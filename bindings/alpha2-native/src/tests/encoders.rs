@@ -827,18 +827,18 @@ fn a_runtime_other_than_the_pinned_sdk_says_why() {
     let identity = |version: &str, configuration: &str| crate::FfmpegRuntimeIdentity {
         version: version.to_owned(),
         configuration: configuration.to_owned(),
-        pinned_sdk_release: "ffmpeg-8.1.3-shared-build8",
+        pinned_sdk_release: "ffmpeg-8.1.3-shared-build1",
     };
     let pinned = "--disable-gpl --disable-nonfree --disable-autodetect --enable-libdav1d --enable-videotoolbox";
     assert_eq!(identity("n8.1.3", pinned).pinned_sdk_mismatch(), None);
-    // build2 is the same version without libdav1d.
-    let build2 = identity(
+    // The same version without libdav1d.
+    let without_dav1d = identity(
         "n8.1.3",
         "--disable-gpl --disable-nonfree --disable-autodetect --enable-videotoolbox",
     )
     .pinned_sdk_mismatch()
     .expect("an SDK without libdav1d is not the pin");
-    assert_eq!(build2, "not configured with --enable-libdav1d");
+    assert_eq!(without_dav1d, "not configured with --enable-libdav1d");
     let homebrew = identity(
         "8.1.2",
         "--prefix=/opt/homebrew --enable-gpl --enable-libx264",

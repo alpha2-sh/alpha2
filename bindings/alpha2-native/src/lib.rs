@@ -219,6 +219,6 @@ pub fn ffmpeg_runtime_identity() -> FfmpegRuntimeIdentity {
     FfmpegRuntimeIdentity {
         version: alpha2_ffmpeg_bridge::runtime_version(),
         configuration: alpha2_ffmpeg_bridge::runtime_configuration(),
-        pinned_sdk_release: "ffmpeg-8.1.3-shared-build8",
+        pinned_sdk_release: "ffmpeg-8.1.3-shared-build1",
     }
 }

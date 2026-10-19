@@ -1,7 +1,7 @@
 schema = 2
 name = "alpha2-ffmpeg-lgpl-runtime"
-repository = "AtlasYang/ffmpeg-static-builds"
-release_tag = "ffmpeg-8.1.3-shared-build8"
+repository = "alpha2-sh/ffmpeg-builds"
+release_tag = "ffmpeg-8.1.3-shared-build1"
 ffmpeg_version = "8.1.3"
 source_tag = "n8.1.3"
 source_url = "https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz"
@@ -106,28 +106,28 @@ notices_linux = [
 
 [assets.win-x64]
 archive = "ffmpeg-8.1.3-shared-win-x64.zip"
-sha256 = "60fb0757cb73a024eac16c19bfed352016f3e0a774c60173d73d6b00d56be5c9"
+sha256 = "be238adbd1ca872c460d98d6b56ce1867f97d2de76a267922657b9f5a8078102"
 report = "ffmpeg-8.1.3-shared-win-x64.configure.txt"
-report_sha256 = "77e096cce8b6c862c94d29cfc233ba220b55d9818ebcc3ad8bee2ffc96968b89"
+report_sha256 = "8424e67ded8b6c1cd0d3a89b48af5221233f20da63cebb86e0b7c4657102c6f4"
 minimum_os = "Windows 10"
 
 [assets.linux-x64]
 archive = "ffmpeg-8.1.3-shared-linux-x64.tar.gz"
-sha256 = "cc8b6e7682bd55f99ad8e1f9f8cb4bd37f164ee456bacd7a7046b2daacd46cda"
+sha256 = "805d67c744542cd912d4c37d7b8c4e4072edd516f3ad110ee7b44c626586951c"
 report = "ffmpeg-8.1.3-shared-linux-x64.configure.txt"
-report_sha256 = "a4fe7bbb69463ecd5e4c8cbb64af90f2582dc590d65550475308cc5f749d57cb"
+report_sha256 = "04281c41f49fc63d21fdf0a94dc170f63d9c0b10eccba759c2d00a37bc97cf15"
 minimum_os = "glibc 2.35"
 
 [assets.linux-arm64]
 archive = "ffmpeg-8.1.3-shared-linux-arm64.tar.gz"
-sha256 = "8e87e2be1ce3a2e6125cfce3c7dc9d31d5d731310cab7963d34dde6355447071"
+sha256 = "4f52a21d93a68012eee926c09040446ce3c17b3edd514f343334b963f42b159f"
 report = "ffmpeg-8.1.3-shared-linux-arm64.configure.txt"
-report_sha256 = "e3e940dfa292db077ebcc0846e93f325bd247d580f3cdcd296b1ead46626c543"
+report_sha256 = "fe7c13fd8e5490b877594daabf2aa85ed2f92b01e39f0e19e3fa7725450da607"
 minimum_os = "glibc 2.35"
 
 [assets.macos-arm64]
 archive = "ffmpeg-8.1.3-shared-macos-arm64.tar.gz"
-sha256 = "dbbd3df0fecde085a6a82d29d187b387fb0bd31e31fcc02f0ef5565cff26e716"
+sha256 = "bbd0fa5868cb6dcdde6b44d7e7c3a95aab4b7acaeb328fb69a4621cf42cc48c9"
 report = "ffmpeg-8.1.3-shared-macos-arm64.configure.txt"
-report_sha256 = "918bd5d7ba57019505a4967affc27da502b4baa89df19257608f57708bec4063"
+report_sha256 = "c8caf4f65feb901dd5bf51a7ae1bba2927c1908937f730a61cadcb8390d89291"
 minimum_os = "macOS 11"
