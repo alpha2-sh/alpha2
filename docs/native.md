@@ -68,7 +68,7 @@ The commands that decode take `--decode-policy strict|tolerant`: `strict` (the d
 
 `cargo install alpha2-host` (or `alpha2-native`, which installs `alpha2`) builds the programs against the FFmpeg on the machine that installs them, and the programs load that FFmpeg when they run:
 
-- The build finds FFmpeg with pkg-config; `FFMPEG_PKG_CONFIG_PATH` names the `lib/pkgconfig` directory of another FFmpeg. On Windows it needs `FFMPEG_LIBS_DIR` and `FFMPEG_INCLUDE_DIR`.
+- The build finds FFmpeg with pkg-config; `FFMPEG_PKG_CONFIG_PATH` names the `lib/pkgconfig` directory of another FFmpeg. On Windows it needs `FFMPEG_LIBS_DIR` and `FFMPEG_INCLUDE_DIR`, and `FFMPEG_LINK_MODE=dynamic`: without it the build links those libraries statically.
 - The FFmpeg must be version 8 (libavutil 60, libavcodec 62).
 - The programs link FFmpeg's shared libraries. On Linux the system loader must find them, on macOS they are found where pkg-config said they were, and on Windows their DLLs must be on `PATH`.
 

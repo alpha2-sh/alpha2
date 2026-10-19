@@ -9,7 +9,7 @@ The crate also builds `alpha2`, a command for one media file at a time: `probe`,
 
 ## Building
 
-The crate links the FFmpeg 8 on the machine that builds it, found with pkg-config (or `FFMPEG_PKG_CONFIG_PATH`; on Windows `FFMPEG_LIBS_DIR` and `FFMPEG_INCLUDE_DIR`), and a program built with it loads that FFmpeg's shared libraries when it runs. The native archives on the [GitHub Releases page](https://github.com/alpha2-sh/alpha2/releases) carry the `alpha2` command with the FFmpeg runtime alpha2 is released with.
+The crate links the FFmpeg 8 on the machine that builds it, found with pkg-config (or `FFMPEG_PKG_CONFIG_PATH`; on Windows `FFMPEG_LIBS_DIR`, `FFMPEG_INCLUDE_DIR` and `FFMPEG_LINK_MODE=dynamic`), and a program built with it loads that FFmpeg's shared libraries when it runs. The native archives on the [GitHub Releases page](https://github.com/alpha2-sh/alpha2/releases) carry the `alpha2` command with the FFmpeg runtime alpha2 is released with.
 
 ## License
 

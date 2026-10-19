@@ -9,7 +9,7 @@
 
 The native archives on the [GitHub Releases page](https://github.com/alpha2-sh/alpha2/releases) carry `alpha2-host` with the FFmpeg runtime alpha2 is released with.
 
-`cargo install alpha2-host` builds it against the FFmpeg 8 on the machine instead, found with pkg-config (or `FFMPEG_PKG_CONFIG_PATH`; on Windows `FFMPEG_LIBS_DIR` and `FFMPEG_INCLUDE_DIR`), and the program loads that FFmpeg's shared libraries when it runs.
+`cargo install alpha2-host` builds it against the FFmpeg 8 on the machine instead, found with pkg-config (or `FFMPEG_PKG_CONFIG_PATH`; on Windows `FFMPEG_LIBS_DIR`, `FFMPEG_INCLUDE_DIR` and `FFMPEG_LINK_MODE=dynamic`), and the program loads that FFmpeg's shared libraries when it runs.
 
 ## License
 
