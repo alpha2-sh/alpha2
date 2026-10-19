@@ -1,0 +1,15 @@
+[package]
+name = "alpha2-scaling-support"
+version.workspace = true
+description = "Checks that a test's work grows in proportion to its input, by the CPU work of the testing thread rather than wall-clock time."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+alpha2-os.workspace = true
+
+[lints]
+workspace = true

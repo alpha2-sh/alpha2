@@ -1,0 +1,1418 @@
+{
+  "schema_version": 1,
+  "id": "host-parity-effects",
+  "name": "Host parity: every built-in effect, and every built-in transition between a video and a still",
+  "settings": {
+    "width": 96,
+    "height": 64,
+    "frame_rate": {
+      "num": 24,
+      "den": 1
+    },
+    "sample_rate": 48000
+  },
+  "sources": [
+    {
+      "id": "video",
+      "locator": "fixture://parity-rgb",
+      "kind": "video"
+    },
+    {
+      "id": "still",
+      "locator": "fixture://parity-image",
+      "kind": "image"
+    }
+  ],
+  "effect_resources": [
+    {
+      "id": "grade",
+      "kind": "lut3d",
+      "locator": "fixture://parity-grade"
+    }
+  ],
+  "compositions": [
+    {
+      "id": "gaussian-blur-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.gaussian-blur",
+              "version": 1,
+              "params": {
+                "radius": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.03
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "chroma-key-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.chroma-key",
+              "version": 1
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "lut-3d-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.lut-3d",
+              "version": 1,
+              "resources": {
+                "lut": "grade"
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "color-controls-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.color-controls",
+              "version": 1,
+              "params": {
+                "exposure": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.4
+                  }
+                },
+                "contrast": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 1.3
+                  }
+                },
+                "saturation": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.6
+                  }
+                },
+                "temperature": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.3
+                  }
+                },
+                "tint": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": -0.2
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "vignette-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.vignette",
+              "version": 1
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "sharpen-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.sharpen",
+              "version": 1,
+              "params": {
+                "amount": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 1.5
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "pixelate-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.pixelate",
+              "version": 1,
+              "params": {
+                "blocks": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 16
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "glow-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.glow",
+              "version": 1,
+              "params": {
+                "threshold": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.4
+                  }
+                },
+                "intensity": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 1.2
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "film-grain-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.film-grain",
+              "version": 1,
+              "params": {
+                "amount": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.5
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "crop-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.crop",
+              "version": 1,
+              "params": {
+                "top_left": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "vec2",
+                    "value": [
+                      0.1,
+                      0.05
+                    ]
+                  }
+                },
+                "bottom_right": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "vec2",
+                    "value": [
+                      0.15,
+                      0.2
+                    ]
+                  }
+                },
+                "feather": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.03
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "mirror-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.mirror",
+              "version": 1,
+              "params": {
+                "axis": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "enum",
+                    "value": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    }
+  ],
+  "timeline": {
+    "tracks": [
+      {
+        "id": "base",
+        "name": "Base",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "effect-gaussian-blur",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 0,
+              "end": 10000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 10000
+            },
+            "composition": {
+              "id": "gaussian-blur-look"
+            }
+          },
+          {
+            "id": "effect-chroma-key",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 10000,
+              "end": 20000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 30000
+            },
+            "composition": {
+              "id": "chroma-key-look"
+            }
+          },
+          {
+            "id": "effect-lut-3d",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 20000,
+              "end": 30000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 50000
+            },
+            "composition": {
+              "id": "lut-3d-look"
+            }
+          },
+          {
+            "id": "effect-color-controls",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 30000,
+              "end": 40000
+            },
+            "source_range": {
+              "start": 60000,
+              "end": 70000
+            },
+            "composition": {
+              "id": "color-controls-look"
+            }
+          },
+          {
+            "id": "effect-vignette",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 40000,
+              "end": 50000
+            },
+            "source_range": {
+              "start": 80000,
+              "end": 90000
+            },
+            "composition": {
+              "id": "vignette-look"
+            }
+          },
+          {
+            "id": "effect-sharpen",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 50000,
+              "end": 60000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 10000
+            },
+            "composition": {
+              "id": "sharpen-look"
+            }
+          },
+          {
+            "id": "effect-pixelate",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 60000,
+              "end": 70000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 30000
+            },
+            "composition": {
+              "id": "pixelate-look"
+            }
+          },
+          {
+            "id": "effect-glow",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 70000,
+              "end": 80000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 50000
+            },
+            "composition": {
+              "id": "glow-look"
+            }
+          },
+          {
+            "id": "effect-film-grain",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 80000,
+              "end": 90000
+            },
+            "source_range": {
+              "start": 60000,
+              "end": 70000
+            },
+            "composition": {
+              "id": "film-grain-look"
+            }
+          },
+          {
+            "id": "effect-crop",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 90000,
+              "end": 100000
+            },
+            "source_range": {
+              "start": 80000,
+              "end": 90000
+            },
+            "composition": {
+              "id": "crop-look"
+            }
+          },
+          {
+            "id": "effect-mirror",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 100000,
+              "end": 110000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 10000
+            },
+            "composition": {
+              "id": "mirror-look"
+            }
+          },
+          {
+            "id": "chain-0",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 110000,
+              "end": 145000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-1",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 130000,
+              "end": 165000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-2",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 150000,
+              "end": 185000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 55000
+            }
+          },
+          {
+            "id": "chain-3",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 170000,
+              "end": 205000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-4",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 190000,
+              "end": 225000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 75000
+            }
+          },
+          {
+            "id": "chain-5",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 210000,
+              "end": 245000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-6",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 230000,
+              "end": 265000
+            },
+            "source_range": {
+              "start": 60000,
+              "end": 95000
+            }
+          },
+          {
+            "id": "chain-7",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 250000,
+              "end": 285000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-8",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 270000,
+              "end": 305000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-9",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 290000,
+              "end": 325000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-10",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 310000,
+              "end": 345000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 55000
+            }
+          },
+          {
+            "id": "chain-11",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 330000,
+              "end": 365000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-12",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 350000,
+              "end": 385000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 75000
+            }
+          },
+          {
+            "id": "chain-13",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 370000,
+              "end": 405000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-14",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 390000,
+              "end": 425000
+            },
+            "source_range": {
+              "start": 60000,
+              "end": 95000
+            }
+          },
+          {
+            "id": "chain-15",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 410000,
+              "end": 445000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-16",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 430000,
+              "end": 465000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-17",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 450000,
+              "end": 485000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-18",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 470000,
+              "end": 505000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 55000
+            }
+          },
+          {
+            "id": "chain-19",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 490000,
+              "end": 525000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-20",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 510000,
+              "end": 545000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 75000
+            }
+          },
+          {
+            "id": "chain-21",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 530000,
+              "end": 565000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-22",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 550000,
+              "end": 585000
+            },
+            "source_range": {
+              "start": 60000,
+              "end": 95000
+            }
+          },
+          {
+            "id": "chain-23",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 570000,
+              "end": 605000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-24",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 590000,
+              "end": 625000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-25",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 610000,
+              "end": 645000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-26",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 630000,
+              "end": 665000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 55000
+            }
+          },
+          {
+            "id": "chain-27",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 650000,
+              "end": 685000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-28",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 670000,
+              "end": 705000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 75000
+            }
+          },
+          {
+            "id": "chain-29",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 690000,
+              "end": 725000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-30",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 710000,
+              "end": 745000
+            },
+            "source_range": {
+              "start": 60000,
+              "end": 95000
+            }
+          }
+        ],
+        "transitions": [
+          {
+            "from_clip": "chain-0",
+            "to_clip": "chain-1",
+            "timeline_range": {
+              "start": 130000,
+              "end": 145000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.fade",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-1",
+            "to_clip": "chain-2",
+            "timeline_range": {
+              "start": 150000,
+              "end": 165000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.directional",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-2",
+            "to_clip": "chain-3",
+            "timeline_range": {
+              "start": 170000,
+              "end": 185000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.circle-open",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-3",
+            "to_clip": "chain-4",
+            "timeline_range": {
+              "start": 190000,
+              "end": 205000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.angular",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-4",
+            "to_clip": "chain-5",
+            "timeline_range": {
+              "start": 210000,
+              "end": 225000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.pixelize",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-5",
+            "to_clip": "chain-6",
+            "timeline_range": {
+              "start": 230000,
+              "end": 245000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.directional-wipe",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-6",
+            "to_clip": "chain-7",
+            "timeline_range": {
+              "start": 250000,
+              "end": 265000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.circle",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-7",
+            "to_clip": "chain-8",
+            "timeline_range": {
+              "start": 270000,
+              "end": 285000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.cross-warp",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-8",
+            "to_clip": "chain-9",
+            "timeline_range": {
+              "start": 290000,
+              "end": 305000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.dreamy",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-9",
+            "to_clip": "chain-10",
+            "timeline_range": {
+              "start": 310000,
+              "end": 325000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.radial",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-10",
+            "to_clip": "chain-11",
+            "timeline_range": {
+              "start": 330000,
+              "end": 345000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.wipe-up",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-11",
+            "to_clip": "chain-12",
+            "timeline_range": {
+              "start": 350000,
+              "end": 365000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.wipe-down",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-12",
+            "to_clip": "chain-13",
+            "timeline_range": {
+              "start": 370000,
+              "end": 385000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.wipe-left",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-13",
+            "to_clip": "chain-14",
+            "timeline_range": {
+              "start": 390000,
+              "end": 405000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.wipe-right",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-14",
+            "to_clip": "chain-15",
+            "timeline_range": {
+              "start": 410000,
+              "end": 425000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.window-blinds",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-15",
+            "to_clip": "chain-16",
+            "timeline_range": {
+              "start": 430000,
+              "end": 445000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.window-slice",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-16",
+            "to_clip": "chain-17",
+            "timeline_range": {
+              "start": 450000,
+              "end": 465000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.wind",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-17",
+            "to_clip": "chain-18",
+            "timeline_range": {
+              "start": 470000,
+              "end": 485000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.pinwheel",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-18",
+            "to_clip": "chain-19",
+            "timeline_range": {
+              "start": 490000,
+              "end": 505000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.heart",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-19",
+            "to_clip": "chain-20",
+            "timeline_range": {
+              "start": 510000,
+              "end": 525000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.color-phase",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-20",
+            "to_clip": "chain-21",
+            "timeline_range": {
+              "start": 530000,
+              "end": 545000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.fade-color",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-21",
+            "to_clip": "chain-22",
+            "timeline_range": {
+              "start": 550000,
+              "end": 565000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.fade-grayscale",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-22",
+            "to_clip": "chain-23",
+            "timeline_range": {
+              "start": 570000,
+              "end": 585000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.morph",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-23",
+            "to_clip": "chain-24",
+            "timeline_range": {
+              "start": 590000,
+              "end": 605000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.ripple",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-24",
+            "to_clip": "chain-25",
+            "timeline_range": {
+              "start": 610000,
+              "end": 625000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.squeeze",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-25",
+            "to_clip": "chain-26",
+            "timeline_range": {
+              "start": 630000,
+              "end": 645000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.simple-zoom",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-26",
+            "to_clip": "chain-27",
+            "timeline_range": {
+              "start": 650000,
+              "end": 665000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.circle-crop",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-27",
+            "to_clip": "chain-28",
+            "timeline_range": {
+              "start": 670000,
+              "end": 685000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.colour-distance",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-28",
+            "to_clip": "chain-29",
+            "timeline_range": {
+              "start": 690000,
+              "end": 705000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.polka-dots-curtain",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-29",
+            "to_clip": "chain-30",
+            "timeline_range": {
+              "start": 710000,
+              "end": 725000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.directional-warp",
+              "version": 1
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

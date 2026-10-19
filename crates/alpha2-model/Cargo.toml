@@ -1,0 +1,43 @@
+[package]
+name = "alpha2-model"
+version.workspace = true
+description = "Versioned project and timeline model for alpha2."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["video", "timeline", "project", "json-schema"]
+categories = ["multimedia::video"]
+# Builds from its sources and license alone: tests, test-only modules, benches and fixtures
+# stay in the repository, which is where `cargo test` runs.
+include = [
+  "/src/**",
+  "/README.md",
+  "/LICENSE.md",
+  "!/src/**/tests.rs",
+  "!/src/**/*_tests.rs",
+  "!/src/**/tests/**",
+]
+
+[dependencies]
+libm = "0.2.16"
+alpha2-media.workspace = true
+alpha2-time.workspace = true
+schemars = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+alpha2-scaling-support.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Derives `schemars::JsonSchema` for the document and exposes `project_json_schema`, the published
+# project schema.
+schema = ["dep:schemars", "alpha2-media/schema", "alpha2-time/schema"]
+
+[[example]]
+name = "emit-schema"
+required-features = ["schema"]

@@ -1,0 +1,21 @@
+﻿WEBVTT - a title
+Kind: captions
+
+NOTE a comment
+that spans lines
+
+STYLE
+::cue { color: red }
+
+REGION
+id:top
+
+intro
+00:00.000 --> 00:01.000 align:start position:10%
+<v Speaker>Hi</v> &lt;3 &amp; &nbsp;bye &#x41;&#66;
+
+00:00:00.500 --> 00:00:03.000
+<c.loud>overlapping</c> <00:00:01.000>karaoke
+
+00:00:00.700 --> 00:00:02.000
+third at once

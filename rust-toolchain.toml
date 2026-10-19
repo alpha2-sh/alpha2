@@ -1,0 +1,9 @@
+# The toolchain every build, lint and release uses, so `cargo clippy -- -D warnings` and the wasm
+# size checks give the same result on every machine. `rust-version` in Cargo.toml stays the floor
+# the crates support. Raise the pin on purpose: change `channel`, fix what the new clippy reports,
+# rebuild the wasm and check its size budget in the same change.
+[toolchain]
+channel = "1.99.0"
+components = ["clippy", "rustfmt"]
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"

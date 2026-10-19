@@ -1,0 +1,3 @@
+# WASM modules require SIMD. Custom RUSTFLAGS must include this flag too.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+simd128"]

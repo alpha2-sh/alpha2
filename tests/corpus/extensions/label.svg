@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="24" viewBox="0 0 64 24">
+  <!-- Text, drawn with the fonts the host registers: DejaVu Sans (tests/fonts/Alpha2Fixture.ttf). -->
+  <rect x="0" y="0" width="64" height="24" fill="#203060"/>
+  <text x="3" y="18" font-family="DejaVu Sans" font-size="17" fill="#ffe040">Ag 12</text>
+</svg>

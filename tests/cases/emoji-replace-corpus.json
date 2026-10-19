@@ -1,0 +1,16 @@
+{
+  "about": "What the emoji policy `replace` makes of text, in both text hosts (alpha2-text and OffscreenTextRasterizer): each grapheme shown as an emoji (UTS #51: one holding an Emoji_Presentation character, or U+FE0F with a pictograph or keycap, and no U+FE0E) becomes one U+FFFD; a symbol shown as text stays.",
+  "cases": [
+    {
+      "name": "text symbols stay",
+      "text": "© 2026 Acme™ ® ↔ ▶ ℹ ☀ ✓ ➔ ❶",
+      "replaced": "© 2026 Acme™ ® ↔ ▶ ℹ ☀ ✓ ➔ ❶"
+    },
+    { "name": "emoji by default", "text": "⭐ ⌚ 🙂", "replaced": "� � �" },
+    { "name": "a pictograph asked to be an emoji", "text": "☀️ ❤️ ©️", "replaced": "� � �" },
+    { "name": "an emoji asked to be text", "text": "⌚︎ ⭐︎", "replaced": "⌚︎ ⭐︎" },
+    { "name": "sequences whole", "text": "🇰🇷 👍🏽 👨‍👩‍👧 1️⃣", "replaced": "� � � �" },
+    { "name": "between letters", "text": "A🙂B", "replaced": "A�B" },
+    { "name": "a keycap without the selector is text", "text": "#⃣", "replaced": "#⃣" }
+  ]
+}

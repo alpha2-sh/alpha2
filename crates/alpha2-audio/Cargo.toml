@@ -1,0 +1,35 @@
+[package]
+name = "alpha2-audio"
+version.workspace = true
+description = "Platform-independent audio DSP core for alpha2."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["audio", "dsp", "mixing", "loudness"]
+categories = ["multimedia::audio"]
+# Builds from its sources and license alone: tests, test-only modules, benches and fixtures
+# stay in the repository, which is where `cargo test` runs.
+include = [
+  "/src/**",
+  "/README.md",
+  "/LICENSE.md",
+  "!/src/**/tests.rs",
+  "!/src/**/*_tests.rs",
+  "!/src/**/tests/**",
+]
+
+[dependencies]
+libm = "0.2.16"
+alpha2-media.workspace = true
+alpha2-time.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "dsp"
+harness = false

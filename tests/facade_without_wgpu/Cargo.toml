@@ -1,0 +1,23 @@
+[package]
+name = "alpha2-facade-without-wgpu"
+version.workspace = true
+description = "A Rust user of the alpha2 facade with its default features and no wgpu dependency: its test takes a project from loading to a preview frame and a finished export."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# Only the facade, with its default features, and no `wgpu`. Build this package alone
+# (`cargo test -p alpha2-facade-without-wgpu`) to keep the workspace's interop crates from turning
+# `wgpu-interop` on through feature unification.
+[dependencies]
+alpha2.workspace = true
+
+[dev-dependencies]
+# Device acquisitions take turns within the test process (`alpha2::gpu::serialize_acquisition`).
+alpha2-gpu = { workspace = true, features = ["serial-acquisition"] }
+pollster.workspace = true
+
+[lints]
+workspace = true

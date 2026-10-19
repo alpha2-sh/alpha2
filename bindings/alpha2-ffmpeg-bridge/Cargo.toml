@@ -1,0 +1,51 @@
+[package]
+name = "alpha2-ffmpeg-bridge"
+version.workspace = true
+description = "Small audited unsafe boundary for FFmpeg buffers used by alpha2-native."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["ffmpeg", "video", "ffi", "vulkan"]
+categories = ["multimedia::video", "external-ffi-bindings"]
+# Builds from its sources and license alone: tests, test-only modules, benches and fixtures
+# stay in the repository, which is where `cargo test` runs.
+include = [
+  "/build.rs",
+  "/src/**",
+  "/include/**",
+  "/README.md",
+  "/LICENSE.md",
+  "!/src/**/tests.rs",
+  "!/src/**/*_tests.rs",
+  "!/src/**/tests/**",
+]
+build = "build.rs"
+
+# docs.rs has no FFmpeg; there the build script compiles no C shim (`alpha2_build_support::docs_rs`),
+# so the hardware-device API is documented as well.
+[package.metadata.docs.rs]
+features = ["hwdevice"]
+
+[features]
+default = []
+# The C shims for native GPU interop with FFmpeg hardware devices, which
+# hardware decode and hardware encode both build on.
+hwdevice = []
+
+[build-dependencies]
+alpha2-build-support.workspace = true
+
+[dependencies]
+alpha2-media.workspace = true
+bytes.workspace = true
+rsmpeg = { version = "0.18.0", features = ["link_system_ffmpeg"] }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"

@@ -1,0 +1,842 @@
+{
+  "description": "Why a composition cannot draw its output, by the engine's planner (alpha2-eval composition_tests.rs) and @alpha2-sh/editor's graphIssues (packages/alpha2-editor/test/graph.test.mjs): the engine refuses exactly the cases that list issues, with one of them. An input key is a name, or a merge layer's or group input's index.",
+  "cases": [
+    {
+      "name": "a complete clip composition",
+      "use": "clip",
+      "composition": "look",
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            {
+              "id": "clip",
+              "op": {
+                "type": "clip"
+              }
+            },
+            {
+              "id": "blur",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "effect": {
+                  "id": "alpha2.effect.gaussian-blur",
+                  "version": 1
+                }
+              }
+            }
+          ],
+          "output": "blur"
+        }
+      ],
+      "sources": [],
+      "issues": []
+    },
+    {
+      "name": "no output",
+      "use": "clip",
+      "composition": "look",
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            {
+              "id": "clip",
+              "op": {
+                "type": "clip"
+              }
+            }
+          ],
+          "output": null
+        }
+      ],
+      "sources": [],
+      "issues": [
+        {
+          "kind": "no_output"
+        }
+      ]
+    },
+    {
+      "name": "an unconnected input the output needs",
+      "use": "clip",
+      "composition": "look",
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            {
+              "id": "clip",
+              "op": {
+                "type": "clip"
+              }
+            },
+            {
+              "id": "blur",
+              "op": {
+                "type": "effect",
+                "input": null,
+                "effect": {
+                  "id": "alpha2.effect.gaussian-blur",
+                  "version": 1
+                }
+              }
+            }
+          ],
+          "output": "blur"
+        }
+      ],
+      "sources": [],
+      "issues": [
+        {
+          "kind": "missing_input",
+          "node": "blur",
+          "input": "input"
+        }
+      ]
+    },
+    {
+      "name": "a merge layer with nothing in it",
+      "use": "clip",
+      "composition": "look",
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            {
+              "id": "clip",
+              "op": {
+                "type": "clip"
+              }
+            },
+            {
+              "id": "mix",
+              "op": {
+                "type": "merge",
+                "layers": [
+                  {
+                    "input": "clip"
+                  },
+                  {
+                    "input": null
+                  }
+                ]
+              }
+            }
+          ],
+          "output": "mix"
+        }
+      ],
+      "sources": [],
+      "issues": [
+        {
+          "kind": "missing_input",
+          "node": "mix",
+          "input": 1
+        }
+      ]
+    },
+    {
+      "name": "a group input in a clip's own composition",
+      "use": "clip",
+      "composition": "look",
+      "compositions": [
+        {
+          "id": "look",
+          "inputs": [
+            "In"
+          ],
+          "nodes": [
+            {
+              "id": "in",
+              "op": {
+                "type": "group_input",
+                "index": 0
+              }
+            }
+          ],
+          "output": "in"
+        }
+      ],
+      "sources": [],
+      "issues": [
+        {
+          "kind": "unbound_group_input",
+          "node": "in"
+        }
+      ]
+    },
+    {
+      "name": "a group input in a composition source",
+      "use": "source",
+      "composition": "title",
+      "compositions": [
+        {
+          "id": "title",
+          "inputs": [
+            "In"
+          ],
+          "nodes": [
+            {
+              "id": "in",
+              "op": {
+                "type": "group_input",
+                "index": 0
+              }
+            }
+          ],
+          "output": "in"
+        }
+      ],
+      "sources": [],
+      "issues": [
+        {
+          "kind": "unbound_group_input",
+          "node": "in"
+        }
+      ]
+    },
+    {
+      "name": "a clip node in a composition source",
+      "use": "source",
+      "composition": "title",
+      "compositions": [
+        {
+          "id": "title",
+          "nodes": [
+            {
+              "id": "clip",
+              "op": {
+                "type": "clip"
+              }
+            }
+          ],
+          "output": "clip"
+        }
+      ],
+      "sources": [],
+      "issues": [
+        {
+          "kind": "clip_without_clip",
+          "node": "clip"
+        }
+      ]
+    },
+    {
+      "name": "a clip node in a clip's own composition",
+      "use": "clip",
+      "composition": "look",
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            {
+              "id": "clip",
+              "op": {
+                "type": "clip"
+              }
+            }
+          ],
+          "output": "clip"
+        }
+      ],
+      "sources": [],
+      "issues": []
+    },
+    {
+      "name": "a group whose definition is complete",
+      "use": "clip",
+      "composition": "look",
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            {
+              "id": "clip",
+              "op": {
+                "type": "clip"
+              }
+            },
+            {
+              "id": "g",
+              "op": {
+                "type": "group",
+                "composition": "soften",
+                "inputs": [
+                  "clip"
+                ]
+              }
+            }
+          ],
+          "output": "g"
+        },
+        {
+          "id": "soften",
+          "inputs": [
+            "Image"
+          ],
+          "nodes": [
+            {
+              "id": "in",
+              "op": {
+                "type": "group_input",
+                "index": 0
+              }
+            },
+            {
+              "id": "blur",
+              "op": {
+                "type": "effect",
+                "input": "in",
+                "effect": {
+                  "id": "alpha2.effect.gaussian-blur",
+                  "version": 1
+                }
+              }
+            }
+          ],
+          "output": "blur"
+        }
+      ],
+      "sources": [],
+      "issues": []
+    },
+    {
+      "name": "a group node with an unconnected input",
+      "use": "clip",
+      "composition": "look",
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            {
+              "id": "clip",
+              "op": {
+                "type": "clip"
+              }
+            },
+            {
+              "id": "g",
+              "op": {
+                "type": "group",
+                "composition": "soften",
+                "inputs": [
+                  null
+                ]
+              }
+            }
+          ],
+          "output": "g"
+        },
+        {
+          "id": "soften",
+          "inputs": [
+            "Image"
+          ],
+          "nodes": [
+            {
+              "id": "in",
+              "op": {
+                "type": "group_input",
+                "index": 0
+              }
+            },
+            {
+              "id": "blur",
+              "op": {
+                "type": "effect",
+                "input": "in",
+                "effect": {
+                  "id": "alpha2.effect.gaussian-blur",
+                  "version": 1
+                }
+              }
+            }
+          ],
+          "output": "blur"
+        }
+      ],
+      "sources": [],
+      "issues": [
+        {
+          "kind": "missing_input",
+          "node": "g",
+          "input": 0
+        }
+      ]
+    },
+    {
+      "name": "an unconnected input inside a group's definition",
+      "use": "clip",
+      "composition": "look",
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            {
+              "id": "clip",
+              "op": {
+                "type": "clip"
+              }
+            },
+            {
+              "id": "g",
+              "op": {
+                "type": "group",
+                "composition": "broken",
+                "inputs": [
+                  "clip"
+                ]
+              }
+            }
+          ],
+          "output": "g"
+        },
+        {
+          "id": "broken",
+          "inputs": [
+            "Image"
+          ],
+          "nodes": [
+            {
+              "id": "in",
+              "op": {
+                "type": "group_input",
+                "index": 0
+              }
+            },
+            {
+              "id": "blur",
+              "op": {
+                "type": "effect",
+                "input": null,
+                "effect": {
+                  "id": "alpha2.effect.gaussian-blur",
+                  "version": 1
+                }
+              }
+            }
+          ],
+          "output": "blur"
+        }
+      ],
+      "sources": [],
+      "issues": [
+        {
+          "kind": "missing_input",
+          "node": "g/blur",
+          "input": "input"
+        }
+      ]
+    },
+    {
+      "name": "a group's definition without an output",
+      "use": "clip",
+      "composition": "look",
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            {
+              "id": "clip",
+              "op": {
+                "type": "clip"
+              }
+            },
+            {
+              "id": "g",
+              "op": {
+                "type": "group",
+                "composition": "empty"
+              }
+            }
+          ],
+          "output": "g"
+        },
+        {
+          "id": "empty",
+          "nodes": [],
+          "output": null
+        }
+      ],
+      "sources": [],
+      "issues": [
+        {
+          "kind": "no_output",
+          "node": "g"
+        }
+      ]
+    },
+    {
+      "name": "a clip node in a group drawn by a composition source",
+      "use": "source",
+      "composition": "card",
+      "compositions": [
+        {
+          "id": "card",
+          "nodes": [
+            {
+              "id": "g",
+              "op": {
+                "type": "group",
+                "composition": "shows-clip"
+              }
+            }
+          ],
+          "output": "g"
+        },
+        {
+          "id": "shows-clip",
+          "nodes": [
+            {
+              "id": "clip",
+              "op": {
+                "type": "clip"
+              }
+            }
+          ],
+          "output": "clip"
+        }
+      ],
+      "sources": [],
+      "issues": [
+        {
+          "kind": "clip_without_clip",
+          "node": "g/clip"
+        }
+      ]
+    },
+    {
+      "name": "a clip node in a group drawn by a clip's composition",
+      "use": "clip",
+      "composition": "look",
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            {
+              "id": "g",
+              "op": {
+                "type": "group",
+                "composition": "shows-clip"
+              }
+            }
+          ],
+          "output": "g"
+        },
+        {
+          "id": "shows-clip",
+          "nodes": [
+            {
+              "id": "clip",
+              "op": {
+                "type": "clip"
+              }
+            }
+          ],
+          "output": "clip"
+        }
+      ],
+      "sources": [],
+      "issues": []
+    },
+    {
+      "name": "a group input in a composition source a media node draws",
+      "use": "clip",
+      "composition": "look",
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            {
+              "id": "m",
+              "op": {
+                "type": "media",
+                "source_id": "titled"
+              }
+            }
+          ],
+          "output": "m"
+        },
+        {
+          "id": "title",
+          "inputs": [
+            "In"
+          ],
+          "nodes": [
+            {
+              "id": "in",
+              "op": {
+                "type": "group_input",
+                "index": 0
+              }
+            }
+          ],
+          "output": "in"
+        }
+      ],
+      "sources": [
+        {
+          "id": "titled",
+          "kind": "composition",
+          "composition": "title"
+        }
+      ],
+      "issues": [
+        {
+          "kind": "unbound_group_input",
+          "node": "m/in"
+        }
+      ]
+    },
+    {
+      "name": "a clip node in a composition source a media node draws",
+      "use": "clip",
+      "composition": "look",
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            {
+              "id": "m",
+              "op": {
+                "type": "media",
+                "source_id": "titled"
+              }
+            }
+          ],
+          "output": "m"
+        },
+        {
+          "id": "title",
+          "nodes": [
+            {
+              "id": "clip",
+              "op": {
+                "type": "clip"
+              }
+            }
+          ],
+          "output": "clip"
+        }
+      ],
+      "sources": [
+        {
+          "id": "titled",
+          "kind": "composition",
+          "composition": "title"
+        }
+      ],
+      "issues": [
+        {
+          "kind": "clip_without_clip",
+          "node": "m/clip"
+        }
+      ]
+    },
+    {
+      "name": "a bypassed group passes its input through without drawing its definition",
+      "use": "clip",
+      "composition": "look",
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            {
+              "id": "clip",
+              "op": {
+                "type": "clip"
+              }
+            },
+            {
+              "id": "g",
+              "bypass": true,
+              "op": {
+                "type": "group",
+                "composition": "broken",
+                "inputs": [
+                  "clip"
+                ]
+              }
+            }
+          ],
+          "output": "g"
+        },
+        {
+          "id": "broken",
+          "inputs": [
+            "Image"
+          ],
+          "nodes": [
+            {
+              "id": "in",
+              "op": {
+                "type": "group_input",
+                "index": 0
+              }
+            },
+            {
+              "id": "blur",
+              "op": {
+                "type": "effect",
+                "input": null,
+                "effect": {
+                  "id": "alpha2.effect.gaussian-blur",
+                  "version": 1
+                }
+              }
+            }
+          ],
+          "output": "blur"
+        }
+      ],
+      "sources": [],
+      "issues": []
+    },
+    {
+      "name": "a group port its definition never reads may be left unconnected",
+      "use": "clip",
+      "composition": "look",
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            {
+              "id": "clip",
+              "op": {
+                "type": "clip"
+              }
+            },
+            {
+              "id": "g",
+              "op": {
+                "type": "group",
+                "composition": "first-of-two",
+                "inputs": [
+                  "clip",
+                  null
+                ]
+              }
+            }
+          ],
+          "output": "g"
+        },
+        {
+          "id": "first-of-two",
+          "inputs": [
+            "Image",
+            "Spare"
+          ],
+          "nodes": [
+            {
+              "id": "a",
+              "op": {
+                "type": "group_input",
+                "index": 0
+              }
+            },
+            {
+              "id": "b",
+              "op": {
+                "type": "group_input",
+                "index": 1
+              }
+            },
+            {
+              "id": "blur",
+              "op": {
+                "type": "effect",
+                "input": "a",
+                "effect": {
+                  "id": "alpha2.effect.gaussian-blur",
+                  "version": 1
+                }
+              }
+            }
+          ],
+          "output": "blur"
+        }
+      ],
+      "sources": [],
+      "issues": []
+    },
+    {
+      "name": "a group port only a bypassed node of its definition reads may be left unconnected",
+      "use": "clip",
+      "composition": "look",
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            {
+              "id": "clip",
+              "op": {
+                "type": "clip"
+              }
+            },
+            {
+              "id": "g",
+              "op": {
+                "type": "group",
+                "composition": "first-of-two",
+                "inputs": [
+                  "clip",
+                  null
+                ]
+              }
+            }
+          ],
+          "output": "g"
+        },
+        {
+          "id": "first-of-two",
+          "inputs": [
+            "Image",
+            "Spare"
+          ],
+          "nodes": [
+            {
+              "id": "a",
+              "op": {
+                "type": "group_input",
+                "index": 0
+              }
+            },
+            {
+              "id": "b",
+              "op": {
+                "type": "group_input",
+                "index": 1
+              }
+            },
+            {
+              "id": "blur",
+              "op": {
+                "type": "effect",
+                "input": "a",
+                "effect": {
+                  "id": "alpha2.effect.gaussian-blur",
+                  "version": 1
+                }
+              }
+            },
+            {
+              "id": "keep",
+              "bypass": true,
+              "op": {
+                "type": "matte",
+                "input": "blur",
+                "matte": "b",
+                "mode": "alpha"
+              }
+            }
+          ],
+          "output": "keep"
+        }
+      ],
+      "sources": [],
+      "issues": []
+    }
+  ]
+}

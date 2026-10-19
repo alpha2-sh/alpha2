@@ -1,0 +1,203 @@
+// Wasm export cases: the schedule, waiting frames, the working set, and every project audio rate.
+
+// The packaged engine plays tests/audio_determinism's fixed mix to the hash native code pins, and
+// every project rate (8 to 96 kHz) exports as natively. Chrome on Linux has no AAC encoder and
+// Opus converts to 48 kHz itself, so the sink's conversion also runs on an explicit Opus rate.
+export function exportEveryProjectRate() {
+  return `
+const wasm = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+await wasm.default();
+const { audioEncoderSampleRate, MediabunnyMp4Sink } = await import("/packages/alpha2/dist/mediabunny.js");
+const { renderOfflineAudio } = await import("/packages/alpha2/dist/audio.js");
+const mb = await import("mediabunny");
+if (typeof AudioEncoder === "undefined" || typeof AudioDecoder === "undefined") {
+  report({ skipped: "this browser has no WebCodecs AudioEncoder and AudioDecoder" });
+} else {
+  const AMPLITUDE = 0.25;
+  // Half a second of a stereo 997 Hz tone at the project rate, exported and decoded again.
+  const exportTone = async (codec, projectRate, encoderRate) => {
+    const sink = new MediabunnyMp4Sink({
+      audioCodec: codec,
+      audioBitrate: 128000,
+      audioSampleRate: encoderRate,
+      audioResampler: wasm,
+      destination: { kind: "memory", maxBytes: 1 << 24 },
+    });
+    const total = projectRate / 2;
+    await renderOfflineAudio(BigInt(total), [1024, 333], async (start, frames) => {
+      const left = new Float32Array(frames);
+      for (let i = 0; i < frames; i += 1)
+        left[i] = AMPLITUDE * Math.sin((2 * Math.PI * 997 * (Number(start) + i)) / projectRate);
+      return { sourceId: "mix", startSample: start, generation: 0, sampleRate: projectRate, channels: [left, left.slice()] };
+    }, sink);
+    const input = new mb.Input({ source: new mb.BufferSource(sink.output.buffer), formats: mb.ALL_FORMATS });
+    const track = await input.getPrimaryAudioTrack();
+    const duration = await track.computeDuration();
+    let sum = 0;
+    let count = 0;
+    for await (const sample of new mb.AudioSampleSink(track).samples(0.1, 0.4)) {
+      const plane = new Float32Array(sample.numberOfFrames);
+      sample.copyTo(plane, { planeIndex: 0, format: "f32-planar" });
+      for (const value of plane) { sum += value * value; count += 1; }
+      sample.close();
+    }
+    input.dispose();
+    const rms = Math.sqrt(sum / Math.max(1, count));
+    // The tone through a lossy codec: its level within 15 %, its length within a codec frame and
+    // its priming.
+    const ok = Math.abs(rms - AMPLITUDE / Math.SQRT2) < 0.15 * (AMPLITUDE / Math.SQRT2) && Math.abs(duration - 0.5) < 0.05;
+    return { ok, fileRate: track.sampleRate, rms: Number(rms.toFixed(4)), duration: Number(duration.toFixed(4)) };
+  };
+  const results = {};
+  const exported = new Set();
+  for (const projectRate of [8000, 22050, 44100, 50000, 96000]) {
+    for (const codec of ["aac", "opus"]) {
+      const encoderRate = await audioEncoderSampleRate(codec, { sampleRate: projectRate, numberOfChannels: 2, bitrate: 128000 });
+      const key = codec + "@" + projectRate;
+      if (encoderRate === null) { results[key] = "no encoder"; continue; }
+      results[key] = { encoderRate, ...(await exportTone(codec, projectRate, encoderRate)) };
+      if (results[key].ok) exported.add(projectRate);
+    }
+  }
+  // The conversion through a real encoder: Opus at 48 kHz from rates this browser's Opus would
+  // also take directly.
+  for (const projectRate of [22050, 50000, 96000]) {
+    const key = "opus@" + projectRate + "->48000";
+    results[key] = await AudioEncoder.isConfigSupported({ codec: "opus", sampleRate: 48000, numberOfChannels: 2, bitrate: 128000 }).then((r) => r.supported)
+      ? await exportTone("opus", projectRate, 48000)
+      : "no encoder";
+  }
+  const converted = Object.entries(results).filter(([key]) => key.includes("->")).map(([, value]) => value);
+  const ok = exported.size === 5 && converted.every((value) => value === "no encoder" || value.ok)
+    && Object.values(results).every((value) => value === "no encoder" || value.ok);
+  report({ ok, results });
+}
+`;
+}
+
+// The range, frame count and audio samples must match tests/golden/time-rules-corpus.json.
+export function exportSchedule() {
+  return `
+const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+await init();
+const engine = await WebEffectRegistry.create();
+const corpus = await (await fetch("/tests/golden/time-rules-corpus.json")).json();
+const mismatches = [];
+let checked = 0;
+for (const sampleRate of [44100, 48000]) {
+  engine.loadProject(JSON.stringify({
+    schema_version: 1, id: "schedule", name: "Schedule",
+    settings: { width: 16, height: 16, frame_rate: { num: 30, den: 1 }, sample_rate: sampleRate },
+    sources: [], timeline: { tracks: [] },
+  }));
+  for (const c of corpus.exports.filter((c) => c.sampleRate === sampleRate)) {
+    engine.beginExport(BigInt(c.start), BigInt(c.end), c.rate.num, c.rate.den, "h264");
+    const progress = JSON.parse(engine.exportProgress());
+    engine.endExport();
+    checked++;
+    const got = [progress.effectiveRange.startTicks, progress.effectiveRange.endTicks, progress.total, progress.audioWindow?.startSample, progress.audioWindow?.frames].join(" ");
+    const want = [c.effectiveStart, c.effectiveEnd, c.total, c.audioStartSample, c.audioFrames].join(" ");
+    if (got !== want) mismatches.push(c.rate.num + "/" + c.rate.den + " [" + c.start + ", " + c.end + ") at " + sampleRate + ": " + got + " != " + want);
+  }
+}
+report({ ok: checked === corpus.exports.length && mismatches.length === 0, checked, mismatches: mismatches.slice(0, 5) });
+`;
+}
+
+// A waiting export frame names source frames as a preview does: a trimmed clip at the trimmed time.
+export function exportWaitingFrames() {
+  return `
+const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+await init();
+const engine = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(16, 16));
+engine.loadProject(JSON.stringify({
+  schema_version: 1, id: "trim", name: "Trim",
+  settings: { width: 16, height: 16, frame_rate: { num: 30, den: 1 }, sample_rate: 48000 },
+  sources: [{ id: "s", locator: "fixture://s", kind: "video" }],
+  timeline: { tracks: [{ id: "v", name: "V", kind: "video", clips: [{
+    id: "c", source_id: "s", timeline_range: { start: 0, end: 120000 }, source_range: { start: 60000, end: 180000 },
+  }] }] },
+}));
+const expected = [{ clipId: "c", readerId: null, sourceId: "s", mediaTimeTicks: "60000" }];
+const named = (ticket) => ticket.kind === "waiting"
+  && JSON.stringify(ticket.missingSources) === JSON.stringify(["s"])
+  && JSON.stringify(ticket.missingFrames) === JSON.stringify(expected);
+const at = engine.beginExportAt(0n, "h264");
+engine.beginExport(0n, 4000n, 30, 1, "h264");
+const frame = engine.beginExportFrame();
+const promised = await engine.exportFrame();
+engine.endExport();
+const planes = new Uint8Array(16 * 16 + 2 * 8 * 8).fill(128);
+engine.uploadYuvFrame("s", 60000n, "I420", 16, 16, planes, Uint32Array.from([0, 16, 256, 8, 320, 8]),
+  Uint32Array.from([0, 0, 16, 16]), 16, 16,
+  JSON.stringify({ primaries: "bt709", transfer: "bt709", matrix: "bt709", range: "limited", dynamic_range: "sdr" }),
+  "left", 16, 16, 0, false);
+const after = engine.beginExportAt(0n, "h264");
+const rendered = after.kind === "rendered" ? (await after.readback).kind : after.kind;
+report({
+  ok: named(at) && named(frame) && named(promised) && rendered === "rendered",
+  at, frame, promised, rendered,
+});
+`;
+}
+
+// An export pins the sources of the frame it waits for; the upload that would outgrow the budget
+// is refused at once with RESOURCE_LIMIT, on both export paths.
+export function exportWorkingSet() {
+  return `
+const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+await init();
+const engine = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(64, 48));
+const pixels = new Uint8Array(64 * 48 * 4).fill(255);
+const frameBytes = engine.uploadRgbaFrame("probe", 0n, 64, 48, pixels).retainedBytes;
+engine.releaseSourceFrames("probe");
+engine.setUploadedFrameBudget(frameBytes * 2.5);
+const clip = (id, source) => ({ id, name: id, kind: "video", clips: [{
+  id: "clip-" + id, source_id: source,
+  timeline_range: { start: 0, end: 120000 }, source_range: { start: 0, end: 120000 },
+}] });
+const load = (sources) => engine.loadProject(JSON.stringify({
+  schema_version: 1, id: "set", name: "Set",
+  settings: { width: 64, height: 48, frame_rate: { num: 30, den: 1 }, sample_rate: 48000 },
+  sources: sources.map(([id, kind]) => ({ id, locator: "fixture://" + id, kind })),
+  timeline: { tracks: sources.map(([id]) => clip(id, id)) },
+}));
+const refusal = (upload) => {
+  try { upload(); return null; } catch (error) {
+    return { code: error.code, stage: error.failure?.stage, phase: error.failure?.phase, requestedBytes: error.failure?.requestedBytes };
+  }
+};
+const expected = { code: "RESOURCE_LIMIT", stage: "working-set-over-budget", phase: "upload", requestedBytes: 3 * frameBytes };
+// Three layers, two and a half frames of budget.
+load([["a", "video"], ["b", "video"], ["c", "video"]]);
+engine.beginExport(0n, 4000n, 30, 1, "h264");
+const waiting = engine.beginExportFrame();
+const fill = (frames) => frames.map((need) => refusal(() => engine.uploadRgbaFrame(need.sourceId, BigInt(need.mediaTimeTicks), 64, 48, pixels)));
+const stateful = fill(waiting.missingFrames);
+const heldStateful = ["a", "b"].every((id) => engine.uploadedFrameBytes >= BigInt(2 * frameBytes));
+engine.endExport();
+engine.clearFrames();
+const at = engine.beginExportAt(0n, "h264");
+const stateless = fill(at.missingFrames);
+const sameKey = (refused) => JSON.stringify(refused) === JSON.stringify([null, null, expected]);
+// A still under a video, one video frame per export frame: the still stays.
+engine.clearFrames();
+load([["logo", "image"], ["v", "video"]]);
+const logo = engine.uploadRgbaImage("logo", 64, 48, pixels).generation;
+engine.beginExport(0n, 20000n, 30, 1, "h264");
+const kept = [];
+for (let frame = 0; frame < 5; frame++) {
+  let ticket = engine.beginExportFrame();
+  for (const need of ticket.kind === "waiting" ? ticket.missingFrames : [])
+    engine.uploadRgbaFrame(need.sourceId, BigInt(need.mediaTimeTicks), 64, 48, pixels);
+  if (ticket.kind === "waiting") ticket = engine.beginExportFrame();
+  if (ticket.kind === "rendered") await ticket.readback;
+  kept.push(ticket.kind === "rendered" && engine.holdsImage("logo", logo));
+}
+engine.endExport();
+report({
+  ok: waiting.kind === "waiting" && sameKey(stateful) && heldStateful && at.kind === "waiting" && sameKey(stateless) && kept.every(Boolean),
+  frameBytes, stateful, stateless, kept,
+});
+`;
+}

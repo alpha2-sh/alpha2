@@ -1,0 +1,37 @@
+[package]
+name = "alpha2-assets"
+version.workspace = true
+description = "Asset identity, proxy selection, and conform reports for alpha2 hosts."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["video", "media", "proxy", "assets"]
+categories = ["multimedia::video"]
+# Builds from its sources and license alone: tests, test-only modules, benches and fixtures
+# stay in the repository, which is where `cargo test` runs.
+include = [
+  "/src/**",
+  "/README.md",
+  "/LICENSE.md",
+  "!/src/**/tests.rs",
+  "!/src/**/*_tests.rs",
+  "!/src/**/tests/**",
+]
+
+[dependencies]
+alpha2-media.workspace = true
+alpha2-model.workspace = true
+alpha2-time.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+alpha2-scaling-support.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "conform"
+harness = false

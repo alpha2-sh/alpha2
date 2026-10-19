@@ -1,0 +1,41 @@
+[package]
+name = "alpha2-extensions-web"
+version.workspace = true
+description = "The extension providers as their own wasm module, loaded by a page only when it opens such a source."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["wasm", "svg", "lottie", "video"]
+categories = ["wasm", "multimedia::images"]
+# Tests, test-only modules, benches and fixtures stay in the repository, where `cargo test` runs.
+include = [
+  "/src/**",
+  "/README.md",
+  "/LICENSE.md",
+  "!/src/**/tests.rs",
+  "!/src/**/*_tests.rs",
+  "!/src/**/tests/**",
+]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["svg", "animated-image", "image-sequence", "lottie", "exr"]
+svg = ["alpha2-extensions/svg"]
+animated-image = ["alpha2-extensions/animated-image"]
+image-sequence = ["alpha2-extensions/image-sequence"]
+lottie = ["alpha2-extensions/lottie"]
+exr = ["alpha2-extensions/exr"]
+
+[dependencies]
+alpha2-extensions = { workspace = true, default-features = false }
+alpha2-model.workspace = true
+alpha2-time.workspace = true
+serde_json.workspace = true
+wasm-bindgen.workspace = true
+js-sys.workspace = true
+
+[lints]
+workspace = true

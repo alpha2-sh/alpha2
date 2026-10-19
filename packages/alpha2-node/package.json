@@ -1,0 +1,43 @@
+{
+  "name": "@alpha2-sh/node",
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Node.js client for the alpha2 native rendering host.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alpha2-sh/alpha2.git",
+    "directory": "packages/alpha2-node"
+  },
+  "homepage": "https://github.com/alpha2-sh/alpha2#readme",
+  "bugs": {
+    "url": "https://github.com/alpha2-sh/alpha2/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "test": "npm run build && node --test test/*.test.mjs"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE.md"
+  ],
+  "dependencies": {
+    "alpha2": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.30"
+  }
+}

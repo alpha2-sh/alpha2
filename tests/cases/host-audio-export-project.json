@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "id": "host-audio-export",
+  "name": "Host audio export fixture",
+  "settings": {
+    "width": 64,
+    "height": 48,
+    "frame_rate": { "num": 30, "den": 1 },
+    "sample_rate": 48000
+  },
+  "sources": [
+    {
+      "id": "image-source",
+      "locator": "fixture://cross-topology-parity",
+      "kind": "image"
+    },
+    {
+      "id": "audio-source",
+      "locator": "fixture://audio-only-aac-priming",
+      "kind": "audio"
+    }
+  ],
+  "timeline": {
+    "tracks": [
+      {
+        "id": "video",
+        "name": "Video",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "image-clip",
+            "source_id": "image-source",
+            "timeline_range": { "start": 0, "end": 48000 },
+            "source_range": { "start": 0, "end": 48000 }
+          }
+        ]
+      },
+      {
+        "id": "audio",
+        "name": "Audio",
+        "kind": "audio",
+        "clips": [
+          {
+            "id": "audio-clip",
+            "source_id": "audio-source",
+            "timeline_range": { "start": 0, "end": 48000 },
+            "source_range": { "start": 0, "end": 48000 }
+          }
+        ]
+      }
+    ]
+  }
+}

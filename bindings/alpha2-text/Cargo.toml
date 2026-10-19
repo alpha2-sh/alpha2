@@ -1,0 +1,41 @@
+[package]
+name = "alpha2-text"
+version.workspace = true
+description = "Portable text shaping and rasterization for alpha2 hosts, native and wasm."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["text", "shaping", "rasterization", "captions", "wasm"]
+categories = ["text-processing", "rendering"]
+# Tests, test-only modules, benches and fixtures stay in the repository, where `cargo test` runs.
+include = [
+  "/src/**",
+  "/README.md",
+  "/LICENSE.md",
+  "!/src/**/tests.rs",
+  "!/src/**/*_tests.rs",
+  "!/src/**/tests/**",
+]
+
+[dependencies]
+alpha2-media.workspace = true
+# Without `std` (so with `libm`): on x86 `std` picks an AVX2 or SSE4.2 line drawing at run time,
+# and the one scalar path keeps native and wasm glyphs the same bytes.
+ab_glyph_rasterizer = { version = "0.1.10", default-features = false, features = ["libm"] }
+rustybuzz = "0.20.1"
+unicode-bidi = "0.3.18"
+unicode-linebreak = "0.1.5"
+unicode-script = "0.5.8"
+unicode-segmentation = "1.13.3"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+alpha2-scaling-support.workspace = true
+serde_json.workspace = true
+
+[[bench]]
+name = "caption_raster"
+harness = false

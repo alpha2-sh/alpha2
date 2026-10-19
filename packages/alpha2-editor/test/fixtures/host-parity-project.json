@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "id": "host-parity",
+  "name": "Host parity fixture",
+  "settings": {
+    "width": 64,
+    "height": 48,
+    "frame_rate": { "num": 24, "den": 1 },
+    "sample_rate": 48000
+  },
+  "sources": [
+    {
+      "id": "image-source",
+      "locator": "fixture://cross-topology-parity",
+      "kind": "image"
+    }
+  ],
+  "compositions": [
+    {
+      "id": "image-clip-look",
+      "nodes": [
+        { "id": "clip", "op": { "type": "clip" } },
+        {
+          "id": "effect-0",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.color-controls",
+              "version": 1,
+              "params": {
+                "exposure": {
+                  "mode": "keyframes",
+                  "keyframes": [
+                    {
+                      "time": -2500,
+                      "value": { "type": "float", "value": -1 },
+                      "interpolation": { "type": "linear" }
+                    },
+                    {
+                      "time": 2500,
+                      "value": { "type": "float", "value": 1 },
+                      "interpolation": { "type": "hold" }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect-0"
+    }
+  ],
+  "timeline": {
+    "tracks": [
+      {
+        "id": "video",
+        "name": "Video",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "image-clip",
+            "source_id": "image-source",
+            "timeline_range": { "start": 0, "end": 5000 },
+            "source_range": { "start": 0, "end": 5000 },
+            "composition": { "id": "image-clip-look" }
+          }
+        ]
+      }
+    ]
+  }
+}

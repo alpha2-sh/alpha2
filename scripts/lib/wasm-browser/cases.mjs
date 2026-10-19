@@ -1,0 +1,136 @@
+// The cases of test-wasm-browser.mjs, in the order they run: each name is the page's path and maps
+// to the body of the page (lib/wasm-browser/page.mjs wraps it).
+
+import {
+  audioContinuity,
+  audioMatroskaCodecDelay,
+  audioSeekState,
+  audioSpeakerLayout,
+  audioStoreCapacity,
+  audioWindowPreroll,
+  fixedAudioMix,
+  loudnessUnderLimiter,
+} from "./audio.mjs";
+import {
+  audioClockTracking,
+  audioWorkletHighRate,
+  audioWorkletOtherRate,
+  audioWorkletQuanta,
+} from "./audio-worklet.mjs";
+import {
+  layers,
+  smoke,
+  transparentEdges,
+  webgl2EffectBackendCompile,
+  webgl2ProbeWithoutOffscreenWebgl,
+  webgl2WithoutFloatColorBuffers,
+  webglContextLoss,
+  webglWorkerRecovery,
+  webgpuDroppedWork,
+  webgpuRejectedFrame,
+  webgpuUnconfiguredSurface,
+} from "./backends.mjs";
+import {
+  bindingRefusalCodes,
+  effectRegistrationOverlap,
+  engineErrorCodes,
+  sha256BlobYields,
+  textRasterParity,
+  wasmFeatureProbe,
+} from "./binding.mjs";
+import {
+  exportEveryProjectRate,
+  exportSchedule,
+  exportWaitingFrames,
+  exportWorkingSet,
+} from "./export.mjs";
+import {
+  extensionModuleRestart,
+  extensionProviderContract,
+  extensionSvgBudgets,
+} from "./extensions.mjs";
+import {
+  frameCacheBound,
+  gpuMemoryRelease,
+  planBudget,
+  readbackCanaryBuffers,
+  resultCacheRevisit,
+  stillResidency,
+  wasmMemoryBound,
+} from "./memory.mjs";
+import {
+  browserVideoConversion,
+  presentationCacheColor,
+  presentationCacheResize,
+  sdrChromaSiting,
+  videoColorContract,
+  yuvAnamorphic,
+} from "./video.mjs";
+
+export const cases = {
+  "webgpu-smoke": () => smoke(false),
+  "webgl2-smoke": () => smoke(true),
+  "webgl-context-loss": webglContextLoss,
+  "webgl-worker-recovery": webglWorkerRecovery,
+  "webgpu-dropped-work": webgpuDroppedWork,
+  "webgpu-rejected-frame": webgpuRejectedFrame,
+  "video-color-contract": videoColorContract,
+  "browser-video-conversion": browserVideoConversion,
+  "sdr-chroma-siting": sdrChromaSiting,
+  "audio-clock-tracking": () => audioClockTracking(48_000),
+  "audio-clock-tracking-other-rate": () => audioClockTracking(44_100),
+  "audio-worklet-other-rate": audioWorkletOtherRate,
+  "audio-worklet-quanta": audioWorkletQuanta,
+  "audio-worklet-high-rate": audioWorkletHighRate,
+  "wasm-memory-bound": wasmMemoryBound,
+  "wasm-rolling-audio-memory": () => wasmMemoryBound(true),
+  "audio-store-capacity": audioStoreCapacity,
+  "export-schedule": exportSchedule,
+  "frame-cache-bound": frameCacheBound,
+  "still-residency": stillResidency,
+  "presentation-cache-resize": presentationCacheResize,
+  "presentation-cache-color": presentationCacheColor,
+  "export-waiting-frames": exportWaitingFrames,
+  "export-working-set": exportWorkingSet,
+  "audio-seek-state": audioSeekState,
+  "audio-continuity": audioContinuity,
+  "audio-window-preroll": audioWindowPreroll,
+  "audio-matroska-codec-delay": audioMatroskaCodecDelay,
+  "audio-speaker-layout": audioSpeakerLayout,
+  "fixed-audio-mix": fixedAudioMix,
+  "export-every-project-rate": exportEveryProjectRate,
+  "loudness-under-limiter": loudnessUnderLimiter,
+  "text-raster-parity": textRasterParity,
+  "webgl2-transparent-edges": () => transparentEdges(true),
+  "webgpu-transparent-edges": () => transparentEdges(false),
+  "webgl2-layers": () => layers(true),
+  "webgpu-layers": () => layers(false),
+  "webgl2-effect-backend-compile": webgl2EffectBackendCompile,
+  "webgl2-without-float-color-buffers": webgl2WithoutFloatColorBuffers,
+  "webgpu-video-frame-rejected": () => transparentEdges(false, true),
+  "extension-module-restart": extensionModuleRestart,
+  "extension-svg-budgets": extensionSvgBudgets,
+  "extension-provider-contract": extensionProviderContract,
+  "gpu-memory-release": gpuMemoryRelease,
+  "readback-canary-buffers": readbackCanaryBuffers,
+  "plan-budget": planBudget,
+  "engine-error-codes": engineErrorCodes,
+  "binding-refusal-codes": bindingRefusalCodes,
+  "result-cache-revisit": resultCacheRevisit,
+  "effect-registration-overlap": effectRegistrationOverlap,
+  "yuv-anamorphic": yuvAnamorphic,
+  "webgl2-probe-without-offscreen-webgl": webgl2ProbeWithoutOffscreenWebgl,
+  "wasm-feature-probe": wasmFeatureProbe,
+  "sha256-blob-yields": sha256BlobYields,
+  "webgpu-unconfigured-surface": webgpuUnconfiguredSurface,
+};
+
+// Cases that import a VideoFrame into WebGPU, which some browsers cannot do.
+export const videoImportCases = new Set([
+  "webgpu-transparent-edges",
+  "webgpu-video-frame-rejected",
+  "video-color-contract",
+  "browser-video-conversion",
+  "sdr-chroma-siting",
+  "presentation-cache-resize",
+]);

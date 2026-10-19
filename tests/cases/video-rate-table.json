@@ -1,0 +1,305 @@
+{
+  "description": "The engine's level-to-rate table, pinned. crates/alpha2-model reads this in its unit tests; test:package resolves every case through the built wasm binding and compares.",
+  "cases": [
+    {
+      "codec": "h264",
+      "width": 1920,
+      "height": 1080,
+      "frameRate": {
+        "num": 30,
+        "den": 1
+      },
+      "level": "very-low",
+      "expected": {
+        "bitrate": 1800000,
+        "mode": "variable",
+        "quantizer": 41
+      }
+    },
+    {
+      "codec": "h264",
+      "width": 1920,
+      "height": 1080,
+      "frameRate": {
+        "num": 30,
+        "den": 1
+      },
+      "level": "low",
+      "expected": {
+        "bitrate": 3500000,
+        "mode": "variable",
+        "quantizer": 35
+      }
+    },
+    {
+      "codec": "h264",
+      "width": 1920,
+      "height": 1080,
+      "frameRate": {
+        "num": 30,
+        "den": 1
+      },
+      "level": "medium",
+      "expected": {
+        "bitrate": 6000000,
+        "mode": "variable",
+        "quantizer": 31
+      }
+    },
+    {
+      "codec": "h264",
+      "width": 1920,
+      "height": 1080,
+      "frameRate": {
+        "num": 30,
+        "den": 1
+      },
+      "level": "high",
+      "expected": {
+        "bitrate": 10000000,
+        "mode": "variable",
+        "quantizer": 27
+      }
+    },
+    {
+      "codec": "h264",
+      "width": 1920,
+      "height": 1080,
+      "frameRate": {
+        "num": 30,
+        "den": 1
+      },
+      "level": "very-high",
+      "expected": {
+        "bitrate": 16000000,
+        "mode": "variable",
+        "quantizer": 23
+      }
+    },
+    {
+      "codec": "h264",
+      "width": 3840,
+      "height": 2160,
+      "frameRate": {
+        "num": 30,
+        "den": 1
+      },
+      "level": "very-low",
+      "expected": {
+        "bitrate": 3600000,
+        "mode": "variable",
+        "quantizer": 41
+      }
+    },
+    {
+      "codec": "h264",
+      "width": 3840,
+      "height": 2160,
+      "frameRate": {
+        "num": 30,
+        "den": 1
+      },
+      "level": "low",
+      "expected": {
+        "bitrate": 7000000,
+        "mode": "variable",
+        "quantizer": 35
+      }
+    },
+    {
+      "codec": "h264",
+      "width": 3840,
+      "height": 2160,
+      "frameRate": {
+        "num": 30,
+        "den": 1
+      },
+      "level": "medium",
+      "expected": {
+        "bitrate": 12000000,
+        "mode": "variable",
+        "quantizer": 31
+      }
+    },
+    {
+      "codec": "h264",
+      "width": 3840,
+      "height": 2160,
+      "frameRate": {
+        "num": 30,
+        "den": 1
+      },
+      "level": "high",
+      "expected": {
+        "bitrate": 20000000,
+        "mode": "variable",
+        "quantizer": 27
+      }
+    },
+    {
+      "codec": "h264",
+      "width": 3840,
+      "height": 2160,
+      "frameRate": {
+        "num": 30,
+        "den": 1
+      },
+      "level": "very-high",
+      "expected": {
+        "bitrate": 32000000,
+        "mode": "variable",
+        "quantizer": 23
+      }
+    },
+    {
+      "codec": "h264",
+      "width": 3840,
+      "height": 1634,
+      "frameRate": {
+        "num": 24000,
+        "den": 1001
+      },
+      "level": "high",
+      "expected": {
+        "bitrate": 15206000,
+        "mode": "variable",
+        "quantizer": 27
+      }
+    },
+    {
+      "codec": "h264",
+      "width": 1920,
+      "height": 1080,
+      "frameRate": {
+        "num": 60,
+        "den": 1
+      },
+      "level": "high",
+      "expected": {
+        "bitrate": 15157000,
+        "mode": "variable",
+        "quantizer": 27
+      }
+    },
+    {
+      "codec": "h264",
+      "width": 1920,
+      "height": 1080,
+      "frameRate": {
+        "num": 24,
+        "den": 1
+      },
+      "level": "high",
+      "expected": {
+        "bitrate": 8747000,
+        "mode": "variable",
+        "quantizer": 27
+      }
+    },
+    {
+      "codec": "hevc",
+      "width": 1920,
+      "height": 1080,
+      "frameRate": {
+        "num": 30,
+        "den": 1
+      },
+      "level": "high",
+      "expected": {
+        "bitrate": 6500000,
+        "mode": "variable",
+        "quantizer": null
+      }
+    },
+    {
+      "codec": "vp9",
+      "width": 1920,
+      "height": 1080,
+      "frameRate": {
+        "num": 30,
+        "den": 1
+      },
+      "level": "high",
+      "expected": {
+        "bitrate": 6500000,
+        "mode": "variable",
+        "quantizer": null
+      }
+    },
+    {
+      "codec": "av1",
+      "width": 3840,
+      "height": 2160,
+      "frameRate": {
+        "num": 30,
+        "den": 1
+      },
+      "level": "medium",
+      "expected": {
+        "bitrate": 6960000,
+        "mode": "variable",
+        "quantizer": null
+      }
+    },
+    {
+      "codec": "mpeg4-part2",
+      "width": 1920,
+      "height": 1080,
+      "frameRate": {
+        "num": 30,
+        "den": 1
+      },
+      "level": "high",
+      "expected": {
+        "bitrate": 27000000,
+        "mode": "variable",
+        "quantizer": null
+      }
+    },
+    {
+      "codec": "mpeg4-part2",
+      "width": 64,
+      "height": 48,
+      "frameRate": {
+        "num": 24,
+        "den": 1
+      },
+      "level": "high",
+      "expected": {
+        "bitrate": 909000,
+        "mode": "variable",
+        "quantizer": null
+      }
+    },
+    {
+      "codec": "h264",
+      "width": 320,
+      "height": 240,
+      "frameRate": {
+        "num": 24,
+        "den": 1
+      },
+      "level": "very-low",
+      "expected": {
+        "bitrate": 303000,
+        "mode": "variable",
+        "quantizer": 41
+      }
+    },
+    {
+      "codec": "h264",
+      "width": 64,
+      "height": 48,
+      "frameRate": {
+        "num": 24,
+        "den": 1
+      },
+      "level": "very-low",
+      "expected": {
+        "bitrate": 250000,
+        "mode": "variable",
+        "quantizer": 41
+      }
+    }
+  ]
+}

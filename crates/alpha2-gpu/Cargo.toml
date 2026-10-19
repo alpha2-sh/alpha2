@@ -1,0 +1,39 @@
+[package]
+name = "alpha2-gpu"
+version.workspace = true
+description = "GPU context and capability boundary for alpha2."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["gpu", "wgpu", "webgpu", "video"]
+categories = ["graphics", "rendering"]
+# Builds from its sources and license alone: tests, test-only modules, benches and fixtures
+# stay in the repository, which is where `cargo test` runs.
+include = [
+  "/src/**",
+  "/README.md",
+  "/LICENSE.md",
+  "!/src/**/tests.rs",
+  "!/src/**/*_tests.rs",
+  "!/src/**/tests/**",
+]
+
+[features]
+# Device acquisitions take turns within a process. For test builds only: the workspace's crates
+# turn it on through their dev-dependencies (see `serialize_acquisition`).
+serial-acquisition = []
+# The `wgpu` interop surface: `alpha2_gpu::wgpu`, and the items that take or return `wgpu` types
+# (documented only with this feature; their semver follows wgpu's major). Off by default.
+wgpu-interop = []
+
+[dependencies]
+wgpu.workspace = true
+web-time = "1.1.0"
+
+[dev-dependencies]
+alpha2-gpu = { path = ".", features = ["serial-acquisition"] }
+pollster.workspace = true
+
+[lints]
+workspace = true

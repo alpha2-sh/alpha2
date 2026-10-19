@@ -1,0 +1,67 @@
+[package]
+name = "alpha2-extensions"
+version.workspace = true
+description = "Extension providers that supply frames of formats the host decoders do not read: SVG, animated images, Lottie, OpenEXR, image sequences."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["svg", "lottie", "gif", "openexr", "video"]
+categories = ["multimedia::images", "multimedia::video"]
+# Tests, test-only modules, benches and fixtures stay in the repository, where `cargo test` runs.
+include = [
+  "/src/**",
+  "/README.md",
+  "/LICENSE.md",
+  "!/src/**/tests.rs",
+  "!/src/**/*_tests.rs",
+  "!/src/**/tests/**",
+]
+
+[features]
+default = ["svg", "animated-image", "image-sequence", "lottie", "exr"]
+# Static SVG through resvg with only the fonts a host registers, never system fonts, so every host
+# rasterizes the same pixels.
+svg = ["dep:resvg", "dep:imagesize", "dep:flate2", "dep:simplecss", "dep:svgtypes", "dep:kurbo"]
+# GIF, animated WebP, and APNG, composited by one frame compositor.
+animated-image = ["dep:gif", "dep:image-webp", "dep:png"]
+# Numbered still images at a fixed rate.
+image-sequence = ["dep:png"]
+# OpenEXR stills and EXR frames in image sequences: flat RGB(A) half/float, delivered as
+# premultiplied linear half-float frames.
+exr = ["dep:exr", "dep:half"]
+# Lottie JSON and dotLottie: velato's animation model, rasterized with tiny-skia like SVG.
+lottie = ["dep:velato", "dep:kurbo", "dep:peniko", "dep:resvg", "dep:zip", "dep:serde_json", "dep:png", "dep:base64"]
+
+[dependencies]
+alpha2-model.workspace = true
+alpha2-time.workspace = true
+serde.workspace = true
+gif = { version = "0.14.2", optional = true, default-features = false, features = ["std"] }
+image-webp = { version = "0.2.4", optional = true }
+png = { workspace = true, optional = true }
+imagesize = { version = "0.14.0", optional = true }
+resvg = { version = "0.47.0", optional = true, default-features = false, features = ["text", "raster-images"] }
+serde_json = { workspace = true, optional = true }
+velato = { version = "0.12.0", optional = true, default-features = false }
+kurbo = { version = "0.13.1", optional = true }
+peniko = { version = "0.6.1", optional = true }
+base64 = { version = "0.22.1", optional = true }
+exr = { version = "1.74.2", optional = true, default-features = false }
+half = { version = "2.6.0", optional = true }
+flate2 = { version = "1.1.10", optional = true }
+simplecss = { version = "0.2.2", optional = true }
+svgtypes = { version = "0.16.1", optional = true }
+zip = { version = "9.0.5", optional = true, default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+alpha2-scaling-support.workspace = true
+serde_json.workspace = true
+# Tests write the files they read (PNG and GIF encoders, data URLs). Each format's tests build with
+# that format alone.
+base64 = "0.22.1"
+gif = { version = "0.14.2", default-features = false, features = ["std", "color_quant"] }
+png.workspace = true
+
+[lints]
+workspace = true

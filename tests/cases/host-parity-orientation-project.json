@@ -1,0 +1,299 @@
+{
+  "schema_version": 1,
+  "id": "host-parity-orientation",
+  "name": "Host parity: stills upright by their Exif orientation, in stored code values, at their own size, display matrices that mirror, and pixels that are not square",
+  "settings": {
+    "width": 64,
+    "height": 48,
+    "frame_rate": {
+      "num": 30,
+      "den": 1
+    },
+    "sample_rate": 48000
+  },
+  "sources": [
+    {
+      "id": "exif1",
+      "locator": "fixture://exif-orientation-1",
+      "kind": "image"
+    },
+    {
+      "id": "exif2",
+      "locator": "fixture://exif-orientation-2",
+      "kind": "image"
+    },
+    {
+      "id": "exif3",
+      "locator": "fixture://exif-orientation-3",
+      "kind": "image"
+    },
+    {
+      "id": "exif4",
+      "locator": "fixture://exif-orientation-4",
+      "kind": "image"
+    },
+    {
+      "id": "exif5",
+      "locator": "fixture://exif-orientation-5",
+      "kind": "image"
+    },
+    {
+      "id": "exif6",
+      "locator": "fixture://exif-orientation-6",
+      "kind": "image"
+    },
+    {
+      "id": "exif7",
+      "locator": "fixture://exif-orientation-7",
+      "kind": "image"
+    },
+    {
+      "id": "exif8",
+      "locator": "fixture://exif-orientation-8",
+      "kind": "image"
+    },
+    {
+      "id": "p3",
+      "locator": "fixture://icc-display-p3",
+      "kind": "image"
+    },
+    {
+      "id": "hflip",
+      "locator": "fixture://h264-bt709-hflip",
+      "kind": "video"
+    },
+    {
+      "id": "vflip",
+      "locator": "fixture://h264-bt709-vflip",
+      "kind": "video"
+    },
+    {
+      "id": "transverse",
+      "locator": "fixture://h264-bt709-transverse",
+      "kind": "video"
+    },
+    {
+      "id": "transverse-mkv",
+      "locator": "fixture://h264-bt709-transverse-mkv",
+      "kind": "video"
+    },
+    {
+      "id": "pasp",
+      "locator": "fixture://h264-bt709-pasp",
+      "kind": "video"
+    },
+    {
+      "id": "vui-sar-ts",
+      "locator": "fixture://h264-bt709-vui-sar-ts",
+      "kind": "video"
+    },
+    {
+      "id": "vui-sar-mp4",
+      "locator": "fixture://h264-bt709-vui-sar",
+      "kind": "video"
+    }
+  ],
+  "timeline": {
+    "tracks": [
+      {
+        "id": "base",
+        "name": "Base",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "exif1-clip",
+            "source_id": "exif1",
+            "timeline_range": {
+              "start": 0,
+              "end": 4000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 4000
+            }
+          },
+          {
+            "id": "exif2-clip",
+            "source_id": "exif2",
+            "timeline_range": {
+              "start": 4000,
+              "end": 8000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 4000
+            }
+          },
+          {
+            "id": "exif3-clip",
+            "source_id": "exif3",
+            "timeline_range": {
+              "start": 8000,
+              "end": 12000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 4000
+            }
+          },
+          {
+            "id": "exif4-clip",
+            "source_id": "exif4",
+            "timeline_range": {
+              "start": 12000,
+              "end": 16000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 4000
+            }
+          },
+          {
+            "id": "exif5-clip",
+            "source_id": "exif5",
+            "timeline_range": {
+              "start": 16000,
+              "end": 20000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 4000
+            }
+          },
+          {
+            "id": "exif6-clip",
+            "source_id": "exif6",
+            "timeline_range": {
+              "start": 20000,
+              "end": 24000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 4000
+            }
+          },
+          {
+            "id": "exif7-clip",
+            "source_id": "exif7",
+            "timeline_range": {
+              "start": 24000,
+              "end": 28000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 4000
+            }
+          },
+          {
+            "id": "exif8-clip",
+            "source_id": "exif8",
+            "timeline_range": {
+              "start": 28000,
+              "end": 32000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 4000
+            }
+          },
+          {
+            "id": "p3-clip",
+            "source_id": "p3",
+            "timeline_range": {
+              "start": 32000,
+              "end": 36000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 4000
+            }
+          },
+          {
+            "id": "hflip-clip",
+            "source_id": "hflip",
+            "timeline_range": {
+              "start": 36000,
+              "end": 40000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 4000
+            }
+          },
+          {
+            "id": "vflip-clip",
+            "source_id": "vflip",
+            "timeline_range": {
+              "start": 40000,
+              "end": 44000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 4000
+            }
+          },
+          {
+            "id": "transverse-clip",
+            "source_id": "transverse",
+            "timeline_range": {
+              "start": 44000,
+              "end": 48000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 4000
+            }
+          },
+          {
+            "id": "transverse-mkv-clip",
+            "source_id": "transverse-mkv",
+            "timeline_range": {
+              "start": 48000,
+              "end": 52000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 4000
+            }
+          },
+          {
+            "id": "pasp-clip",
+            "source_id": "pasp",
+            "timeline_range": {
+              "start": 52000,
+              "end": 56000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 4000
+            }
+          },
+          {
+            "id": "vui-sar-ts-clip",
+            "source_id": "vui-sar-ts",
+            "timeline_range": {
+              "start": 56000,
+              "end": 60000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 4000
+            }
+          },
+          {
+            "id": "vui-sar-mp4-clip",
+            "source_id": "vui-sar-mp4",
+            "timeline_range": {
+              "start": 60000,
+              "end": 64000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 4000
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

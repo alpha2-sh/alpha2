@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="32" viewBox="0 0 64 32">
+  <defs>
+    <linearGradient id="fade" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ff0000"/>
+      <stop offset="1" stop-color="#0000ff"/>
+    </linearGradient>
+  </defs>
+  <!-- An opaque left half, a gradient bar, and a translated, half-transparent circle. -->
+  <rect x="0" y="0" width="32" height="32" fill="#20a040"/>
+  <rect x="32" y="0" width="32" height="8" fill="url(#fade)"/>
+  <g transform="translate(48 20)">
+    <circle r="8" fill="#ffffff" fill-opacity="0.5" stroke="#000000" stroke-width="2"/>
+  </g>
+</svg>

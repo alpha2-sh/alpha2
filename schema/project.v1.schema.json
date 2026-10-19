@@ -1,0 +1,3618 @@
+{
+  "$defs": {
+    "Animated_EffectValue": {
+      "description": "A value that is either constant or controlled by sorted keyframes.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A value without animation.",
+          "properties": {
+            "mode": {
+              "const": "constant",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/EffectValue",
+              "description": "Value used at every timestamp."
+            }
+          },
+          "required": [
+            "mode",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Values evaluated from their keyframe sequence.",
+          "properties": {
+            "keyframes": {
+              "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
+              "items": {
+                "$ref": "#/$defs/Keyframe_EffectValue"
+              },
+              "type": "array"
+            },
+            "mode": {
+              "const": "keyframes",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "keyframes"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Animated_Vec2": {
+      "description": "A value that is either constant or controlled by sorted keyframes.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A value without animation.",
+          "properties": {
+            "mode": {
+              "const": "constant",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/Vec2",
+              "description": "Value used at every timestamp."
+            }
+          },
+          "required": [
+            "mode",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Values evaluated from their keyframe sequence.",
+          "properties": {
+            "keyframes": {
+              "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
+              "items": {
+                "$ref": "#/$defs/Keyframe_Vec2"
+              },
+              "type": "array"
+            },
+            "mode": {
+              "const": "keyframes",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "keyframes"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Animated_float": {
+      "description": "A value that is either constant or controlled by sorted keyframes.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A value without animation.",
+          "properties": {
+            "mode": {
+              "const": "constant",
+              "type": "string"
+            },
+            "value": {
+              "description": "Value used at every timestamp.",
+              "format": "float",
+              "type": "number"
+            }
+          },
+          "required": [
+            "mode",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Values evaluated from their keyframe sequence.",
+          "properties": {
+            "keyframes": {
+              "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
+              "items": {
+                "$ref": "#/$defs/Keyframe_float"
+              },
+              "type": "array"
+            },
+            "mode": {
+              "const": "keyframes",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "keyframes"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "AudioEffect": {
+      "description": "A serializable single-input audio effect applied to a clip or track bus.\n\nSidechain ducking is not an entry here because it consumes a second input.\nIt is authored per track through [`Ducking`].",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Cascaded biquad sections.",
+          "properties": {
+            "bands": {
+              "description": "Ordered filter sections, 1 to [`MAX_EQ_BANDS`] of them.",
+              "items": {
+                "$ref": "#/$defs/EqBand"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "eq",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "bands"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Lookahead dynamic range compression.",
+          "properties": {
+            "attack_ms": {
+              "description": "Attack time in milliseconds, positive and at most [`MAX_ENVELOPE_MS`].",
+              "format": "float",
+              "type": "number"
+            },
+            "lookahead_ms": {
+              "default": 0.0,
+              "description": "Lookahead in milliseconds, at most [`MAX_LOOKAHEAD_MS`]. Reported as\ngraph latency.",
+              "format": "float",
+              "type": "number"
+            },
+            "ratio": {
+              "description": "Downward ratio, from one (unity) to [`MAX_COMPRESSOR_RATIO`].",
+              "format": "float",
+              "type": "number"
+            },
+            "release_ms": {
+              "description": "Release time in milliseconds, positive and at most [`MAX_ENVELOPE_MS`].",
+              "format": "float",
+              "type": "number"
+            },
+            "threshold_db": {
+              "description": "Level above which gain reduction begins, in decibels from\n[`MIN_LEVEL_DB`] to 0.",
+              "format": "float",
+              "type": "number"
+            },
+            "type": {
+              "const": "compressor",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "threshold_db",
+            "ratio",
+            "attack_ms",
+            "release_ms"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Schroeder reverberation.",
+          "properties": {
+            "damping": {
+              "description": "High-frequency damping, in `0..=1`.",
+              "format": "float",
+              "type": "number"
+            },
+            "mix": {
+              "description": "Wet mix, in `0..=1`.",
+              "format": "float",
+              "type": "number"
+            },
+            "room_size": {
+              "description": "Room size, in `0..=1`.",
+              "format": "float",
+              "type": "number"
+            },
+            "type": {
+              "const": "reverb",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "room_size",
+            "damping",
+            "mix"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "AudioProperties": {
+      "additionalProperties": false,
+      "description": "Per-clip audio presentation controls.",
+      "properties": {
+        "effects": {
+          "default": [],
+          "description": "Ordered single-input effects applied before the track bus, at most\n[`MAX_CHAIN_EFFECTS`].",
+          "items": {
+            "$ref": "#/$defs/AudioEffect"
+          },
+          "type": "array"
+        },
+        "fade_in": {
+          "$ref": "#/$defs/MediaTime",
+          "default": 0,
+          "description": "Fade-in duration measured from the clip's timeline start. Non-negative."
+        },
+        "fade_out": {
+          "$ref": "#/$defs/MediaTime",
+          "default": 0,
+          "description": "Fade-out duration measured back from the clip's timeline end.\nNon-negative."
+        },
+        "fade_shape": {
+          "$ref": "#/$defs/FadeShape",
+          "default": "linear",
+          "description": "Curve used by both fades."
+        },
+        "gain": {
+          "$ref": "#/$defs/Animated_float",
+          "default": {
+            "mode": "constant",
+            "value": 1.0
+          },
+          "description": "Animated linear amplitude constrained to `0..=MAX_GAIN`."
+        },
+        "muted": {
+          "default": false,
+          "description": "Silences this clip without removing it.",
+          "type": "boolean"
+        },
+        "pan": {
+          "$ref": "#/$defs/Animated_float",
+          "default": {
+            "mode": "constant",
+            "value": 0.0
+          },
+          "description": "Animated stereo position from `-1` (left) to `1` (right)."
+        }
+      },
+      "type": "object"
+    },
+    "AudioStreamShape": {
+      "additionalProperties": false,
+      "description": "An audio stream's channel count and sample rate.",
+      "properties": {
+        "channels": {
+          "description": "Channel count.",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sample_rate": {
+          "description": "Samples per second per channel.",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "channels",
+        "sample_rate"
+      ],
+      "type": "object"
+    },
+    "BlendSpace": {
+      "description": "The color space in which blend modes are evaluated.\n\nComposition is always premultiplied; this chooses what the blend formulas\nsee. Design tools blend sRGB-encoded values, so overlay, soft-light, and\nthe other contrast modes look as they do there only in\n[`BlendSpace::SrgbEncoded`].",
+      "oneOf": [
+        {
+          "const": "linear_light",
+          "description": "Linear light, where blending is physically meaningful.",
+          "type": "string"
+        },
+        {
+          "const": "srgb_encoded",
+          "description": "sRGB-encoded values, as design tools and CSS blend.",
+          "type": "string"
+        }
+      ]
+    },
+    "CacheIntent": {
+      "description": "Whether a runtime may keep and reuse a clip's rendered picture.",
+      "oneOf": [
+        {
+          "const": "auto",
+          "description": "The runtime decides, keeping pictures whose inputs it can identify.",
+          "type": "string"
+        },
+        {
+          "const": "pin",
+          "description": "Keep it ahead of other pictures, and bake its range when a host bakes\nrender caches.",
+          "type": "string"
+        },
+        {
+          "const": "bypass",
+          "description": "Always render it live: nothing it draws is read from or kept in a\ncache.",
+          "type": "string"
+        }
+      ]
+    },
+    "CaptionCue": {
+      "additionalProperties": false,
+      "description": "Text shown over one timeline interval.",
+      "properties": {
+        "text": {
+          "description": "The text; `\\n` starts a line. Non-empty, at most\n[`MAX_TEXT_CONTENT_BYTES`] bytes.",
+          "type": "string"
+        },
+        "timeline_range": {
+          "$ref": "#/$defs/TimeRange",
+          "description": "When the cue shows. Non-empty and not before zero."
+        }
+      },
+      "required": [
+        "timeline_range",
+        "text"
+      ],
+      "type": "object"
+    },
+    "Captions": {
+      "additionalProperties": false,
+      "description": "What a caption track shows: its cues, in one style.",
+      "properties": {
+        "cues": {
+          "description": "Cues in timeline order, none overlapping another: a track shows one\ncue at a time. Simultaneous captions take one track each.",
+          "items": {
+            "$ref": "#/$defs/CaptionCue"
+          },
+          "type": "array"
+        },
+        "style": {
+          "$ref": "#/$defs/TextStyle",
+          "default": {
+            "align": "center",
+            "anchor": {
+              "x": 0.5,
+              "y": 1.0
+            },
+            "background": null,
+            "color": {
+              "alpha": 1.0,
+              "blue": 1.0,
+              "green": 1.0,
+              "red": 1.0
+            },
+            "font_size": 0.05,
+            "line_height": 1.2,
+            "max_width": 0.9,
+            "outline": null,
+            "position": {
+              "x": 0.5,
+              "y": 0.92
+            }
+          },
+          "description": "How every cue of the track looks."
+        }
+      },
+      "required": [
+        "cues"
+      ],
+      "type": "object"
+    },
+    "Clip": {
+      "additionalProperties": false,
+      "description": "A reference to a source over independent timeline and source ranges.",
+      "properties": {
+        "audio": {
+          "$ref": "#/$defs/AudioProperties",
+          "default": {
+            "effects": [],
+            "fade_in": 0,
+            "fade_out": 0,
+            "fade_shape": "linear",
+            "gain": {
+              "mode": "constant",
+              "value": 1.0
+            },
+            "muted": false,
+            "pan": {
+              "mode": "constant",
+              "value": 0.0
+            }
+          },
+          "description": "Presentation controls applied to this clip's audio."
+        },
+        "blend_mode": {
+          "$ref": "#/$defs/ClipBlendMode",
+          "default": "normal",
+          "description": "Artistic operation used when this clip is composited over earlier layers."
+        },
+        "cache": {
+          "$ref": "#/$defs/CacheIntent",
+          "description": "Whether a runtime may keep and reuse the clip's rendered picture.\nNever changes what renders: a kept picture is the one a live render\ndraws."
+        },
+        "composition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ClipComposition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The composition graph that builds the clip's picture from its source,\nwith the clip's time mapping onto it. Without one the clip shows its\nsource as it is. Visual clips only."
+        },
+        "id": {
+          "$ref": "#/$defs/ClipId",
+          "description": "Stable clip identity."
+        },
+        "masks": {
+          "default": [],
+          "description": "Shapes that limit where the clip is visible, applied in order after\nits composition and before its transform. At most\n[`crate::MAX_CLIP_MASKS`]; visual clips only.",
+          "items": {
+            "$ref": "#/$defs/ShapeMask"
+          },
+          "type": "array"
+        },
+        "matte": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Matte"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Another visual clip whose picture sets where this clip is visible."
+        },
+        "source_id": {
+          "$ref": "#/$defs/SourceId",
+          "description": "Source consumed by this clip."
+        },
+        "source_range": {
+          "$ref": "#/$defs/TimeRange",
+          "description": "Interval read from the source timeline."
+        },
+        "time_map": {
+          "$ref": "#/$defs/TimeMap",
+          "default": {
+            "type": "forward"
+          },
+          "description": "How timeline time maps onto the source range."
+        },
+        "timeline_range": {
+          "$ref": "#/$defs/TimeRange",
+          "description": "Destination interval on the project timeline."
+        },
+        "visual": {
+          "$ref": "#/$defs/VisualProperties",
+          "default": {
+            "anchor": {
+              "x": 0.5,
+              "y": 0.5
+            },
+            "opacity": {
+              "mode": "constant",
+              "value": 1.0
+            },
+            "position": {
+              "mode": "constant",
+              "value": {
+                "x": 0.5,
+                "y": 0.5
+              }
+            },
+            "rotation_degrees": {
+              "mode": "constant",
+              "value": 0.0
+            },
+            "scale": {
+              "mode": "constant",
+              "value": {
+                "x": 1.0,
+                "y": 1.0
+              }
+            }
+          },
+          "description": "Resolution-independent visual presentation controls."
+        }
+      },
+      "required": [
+        "id",
+        "source_id",
+        "timeline_range",
+        "source_range"
+      ],
+      "type": "object"
+    },
+    "ClipBlendMode": {
+      "description": "Artistic blend operation stored independently from a renderer implementation.\n\nThe modes are those of W3C Compositing and Blending Level 1 (the CSS\n`mix-blend-mode` values), with the specification's formulas.",
+      "oneOf": [
+        {
+          "const": "normal",
+          "description": "Preserve source color and apply source-over coverage.",
+          "type": "string"
+        },
+        {
+          "const": "multiply",
+          "description": "Multiply source and backdrop components.",
+          "type": "string"
+        },
+        {
+          "const": "screen",
+          "description": "Inverse-multiply source and backdrop components.",
+          "type": "string"
+        },
+        {
+          "const": "overlay",
+          "description": "Multiply dark backdrop regions and screen light regions.",
+          "type": "string"
+        },
+        {
+          "const": "darken",
+          "description": "The darker of source and backdrop, per channel.",
+          "type": "string"
+        },
+        {
+          "const": "lighten",
+          "description": "The lighter of source and backdrop, per channel.",
+          "type": "string"
+        },
+        {
+          "const": "color_dodge",
+          "description": "Brighten the backdrop to reflect the source.",
+          "type": "string"
+        },
+        {
+          "const": "color_burn",
+          "description": "Darken the backdrop to reflect the source.",
+          "type": "string"
+        },
+        {
+          "const": "hard_light",
+          "description": "Multiply or screen, depending on the source.",
+          "type": "string"
+        },
+        {
+          "const": "soft_light",
+          "description": "Darken or lighten, depending on the source: a diffused hard light.",
+          "type": "string"
+        },
+        {
+          "const": "difference",
+          "description": "The absolute difference of source and backdrop.",
+          "type": "string"
+        },
+        {
+          "const": "exclusion",
+          "description": "Like difference, with lower contrast.",
+          "type": "string"
+        },
+        {
+          "const": "hue",
+          "description": "The source's hue with the backdrop's saturation and luminosity.",
+          "type": "string"
+        },
+        {
+          "const": "saturation",
+          "description": "The source's saturation with the backdrop's hue and luminosity.",
+          "type": "string"
+        },
+        {
+          "const": "color",
+          "description": "The source's hue and saturation with the backdrop's luminosity.",
+          "type": "string"
+        },
+        {
+          "const": "luminosity",
+          "description": "The source's luminosity with the backdrop's hue and saturation.",
+          "type": "string"
+        }
+      ]
+    },
+    "ClipComposition": {
+      "additionalProperties": false,
+      "description": "A clip's use of a [`Composition`], and how its time maps onto it.\n\nComposition time is `offset + (t - clip start) * scale` for timeline time\n`t`, rounded down to a tick. Moving a clip keeps its offset, so its\nanimation moves with it; trimming its start by `d` adds `d * scale` to the\noffset, so what remains of the animation stays where it was. Extending the\nstart before composition time zero makes the offset negative: settings\nhold their first keyframe there, and media nodes show their first frame.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/CompositionId",
+          "description": "The composition shown."
+        },
+        "offset": {
+          "$ref": "#/$defs/MediaTime",
+          "default": 0,
+          "description": "Composition time at the clip's start."
+        },
+        "scale": {
+          "$ref": "#/$defs/TimeScale",
+          "default": {
+            "den": 1,
+            "num": 1
+          },
+          "description": "Composition time per timeline time."
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "ClipEffect": {
+      "additionalProperties": false,
+      "description": "One versioned runtime effect invocation: a composition's effect or\ntransition node, or a timeline transition.",
+      "properties": {
+        "id": {
+          "description": "Stable effect definition identifier.",
+          "type": "string"
+        },
+        "params": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Animated_EffectValue"
+          },
+          "default": {},
+          "description": "Named parameter values, constant or keyframed. Omitted entries use\ndefinition defaults.\n\nKeyframe times are composition times in a composition node and\ntimeline times in a timeline transition. A parameter's keyframes all\nhave one value type, and `enum` and `bool` keyframes only hold. An\ninterpolated value that a timing curve carries past the parameter's\nrange is clamped to it; an authored value outside it is an error.",
+          "type": "object"
+        },
+        "resources": {
+          "additionalProperties": {
+            "$ref": "#/$defs/EffectResourceId"
+          },
+          "default": {},
+          "description": "Named external resources matched against the effect definition.",
+          "type": "object"
+        },
+        "version": {
+          "description": "Exact effect definition version required by the project.",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "type": "object"
+    },
+    "ClipId": {
+      "description": "A stable timeline-clip identifier.",
+      "minLength": 1,
+      "type": "string"
+    },
+    "ClipTransition": {
+      "additionalProperties": false,
+      "description": "A two-input transition over the overlap of two visual clips.",
+      "properties": {
+        "easing": {
+          "$ref": "#/$defs/Easing",
+          "description": "Timing curve applied to the transition's linear progress. The eased\nprogress is clamped to `0..=1`, the domain transition shaders define."
+        },
+        "effect": {
+          "$ref": "#/$defs/ClipEffect",
+          "description": "Versioned transition shader and named parameter values."
+        },
+        "from_clip": {
+          "$ref": "#/$defs/ClipId",
+          "description": "Clip sampled as transition progress zero."
+        },
+        "timeline_range": {
+          "$ref": "#/$defs/TimeRange",
+          "description": "Half-open timeline interval over which both clips must be active."
+        },
+        "to_clip": {
+          "$ref": "#/$defs/ClipId",
+          "description": "Clip sampled as transition progress one."
+        }
+      },
+      "required": [
+        "from_clip",
+        "to_clip",
+        "timeline_range",
+        "easing",
+        "effect"
+      ],
+      "type": "object"
+    },
+    "ColorMatrix": {
+      "description": "Coefficients used to decode source components.",
+      "oneOf": [
+        {
+          "const": "bt601",
+          "description": "SD BT.601 YUV coefficients.",
+          "type": "string"
+        },
+        {
+          "const": "bt709",
+          "description": "HD BT.709 YUV coefficients.",
+          "type": "string"
+        },
+        {
+          "const": "bt2020_ncl",
+          "description": "BT.2020 non-constant-luminance YUV coefficients.",
+          "type": "string"
+        },
+        {
+          "const": "rgb",
+          "description": "Source components are already RGB.",
+          "type": "string"
+        }
+      ]
+    },
+    "ColorMetadata": {
+      "additionalProperties": false,
+      "description": "Host-independent video color description.",
+      "properties": {
+        "dynamic_range": {
+          "$ref": "#/$defs/DynamicRange",
+          "description": "SDR or HDR signal classification: HDR exactly when `transfer` is PQ\nor HLG ([`Self::is_consistent`])."
+        },
+        "matrix": {
+          "$ref": "#/$defs/ColorMatrix",
+          "description": "YUV-to-RGB coefficient family, or RGB for already converted sources."
+        },
+        "primaries": {
+          "$ref": "#/$defs/ColorPrimaries",
+          "description": "RGB chromaticity standard."
+        },
+        "range": {
+          "$ref": "#/$defs/ColorRange",
+          "description": "Encoded component range."
+        },
+        "transfer": {
+          "$ref": "#/$defs/TransferFunction",
+          "description": "Nonlinear transfer curve."
+        }
+      },
+      "required": [
+        "primaries",
+        "transfer",
+        "matrix",
+        "range",
+        "dynamic_range"
+      ],
+      "type": "object"
+    },
+    "ColorPipeline": {
+      "additionalProperties": false,
+      "description": "How sources' colors come into the working space.\n\nThe working space is display-referred linear light with BT.709 primaries,\nwhere `1.0` is SDR white (100 nits), and every export is SDR BT.709. SDR\nsources decode through the sRGB EOTF; wide-gamut ones are converted into\nBT.709 primaries. An HDR (PQ or HLG) source is either refused or brought\nin: linearized to display light, converted into BT.709 primaries, and\ntone-mapped from [`Self::hdr_peak_nits`] to SDR white by the ITU-R BT.2390\nEETF on each pixel's largest component, which keeps its hue.",
+      "properties": {
+        "hdr": {
+          "$ref": "#/$defs/HdrSources",
+          "default": "tone_map",
+          "description": "What an HDR source does."
+        },
+        "hdr_peak_nits": {
+          "default": 1000,
+          "description": "The luminance, in nits, HDR sources are taken to peak at: PQ above it\nis clipped to it, HLG is displayed at it, and the tone map brings it\nto SDR white. Within [`HDR_PEAK_NITS_RANGE`].",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "ColorPrimaries": {
+      "description": "RGB primary chromaticities a source or export declares.",
+      "oneOf": [
+        {
+          "const": "bt601",
+          "description": "SD video primaries.",
+          "type": "string"
+        },
+        {
+          "const": "bt709",
+          "description": "HD video and sRGB primaries.",
+          "type": "string"
+        },
+        {
+          "const": "bt2020",
+          "description": "Wide-gamut BT.2020 primaries, normally indicating HDR input.",
+          "type": "string"
+        }
+      ]
+    },
+    "ColorRange": {
+      "description": "Nominal encoded component range.",
+      "oneOf": [
+        {
+          "const": "limited",
+          "description": "Studio/video range.",
+          "type": "string"
+        },
+        {
+          "const": "full",
+          "description": "Full component range.",
+          "type": "string"
+        }
+      ]
+    },
+    "Composition": {
+      "additionalProperties": false,
+      "description": "An acyclic graph of image operations with one selected output.",
+      "properties": {
+        "controls": {
+          "description": "The node settings a group node may set, by name.",
+          "items": {
+            "$ref": "#/$defs/CompositionControl"
+          },
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/CompositionId",
+          "description": "Stable composition identity."
+        },
+        "inputs": {
+          "description": "The images a group node gives it, by name, in port order: its\n[`NodeOp::GroupInput`] nodes read them.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "nodes": {
+          "default": [],
+          "description": "The graph's nodes. Their order has no meaning: a node may name a node\nlisted after it as its input.",
+          "items": {
+            "$ref": "#/$defs/CompositionNode"
+          },
+          "type": "array"
+        },
+        "output": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NodeId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The node whose image is the composition's picture. A composition\nwithout one saves, but cannot be rendered."
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "CompositionControl": {
+      "additionalProperties": false,
+      "description": "A node setting a composition exposes to the group nodes that use it: an\neffect or transition parameter of one of its nodes.",
+      "properties": {
+        "name": {
+          "description": "The name a group node sets it by; unique in the composition.",
+          "type": "string"
+        },
+        "node": {
+          "$ref": "#/$defs/NodeId",
+          "description": "The effect or transition node."
+        },
+        "param": {
+          "description": "The parameter of its effect.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "node",
+        "param"
+      ],
+      "type": "object"
+    },
+    "CompositionId": {
+      "description": "A stable composition-graph identifier.",
+      "minLength": 1,
+      "type": "string"
+    },
+    "CompositionNode": {
+      "additionalProperties": false,
+      "description": "One image operation in a [`Composition`].",
+      "properties": {
+        "bypass": {
+          "default": false,
+          "description": "Whether the node passes its [`NodeOp::bypass_input`] through\nunchanged instead of operating. A node without inputs cannot be\nbypassed.",
+          "type": "boolean"
+        },
+        "id": {
+          "$ref": "#/$defs/NodeId",
+          "description": "Identity, unique within its composition."
+        },
+        "op": {
+          "$ref": "#/$defs/NodeOp",
+          "description": "What the node does, with its inputs and settings."
+        }
+      },
+      "required": [
+        "id",
+        "op"
+      ],
+      "type": "object"
+    },
+    "Ducking": {
+      "additionalProperties": false,
+      "description": "Sidechain ducking authored on the track that is attenuated.",
+      "properties": {
+        "attack_ms": {
+          "description": "Attack time in milliseconds, positive and at most [`MAX_ENVELOPE_MS`].",
+          "format": "float",
+          "type": "number"
+        },
+        "depth_db": {
+          "description": "Maximum attenuation in decibels, from [`MIN_LEVEL_DB`] to 0.",
+          "format": "float",
+          "type": "number"
+        },
+        "release_ms": {
+          "description": "Release time in milliseconds, positive and at most [`MAX_ENVELOPE_MS`].",
+          "format": "float",
+          "type": "number"
+        },
+        "sidechain_track": {
+          "$ref": "#/$defs/TrackId",
+          "description": "Track whose mixed output drives the envelope follower."
+        },
+        "threshold": {
+          "description": "Linear level above which attenuation begins. Positive.",
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "sidechain_track",
+        "threshold",
+        "depth_db",
+        "attack_ms",
+        "release_ms"
+      ],
+      "type": "object"
+    },
+    "DynamicRange": {
+      "description": "Whether a signal is standard or high dynamic range. It follows the\ntransfer: `hdr` exactly when the transfer is PQ or HLG, and a color\nwhose two fields disagree is refused.",
+      "oneOf": [
+        {
+          "const": "sdr",
+          "description": "Standard dynamic range: a BT.709 or sRGB transfer.",
+          "type": "string"
+        },
+        {
+          "const": "hdr",
+          "description": "High dynamic range: a PQ or HLG transfer, which a project tone-maps\ninto the SDR working space or refuses, as its color pipeline says.",
+          "type": "string"
+        }
+      ]
+    },
+    "Easing": {
+      "description": "A timing curve from linear progress to eased progress, without a hold.\n\nTransitions use it directly; keyframe [`crate::Interpolation`] adds `hold`.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Progress advances at a constant rate.",
+          "properties": {
+            "type": {
+              "const": "linear",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Progress follows a CSS `cubic-bezier()` curve.",
+          "properties": {
+            "type": {
+              "const": "cubic_bezier",
+              "type": "string"
+            },
+            "x1": {
+              "description": "Horizontal coordinate of the first control point, in `0..=1`.",
+              "format": "float",
+              "type": "number"
+            },
+            "x2": {
+              "description": "Horizontal coordinate of the second control point, in `0..=1`.",
+              "format": "float",
+              "type": "number"
+            },
+            "y1": {
+              "description": "Vertical coordinate of the first control point.",
+              "format": "float",
+              "type": "number"
+            },
+            "y2": {
+              "description": "Vertical coordinate of the second control point.",
+              "format": "float",
+              "type": "number"
+            }
+          },
+          "required": [
+            "type",
+            "x1",
+            "y1",
+            "x2",
+            "y2"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "EffectResource": {
+      "additionalProperties": false,
+      "description": "Host-resolved, non-media data consumed by one or more visual effects.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/EffectResourceId",
+          "description": "Stable identity referenced by effect invocations."
+        },
+        "kind": {
+          "$ref": "#/$defs/EffectResourceKind",
+          "description": "Resource representation expected by the effect definition."
+        },
+        "locator": {
+          "description": "Opaque host locator. The core never opens it directly.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "locator"
+      ],
+      "type": "object"
+    },
+    "EffectResourceId": {
+      "description": "A stable effect-resource identifier.",
+      "minLength": 1,
+      "type": "string"
+    },
+    "EffectResourceKind": {
+      "description": "Portable effect-resource categories supported by the render ABI.",
+      "oneOf": [
+        {
+          "const": "lut3d",
+          "description": "A cubic, filterable RGB lookup table, normally authored as a `.cube` file.",
+          "type": "string"
+        }
+      ]
+    },
+    "EffectValue": {
+      "description": "Serializable value supplied to one runtime effect parameter.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "One finite scalar.",
+          "properties": {
+            "type": {
+              "const": "float",
+              "type": "string"
+            },
+            "value": {
+              "format": "float",
+              "type": "number"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Two finite components, normally in normalized coordinates.",
+          "properties": {
+            "type": {
+              "const": "vec2",
+              "type": "string"
+            },
+            "value": {
+              "items": {
+                "format": "float",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Four finite components that are not a color, such as per-channel\nthresholds; they keyframe component by component.",
+          "properties": {
+            "type": {
+              "const": "vec4",
+              "type": "string"
+            },
+            "value": {
+              "items": {
+                "format": "float",
+                "type": "number"
+              },
+              "maxItems": 4,
+              "minItems": 4,
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Straight (not premultiplied), sRGB-encoded RGBA components in the\ninclusive unit interval, as a color picker shows them.",
+          "properties": {
+            "type": {
+              "const": "color",
+              "type": "string"
+            },
+            "value": {
+              "items": {
+                "format": "float",
+                "type": "number"
+              },
+              "maxItems": 4,
+              "minItems": 4,
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Index into an effect definition's enum choices.",
+          "properties": {
+            "type": {
+              "const": "enum",
+              "type": "string"
+            },
+            "value": {
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Boolean toggle.",
+          "properties": {
+            "type": {
+              "const": "bool",
+              "type": "string"
+            },
+            "value": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "EqBand": {
+      "additionalProperties": false,
+      "description": "A single equalizer section stored independently from its DSP implementation.",
+      "properties": {
+        "frequency_hz": {
+          "description": "Center or corner frequency in hertz, within [`EQ_FREQUENCY_RANGE_HZ`].",
+          "format": "float",
+          "type": "number"
+        },
+        "gain_db": {
+          "default": 0.0,
+          "description": "Peaking gain in decibels, at most [`MAX_EQ_GAIN_DB`] either way.\nIgnored by the pass filters.",
+          "format": "float",
+          "type": "number"
+        },
+        "kind": {
+          "$ref": "#/$defs/EqBandKind",
+          "description": "Filter shape."
+        },
+        "q": {
+          "description": "Resonance, within [`EQ_Q_RANGE`]. Larger values produce narrower bands.",
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "kind",
+        "frequency_hz",
+        "q"
+      ],
+      "type": "object"
+    },
+    "EqBandKind": {
+      "description": "The filter shape of one equalizer band.",
+      "oneOf": [
+        {
+          "const": "peaking",
+          "description": "Bell-shaped parametric band.",
+          "type": "string"
+        },
+        {
+          "const": "low_pass",
+          "description": "Second-order low-pass.",
+          "type": "string"
+        },
+        {
+          "const": "high_pass",
+          "description": "Second-order high-pass.",
+          "type": "string"
+        }
+      ]
+    },
+    "FadeShape": {
+      "description": "Curve applied by a clip's fade in and fade out.",
+      "oneOf": [
+        {
+          "const": "linear",
+          "description": "Amplitude moves linearly. Two linear fades over one overlap dip by 6 dB.",
+          "type": "string"
+        },
+        {
+          "const": "equal_power",
+          "description": "Amplitude follows a quarter sine. Two of these crossfade at constant\npower, which is what overlapping clips normally want.",
+          "type": "string"
+        }
+      ]
+    },
+    "FrameRate": {
+      "additionalProperties": false,
+      "description": "A positive rational frame rate in reduced form, at most one frame per tick\n(120 000 frames per second).",
+      "properties": {
+        "den": {
+          "description": "Seconds per `num` frames. Positive.",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "num": {
+          "description": "Frames per `den` seconds. Positive, and at most 120 000 times `den`.",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "num",
+        "den"
+      ],
+      "type": "object"
+    },
+    "GeneratedShape": {
+      "description": "The outline of a [`Generator::Shape`].",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A rectangle, optionally with rounded corners.",
+          "properties": {
+            "corner_radius": {
+              "default": 0.0,
+              "description": "Corner radius, as a fraction of the picture's shorter side.\nNon-negative; a radius past half the rectangle is capped.",
+              "format": "float",
+              "type": "number"
+            },
+            "type": {
+              "const": "rectangle",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The ellipse inscribed in the size.",
+          "properties": {
+            "type": {
+              "const": "ellipse",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Generator": {
+      "description": "The picture of a generated source.\n\nA generated picture has the canvas's size and aspect, like a source that\nfills the frame at scale 1. Positions are in its normalized space, `(0, 0)`\ntop-left to `(1, 1)` bottom-right; lengths (radii, stroke widths) are\nfractions of its shorter side, so the picture is the same at any render\nresolution. It does not change over time: a clip animates it with its\ntransform, effects, and masks.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Paint over the whole picture.",
+          "properties": {
+            "paint": {
+              "$ref": "#/$defs/Paint",
+              "description": "What covers the picture."
+            },
+            "type": {
+              "const": "fill",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "paint"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One shape on a transparent picture, filled, stroked, or both.",
+          "properties": {
+            "center": {
+              "$ref": "#/$defs/Vec2",
+              "description": "Centre of the shape."
+            },
+            "fill": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Paint"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Paint inside the outline."
+            },
+            "rotation_degrees": {
+              "default": 0.0,
+              "description": "Clockwise rotation about the centre, in degrees.",
+              "format": "float",
+              "type": "number"
+            },
+            "shape": {
+              "$ref": "#/$defs/GeneratedShape",
+              "description": "The shape's outline."
+            },
+            "size": {
+              "$ref": "#/$defs/Vec2",
+              "description": "Full width and height of the shape, before rotation. Non-negative."
+            },
+            "stroke": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Stroke"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Paint along the outline, drawn over the fill."
+            },
+            "type": {
+              "const": "shape",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "shape",
+            "center",
+            "size"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Text on a transparent picture, laid out and placed by its style as a\ncaption track's cues are: its size and wrapping width fractions of\nthe canvas, its anchor at `style.position`. The engine draws it with\nthe fonts its host registered.",
+          "properties": {
+            "style": {
+              "$ref": "#/$defs/TextStyle",
+              "default": {
+                "align": "center",
+                "anchor": {
+                  "x": 0.5,
+                  "y": 1.0
+                },
+                "background": null,
+                "color": {
+                  "alpha": 1.0,
+                  "blue": 1.0,
+                  "green": 1.0,
+                  "red": 1.0
+                },
+                "font_size": 0.05,
+                "line_height": 1.2,
+                "max_width": 0.9,
+                "outline": null,
+                "position": {
+                  "x": 0.5,
+                  "y": 0.92
+                }
+              },
+              "description": "How it looks and where it lies. The font size is at most\n[`MAX_TEXT_GENERATOR_FONT_SIZE`]."
+            },
+            "text": {
+              "description": "The text; `\\n` starts a line. Non-empty, at most\n[`MAX_TEXT_CONTENT_BYTES`] bytes.",
+              "type": "string"
+            },
+            "type": {
+              "const": "text",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "GradientStop": {
+      "additionalProperties": false,
+      "description": "One color of a gradient.",
+      "properties": {
+        "color": {
+          "$ref": "#/$defs/Rgba",
+          "description": "Color at that position."
+        },
+        "offset": {
+          "description": "Position along the gradient, in `0..=1`, not before the previous stop.",
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "offset",
+        "color"
+      ],
+      "type": "object"
+    },
+    "HdrSources": {
+      "description": "What a project does with HDR sources.",
+      "oneOf": [
+        {
+          "const": "tone_map",
+          "description": "Tone-map them into the SDR working space.",
+          "type": "string"
+        },
+        {
+          "const": "reject",
+          "description": "Refuse to render them.",
+          "type": "string"
+        }
+      ]
+    },
+    "Interpolation": {
+      "description": "Interpolation from one keyframe to the next.\n\nValues are interpolated numerically: a rotation from 0 to 720 degrees\nturns twice, and one from 0 to 360 turns once. A host that wants the\nshortest path normalizes its keyframe values.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Keep this keyframe's value until the next keyframe.",
+          "properties": {
+            "type": {
+              "const": "hold",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Move to the next value at a constant rate.",
+          "properties": {
+            "type": {
+              "const": "linear",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Move to the next value along a CSS `cubic-bezier()` timing curve.",
+          "properties": {
+            "type": {
+              "const": "cubic_bezier",
+              "type": "string"
+            },
+            "x1": {
+              "description": "Horizontal coordinate of the first control point, in `0..=1`.",
+              "format": "float",
+              "type": "number"
+            },
+            "x2": {
+              "description": "Horizontal coordinate of the second control point, in `0..=1`.",
+              "format": "float",
+              "type": "number"
+            },
+            "y1": {
+              "description": "Vertical coordinate of the first control point.",
+              "format": "float",
+              "type": "number"
+            },
+            "y2": {
+              "description": "Vertical coordinate of the second control point.",
+              "format": "float",
+              "type": "number"
+            }
+          },
+          "required": [
+            "type",
+            "x1",
+            "y1",
+            "x2",
+            "y2"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Keyframe_EffectValue": {
+      "additionalProperties": false,
+      "description": "One timestamped control value.",
+      "properties": {
+        "interpolation": {
+          "$ref": "#/$defs/Interpolation",
+          "description": "Interpolation from this keyframe to its successor."
+        },
+        "time": {
+          "$ref": "#/$defs/MediaTime",
+          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time."
+        },
+        "value": {
+          "$ref": "#/$defs/EffectValue",
+          "description": "Value at `time`."
+        }
+      },
+      "required": [
+        "time",
+        "value",
+        "interpolation"
+      ],
+      "type": "object"
+    },
+    "Keyframe_Vec2": {
+      "additionalProperties": false,
+      "description": "One timestamped control value.",
+      "properties": {
+        "interpolation": {
+          "$ref": "#/$defs/Interpolation",
+          "description": "Interpolation from this keyframe to its successor."
+        },
+        "time": {
+          "$ref": "#/$defs/MediaTime",
+          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time."
+        },
+        "value": {
+          "$ref": "#/$defs/Vec2",
+          "description": "Value at `time`."
+        }
+      },
+      "required": [
+        "time",
+        "value",
+        "interpolation"
+      ],
+      "type": "object"
+    },
+    "Keyframe_float": {
+      "additionalProperties": false,
+      "description": "One timestamped control value.",
+      "properties": {
+        "interpolation": {
+          "$ref": "#/$defs/Interpolation",
+          "description": "Interpolation from this keyframe to its successor."
+        },
+        "time": {
+          "$ref": "#/$defs/MediaTime",
+          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time."
+        },
+        "value": {
+          "description": "Value at `time`.",
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "time",
+        "value",
+        "interpolation"
+      ],
+      "type": "object"
+    },
+    "Limiter": {
+      "additionalProperties": false,
+      "description": "Final peak limiter placed at the end of the master bus.",
+      "properties": {
+        "release_ms": {
+          "description": "Release time in milliseconds, positive and at most [`MAX_ENVELOPE_MS`].",
+          "format": "float",
+          "type": "number"
+        },
+        "threshold": {
+          "description": "Linear ceiling, positive and at most [`MAX_GAIN`]. One is full scale.",
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "threshold",
+        "release_ms"
+      ],
+      "type": "object"
+    },
+    "LinearPrimaries": {
+      "description": "Named RGB primaries linear-light media may be in, each with its own white\npoint.",
+      "oneOf": [
+        {
+          "const": "bt709",
+          "description": "ITU-R BT.709 and sRGB, D65 white.",
+          "type": "string"
+        },
+        {
+          "const": "bt2020",
+          "description": "ITU-R BT.2020, D65 white.",
+          "type": "string"
+        },
+        {
+          "const": "p3_d65",
+          "description": "DCI-P3 primaries with a D65 white, as Display P3.",
+          "type": "string"
+        },
+        {
+          "const": "aces_ap0",
+          "description": "ACES AP0 (SMPTE ST 2065-1), the ACES white.",
+          "type": "string"
+        },
+        {
+          "const": "aces_ap1",
+          "description": "ACES AP1 (ACEScg), the ACES white.",
+          "type": "string"
+        }
+      ]
+    },
+    "LoopMode": {
+      "description": "How each pass of a [`TimeMap::Loop`] follows the one before.",
+      "oneOf": [
+        {
+          "const": "repeat",
+          "description": "Every pass plays forward, from the start again. Sound fades out and\nin over [`LOOP_FADE_SECONDS`] at each wrap, so the jump does not click.",
+          "type": "string"
+        },
+        {
+          "const": "ping_pong",
+          "description": "Passes alternate forward and backward.",
+          "type": "string"
+        }
+      ]
+    },
+    "MaskMode": {
+      "description": "How a mask combines with the coverage of the masks before it.\n\nCoverage starts empty when the first mask adds, and full otherwise, so a\nclip whose only mask subtracts is visible outside the shape.",
+      "oneOf": [
+        {
+          "const": "add",
+          "description": "Union: `c + m - c * m`.",
+          "type": "string"
+        },
+        {
+          "const": "subtract",
+          "description": "Difference: `c * (1 - m)`.",
+          "type": "string"
+        },
+        {
+          "const": "intersect",
+          "description": "Intersection: `c * m`.",
+          "type": "string"
+        }
+      ]
+    },
+    "MaskShape": {
+      "description": "The outline of a [`ShapeMask`].",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A rectangle, optionally with rounded corners.",
+          "properties": {
+            "corner_radius": {
+              "$ref": "#/$defs/Animated_float",
+              "default": {
+                "mode": "constant",
+                "value": 0.0
+              },
+              "description": "Corner radius, as a fraction of the shorter side of source\nspace. Non-negative; a radius past half the rectangle is capped."
+            },
+            "type": {
+              "const": "rectangle",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The ellipse inscribed in the size.",
+          "properties": {
+            "type": {
+              "const": "ellipse",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "MasterAudio": {
+      "additionalProperties": false,
+      "description": "Project-wide master bus settings.",
+      "properties": {
+        "effects": {
+          "default": [],
+          "description": "Ordered single-input effects applied to the summed track buses, at\nmost [`MAX_CHAIN_EFFECTS`].",
+          "items": {
+            "$ref": "#/$defs/AudioEffect"
+          },
+          "type": "array"
+        },
+        "gain": {
+          "$ref": "#/$defs/Animated_float",
+          "default": {
+            "mode": "constant",
+            "value": 1.0
+          },
+          "description": "Animated linear master amplitude constrained to `0..=MAX_GAIN`."
+        },
+        "limiter": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Limiter"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": {
+            "release_ms": 50.0,
+            "threshold": 1.0
+          },
+          "description": "Final peak limiter. An omitted field is [`Limiter::default`]; an\nexplicit `null` leaves the mix unlimited."
+        }
+      },
+      "type": "object"
+    },
+    "Matte": {
+      "additionalProperties": false,
+      "description": "Another visual clip whose picture sets where this clip is visible.\n\nThe matte clip is drawn, with its own transform and effects, only into the\nmatte; a clip that is any clip's matte is never composited itself. Where\nthe matte clip is not active, its coverage is zero.",
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/MatteMode",
+          "description": "What of that picture is the coverage."
+        },
+        "source": {
+          "$ref": "#/$defs/ClipId",
+          "description": "The clip whose picture is the matte."
+        }
+      },
+      "required": [
+        "source",
+        "mode"
+      ],
+      "type": "object"
+    },
+    "MatteMode": {
+      "description": "Which property of the matte clip's picture is coverage.",
+      "oneOf": [
+        {
+          "const": "alpha",
+          "description": "Its alpha.",
+          "type": "string"
+        },
+        {
+          "const": "alpha_inverted",
+          "description": "One minus its alpha.",
+          "type": "string"
+        },
+        {
+          "const": "luma",
+          "description": "Its luminance over black: BT.709 weights on linear light, times alpha.",
+          "type": "string"
+        },
+        {
+          "const": "luma_inverted",
+          "description": "One minus that luminance.",
+          "type": "string"
+        }
+      ]
+    },
+    "MediaFingerprint": {
+      "additionalProperties": false,
+      "description": "Evidence of a source's media, each part recorded only when it was known.\n\nA matching content hash proves the same bytes. Without one, the other\nparts can only show a difference. `modified_ms` narrows a search for\ncandidates and never decides whether a candidate is the same media.",
+      "properties": {
+        "byte_length": {
+          "description": "The file's length in bytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "color": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ColorMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The color the decoded pictures carry."
+        },
+        "content_sha256": {
+          "description": "SHA-256 of the whole file, as 64 lowercase hexadecimal digits.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "duration_ticks": {
+          "description": "Where the media ends on its own timeline, in ticks: its first\npresentation plus its length, the end of any source range that reads\nit. A transport stream that starts at 1.4 s and lasts 2 s ends at\n3.4 s. Non-negative.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "modified_ms": {
+          "description": "The file's modification time, in milliseconds since the Unix epoch.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "streams": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StreamTopology"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The streams the file carries."
+        }
+      },
+      "type": "object"
+    },
+    "MediaKind": {
+      "description": "The payload domain of a source.",
+      "oneOf": [
+        {
+          "const": "video",
+          "description": "A video stream, potentially with an audio stream.",
+          "type": "string"
+        },
+        {
+          "const": "audio",
+          "description": "An audio stream.",
+          "type": "string"
+        },
+        {
+          "const": "image",
+          "description": "A still visual image.",
+          "type": "string"
+        },
+        {
+          "const": "generated",
+          "description": "A picture the engine draws from the source's [`Generator`]. The host\nsupplies nothing for it.",
+          "type": "string"
+        },
+        {
+          "const": "composition",
+          "description": "A composition of the project, drawn at the source time as its own\ntime. The host supplies nothing for it; the media its nodes read, it\nsupplies as for any composition.",
+          "type": "string"
+        }
+      ]
+    },
+    "MediaSource": {
+      "additionalProperties": false,
+      "description": "A host-resolved media resource.",
+      "properties": {
+        "color_metadata": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ColorMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The color a [`MediaKind::Video`] source's pictures are in, which wins\nover what its frames and its stream are tagged with on every host: a\nhost records it at import, or a document declares it to correct\nmissing or wrong tags. `None` leaves the tags in charge. A still is\nread as sRGB code values whatever it declares."
+        },
+        "composition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompositionId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The composition a [`MediaKind::Composition`] source shows; present\nexactly for that kind."
+        },
+        "fingerprint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MediaFingerprint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What the host found at the locator when the project recorded it, so\nanother host can tell whether media it finds is the same. A generated\nsource has none."
+        },
+        "generator": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Generator"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "What a [`MediaKind::Generated`] source draws; present exactly for\nthat kind."
+        },
+        "has_audio": {
+          "default": false,
+          "description": "Whether this source's media has an audio stream: a fact of the file,\nso every host that imports it records the same, whether or not that\nhost can decode the stream. A host that cannot reports so at run time\nand plays the source silent; the document keeps the stream for the\nhosts that can.\n\n[`MediaKind::Audio`] always does. A [`MediaKind::Video`] source declares\nit so that clips on a visual track contribute to the mix; leaving it\nunset keeps a video clip silent.",
+          "type": "boolean"
+        },
+        "id": {
+          "$ref": "#/$defs/SourceId",
+          "description": "Stable source identity."
+        },
+        "kind": {
+          "$ref": "#/$defs/MediaKind",
+          "description": "Media payload domain."
+        },
+        "locator": {
+          "default": "",
+          "description": "Opaque URI or host locator. The engine does not open it directly.\nRequired, except that a [`MediaKind::Generated`] or\n[`MediaKind::Composition`] source has none.",
+          "type": "string"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The extension provider that supplies this source's media, and its\nsettings, when the host's own decoders do not read it."
+        }
+      },
+      "required": [
+        "id",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "MediaTime": {
+      "description": "A signed position or duration in timeline ticks (120 000 per second), at most the largest integer a JavaScript number holds exactly either way.",
+      "format": "int64",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+    },
+    "MergeLayer": {
+      "additionalProperties": false,
+      "description": "One layer of a [`NodeOp::Merge`].",
+      "properties": {
+        "blend_mode": {
+          "$ref": "#/$defs/ClipBlendMode",
+          "default": "normal",
+          "description": "How the layer blends with the layers under it."
+        },
+        "input": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NodeId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The layer's image."
+        },
+        "opacity": {
+          "$ref": "#/$defs/Animated_float",
+          "default": {
+            "mode": "constant",
+            "value": 1.0
+          },
+          "description": "The layer's opacity, in `0..=1`."
+        }
+      },
+      "type": "object"
+    },
+    "MissingFrames": {
+      "description": "How an image sequence shows a frame missing from its numbering.",
+      "oneOf": [
+        {
+          "const": "reject",
+          "description": "A sequence with a missing frame is refused.",
+          "type": "string"
+        },
+        {
+          "const": "hold",
+          "description": "The frame before it is shown.",
+          "type": "string"
+        },
+        {
+          "const": "blank",
+          "description": "Nothing is shown: a transparent frame.",
+          "type": "string"
+        }
+      ]
+    },
+    "NodeId": {
+      "description": "A stable identifier of a node within one composition graph. It has no `/`, which joins the IDs of the group and media nodes a step was drawn through.",
+      "minLength": 1,
+      "pattern": "^[^/]*$",
+      "type": "string"
+    },
+    "NodeOp": {
+      "description": "The operation of a [`CompositionNode`].\n\nAnimated settings are keyed in composition time (see\n[`ClipComposition`]), not timeline time.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The picture of the clip showing the composition: its source at the\nsource time the clip's time map gives, or what its generated source\ndraws.",
+          "properties": {
+            "type": {
+              "const": "clip",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Another visual source, read at `start` plus the composition time.\nA media node adds no sound to the mix.",
+          "properties": {
+            "source_id": {
+              "$ref": "#/$defs/SourceId",
+              "description": "The source; a video, image, or generated source."
+            },
+            "start": {
+              "$ref": "#/$defs/MediaTime",
+              "default": 0,
+              "description": "Source time shown at composition time zero. Non-negative."
+            },
+            "type": {
+              "const": "media",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "source_id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A picture the engine draws.",
+          "properties": {
+            "generator": {
+              "$ref": "#/$defs/Generator",
+              "description": "What is drawn."
+            },
+            "type": {
+              "const": "generator",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "generator"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A registered one-input effect.",
+          "properties": {
+            "effect": {
+              "$ref": "#/$defs/ClipEffect",
+              "description": "The versioned effect and its parameters."
+            },
+            "input": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/NodeId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The image the effect processes."
+            },
+            "type": {
+              "const": "effect",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "effect"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A registered two-input transition at an explicit progress.",
+          "properties": {
+            "effect": {
+              "$ref": "#/$defs/ClipEffect",
+              "description": "The versioned transition and its parameters."
+            },
+            "from": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/NodeId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The image at progress zero."
+            },
+            "progress": {
+              "$ref": "#/$defs/Animated_float",
+              "description": "Progress through the transition, in `0..=1`."
+            },
+            "to": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/NodeId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The image at progress one."
+            },
+            "type": {
+              "const": "transition",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "effect",
+            "progress"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The input placed on the canvas by a transform and opacity.",
+          "properties": {
+            "input": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/NodeId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The image placed."
+            },
+            "transform": {
+              "$ref": "#/$defs/VisualProperties",
+              "default": {
+                "anchor": {
+                  "x": 0.5,
+                  "y": 0.5
+                },
+                "opacity": {
+                  "mode": "constant",
+                  "value": 1.0
+                },
+                "position": {
+                  "mode": "constant",
+                  "value": {
+                    "x": 0.5,
+                    "y": 0.5
+                  }
+                },
+                "rotation_degrees": {
+                  "mode": "constant",
+                  "value": 0.0
+                },
+                "scale": {
+                  "mode": "constant",
+                  "value": {
+                    "x": 1.0,
+                    "y": 1.0
+                  }
+                }
+              },
+              "description": "Position, anchor, scale, rotation, and opacity."
+            },
+            "type": {
+              "const": "transform",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Ordered layers composited over transparency.",
+          "properties": {
+            "layers": {
+              "default": [],
+              "description": "Layers from bottom to top.",
+              "items": {
+                "$ref": "#/$defs/MergeLayer"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "merge",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The input kept where a second image says.",
+          "properties": {
+            "input": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/NodeId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The image kept."
+            },
+            "matte": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/NodeId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The image whose alpha or luminance is coverage."
+            },
+            "mode": {
+              "$ref": "#/$defs/MatteMode",
+              "description": "Which property of the matte image is coverage."
+            },
+            "type": {
+              "const": "matte",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "mode"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The input kept inside shapes.",
+          "properties": {
+            "input": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/NodeId"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "The image masked."
+            },
+            "masks": {
+              "description": "The shapes, combined in order; at most [`crate::MAX_CLIP_MASKS`].\nGeometry is in the input image's normalized space.",
+              "items": {
+                "$ref": "#/$defs/ShapeMask"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "shape_mask",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "masks"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Another composition drawn in this one's time, as a group: its\noutput, with its group inputs fed from `inputs` and its controls set\nfrom `controls`.",
+          "properties": {
+            "composition": {
+              "$ref": "#/$defs/CompositionId",
+              "description": "The composition drawn."
+            },
+            "controls": {
+              "additionalProperties": {
+                "$ref": "#/$defs/Animated_EffectValue"
+              },
+              "description": "Values for its controls, by name; a control not set keeps the\ncomposition's own value. Keyed in composition time.",
+              "type": "object"
+            },
+            "inputs": {
+              "default": [],
+              "description": "The image for each of its inputs, in its port order.",
+              "items": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/NodeId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "group",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "composition"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "In a composition used as a group, the image the group node gives its\ninput `index`.",
+          "properties": {
+            "index": {
+              "description": "The input, in the composition's port order.",
+              "format": "uint32",
+              "maximum": 4294967295,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "group_input",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "index"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Paint": {
+      "description": "A color or gradient.\n\nGradients interpolate between stops premultiplied, in linear light: the\nengine's working space, so a gradient between two colors passes through\nthe physical mix of them, and a stop fading to transparent does not darken\nits neighbour.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "One color.",
+          "properties": {
+            "color": {
+              "$ref": "#/$defs/Rgba",
+              "description": "The color."
+            },
+            "type": {
+              "const": "solid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "color"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Colors along the line from `start` to `end`, constant across it.",
+          "properties": {
+            "end": {
+              "$ref": "#/$defs/Vec2",
+              "description": "Where offset 1 lies. Distinct from `start`."
+            },
+            "spread": {
+              "$ref": "#/$defs/Spread",
+              "default": "pad",
+              "description": "What lies beyond the first and last offsets."
+            },
+            "start": {
+              "$ref": "#/$defs/Vec2",
+              "description": "Where offset 0 lies."
+            },
+            "stops": {
+              "description": "Two to [`MAX_GRADIENT_STOPS`] stops.",
+              "items": {
+                "$ref": "#/$defs/GradientStop"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "linear_gradient",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "start",
+            "end",
+            "stops"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Colors along the radius of a circle.",
+          "properties": {
+            "center": {
+              "$ref": "#/$defs/Vec2",
+              "description": "Where offset 0 lies."
+            },
+            "radius": {
+              "description": "The distance of offset 1 from the centre, as a fraction of the\npicture's shorter side. Positive.",
+              "format": "float",
+              "type": "number"
+            },
+            "spread": {
+              "$ref": "#/$defs/Spread",
+              "default": "pad",
+              "description": "What lies beyond the first and last offsets."
+            },
+            "stops": {
+              "description": "Two to [`MAX_GRADIENT_STOPS`] stops.",
+              "items": {
+                "$ref": "#/$defs/GradientStop"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "radial_gradient",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "center",
+            "radius",
+            "stops"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Colors around a point: offsets 0 to 1 are one clockwise turn.",
+          "properties": {
+            "angle_degrees": {
+              "default": 0.0,
+              "description": "Where offset 0 lies, in degrees clockwise from straight up.",
+              "format": "float",
+              "type": "number"
+            },
+            "center": {
+              "$ref": "#/$defs/Vec2",
+              "description": "The point the gradient turns around."
+            },
+            "stops": {
+              "description": "Two to [`MAX_GRADIENT_STOPS`] stops.",
+              "items": {
+                "$ref": "#/$defs/GradientStop"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "conic_gradient",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "center",
+            "stops"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ProjectId": {
+      "description": "A stable project identifier.",
+      "minLength": 1,
+      "type": "string"
+    },
+    "ProjectSettings": {
+      "additionalProperties": false,
+      "description": "Output-wide settings independent of a renderer or encoder.",
+      "properties": {
+        "background": {
+          "$ref": "#/$defs/Rgb",
+          "default": {
+            "blue": 0.0,
+            "green": 0.0,
+            "red": 0.0
+          },
+          "description": "Opaque color under every layer, in preview and export alike.\n\nEmpty canvas, and whatever shows through a translucent layer, is this\ncolor rather than something a host or encoder decides."
+        },
+        "blend_space": {
+          "$ref": "#/$defs/BlendSpace",
+          "default": "linear_light",
+          "description": "The space in which clips' blend modes are evaluated, in preview and\nexport alike."
+        },
+        "color": {
+          "$ref": "#/$defs/ColorPipeline",
+          "default": {
+            "hdr": "tone_map",
+            "hdr_peak_nits": 1000
+          },
+          "description": "How sources' colors come into the working space."
+        },
+        "frame_rate": {
+          "$ref": "#/$defs/FrameRate",
+          "description": "Timeline frame rate."
+        },
+        "height": {
+          "description": "Canvas height in output pixels, at most [`MAX_CANVAS_DIMENSION`]. The\ncanvas area is at most [`MAX_CANVAS_PIXELS`].",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sample_rate": {
+          "description": "Internal audio sample rate, within [`SAMPLE_RATE_RANGE`].",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "width": {
+          "description": "Canvas width in output pixels, at most [`MAX_CANVAS_DIMENSION`].",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "width",
+        "height",
+        "frame_rate",
+        "sample_rate"
+      ],
+      "type": "object"
+    },
+    "ProviderSource": {
+      "description": "A source whose media an extension provider supplies, rather than the\nhost's video and image decoders.\n\nA host picks the provider by probing the bytes at import, never by a file\nname, and records it here with the settings the source needs, so every\nhost opens the source the same way. The engine does not read it: a\nprovider source needs frames like any video or image source.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A static SVG document, rasterized at the size it is shown. The\nsource's kind is `image`.",
+          "properties": {
+            "format": {
+              "const": "svg",
+              "type": "string"
+            }
+          },
+          "required": [
+            "format"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A GIF, animated WebP, or APNG: one cycle of frames, each with its own\nduration. Repetition is the clip's. The source's kind is `video`.",
+          "properties": {
+            "format": {
+              "const": "animated_image",
+              "type": "string"
+            }
+          },
+          "required": [
+            "format"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A Lottie animation, from a Lottie JSON file or a dotLottie package,\nevaluated at its own frames. The source's kind is `video`.",
+          "properties": {
+            "animation": {
+              "description": "The dotLottie animation shown, by its ID; the package's first\nwhen absent, and absent for a Lottie JSON file.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "format": {
+              "const": "lottie",
+              "type": "string"
+            }
+          },
+          "required": [
+            "format"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Still images played in order at a fixed rate. The source's kind is\n`video`.",
+          "properties": {
+            "format": {
+              "const": "image_sequence",
+              "type": "string"
+            },
+            "frame_rate": {
+              "$ref": "#/$defs/FrameRate",
+              "description": "The rate the frames play at."
+            },
+            "frames": {
+              "description": "Each frame's locator, in play order. `null` is a number missing\nfrom the sequence, allowed only when `missing` says how to show\nit.",
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": "array"
+            },
+            "missing": {
+              "$ref": "#/$defs/MissingFrames",
+              "default": "reject",
+              "description": "How a missing frame is shown."
+            },
+            "primaries": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/LinearPrimaries"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The primaries OpenEXR frames' linear RGB is in, overriding what\nthe first frame's chromaticities say. Only for OpenEXR frames."
+            },
+            "start_number": {
+              "default": 0,
+              "description": "The number of the first frame, as its file was numbered.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "format",
+            "frames",
+            "frame_rate"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A still OpenEXR image: linear-light RGB(A), read at half precision.\nThe source's kind is `image`.",
+          "properties": {
+            "format": {
+              "const": "exr",
+              "type": "string"
+            },
+            "primaries": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/LinearPrimaries"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The primaries its linear RGB is in, overriding what the file's\nchromaticities say (BT.709 when it says nothing, as OpenEXR\ndefines)."
+            }
+          },
+          "required": [
+            "format"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Rgb": {
+      "additionalProperties": false,
+      "description": "An opaque color as a color picker shows it: straight, sRGB-encoded\ncomponents in the inclusive unit interval.",
+      "properties": {
+        "blue": {
+          "description": "Blue component.",
+          "format": "float",
+          "type": "number"
+        },
+        "green": {
+          "description": "Green component.",
+          "format": "float",
+          "type": "number"
+        },
+        "red": {
+          "description": "Red component.",
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "red",
+        "green",
+        "blue"
+      ],
+      "type": "object"
+    },
+    "Rgba": {
+      "additionalProperties": false,
+      "description": "A straight (not premultiplied), sRGB-encoded color with alpha, each\ncomponent in `0..=1`.",
+      "properties": {
+        "alpha": {
+          "description": "Coverage.",
+          "format": "float",
+          "type": "number"
+        },
+        "blue": {
+          "description": "Blue component.",
+          "format": "float",
+          "type": "number"
+        },
+        "green": {
+          "description": "Green component.",
+          "format": "float",
+          "type": "number"
+        },
+        "red": {
+          "description": "Red component.",
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "red",
+        "green",
+        "blue",
+        "alpha"
+      ],
+      "type": "object"
+    },
+    "ShapeMask": {
+      "additionalProperties": false,
+      "description": "A shape that limits where a clip is visible.\n\nGeometry is in the clip's source space, before its transform, so the mask\nmoves with the clip: `(0, 0)` is the source's top-left corner and `(1, 1)`\nits bottom-right. Distances (`feather`, a rectangle's `corner_radius`) are\nfractions of that space's shorter side, so a mask covers the same part of\nthe picture at any render resolution.",
+      "properties": {
+        "center": {
+          "$ref": "#/$defs/Animated_Vec2",
+          "description": "Centre of the shape."
+        },
+        "feather": {
+          "$ref": "#/$defs/Animated_float",
+          "default": {
+            "mode": "constant",
+            "value": 0.0
+          },
+          "description": "Width of the soft edge, centred on the outline. Non-negative; zero is\na one-pixel antialiased edge."
+        },
+        "invert": {
+          "default": false,
+          "description": "Whether the mask keeps the outside of the shape instead of its inside.",
+          "type": "boolean"
+        },
+        "mode": {
+          "$ref": "#/$defs/MaskMode",
+          "default": "add",
+          "description": "How this mask combines with the ones before it."
+        },
+        "rotation_degrees": {
+          "$ref": "#/$defs/Animated_float",
+          "default": {
+            "mode": "constant",
+            "value": 0.0
+          },
+          "description": "Clockwise rotation about the centre, in degrees."
+        },
+        "shape": {
+          "$ref": "#/$defs/MaskShape",
+          "description": "The shape's outline."
+        },
+        "size": {
+          "$ref": "#/$defs/Animated_Vec2",
+          "description": "Full width and height of the shape, before rotation. Non-negative."
+        }
+      },
+      "required": [
+        "shape",
+        "center",
+        "size"
+      ],
+      "type": "object"
+    },
+    "SourceId": {
+      "description": "A stable media-source identifier.",
+      "minLength": 1,
+      "type": "string"
+    },
+    "Spread": {
+      "description": "What a linear or radial gradient shows outside its first and last stops.",
+      "oneOf": [
+        {
+          "const": "pad",
+          "description": "The end colors continue.",
+          "type": "string"
+        },
+        {
+          "const": "repeat",
+          "description": "The gradient starts again.",
+          "type": "string"
+        },
+        {
+          "const": "reflect",
+          "description": "The gradient runs back and forth.",
+          "type": "string"
+        }
+      ]
+    },
+    "StreamTopology": {
+      "additionalProperties": false,
+      "description": "The streams a media file carries.",
+      "properties": {
+        "audio": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AudioStreamShape"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The primary audio stream, if there is one."
+        },
+        "video": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VideoStreamShape"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The primary video stream, if there is one."
+        }
+      },
+      "type": "object"
+    },
+    "Stroke": {
+      "additionalProperties": false,
+      "description": "A shape's outline paint. The stroke is centred on the outline.",
+      "properties": {
+        "paint": {
+          "$ref": "#/$defs/Paint",
+          "description": "What covers the stroke."
+        },
+        "width": {
+          "description": "Full width, as a fraction of the picture's shorter side. Positive.",
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "width",
+        "paint"
+      ],
+      "type": "object"
+    },
+    "TextAlign": {
+      "description": "How lines of text align within it.",
+      "oneOf": [
+        {
+          "const": "start",
+          "description": "Left.",
+          "type": "string"
+        },
+        {
+          "const": "center",
+          "description": "Centred.",
+          "type": "string"
+        },
+        {
+          "const": "end",
+          "description": "Right.",
+          "type": "string"
+        }
+      ]
+    },
+    "TextBackground": {
+      "additionalProperties": false,
+      "description": "A box behind each line of text.",
+      "properties": {
+        "color": {
+          "$ref": "#/$defs/Rgba",
+          "description": "Box color."
+        },
+        "padding": {
+          "default": 0.0,
+          "description": "Space between the text and the box edge, as a fraction of the font\nsize, in `[0, 2]`.",
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "color"
+      ],
+      "type": "object"
+    },
+    "TextOutline": {
+      "additionalProperties": false,
+      "description": "A band around the glyphs, drawn behind them.",
+      "properties": {
+        "color": {
+          "$ref": "#/$defs/Rgba",
+          "description": "Band color."
+        },
+        "width": {
+          "description": "Band width as a fraction of the font size, in `(0, 0.5]`.",
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "color",
+        "width"
+      ],
+      "type": "object"
+    },
+    "TextStyle": {
+      "additionalProperties": false,
+      "description": "How text looks and where it lies: a caption track's cues, or a text\n[`crate::Generator`].\n\nSizes are resolution-independent: the font size is a fraction of the\ncanvas height, the wrapping width a fraction of the canvas width, and the\noutline and background padding fractions of the font size. The engine\ndraws with the fonts its host registered: those of `font_family` first,\nthen the rest in their fallback order.",
+      "properties": {
+        "align": {
+          "$ref": "#/$defs/TextAlign",
+          "default": "center",
+          "description": "How lines align within the text."
+        },
+        "anchor": {
+          "$ref": "#/$defs/Vec2",
+          "default": {
+            "x": 0.5,
+            "y": 1.0
+          },
+          "description": "The point of the text, background included, placed at\n`position`: `(0.5, 1)` is its bottom centre."
+        },
+        "background": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextBackground"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A box behind each line."
+        },
+        "color": {
+          "$ref": "#/$defs/Rgba",
+          "default": {
+            "alpha": 1.0,
+            "blue": 1.0,
+            "green": 1.0,
+            "red": 1.0
+          },
+          "description": "Text color."
+        },
+        "font_family": {
+          "description": "The family the text draws in, as the font's own name table gives it\n(typographic family, else family), matched without regard to ASCII\ncase. Glyphs its fonts lack, and a family no registered font has,\ndraw from the other fonts in fallback order. `None` draws from the\nfallback order alone. Non-empty, at most [`MAX_FONT_FAMILY_BYTES`]\nbytes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "font_size": {
+          "default": 0.05,
+          "description": "Font size as a fraction of the canvas height: positive, at most\n[`crate::MAX_CAPTION_FONT_SIZE`] on a caption track and\n[`MAX_TEXT_GENERATOR_FONT_SIZE`] in a text generator.",
+          "format": "float",
+          "type": "number"
+        },
+        "line_height": {
+          "default": 1.2,
+          "description": "Baseline-to-baseline distance in font sizes, in `[0.5, 3]`.",
+          "format": "float",
+          "type": "number"
+        },
+        "max_width": {
+          "default": 0.9,
+          "description": "Width text wraps at, as a fraction of the canvas width, in `(0, 1]`.",
+          "format": "float",
+          "type": "number"
+        },
+        "outline": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextOutline"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "A band around the glyphs."
+        },
+        "position": {
+          "$ref": "#/$defs/Vec2",
+          "default": {
+            "x": 0.5,
+            "y": 0.92
+          },
+          "description": "Where on the canvas the text's anchor lies, `(0, 0)` top-left to\n`(1, 1)` bottom-right."
+        }
+      },
+      "type": "object"
+    },
+    "TimeMap": {
+      "description": "How a clip plays its source range over its timeline range.\n\n`forward` and `reverse` stretch the source range over the timeline range,\nso their speed is the ratio of the two. A loop plays the source range at\nits own speed, again and again, for as long as the timeline range lasts.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "From the start of the source range to its end.",
+          "properties": {
+            "type": {
+              "const": "forward",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "From the end of the source range to its start: pictures in reverse\norder and sound played backwards.",
+          "properties": {
+            "type": {
+              "const": "reverse",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One source instant for the whole clip, and silence.",
+          "properties": {
+            "source_time": {
+              "$ref": "#/$defs/MediaTime",
+              "description": "The instant shown; inside the source range."
+            },
+            "type": {
+              "const": "freeze",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "source_time"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The source range again and again, at its own speed.",
+          "properties": {
+            "mode": {
+              "$ref": "#/$defs/LoopMode",
+              "description": "How each pass follows the one before."
+            },
+            "type": {
+              "const": "loop",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "mode"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "TimeRange": {
+      "additionalProperties": false,
+      "description": "A half-open timeline interval `[start, end)`.",
+      "properties": {
+        "end": {
+          "$ref": "#/$defs/MediaTime",
+          "description": "Exclusive end."
+        },
+        "start": {
+          "$ref": "#/$defs/MediaTime",
+          "description": "Inclusive start."
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "type": "object"
+    },
+    "TimeScale": {
+      "additionalProperties": false,
+      "description": "A positive rational rate of one time against another.",
+      "properties": {
+        "den": {
+          "description": "Denominator; positive.",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "num": {
+          "description": "Numerator; positive.",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "num",
+        "den"
+      ],
+      "type": "object"
+    },
+    "Timeline": {
+      "additionalProperties": false,
+      "description": "Timeline tracks ordered from back to front for visual tracks.",
+      "properties": {
+        "tracks": {
+          "description": "Tracks in composition order.",
+          "items": {
+            "$ref": "#/$defs/Track"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "tracks"
+      ],
+      "type": "object"
+    },
+    "Track": {
+      "additionalProperties": false,
+      "description": "A homogeneous visual or audio timeline lane.",
+      "properties": {
+        "audio": {
+          "$ref": "#/$defs/TrackAudio",
+          "default": {
+            "ducking": null,
+            "effects": [],
+            "gain": {
+              "mode": "constant",
+              "value": 1.0
+            },
+            "muted": false,
+            "pan": {
+              "mode": "constant",
+              "value": 0.0
+            },
+            "solo": false
+          },
+          "description": "Bus controls applied to this track's mixed audio."
+        },
+        "captions": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Captions"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "The cues and style of a caption track; present exactly for that kind."
+        },
+        "clips": {
+          "default": [],
+          "description": "Clips on this track. Ordering is authoring order; evaluation sorts by time.\nA caption track has none.",
+          "items": {
+            "$ref": "#/$defs/Clip"
+          },
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/TrackId",
+          "description": "Stable track identity."
+        },
+        "kind": {
+          "$ref": "#/$defs/TrackKind",
+          "description": "Controls source compatibility and evaluation behavior."
+        },
+        "name": {
+          "description": "User-visible track name.",
+          "type": "string"
+        },
+        "transitions": {
+          "default": [],
+          "description": "Explicit transitions between overlapping clips on this track.",
+          "items": {
+            "$ref": "#/$defs/ClipTransition"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "TrackAudio": {
+      "additionalProperties": false,
+      "description": "Per-track audio bus controls.",
+      "properties": {
+        "ducking": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ducking"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Optional sidechain attenuation driven by another track."
+        },
+        "effects": {
+          "default": [],
+          "description": "Ordered single-input effects applied to the summed clip signal, at\nmost [`MAX_CHAIN_EFFECTS`].",
+          "items": {
+            "$ref": "#/$defs/AudioEffect"
+          },
+          "type": "array"
+        },
+        "gain": {
+          "$ref": "#/$defs/Animated_float",
+          "default": {
+            "mode": "constant",
+            "value": 1.0
+          },
+          "description": "Animated linear bus amplitude constrained to `0..=MAX_GAIN`."
+        },
+        "muted": {
+          "default": false,
+          "description": "Silences this bus.",
+          "type": "boolean"
+        },
+        "pan": {
+          "$ref": "#/$defs/Animated_float",
+          "default": {
+            "mode": "constant",
+            "value": 0.0
+          },
+          "description": "Animated stereo position applied after the clip mix, from `-1` (left)\nto `1` (right)."
+        },
+        "solo": {
+          "default": false,
+          "description": "Restricts the mix to soloed buses when any track sets this.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "TrackId": {
+      "description": "A stable timeline-track identifier.",
+      "minLength": 1,
+      "type": "string"
+    },
+    "TrackKind": {
+      "description": "The media domain accepted by a track.",
+      "oneOf": [
+        {
+          "const": "video",
+          "description": "A composited visual track.",
+          "type": "string"
+        },
+        {
+          "const": "audio",
+          "description": "A mixed audio track.",
+          "type": "string"
+        },
+        {
+          "const": "caption",
+          "description": "Timed text, drawn over the tracks before it and under the ones after.",
+          "type": "string"
+        }
+      ]
+    },
+    "TransferFunction": {
+      "description": "Encoded transfer curve.",
+      "oneOf": [
+        {
+          "const": "bt709",
+          "description": "BT.709 opto-electronic transfer function.",
+          "type": "string"
+        },
+        {
+          "const": "srgb",
+          "description": "IEC sRGB transfer function.",
+          "type": "string"
+        },
+        {
+          "const": "pq",
+          "description": "Perceptual quantizer HDR transfer function.",
+          "type": "string"
+        },
+        {
+          "const": "hlg",
+          "description": "Hybrid log-gamma HDR transfer function.",
+          "type": "string"
+        }
+      ]
+    },
+    "Vec2": {
+      "additionalProperties": false,
+      "description": "A two-dimensional value in normalized output coordinates.",
+      "properties": {
+        "x": {
+          "description": "Horizontal component.",
+          "format": "float",
+          "type": "number"
+        },
+        "y": {
+          "description": "Vertical component.",
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object"
+    },
+    "VideoStreamShape": {
+      "additionalProperties": false,
+      "description": "A video stream's displayed size and frame rate.",
+      "properties": {
+        "frame_rate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FrameRate"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The rate its first frames are presented at, as every host measures\nit from packet times and rounds it (`alpha2_assets::FrameRateEvidence`),\nwhen it can be measured. Not the rate a stream declares: a declared\nrate is a guess for variable-rate media, and browsers report none."
+        },
+        "height": {
+          "description": "Displayed height in square pixels: the stored height stretched by a\npixel aspect ratio taller than wide, then turned.",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "width": {
+          "description": "Displayed width in square pixels: the stored width stretched by a\npixel aspect ratio wider than tall, then turned by the stream's\norientation.",
+          "format": "uint32",
+          "maximum": 4294967295,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "width",
+        "height"
+      ],
+      "type": "object"
+    },
+    "VisualProperties": {
+      "additionalProperties": false,
+      "description": "Resolution-independent visual presentation controls for a clip.",
+      "properties": {
+        "anchor": {
+          "$ref": "#/$defs/Vec2",
+          "description": "Unanimated normalized point within the source rectangle."
+        },
+        "opacity": {
+          "$ref": "#/$defs/Animated_float",
+          "description": "Animated opacity constrained to `0..=1`."
+        },
+        "position": {
+          "$ref": "#/$defs/Animated_Vec2",
+          "description": "Animated normalized canvas translation."
+        },
+        "rotation_degrees": {
+          "$ref": "#/$defs/Animated_float",
+          "description": "Animated clockwise rotation in degrees."
+        },
+        "scale": {
+          "$ref": "#/$defs/Animated_Vec2",
+          "description": "Animated per-axis scale."
+        }
+      },
+      "required": [
+        "position",
+        "anchor",
+        "scale",
+        "rotation_degrees",
+        "opacity"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "The deserialized shape of a [`Project`], before its invariants are checked.\n\nThis is the wire contract, and the published JSON Schema is derived from\nit: a document the schema accepts has the right shape, and\n[`Project::validate`] then decides whether it means anything.",
+  "properties": {
+    "audio": {
+      "$ref": "#/$defs/MasterAudio",
+      "default": {
+        "effects": [],
+        "gain": {
+          "mode": "constant",
+          "value": 1.0
+        },
+        "limiter": {
+          "release_ms": 50.0,
+          "threshold": 1.0
+        }
+      },
+      "description": "Master bus applied to the summed track audio."
+    },
+    "compositions": {
+      "default": [],
+      "description": "Composition graphs that clips show.",
+      "items": {
+        "$ref": "#/$defs/Composition"
+      },
+      "type": "array"
+    },
+    "effect_resources": {
+      "default": [],
+      "description": "Non-media resources referenced by effect invocations.",
+      "items": {
+        "$ref": "#/$defs/EffectResource"
+      },
+      "type": "array"
+    },
+    "id": {
+      "$ref": "#/$defs/ProjectId",
+      "description": "Stable identity of this project."
+    },
+    "name": {
+      "description": "Human-readable project name. It has no semantic meaning.",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "description": "Document version. This build reads and writes only\n[`CURRENT_SCHEMA_VERSION`].",
+      "format": "uint32",
+      "maximum": 4294967295,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "settings": {
+      "$ref": "#/$defs/ProjectSettings",
+      "description": "Output-wide timeline settings."
+    },
+    "sources": {
+      "description": "Media resources referenced by clips.",
+      "items": {
+        "$ref": "#/$defs/MediaSource"
+      },
+      "type": "array"
+    },
+    "timeline": {
+      "$ref": "#/$defs/Timeline",
+      "description": "Ordered visual and audio tracks."
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "name",
+    "settings",
+    "sources",
+    "timeline"
+  ],
+  "title": "alpha2 project document, schema version 1",
+  "type": "object"
+}

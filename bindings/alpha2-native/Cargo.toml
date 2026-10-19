@@ -1,0 +1,91 @@
+[package]
+name = "alpha2-native"
+version.workspace = true
+description = "Native headless and real-time host boundary for alpha2."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["ffmpeg", "video", "decode", "encode", "cli"]
+categories = ["multimedia::video", "multimedia::encoding", "command-line-utilities"]
+# Builds from its sources and license alone: tests, test-only modules, benches and fixtures
+# stay in the repository, which is where `cargo test` runs.
+include = [
+  "/build.rs",
+  "/src/**",
+  "/README.md",
+  "/LICENSE.md",
+  "!/src/**/tests.rs",
+  "!/src/**/*_tests.rs",
+  "!/src/**/tests/**",
+]
+
+# docs.rs has no FFmpeg; there the build script compiles no C shim (`alpha2_build_support::docs_rs`),
+# so the hardware-device API is documented as well.
+[package.metadata.docs.rs]
+features = ["hwdecode", "hwencode", "timeline"]
+
+[features]
+default = []
+cpal-host = ["dep:cpal"]
+# Sharing the renderer's device with FFmpeg's hardware contexts, which both
+# directions build on. Enable `hwdecode` and/or `hwencode`, not this.
+hwdevice = ["alpha2-ffmpeg-bridge/hwdevice", "dep:alpha2-native-gpu", "dep:wgpu"]
+# Hardware video decode into renderer-importable surfaces.
+hwdecode = ["hwdevice"]
+# Hardware video encode from renderer-packed planes (the GPU-resident export). On Windows,
+# `probe-encoders` opens each DX12 adapter itself to ask its D3D12VA encoders.
+hwencode = ["hwdevice", "dep:alpha2-gpu", "dep:pollster"]
+# Mixes a timeline project's audio. It is the only part of this crate that needs the engine,
+# so decode and encode alone never link the timeline crates.
+timeline = ["dep:alpha2-engine"]
+
+[[bin]]
+name = "alpha2"
+path = "src/main.rs"
+
+[dependencies]
+alpha2-engine = { workspace = true, optional = true }
+alpha2-audio.workspace = true
+alpha2-media.workspace = true
+alpha2-time.workspace = true
+alpha2-ffmpeg-bridge.workspace = true
+alpha2-os.workspace = true
+bytes.workspace = true
+alpha2-native-gpu = { workspace = true, features = ["hwdevice"], optional = true }
+# Only the encoder-input handoff names wgpu types; the rest of this crate stays free of them.
+wgpu = { workspace = true, optional = true }
+rsmpeg = { version = "0.18.0", features = ["link_system_ffmpeg"] }
+png.workspace = true
+cpal = { version = "0.17.3", optional = true }
+
+[dev-dependencies]
+# Tests acquire devices one at a time (`alpha2_gpu::serialize_acquisition`).
+alpha2-gpu = { workspace = true, features = ["serial-acquisition"] }
+# The audio contract only: the visual one (a default feature) turns the extension providers on.
+alpha2-provider-contract = { workspace = true, default-features = false }
+alpha2-model.workspace = true
+
+# The VideoToolbox tests open the renderer's Metal device the way the host does.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+pollster.workspace = true
+
+# `probe-encoders` opens a DX12 device per adapter for its D3D12VA rate-control rows.
+[target.'cfg(target_os = "windows")'.dependencies]
+alpha2-gpu = { workspace = true, optional = true, features = ["wgpu-interop"] }
+pollster = { workspace = true, optional = true }
+
+# The D3D12VA tests open the renderer's DX12 device the way the host does.
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+pollster.workspace = true
+wgpu.workspace = true
+
+[build-dependencies]
+alpha2-build-support.workspace = true
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "media_io"
+harness = false

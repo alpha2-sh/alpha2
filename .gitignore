@@ -1,0 +1,17 @@
+/target/
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/
+/fuzz/logs/
+/test-results/
+/release/ffmpeg-lgpl/artifacts/
+/node_modules/
+/packages/*/dist/
+/packages/*/wasm/
+*.wasm
+*.wasm.map
+.DS_Store
+# What a compiler probe leaves when it is given no output name.
+a.out
+
+/.local/

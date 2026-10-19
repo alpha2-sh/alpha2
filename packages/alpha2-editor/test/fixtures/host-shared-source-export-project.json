@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "id": "host-shared-source-export",
+  "name": "Host shared-source export regression fixture",
+  "settings": {
+    "width": 64,
+    "height": 48,
+    "frame_rate": { "num": 30, "den": 1 },
+    "sample_rate": 48000
+  },
+  "sources": [
+    {
+      "id": "video-source",
+      "locator": "fixture://long-gop",
+      "kind": "video"
+    }
+  ],
+  "timeline": {
+    "tracks": [
+      {
+        "id": "video-a",
+        "name": "Early source time",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "video-clip-a",
+            "source_id": "video-source",
+            "timeline_range": { "start": 0, "end": 60000 },
+            "source_range": { "start": 0, "end": 60000 }
+          }
+        ]
+      },
+      {
+        "id": "video-b",
+        "name": "Later source time",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "video-clip-b",
+            "source_id": "video-source",
+            "timeline_range": { "start": 0, "end": 60000 },
+            "source_range": { "start": 60000, "end": 120000 }
+          }
+        ]
+      }
+    ]
+  }
+}

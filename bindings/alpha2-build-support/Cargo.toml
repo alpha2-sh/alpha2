@@ -1,0 +1,29 @@
+[package]
+name = "alpha2-build-support"
+version.workspace = true
+description = "Build-script helpers, and the C headers their shims share, for the alpha2 crates that link FFmpeg."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["ffmpeg", "build", "bindgen"]
+categories = ["development-tools::build-utils"]
+# Builds from its sources and license alone: tests, test-only modules, benches and fixtures
+# stay in the repository, which is where `cargo test` runs.
+include = [
+  "/src/**",
+  "/include/**",
+  "/README.md",
+  "/LICENSE.md",
+  "!/src/**/tests.rs",
+  "!/src/**/*_tests.rs",
+  "!/src/**/tests/**",
+]
+
+[dependencies]
+# The version `rusty_ffmpeg` already builds, so libclang is no new requirement.
+bindgen = "0.71"
+cc = "1.4.7"
+
+[lints]
+workspace = true

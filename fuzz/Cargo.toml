@@ -1,0 +1,93 @@
+[package]
+name = "alpha2-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+alpha2-audio = { path = "../crates/alpha2-audio" }
+alpha2-engine = { path = "../crates/alpha2-engine" }
+alpha2-eval = { path = "../crates/alpha2-eval" }
+alpha2-extensions = { path = "../extensions" }
+alpha2-media = { path = "../crates/alpha2-media" }
+alpha2-model = { path = "../crates/alpha2-model" }
+alpha2-time = { path = "../crates/alpha2-time" }
+libfuzzer-sys = "0.4"
+serde_json = "1.0.149"
+typed-arena = "2"
+
+[[bin]]
+name = "project_from_json"
+path = "fuzz_targets/project_from_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "evaluate"
+path = "fuzz_targets/evaluate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "audio_render"
+path = "fuzz_targets/audio_render.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "extension_svg"
+path = "fuzz_targets/extension_svg.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "extension_animated"
+path = "fuzz_targets/extension_animated.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "extension_lottie"
+path = "fuzz_targets/extension_lottie.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "extension_exr"
+path = "fuzz_targets/extension_exr.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "caption_import"
+path = "fuzz_targets/caption_import.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "project_lint"
+path = "fuzz_targets/project_lint.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "composition_plan"
+path = "fuzz_targets/composition_plan.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

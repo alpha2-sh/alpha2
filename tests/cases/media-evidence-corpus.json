@@ -1,0 +1,40 @@
+{
+  "description": "Evidence every host records of the same bytes (alpha2_assets::FrameRateEvidence and rational_rate, the browser editor's fingerprint.js): the size a video is shown at in square pixels (`size`: the container's sample aspect ratio, else the one its H.264 or HEVC parameter sets signal, the longer side stretched and rounded), a video's frame rate measured from its packets' presentation times, and where the media ends on its own timeline (its first presentation plus its length). The native host (bindings/alpha2-host/src/tests.rs) and the browser editor (packages/alpha2-editor/test/fingerprint.test.mjs) both probe each file and must record exactly this.",
+  "files": [
+    { "file": "recovery-h264.mp4", "size": { "width": 64, "height": 48 }, "frame_rate": { "num": 10, "den": 1 }, "duration_ticks": 240000 },
+    { "file": "vfr.mp4", "size": { "width": 64, "height": 48 }, "frame_rate": { "num": 12, "den": 1 }, "duration_ticks": 44000 },
+    { "file": "vp9.webm", "size": { "width": 128, "height": 96 }, "frame_rate": { "num": 29979, "den": 1000 }, "duration_ticks": 60000 },
+    { "file": "h264-bt709-copy.ts", "size": { "width": 128, "height": 96 }, "frame_rate": { "num": 30, "den": 1 }, "duration_ticks": 416000 },
+    { "file": "h264-bt709-vui-sar.mp4", "size": { "width": 171, "height": 96 }, "frame_rate": { "num": 30, "den": 1 }, "duration_ticks": 240000 },
+    { "file": "h264-bt709-vui-sar.ts", "size": { "width": 171, "height": 96 }, "frame_rate": { "num": 30, "den": 1 }, "duration_ticks": 416000 },
+    { "file": "h264-bt709-copy.mkv", "size": { "width": 128, "height": 96 }, "frame_rate": { "num": 29995, "den": 1000 }, "duration_ticks": 240000 },
+    { "file": "h264-bt709-copy.mp4", "size": { "width": 128, "height": 96 }, "frame_rate": { "num": 30, "den": 1 }, "duration_ticks": 240000 },
+    { "file": "edit-list.mp4", "size": { "width": 64, "height": 48 }, "frame_rate": { "num": 25, "den": 1 }, "duration_ticks": 59920 },
+    { "file": "cfr-bt709-limited.mp4", "size": { "width": 64, "height": 48 }, "frame_rate": { "num": 30000, "den": 1001 }, "duration_ticks": 48048 },
+    { "file": "h264-long-gop.mp4", "size": { "width": 128, "height": 96 }, "frame_rate": { "num": 30, "den": 1 }, "duration_ticks": 120000 },
+    { "file": "hevc-hvc1.mp4", "size": { "width": 64, "height": 48 }, "frame_rate": { "num": 30, "den": 1 }, "duration_ticks": 24000 },
+    { "file": "av1.mp4", "size": { "width": 64, "height": 48 }, "frame_rate": { "num": 30, "den": 1 }, "duration_ticks": 24000 },
+    { "file": "audio-surround-offset.mov", "frame_rate": null, "duration_ticks": 18000 },
+    { "file": "audio-mpegts.ts", "frame_rate": null, "duration_ticks": 219200 },
+    { "file": "audio-late-start.ts", "frame_rate": null, "duration_ticks": 1481593600 }
+  ],
+  "rational": [
+    [29.97003, { "num": 30000, "den": 1001 }],
+    [23.976, { "num": 24000, "den": 1001 }],
+    [59.94, { "num": 60000, "den": 1001 }],
+    [25.001, { "num": 25, "den": 1 }],
+    [29.9949, { "num": 29995, "den": 1000 }],
+    [12.5, { "num": 12500, "den": 1000 }],
+    [6.7857142857, { "num": 6786, "den": 1000 }],
+    [0.006, { "num": 6, "den": 1000 }],
+    [1000.5, { "num": 1000500, "den": 1000 }],
+    [120000, { "num": 120000, "den": 1 }],
+    [119999.6, { "num": 119999600, "den": 1000 }],
+    [1200000, null],
+    [120000.4, null],
+    [120001, null],
+    [0.0004, null],
+    [0, null],
+    [-30, null]
+  ]
+}

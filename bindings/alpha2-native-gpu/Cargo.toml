@@ -1,0 +1,99 @@
+[package]
+name = "alpha2-native-gpu"
+version.workspace = true
+description = "Native decoded-surface import and GPU synchronization boundary for alpha2."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["vulkan", "metal", "d3d12", "hardware", "wgpu"]
+categories = ["multimedia::video", "graphics"]
+# Builds from its sources and license alone: tests, test-only modules, benches and fixtures
+# stay in the repository, which is where `cargo test` runs.
+include = [
+  "/build.rs",
+  "/src/**",
+  "/include/**",
+  "/c/**",
+  "/README.md",
+  "/LICENSE.md",
+  "!/src/**/tests.rs",
+  "!/src/**/*_tests.rs",
+  "!/src/**/tests/**",
+]
+build = "build.rs"
+
+# docs.rs has no FFmpeg; there the build script compiles no C shim (`alpha2_build_support::docs_rs`),
+# so the hardware-device API is documented as well.
+[package.metadata.docs.rs]
+features = ["hwdevice"]
+
+[features]
+default = []
+hwdevice = [
+  "dep:alpha2-ffmpeg-bridge",
+  "alpha2-ffmpeg-bridge/hwdevice",
+  "dep:alpha2-gpu",
+  "dep:ash",
+  "dep:objc2",
+  "dep:objc2-metal",
+  "dep:rsmpeg",
+  "dep:wgpu",
+  "dep:wgpu-hal",
+  "dep:windows",
+]
+
+[build-dependencies]
+alpha2-build-support.workspace = true
+
+[dependencies]
+alpha2-ffmpeg-bridge = { workspace = true, optional = true }
+
+[dev-dependencies]
+# Tests acquire devices one at a time (`alpha2_gpu::serialize_acquisition`).
+alpha2-gpu = { workspace = true, features = ["serial-acquisition"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+alpha2-gpu = { workspace = true, optional = true, features = ["wgpu-interop"] }
+ash = { version = "0.38", optional = true }
+rsmpeg = { version = "0.18.0", features = ["link_system_ffmpeg"], optional = true }
+wgpu = { workspace = true, optional = true }
+wgpu-hal = { version = "30.0.1", features = ["vulkan"], optional = true }
+
+# The queue-lock test drives a renderer on a queue shared the way the decoder shares it.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+alpha2-media.workspace = true
+alpha2-render = { workspace = true, features = ["wgpu-interop"] }
+pollster.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+alpha2-gpu = { workspace = true, optional = true, features = ["wgpu-interop"] }
+objc2 = { version = "0.6.4", optional = true }
+objc2-metal = { version = "0.3.2", features = ["MTLTexture"], optional = true }
+rsmpeg = { version = "0.18.0", features = ["link_system_ffmpeg"], optional = true }
+wgpu = { workspace = true, optional = true }
+wgpu-hal = { version = "30.0.1", features = ["metal"], optional = true }
+
+# The interop tests draw and sample on the renderer's own device.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+pollster.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+alpha2-gpu = { workspace = true, optional = true, features = ["wgpu-interop"] }
+rsmpeg = { version = "0.18.0", features = ["link_system_ffmpeg"], optional = true }
+wgpu = { workspace = true, optional = true }
+wgpu-hal = { version = "30.0.1", features = ["dx12"], optional = true }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common"], optional = true }
+
+# The interop tests draw and sample on the renderer's own device.
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+pollster.workspace = true
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"

@@ -1,0 +1,1167 @@
+[
+  {
+    "name": "a-clean-project",
+    "project": {
+      "schema_version": 1,
+      "id": "lint",
+      "name": "Lint",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "issues": []
+  },
+  {
+    "name": "an-unused-source-and-an-unreached-keyframe",
+    "project": {
+      "schema_version": 1,
+      "id": "lint",
+      "name": "Lint",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": {
+                  "position": {
+                    "mode": "constant",
+                    "value": { "x": 0.5, "y": 0.5 }
+                  },
+                  "anchor": { "x": 0.5, "y": 0.5 },
+                  "scale": { "mode": "constant", "value": { "x": 1, "y": 1 } },
+                  "rotation_degrees": { "mode": "constant", "value": 0 },
+                  "opacity": {
+                    "mode": "keyframes",
+                    "keyframes": [
+                      {
+                        "time": 0,
+                        "value": 0,
+                        "interpolation": { "type": "linear" }
+                      },
+                      {
+                        "time": 60000,
+                        "value": 1,
+                        "interpolation": { "type": "linear" }
+                      },
+                      {
+                        "time": 200000,
+                        "value": 0.5,
+                        "interpolation": { "type": "linear" }
+                      },
+                      {
+                        "time": 300000,
+                        "value": 1,
+                        "interpolation": { "type": "hold" }
+                      }
+                    ]
+                  }
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "issues": [
+      { "kind": "unused_source", "source": "v2" },
+      {
+        "kind": "unreached_keyframe",
+        "owner": { "type": "clip", "clip": "c1" },
+        "property": "visual.opacity",
+        "time": 300000
+      }
+    ]
+  },
+  {
+    "name": "clips-under-an-opaque-fill",
+    "project": {
+      "schema_version": 1,
+      "id": "lint",
+      "name": "Lint",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        {
+          "id": "black",
+          "kind": "generated",
+          "generator": {
+            "type": "fill",
+            "paint": {
+              "type": "solid",
+              "color": { "red": 0, "green": 0, "blue": 0, "alpha": 1 }
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "Cover",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "g",
+                "source_id": "black",
+                "timeline_range": { "start": 0, "end": 240000 },
+                "source_range": { "start": 0, "end": 240000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "issues": [
+      { "kind": "hidden_clip", "clip": "c1", "by": "g" },
+      { "kind": "hidden_clip", "clip": "c2", "by": "g" }
+    ]
+  },
+  {
+    "name": "a-fill-used-only-as-a-matte-hides-nothing",
+    "project": {
+      "schema_version": 1,
+      "id": "lint",
+      "name": "Lint",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        {
+          "id": "black",
+          "kind": "generated",
+          "generator": {
+            "type": "fill",
+            "paint": {
+              "type": "solid",
+              "color": { "red": 0, "green": 0, "blue": 0, "alpha": 1 }
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "Cover",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "g",
+                "source_id": "black",
+                "timeline_range": { "start": 0, "end": 240000 },
+                "source_range": { "start": 0, "end": 240000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t3",
+            "name": "Matted",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "m",
+                "source_id": "v2",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "matte": { "source": "g", "mode": "alpha" }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "issues": []
+  },
+  {
+    "name": "a-dissolving-fill-hides-only-what-precedes-the-dissolve",
+    "project": {
+      "schema_version": 1,
+      "id": "lint",
+      "name": "Lint",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        {
+          "id": "black",
+          "kind": "generated",
+          "generator": {
+            "type": "fill",
+            "paint": {
+              "type": "solid",
+              "color": { "red": 0, "green": 0, "blue": 0, "alpha": 1 }
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c0",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 60000 },
+                "source_range": { "start": 0, "end": 60000 }
+              },
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 60000, "end": 120000 },
+                "source_range": { "start": 60000, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "Cover",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "g",
+                "source_id": "black",
+                "timeline_range": { "start": 0, "end": 132000 },
+                "source_range": { "start": 0, "end": 132000 }
+              },
+              {
+                "id": "h",
+                "source_id": "v2",
+                "timeline_range": { "start": 108000, "end": 240000 },
+                "source_range": { "start": 0, "end": 132000 }
+              }
+            ],
+            "transitions": [
+              {
+                "from_clip": "g",
+                "to_clip": "h",
+                "timeline_range": { "start": 108000, "end": 132000 },
+                "easing": { "type": "linear" },
+                "effect": { "id": "cross_dissolve", "version": 1, "params": {} }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "issues": [{ "kind": "hidden_clip", "clip": "c0", "by": "g" }]
+  },
+  {
+    "name": "a-translucent-fill-hides-nothing",
+    "project": {
+      "schema_version": 1,
+      "id": "lint",
+      "name": "Lint",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        {
+          "id": "black",
+          "kind": "generated",
+          "generator": {
+            "type": "fill",
+            "paint": {
+              "type": "solid",
+              "color": { "red": 0, "green": 0, "blue": 0, "alpha": 0.5 }
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "Cover",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "g",
+                "source_id": "black",
+                "timeline_range": { "start": 0, "end": 240000 },
+                "source_range": { "start": 0, "end": 240000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "issues": []
+  },
+  {
+    "name": "a-fill-over-part-of-a-clip-hides-only-what-it-covers",
+    "project": {
+      "schema_version": 1,
+      "id": "lint",
+      "name": "Lint",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        {
+          "id": "black",
+          "kind": "generated",
+          "generator": {
+            "type": "fill",
+            "paint": {
+              "type": "solid",
+              "color": { "red": 0, "green": 0, "blue": 0, "alpha": 1 }
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "Cover",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "g",
+                "source_id": "black",
+                "timeline_range": { "start": 0, "end": 200000 },
+                "source_range": { "start": 0, "end": 200000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "issues": [{ "kind": "hidden_clip", "clip": "c1", "by": "g" }]
+  },
+  {
+    "name": "a-transition-shorter-than-a-frame",
+    "project": {
+      "schema_version": 1,
+      "id": "lint",
+      "name": "Lint",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 118000, "end": 240000 },
+                "source_range": { "start": 0, "end": 122000 }
+              }
+            ],
+            "transitions": [
+              {
+                "from_clip": "c1",
+                "to_clip": "c2",
+                "timeline_range": { "start": 118000, "end": 120000 },
+                "easing": { "type": "linear" },
+                "effect": { "id": "cross_dissolve", "version": 1, "params": {} }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "issues": [
+      {
+        "kind": "off_frame_boundary",
+        "owner": { "type": "clip", "clip": "c2" },
+        "edge": "start",
+        "time": 118000
+      },
+      {
+        "kind": "short_transition",
+        "track": "t1",
+        "from_clip": "c1",
+        "to_clip": "c2"
+      },
+      {
+        "kind": "off_frame_boundary",
+        "owner": {
+          "type": "transition",
+          "track": "t1",
+          "from_clip": "c1",
+          "to_clip": "c2"
+        },
+        "edge": "start",
+        "time": 118000
+      }
+    ]
+  },
+  {
+    "name": "a-cue-between-frames",
+    "project": {
+      "schema_version": 1,
+      "id": "lint",
+      "name": "Lint",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "subs",
+            "name": "Subtitles",
+            "kind": "caption",
+            "captions": {
+              "cues": [
+                {
+                  "timeline_range": { "start": 0, "end": 60000 },
+                  "text": "On the grid"
+                },
+                {
+                  "timeline_range": { "start": 61000, "end": 120000 },
+                  "text": "Between frames"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "issues": [
+      {
+        "kind": "off_frame_boundary",
+        "owner": { "type": "cue", "track": "subs", "index": 1 },
+        "edge": "start",
+        "time": 61000
+      }
+    ]
+  },
+  {
+    "name": "clips-on-the-frame-starts-of-a-rate-whose-frames-are-not-whole-ticks",
+    "project": {
+      "schema_version": 1,
+      "id": "lint",
+      "name": "Lint",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": {
+          "num": 90,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "v2",
+          "kind": "video",
+          "locator": "b.mp4"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 1333,
+                  "end": 4000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 2667
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": {
+                  "start": 4000,
+                  "end": 6666
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 2666
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "issues": []
+  },
+  {
+    "name": "clips-on-the-frame-starts-of-48000-1001",
+    "project": {
+      "schema_version": 1,
+      "id": "lint",
+      "name": "Lint",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": {
+          "num": 48000,
+          "den": 1001
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "v2",
+          "kind": "video",
+          "locator": "b.mp4"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 2502,
+                  "end": 7507
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 5005
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": {
+                  "start": 7507,
+                  "end": 10010
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 2503
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "issues": []
+  },
+  {
+    "name": "a-clip-a-tick-past-a-frame-start-of-90-fps",
+    "project": {
+      "schema_version": 1,
+      "id": "lint",
+      "name": "Lint",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": {
+          "num": 90,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "v2",
+          "kind": "video",
+          "locator": "b.mp4"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 1334,
+                  "end": 4000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 2666
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": {
+                  "start": 4000,
+                  "end": 6666
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 2666
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "issues": [
+      {
+        "kind": "off_frame_boundary",
+        "owner": {
+          "type": "clip",
+          "clip": "c1"
+        },
+        "edge": "start",
+        "time": 1334
+      }
+    ]
+  },
+  {
+    "name": "a-transition-shorter-than-a-frame-that-a-frame-shows",
+    "project": {
+      "schema_version": 1,
+      "id": "lint",
+      "name": "Lint",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "v2",
+          "kind": "video",
+          "locator": "b.mp4"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 123600
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 123600
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": [
+              {
+                "from_clip": "c1",
+                "to_clip": "c2",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 123600
+                },
+                "easing": {
+                  "type": "linear"
+                },
+                "effect": {
+                  "id": "cross_dissolve",
+                  "version": 1,
+                  "params": {}
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "issues": [
+      {
+        "kind": "off_frame_boundary",
+        "owner": {
+          "type": "clip",
+          "clip": "c1"
+        },
+        "edge": "end",
+        "time": 123600
+      },
+      {
+        "kind": "off_frame_boundary",
+        "owner": {
+          "type": "transition",
+          "track": "t1",
+          "from_clip": "c1",
+          "to_clip": "c2"
+        },
+        "edge": "end",
+        "time": 123600
+      }
+    ]
+  },
+  {
+    "name": "a-frame-long-transition-between-frames-no-frame-shows",
+    "project": {
+      "schema_version": 1,
+      "id": "lint",
+      "name": "Lint",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "v2",
+          "kind": "video",
+          "locator": "b.mp4"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 122000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 122000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": {
+                  "start": 118000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 122000
+                }
+              }
+            ],
+            "transitions": [
+              {
+                "from_clip": "c1",
+                "to_clip": "c2",
+                "timeline_range": {
+                  "start": 118000,
+                  "end": 122000
+                },
+                "easing": {
+                  "type": "linear"
+                },
+                "effect": {
+                  "id": "cross_dissolve",
+                  "version": 1,
+                  "params": {}
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "issues": [
+      {
+        "kind": "off_frame_boundary",
+        "owner": {
+          "type": "clip",
+          "clip": "c1"
+        },
+        "edge": "end",
+        "time": 122000
+      },
+      {
+        "kind": "off_frame_boundary",
+        "owner": {
+          "type": "clip",
+          "clip": "c2"
+        },
+        "edge": "start",
+        "time": 118000
+      },
+      {
+        "kind": "short_transition",
+        "track": "t1",
+        "from_clip": "c1",
+        "to_clip": "c2"
+      },
+      {
+        "kind": "off_frame_boundary",
+        "owner": {
+          "type": "transition",
+          "track": "t1",
+          "from_clip": "c1",
+          "to_clip": "c2"
+        },
+        "edge": "start",
+        "time": 118000
+      },
+      {
+        "kind": "off_frame_boundary",
+        "owner": {
+          "type": "transition",
+          "track": "t1",
+          "from_clip": "c1",
+          "to_clip": "c2"
+        },
+        "edge": "end",
+        "time": 122000
+      }
+    ]
+  },
+  {
+    "name": "a-pq-source-in-a-project-that-refuses-hdr",
+    "project": {
+      "schema_version": 1,
+      "id": "lint",
+      "name": "Lint",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000,
+        "color": {
+          "hdr": "reject"
+        }
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4",
+          "color_metadata": {
+            "primaries": "bt2020",
+            "transfer": "pq",
+            "matrix": "bt2020_ncl",
+            "range": "limited",
+            "dynamic_range": "hdr"
+          }
+        },
+        {
+          "id": "v2",
+          "kind": "video",
+          "locator": "b.mp4"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "issues": [
+      {
+        "kind": "hdr_source",
+        "source": "v1"
+      }
+    ]
+  }
+]

@@ -1,0 +1,40 @@
+[package]
+name = "alpha2-audio-worklet"
+version.workspace = true
+description = "C-ABI wasm binding for the alpha2 AudioWorklet host."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["wasm", "audio", "audioworklet", "webaudio"]
+categories = ["wasm", "multimedia::audio"]
+# Tests, test-only modules, benches and fixtures stay in the repository, where `cargo test` runs.
+include = [
+  "/src/**",
+  "/README.md",
+  "/LICENSE.md",
+  "!/src/**/tests.rs",
+  "!/src/**/*_tests.rs",
+  "!/src/**/tests/**",
+]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+alpha2-audio.workspace = true
+alpha2-time.workspace = true
+
+[dev-dependencies]
+# Tests read the model's master-bus limits, which the record decoder has to accept. Never linked
+# into the wasm module.
+alpha2-model.workspace = true
+
+[lints.rust]
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }

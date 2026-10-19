@@ -1,0 +1,10 @@
+# Every wgpu call that can reach the native queue goes through `GpuContext`, which holds the lock a
+# native decoder sharing that queue also takes.
+# Crates with a clippy.toml of their own repeat these rules: clippy reads only the nearest file.
+disallowed-methods = [
+  { path = "wgpu::Queue::submit", reason = "use `GpuContext::submit`: a native decoder may share the queue, and only the context holds its lock" },
+  { path = "wgpu::Queue::on_submitted_work_done", reason = "use `GpuContext::on_submitted_work_done`: wgpu flushes pending writes there, which is a queue submission" },
+  { path = "wgpu::Queue::present", reason = "use `GpuContext::present`: presenting is a queue access" },
+  { path = "wgpu::BufferSlice::map_async", reason = "use `GpuContext::map_async`: wgpu flushes the buffer's pending writes there, which is a queue submission" },
+  { path = "wgpu::Buffer::map_async", reason = "use `GpuContext::map_async`: wgpu flushes the buffer's pending writes there, which is a queue submission" },
+]

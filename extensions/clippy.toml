@@ -1,0 +1,2 @@
+# OpenEXR and ACEScg are names, not code.
+doc-valid-idents = ["OpenEXR", "ACEScg", ".."]

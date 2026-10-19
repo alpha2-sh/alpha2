@@ -1,0 +1,61 @@
+[package]
+name = "alpha2-render"
+version.workspace = true
+description = "Render graph and effect registry for alpha2."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["wgpu", "rendering", "video", "effects", "compositing"]
+categories = ["rendering::engine", "multimedia::video", "graphics"]
+# Builds from its sources and license alone: tests, test-only modules, benches and fixtures
+# stay in the repository, which is where `cargo test` runs.
+include = [
+  "/src/**",
+  "/README.md",
+  "/LICENSE.md",
+  "!/src/**/tests.rs",
+  "!/src/**/*_tests.rs",
+  "!/src/**/tests/**",
+]
+
+[features]
+# The `wgpu` interop surface: the items that take or return `wgpu` types, documented only with this
+# feature (their semver follows wgpu's major). Off by default.
+wgpu-interop = ["alpha2-gpu/wgpu-interop"]
+
+[dependencies]
+alpha2-gpu.workspace = true
+alpha2-media.workspace = true
+alpha2-shaders.workspace = true
+alpha2-time.workspace = true
+wgpu.workspace = true
+half = "2.7.1"
+bytemuck = "1.25.2"
+web-time = "1.1.0"
+serde_json.workspace = true
+
+[dev-dependencies]
+# Tests acquire devices one at a time (`alpha2_gpu::serialize_acquisition`).
+alpha2-gpu = { workspace = true, features = ["serial-acquisition"] }
+alpha2-golden-support.workspace = true
+pollster.workspace = true
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "readback_and_pools"
+harness = false
+
+[[bench]]
+name = "composite_layers"
+harness = false
+
+[[bench]]
+name = "plane_upload"
+harness = false
+
+[[bench]]
+name = "graph_encode"
+harness = false

@@ -1,0 +1,284 @@
+{
+  "schema_version": 1,
+  "id": "host-parity-extensions",
+  "name": "Host parity: an image sequence, a GIF, an animated WebP, an APNG, a Lottie animation, a dotLottie animation, an OpenEXR image and sequence, and SVGs, one with text in the host's fonts, through their providers",
+  "settings": {
+    "width": 96,
+    "height": 64,
+    "frame_rate": {
+      "num": 10,
+      "den": 1
+    },
+    "sample_rate": 48000
+  },
+  "sources": [
+    {
+      "id": "seq",
+      "locator": "sequence://frames",
+      "kind": "video",
+      "provider": {
+        "format": "image_sequence",
+        "frames": [
+          "f7",
+          "f8",
+          "f9",
+          "f10"
+        ],
+        "frame_rate": {
+          "num": 10,
+          "den": 1
+        },
+        "start_number": 7
+      }
+    },
+    {
+      "id": "gif",
+      "locator": "asset://gif",
+      "kind": "video",
+      "provider": {
+        "format": "animated_image"
+      }
+    },
+    {
+      "id": "webp",
+      "locator": "asset://webp",
+      "kind": "video",
+      "provider": {
+        "format": "animated_image"
+      }
+    },
+    {
+      "id": "apng",
+      "locator": "asset://apng",
+      "kind": "video",
+      "provider": {
+        "format": "animated_image"
+      }
+    },
+    {
+      "id": "lottie",
+      "locator": "asset://lottie",
+      "kind": "video",
+      "provider": {
+        "format": "lottie"
+      }
+    },
+    {
+      "id": "dot",
+      "locator": "asset://dot",
+      "kind": "video",
+      "provider": {
+        "format": "lottie",
+        "animation": "still"
+      }
+    },
+    {
+      "id": "logo",
+      "locator": "asset://logo",
+      "kind": "image",
+      "provider": {
+        "format": "svg"
+      }
+    },
+    {
+      "id": "exr",
+      "locator": "asset://exr",
+      "kind": "image",
+      "provider": {
+        "format": "exr",
+        "primaries": "p3_d65"
+      }
+    },
+    {
+      "id": "exrseq",
+      "locator": "sequence://exr",
+      "kind": "video",
+      "provider": {
+        "format": "image_sequence",
+        "frames": [
+          "x1",
+          "x2"
+        ],
+        "frame_rate": {
+          "num": 10,
+          "den": 1
+        },
+        "start_number": 1
+      }
+    },
+    {
+      "id": "label",
+      "locator": "asset://label",
+      "kind": "image",
+      "provider": {
+        "format": "svg"
+      }
+    }
+  ],
+  "timeline": {
+    "tracks": [
+      {
+        "id": "v1",
+        "name": "V1",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "a",
+            "source_id": "seq",
+            "timeline_range": {
+              "start": 0,
+              "end": 48000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 48000
+            }
+          },
+          {
+            "id": "b",
+            "source_id": "gif",
+            "timeline_range": {
+              "start": 48000,
+              "end": 96000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 48000
+            }
+          },
+          {
+            "id": "c",
+            "source_id": "webp",
+            "timeline_range": {
+              "start": 96000,
+              "end": 144000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 48000
+            }
+          },
+          {
+            "id": "d",
+            "source_id": "apng",
+            "timeline_range": {
+              "start": 144000,
+              "end": 192000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 48000
+            }
+          },
+          {
+            "id": "f",
+            "source_id": "lottie",
+            "timeline_range": {
+              "start": 192000,
+              "end": 240000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 48000
+            }
+          },
+          {
+            "id": "g",
+            "source_id": "dot",
+            "timeline_range": {
+              "start": 240000,
+              "end": 288000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 48000
+            }
+          },
+          {
+            "id": "h",
+            "source_id": "exr",
+            "timeline_range": {
+              "start": 288000,
+              "end": 336000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 48000
+            }
+          },
+          {
+            "id": "i",
+            "source_id": "exrseq",
+            "timeline_range": {
+              "start": 336000,
+              "end": 360000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 24000
+            }
+          }
+        ]
+      },
+      {
+        "id": "v2",
+        "name": "V2",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "e",
+            "source_id": "logo",
+            "timeline_range": {
+              "start": 0,
+              "end": 288000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 288000
+            },
+            "visual": {
+              "position": {
+                "mode": "constant",
+                "value": {
+                  "x": 0.75,
+                  "y": 0.25
+                }
+              },
+              "anchor": {
+                "x": 0.5,
+                "y": 0.5
+              },
+              "scale": {
+                "mode": "constant",
+                "value": {
+                  "x": 0.5,
+                  "y": 0.5
+                }
+              },
+              "rotation_degrees": {
+                "mode": "constant",
+                "value": 0
+              },
+              "opacity": {
+                "mode": "constant",
+                "value": 1
+              }
+            }
+          },
+          {
+            "id": "j",
+            "source_id": "label",
+            "timeline_range": {
+              "start": 288000,
+              "end": 360000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 72000
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

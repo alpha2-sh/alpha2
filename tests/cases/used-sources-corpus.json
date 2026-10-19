@@ -1,0 +1,1902 @@
+[
+  {
+    "name": "a-composition-source-its-clips-own-composition-does-not-draw",
+    "project": {
+      "schema_version": 1,
+      "id": "used-sources",
+      "name": "Used sources",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v", "kind": "video", "locator": "v.mp4" },
+        { "id": "a", "kind": "video", "locator": "a.mp4" },
+        { "id": "b", "kind": "image", "locator": "b.png" },
+        { "id": "c", "kind": "video", "locator": "c.mp4" },
+        { "id": "d", "kind": "image", "locator": "d.png" },
+        {
+          "id": "g",
+          "kind": "generated",
+          "generator": {
+            "type": "fill",
+            "paint": {
+              "type": "solid",
+              "color": { "red": 1, "green": 0, "blue": 0, "alpha": 1 }
+            }
+          }
+        },
+        { "id": "s", "kind": "composition", "composition": "inner" }
+      ],
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [{ "id": "m", "op": { "type": "media", "source_id": "v" } }],
+          "output": "m"
+        },
+        {
+          "id": "inner",
+          "nodes": [{ "id": "m", "op": { "type": "media", "source_id": "a" } }],
+          "output": "m"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "s",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "look" }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "used": ["s", "v"]
+  },
+  {
+    "name": "a-group-port-its-definition-never-reads",
+    "project": {
+      "schema_version": 1,
+      "id": "used-sources",
+      "name": "Used sources",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v", "kind": "video", "locator": "v.mp4" },
+        { "id": "a", "kind": "video", "locator": "a.mp4" },
+        { "id": "b", "kind": "image", "locator": "b.png" },
+        { "id": "c", "kind": "video", "locator": "c.mp4" },
+        { "id": "d", "kind": "image", "locator": "d.png" },
+        {
+          "id": "g",
+          "kind": "generated",
+          "generator": {
+            "type": "fill",
+            "paint": {
+              "type": "solid",
+              "color": { "red": 1, "green": 0, "blue": 0, "alpha": 1 }
+            }
+          }
+        }
+      ],
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            { "id": "m", "op": { "type": "media", "source_id": "a" } },
+            {
+              "id": "g",
+              "op": {
+                "type": "group",
+                "composition": "first-of-two",
+                "inputs": ["clip", "m"]
+              }
+            }
+          ],
+          "output": "g"
+        },
+        {
+          "id": "first-of-two",
+          "inputs": ["Image", "Spare"],
+          "nodes": [
+            { "id": "a", "op": { "type": "group_input", "index": 0 } },
+            { "id": "b", "op": { "type": "group_input", "index": 1 } },
+            {
+              "id": "blur",
+              "op": {
+                "type": "effect",
+                "input": "a",
+                "effect": { "id": "alpha2.effect.gaussian-blur", "version": 1 }
+              }
+            }
+          ],
+          "output": "blur"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "look" }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "used": ["v"]
+  },
+  {
+    "name": "a-clip-shows-its-own-source",
+    "project": {
+      "schema_version": 1,
+      "id": "used-sources",
+      "name": "Used sources",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v",
+          "kind": "video",
+          "locator": "v.mp4"
+        },
+        {
+          "id": "a",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "b",
+          "kind": "image",
+          "locator": "b.png"
+        },
+        {
+          "id": "c",
+          "kind": "video",
+          "locator": "c.mp4"
+        },
+        {
+          "id": "d",
+          "kind": "image",
+          "locator": "d.png"
+        },
+        {
+          "id": "g",
+          "kind": "generated",
+          "generator": {
+            "type": "fill",
+            "paint": {
+              "type": "solid",
+              "color": {
+                "red": 1,
+                "green": 0,
+                "blue": 0,
+                "alpha": 1
+              }
+            }
+          }
+        }
+      ],
+      "compositions": [],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "used": [
+      "v"
+    ]
+  },
+  {
+    "name": "a-media-node-the-output-reads",
+    "project": {
+      "schema_version": 1,
+      "id": "used-sources",
+      "name": "Used sources",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v",
+          "kind": "video",
+          "locator": "v.mp4"
+        },
+        {
+          "id": "a",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "b",
+          "kind": "image",
+          "locator": "b.png"
+        },
+        {
+          "id": "c",
+          "kind": "video",
+          "locator": "c.mp4"
+        },
+        {
+          "id": "d",
+          "kind": "image",
+          "locator": "d.png"
+        },
+        {
+          "id": "g",
+          "kind": "generated",
+          "generator": {
+            "type": "fill",
+            "paint": {
+              "type": "solid",
+              "color": {
+                "red": 1,
+                "green": 0,
+                "blue": 0,
+                "alpha": 1
+              }
+            }
+          }
+        }
+      ],
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            {
+              "id": "clip",
+              "op": {
+                "type": "clip"
+              }
+            },
+            {
+              "id": "m",
+              "op": {
+                "type": "media",
+                "source_id": "a"
+              }
+            },
+            {
+              "id": "mix",
+              "op": {
+                "type": "merge",
+                "layers": [
+                  {
+                    "input": "clip"
+                  },
+                  {
+                    "input": "m"
+                  }
+                ]
+              }
+            }
+          ],
+          "output": "mix"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "composition": {
+                  "id": "look"
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "used": [
+      "a",
+      "v"
+    ]
+  },
+  {
+    "name": "an-unconnected-media-node-reads-nothing",
+    "project": {
+      "schema_version": 1,
+      "id": "used-sources",
+      "name": "Used sources",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v",
+          "kind": "video",
+          "locator": "v.mp4"
+        },
+        {
+          "id": "a",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "b",
+          "kind": "image",
+          "locator": "b.png"
+        },
+        {
+          "id": "c",
+          "kind": "video",
+          "locator": "c.mp4"
+        },
+        {
+          "id": "d",
+          "kind": "image",
+          "locator": "d.png"
+        },
+        {
+          "id": "g",
+          "kind": "generated",
+          "generator": {
+            "type": "fill",
+            "paint": {
+              "type": "solid",
+              "color": {
+                "red": 1,
+                "green": 0,
+                "blue": 0,
+                "alpha": 1
+              }
+            }
+          }
+        }
+      ],
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            {
+              "id": "clip",
+              "op": {
+                "type": "clip"
+              }
+            },
+            {
+              "id": "fx",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "effect": {
+                  "id": "alpha2.effect.vignette",
+                  "version": 1
+                }
+              }
+            },
+            {
+              "id": "loose",
+              "op": {
+                "type": "media",
+                "source_id": "b"
+              }
+            }
+          ],
+          "output": "fx"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "composition": {
+                  "id": "look"
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "used": [
+      "v"
+    ]
+  },
+  {
+    "name": "a-group-reads-what-its-definition-reads",
+    "project": {
+      "schema_version": 1,
+      "id": "used-sources",
+      "name": "Used sources",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v",
+          "kind": "video",
+          "locator": "v.mp4"
+        },
+        {
+          "id": "a",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "b",
+          "kind": "image",
+          "locator": "b.png"
+        },
+        {
+          "id": "c",
+          "kind": "video",
+          "locator": "c.mp4"
+        },
+        {
+          "id": "d",
+          "kind": "image",
+          "locator": "d.png"
+        },
+        {
+          "id": "g",
+          "kind": "generated",
+          "generator": {
+            "type": "fill",
+            "paint": {
+              "type": "solid",
+              "color": {
+                "red": 1,
+                "green": 0,
+                "blue": 0,
+                "alpha": 1
+              }
+            }
+          }
+        }
+      ],
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            {
+              "id": "clip",
+              "op": {
+                "type": "clip"
+              }
+            },
+            {
+              "id": "grp",
+              "op": {
+                "type": "group",
+                "composition": "def",
+                "inputs": [
+                  "clip"
+                ]
+              }
+            }
+          ],
+          "output": "grp"
+        },
+        {
+          "id": "def",
+          "inputs": [
+            "image"
+          ],
+          "nodes": [
+            {
+              "id": "in",
+              "op": {
+                "type": "group_input",
+                "index": 0
+              }
+            },
+            {
+              "id": "m",
+              "op": {
+                "type": "media",
+                "source_id": "b"
+              }
+            },
+            {
+              "id": "mix",
+              "op": {
+                "type": "merge",
+                "layers": [
+                  {
+                    "input": "in"
+                  },
+                  {
+                    "input": "m"
+                  }
+                ]
+              }
+            }
+          ],
+          "output": "mix"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "composition": {
+                  "id": "look"
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "used": [
+      "b",
+      "v"
+    ]
+  },
+  {
+    "name": "a-group-inside-a-group",
+    "project": {
+      "schema_version": 1,
+      "id": "used-sources",
+      "name": "Used sources",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v",
+          "kind": "video",
+          "locator": "v.mp4"
+        },
+        {
+          "id": "a",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "b",
+          "kind": "image",
+          "locator": "b.png"
+        },
+        {
+          "id": "c",
+          "kind": "video",
+          "locator": "c.mp4"
+        },
+        {
+          "id": "d",
+          "kind": "image",
+          "locator": "d.png"
+        },
+        {
+          "id": "g",
+          "kind": "generated",
+          "generator": {
+            "type": "fill",
+            "paint": {
+              "type": "solid",
+              "color": {
+                "red": 1,
+                "green": 0,
+                "blue": 0,
+                "alpha": 1
+              }
+            }
+          }
+        }
+      ],
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            {
+              "id": "clip",
+              "op": {
+                "type": "clip"
+              }
+            },
+            {
+              "id": "outer",
+              "op": {
+                "type": "group",
+                "composition": "def-outer",
+                "inputs": [
+                  "clip"
+                ]
+              }
+            }
+          ],
+          "output": "outer"
+        },
+        {
+          "id": "def-outer",
+          "inputs": [
+            "image"
+          ],
+          "nodes": [
+            {
+              "id": "in",
+              "op": {
+                "type": "group_input",
+                "index": 0
+              }
+            },
+            {
+              "id": "inner",
+              "op": {
+                "type": "group",
+                "composition": "def-inner",
+                "inputs": [
+                  "in"
+                ]
+              }
+            }
+          ],
+          "output": "inner"
+        },
+        {
+          "id": "def-inner",
+          "inputs": [
+            "image"
+          ],
+          "nodes": [
+            {
+              "id": "in",
+              "op": {
+                "type": "group_input",
+                "index": 0
+              }
+            },
+            {
+              "id": "m",
+              "op": {
+                "type": "media",
+                "source_id": "d"
+              }
+            },
+            {
+              "id": "mix",
+              "op": {
+                "type": "merge",
+                "layers": [
+                  {
+                    "input": "in"
+                  },
+                  {
+                    "input": "m"
+                  }
+                ]
+              }
+            }
+          ],
+          "output": "mix"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "composition": {
+                  "id": "look"
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "used": [
+      "d",
+      "v"
+    ]
+  },
+  {
+    "name": "a-clip-showing-a-composition-source",
+    "project": {
+      "schema_version": 1,
+      "id": "used-sources",
+      "name": "Used sources",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v",
+          "kind": "video",
+          "locator": "v.mp4"
+        },
+        {
+          "id": "a",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "b",
+          "kind": "image",
+          "locator": "b.png"
+        },
+        {
+          "id": "c",
+          "kind": "video",
+          "locator": "c.mp4"
+        },
+        {
+          "id": "d",
+          "kind": "image",
+          "locator": "d.png"
+        },
+        {
+          "id": "g",
+          "kind": "generated",
+          "generator": {
+            "type": "fill",
+            "paint": {
+              "type": "solid",
+              "color": {
+                "red": 1,
+                "green": 0,
+                "blue": 0,
+                "alpha": 1
+              }
+            }
+          }
+        },
+        {
+          "id": "card",
+          "kind": "composition",
+          "composition": "card-look"
+        }
+      ],
+      "compositions": [
+        {
+          "id": "card-look",
+          "nodes": [
+            {
+              "id": "m",
+              "op": {
+                "type": "media",
+                "source_id": "a"
+              }
+            },
+            {
+              "id": "fx",
+              "op": {
+                "type": "effect",
+                "input": "m",
+                "effect": {
+                  "id": "alpha2.effect.vignette",
+                  "version": 1
+                }
+              }
+            }
+          ],
+          "output": "fx"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "card",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "used": [
+      "a",
+      "card"
+    ]
+  },
+  {
+    "name": "a-media-node-reading-a-composition-source",
+    "project": {
+      "schema_version": 1,
+      "id": "used-sources",
+      "name": "Used sources",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v",
+          "kind": "video",
+          "locator": "v.mp4"
+        },
+        {
+          "id": "a",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "b",
+          "kind": "image",
+          "locator": "b.png"
+        },
+        {
+          "id": "c",
+          "kind": "video",
+          "locator": "c.mp4"
+        },
+        {
+          "id": "d",
+          "kind": "image",
+          "locator": "d.png"
+        },
+        {
+          "id": "g",
+          "kind": "generated",
+          "generator": {
+            "type": "fill",
+            "paint": {
+              "type": "solid",
+              "color": {
+                "red": 1,
+                "green": 0,
+                "blue": 0,
+                "alpha": 1
+              }
+            }
+          }
+        },
+        {
+          "id": "inset",
+          "kind": "composition",
+          "composition": "inset-look"
+        }
+      ],
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            {
+              "id": "clip",
+              "op": {
+                "type": "clip"
+              }
+            },
+            {
+              "id": "m",
+              "op": {
+                "type": "media",
+                "source_id": "inset"
+              }
+            },
+            {
+              "id": "mix",
+              "op": {
+                "type": "merge",
+                "layers": [
+                  {
+                    "input": "clip"
+                  },
+                  {
+                    "input": "m"
+                  }
+                ]
+              }
+            }
+          ],
+          "output": "mix"
+        },
+        {
+          "id": "inset-look",
+          "nodes": [
+            {
+              "id": "m",
+              "op": {
+                "type": "media",
+                "source_id": "c"
+              }
+            }
+          ],
+          "output": "m"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "composition": {
+                  "id": "look"
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "used": [
+      "c",
+      "inset",
+      "v"
+    ]
+  },
+  {
+    "name": "a-composition-source-inside-a-composition-source",
+    "project": {
+      "schema_version": 1,
+      "id": "used-sources",
+      "name": "Used sources",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v",
+          "kind": "video",
+          "locator": "v.mp4"
+        },
+        {
+          "id": "a",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "b",
+          "kind": "image",
+          "locator": "b.png"
+        },
+        {
+          "id": "c",
+          "kind": "video",
+          "locator": "c.mp4"
+        },
+        {
+          "id": "d",
+          "kind": "image",
+          "locator": "d.png"
+        },
+        {
+          "id": "g",
+          "kind": "generated",
+          "generator": {
+            "type": "fill",
+            "paint": {
+              "type": "solid",
+              "color": {
+                "red": 1,
+                "green": 0,
+                "blue": 0,
+                "alpha": 1
+              }
+            }
+          }
+        },
+        {
+          "id": "card",
+          "kind": "composition",
+          "composition": "card-look"
+        },
+        {
+          "id": "inset",
+          "kind": "composition",
+          "composition": "inset-look"
+        }
+      ],
+      "compositions": [
+        {
+          "id": "card-look",
+          "nodes": [
+            {
+              "id": "m",
+              "op": {
+                "type": "media",
+                "source_id": "inset"
+              }
+            },
+            {
+              "id": "fx",
+              "op": {
+                "type": "effect",
+                "input": "m",
+                "effect": {
+                  "id": "alpha2.effect.vignette",
+                  "version": 1
+                }
+              }
+            }
+          ],
+          "output": "fx"
+        },
+        {
+          "id": "inset-look",
+          "nodes": [
+            {
+              "id": "m",
+              "op": {
+                "type": "media",
+                "source_id": "b"
+              }
+            }
+          ],
+          "output": "m"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "card",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "used": [
+      "b",
+      "card",
+      "inset"
+    ]
+  },
+  {
+    "name": "a-bypassed-node-reads-only-its-pass-through-input",
+    "project": {
+      "schema_version": 1,
+      "id": "used-sources",
+      "name": "Used sources",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v",
+          "kind": "video",
+          "locator": "v.mp4"
+        },
+        {
+          "id": "a",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "b",
+          "kind": "image",
+          "locator": "b.png"
+        },
+        {
+          "id": "c",
+          "kind": "video",
+          "locator": "c.mp4"
+        },
+        {
+          "id": "d",
+          "kind": "image",
+          "locator": "d.png"
+        },
+        {
+          "id": "g",
+          "kind": "generated",
+          "generator": {
+            "type": "fill",
+            "paint": {
+              "type": "solid",
+              "color": {
+                "red": 1,
+                "green": 0,
+                "blue": 0,
+                "alpha": 1
+              }
+            }
+          }
+        }
+      ],
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            {
+              "id": "clip",
+              "op": {
+                "type": "clip"
+              }
+            },
+            {
+              "id": "to",
+              "op": {
+                "type": "media",
+                "source_id": "c"
+              }
+            },
+            {
+              "id": "bottom",
+              "op": {
+                "type": "media",
+                "source_id": "a"
+              }
+            },
+            {
+              "id": "top",
+              "op": {
+                "type": "media",
+                "source_id": "d"
+              }
+            },
+            {
+              "id": "wipe",
+              "bypass": true,
+              "op": {
+                "type": "transition",
+                "from": "clip",
+                "to": "to",
+                "effect": {
+                  "id": "alpha2.transition.cross-dissolve",
+                  "version": 1
+                },
+                "progress": {
+                  "mode": "constant",
+                  "value": 0.5
+                }
+              }
+            },
+            {
+              "id": "stack",
+              "bypass": true,
+              "op": {
+                "type": "merge",
+                "layers": [
+                  {
+                    "input": "bottom"
+                  },
+                  {
+                    "input": "top"
+                  }
+                ]
+              }
+            },
+            {
+              "id": "mix",
+              "op": {
+                "type": "merge",
+                "layers": [
+                  {
+                    "input": "wipe"
+                  },
+                  {
+                    "input": "stack"
+                  }
+                ]
+              }
+            }
+          ],
+          "output": "mix"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "composition": {
+                  "id": "look"
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "used": [
+      "a",
+      "v"
+    ]
+  },
+  {
+    "name": "a-composition-no-clip-shows-reads-nothing",
+    "project": {
+      "schema_version": 1,
+      "id": "used-sources",
+      "name": "Used sources",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v",
+          "kind": "video",
+          "locator": "v.mp4"
+        },
+        {
+          "id": "a",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "b",
+          "kind": "image",
+          "locator": "b.png"
+        },
+        {
+          "id": "c",
+          "kind": "video",
+          "locator": "c.mp4"
+        },
+        {
+          "id": "d",
+          "kind": "image",
+          "locator": "d.png"
+        },
+        {
+          "id": "g",
+          "kind": "generated",
+          "generator": {
+            "type": "fill",
+            "paint": {
+              "type": "solid",
+              "color": {
+                "red": 1,
+                "green": 0,
+                "blue": 0,
+                "alpha": 1
+              }
+            }
+          }
+        },
+        {
+          "id": "unplaced",
+          "kind": "composition",
+          "composition": "lower-third"
+        }
+      ],
+      "compositions": [
+        {
+          "id": "lower-third",
+          "nodes": [
+            {
+              "id": "m",
+              "op": {
+                "type": "media",
+                "source_id": "d"
+              }
+            }
+          ],
+          "output": "m"
+        },
+        {
+          "id": "orphan",
+          "inputs": [
+            "image"
+          ],
+          "nodes": [
+            {
+              "id": "in",
+              "op": {
+                "type": "group_input",
+                "index": 0
+              }
+            },
+            {
+              "id": "m",
+              "op": {
+                "type": "media",
+                "source_id": "b"
+              }
+            },
+            {
+              "id": "mix",
+              "op": {
+                "type": "merge",
+                "layers": [
+                  {
+                    "input": "in"
+                  },
+                  {
+                    "input": "m"
+                  }
+                ]
+              }
+            }
+          ],
+          "output": "mix"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "used": [
+      "v"
+    ]
+  },
+  {
+    "name": "an-unconnected-input-still-reads-what-is-connected",
+    "project": {
+      "schema_version": 1,
+      "id": "used-sources",
+      "name": "Used sources",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v",
+          "kind": "video",
+          "locator": "v.mp4"
+        },
+        {
+          "id": "a",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "b",
+          "kind": "image",
+          "locator": "b.png"
+        },
+        {
+          "id": "c",
+          "kind": "video",
+          "locator": "c.mp4"
+        },
+        {
+          "id": "d",
+          "kind": "image",
+          "locator": "d.png"
+        },
+        {
+          "id": "g",
+          "kind": "generated",
+          "generator": {
+            "type": "fill",
+            "paint": {
+              "type": "solid",
+              "color": {
+                "red": 1,
+                "green": 0,
+                "blue": 0,
+                "alpha": 1
+              }
+            }
+          }
+        }
+      ],
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            {
+              "id": "clip",
+              "op": {
+                "type": "clip"
+              }
+            },
+            {
+              "id": "m",
+              "op": {
+                "type": "media",
+                "source_id": "a"
+              }
+            },
+            {
+              "id": "mix",
+              "op": {
+                "type": "merge",
+                "layers": [
+                  {
+                    "input": "m"
+                  },
+                  {
+                    "input": null
+                  }
+                ]
+              }
+            }
+          ],
+          "output": "mix"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "composition": {
+                  "id": "look"
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "used": [
+      "a",
+      "v"
+    ]
+  },
+  {
+    "name": "a-composition-hiding-the-clip-still-uses-its-source",
+    "project": {
+      "schema_version": 1,
+      "id": "used-sources",
+      "name": "Used sources",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v",
+          "kind": "video",
+          "locator": "v.mp4"
+        },
+        {
+          "id": "a",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "b",
+          "kind": "image",
+          "locator": "b.png"
+        },
+        {
+          "id": "c",
+          "kind": "video",
+          "locator": "c.mp4"
+        },
+        {
+          "id": "d",
+          "kind": "image",
+          "locator": "d.png"
+        },
+        {
+          "id": "g",
+          "kind": "generated",
+          "generator": {
+            "type": "fill",
+            "paint": {
+              "type": "solid",
+              "color": {
+                "red": 1,
+                "green": 0,
+                "blue": 0,
+                "alpha": 1
+              }
+            }
+          }
+        }
+      ],
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            {
+              "id": "clip",
+              "op": {
+                "type": "clip"
+              }
+            },
+            {
+              "id": "m",
+              "op": {
+                "type": "media",
+                "source_id": "a"
+              }
+            }
+          ],
+          "output": "m"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "composition": {
+                  "id": "look"
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "used": [
+      "a",
+      "v"
+    ]
+  },
+  {
+    "name": "a-generated-source-a-media-node-reads",
+    "project": {
+      "schema_version": 1,
+      "id": "used-sources",
+      "name": "Used sources",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v",
+          "kind": "video",
+          "locator": "v.mp4"
+        },
+        {
+          "id": "a",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "b",
+          "kind": "image",
+          "locator": "b.png"
+        },
+        {
+          "id": "c",
+          "kind": "video",
+          "locator": "c.mp4"
+        },
+        {
+          "id": "d",
+          "kind": "image",
+          "locator": "d.png"
+        },
+        {
+          "id": "g",
+          "kind": "generated",
+          "generator": {
+            "type": "fill",
+            "paint": {
+              "type": "solid",
+              "color": {
+                "red": 1,
+                "green": 0,
+                "blue": 0,
+                "alpha": 1
+              }
+            }
+          }
+        }
+      ],
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            {
+              "id": "clip",
+              "op": {
+                "type": "clip"
+              }
+            },
+            {
+              "id": "m",
+              "op": {
+                "type": "media",
+                "source_id": "g"
+              }
+            },
+            {
+              "id": "mix",
+              "op": {
+                "type": "merge",
+                "layers": [
+                  {
+                    "input": "clip"
+                  },
+                  {
+                    "input": "m"
+                  }
+                ]
+              }
+            }
+          ],
+          "output": "mix"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "composition": {
+                  "id": "look"
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "used": [
+      "g",
+      "v"
+    ]
+  }
+]

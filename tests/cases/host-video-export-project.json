@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "host-video-export",
+  "name": "Host video export fixture",
+  "settings": {
+    "width": 64,
+    "height": 48,
+    "frame_rate": { "num": 30, "den": 1 },
+    "sample_rate": 48000
+  },
+  "sources": [
+    {
+      "id": "video-source",
+      "locator": "fixture://long-gop",
+      "kind": "video"
+    }
+  ],
+  "timeline": {
+    "tracks": [
+      {
+        "id": "video",
+        "name": "Video",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "video-clip",
+            "source_id": "video-source",
+            "timeline_range": { "start": 0, "end": 120000 },
+            "source_range": { "start": 0, "end": 120000 }
+          }
+        ]
+      }
+    ]
+  }
+}

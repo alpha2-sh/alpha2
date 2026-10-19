@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "id": "tutorial-project",
+  "name": "Tutorial project",
+  "settings": {
+    "width": 1280,
+    "height": 720,
+    "frame_rate": { "num": 30, "den": 1 },
+    "sample_rate": 48000
+  },
+  "sources": [
+    {
+      "id": "image-1",
+      "locator": "asset://image-1",
+      "kind": "image"
+    }
+  ],
+  "timeline": {
+    "tracks": [
+      {
+        "id": "video-1",
+        "name": "Main video",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "clip-1",
+            "source_id": "image-1",
+            "timeline_range": { "start": 0, "end": 120000 },
+            "source_range": { "start": 0, "end": 120000 }
+          }
+        ],
+        "transitions": []
+      }
+    ]
+  }
+}

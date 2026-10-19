@@ -1,0 +1,5 @@
+# cargo-about configuration for scripts/crate-licenses.mjs: the licenses a shipped crate may carry
+# (the same set as deny.toml), and only what is compiled into the build.
+accepted = ["0BSD", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MIT", "Unicode-3.0", "Unlicense", "Zlib"]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true

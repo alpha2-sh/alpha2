@@ -1,0 +1,36 @@
+[package]
+name = "alpha2-provider-contract"
+version.workspace = true
+description = "The media provider contracts (audio blocks, visual extension providers), their fixtures and checks, shared by alpha2's native and wasm provider tests."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+default = ["visual"]
+# The visual extension provider contract (`src/visual.rs`, `tests/visual.rs`), a feature so that the
+# audio contract's users do not turn the extension providers on through feature unification.
+visual = [
+  "dep:alpha2-extensions",
+  "alpha2-extensions/svg",
+  "alpha2-extensions/animated-image",
+  "alpha2-extensions/lottie",
+  "alpha2-extensions/exr",
+  "dep:alpha2-model",
+  "dep:alpha2-time",
+  "dep:base64",
+]
+
+[dependencies]
+alpha2-media.workspace = true
+alpha2-extensions = { workspace = true, default-features = false, optional = true }
+alpha2-model = { workspace = true, optional = true }
+alpha2-time = { workspace = true, optional = true }
+base64 = { version = "0.22.1", optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

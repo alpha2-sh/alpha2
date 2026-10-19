@@ -1,0 +1,34 @@
+[package]
+name = "alpha2-time"
+version.workspace = true
+description = "Deterministic media time primitives for alpha2."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["video", "timecode", "rational", "media", "time"]
+categories = ["multimedia", "date-and-time"]
+# Builds from its sources and license alone: tests, test-only modules, benches and fixtures
+# stay in the repository, which is where `cargo test` runs.
+include = [
+  "/src/**",
+  "/README.md",
+  "/LICENSE.md",
+  "!/src/**/tests.rs",
+  "!/src/**/*_tests.rs",
+  "!/src/**/tests/**",
+]
+
+[dependencies]
+schemars = { workspace = true, optional = true }
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+# Derives `schemars::JsonSchema` for the wire types (the published project schema).
+schema = ["dep:schemars"]

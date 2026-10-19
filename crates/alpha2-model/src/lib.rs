@@ -1,0 +1,80 @@
+//! Versioned, host-independent project model for alpha2.
+//!
+//! This crate describes intent only. It contains no decoder handles, GPU
+//! resources, filesystem paths, or application-specific types.
+
+mod animation;
+mod audio;
+mod audio_load;
+mod caption;
+mod caption_import;
+mod composition;
+mod easing;
+mod effect;
+mod error;
+mod fingerprint;
+mod generator;
+mod ids;
+mod lint;
+mod mask;
+mod project;
+mod provider;
+mod resource;
+#[cfg(feature = "schema")]
+mod schema;
+mod source;
+#[cfg(test)]
+pub(crate) mod tests;
+mod text;
+mod time_map;
+mod timeline;
+
+pub use animation::{Animated, Interpolation, Keyframe, Vec2, VisualProperties};
+pub use audio::{
+    AUDIO_EFFECT_STATE_MARGIN_MS, AudioEffect, AudioProperties, Ducking, EQ_FREQUENCY_RANGE_HZ,
+    EQ_Q_RANGE, EqBand, EqBandKind, FadeShape, Limiter, MAX_AUDIO_DELAY_MS, MAX_AUDIO_EFFECTS,
+    MAX_CHAIN_EFFECTS, MAX_COMPRESSOR_RATIO, MAX_ENVELOPE_MS, MAX_EQ_BANDS, MAX_EQ_GAIN_DB,
+    MAX_GAIN, MAX_LOOKAHEAD_MS, MIN_LEVEL_DB, MasterAudio, REVERB_DELAY_MS, TrackAudio,
+};
+pub use audio_load::AudioEffectLoad;
+pub use caption::{CaptionCue, Captions, MAX_CAPTION_FONT_SIZE};
+pub use caption_import::{
+    CaptionImportError, ImportedCaptions, MAX_CAPTION_FILE_BYTES, MAX_CAPTION_FILE_CUES,
+    caption_rows, parse_srt, parse_webvtt,
+};
+pub use composition::{
+    ClipComposition, Composition, CompositionControl, CompositionNode, CompositionReads,
+    MAX_COMPOSITION_CONTROLS, MAX_COMPOSITION_DEPTH, MAX_COMPOSITION_NODES, MAX_COMPOSITIONS,
+    MAX_FRAME_INLINED_NODES, MAX_GROUP_INPUTS, MAX_INLINED_NODES, MAX_MERGE_LAYERS, MergeLayer,
+    NodeInput, NodeOp, TimeScale,
+};
+pub use easing::{CubicBezier, Easing};
+pub use effect::{ClipBlendMode, ClipEffect, EffectValue};
+pub use error::{ModelError, ProjectLoadError};
+pub use fingerprint::{AudioStreamShape, MediaFingerprint, StreamTopology, VideoStreamShape};
+pub use generator::{
+    GeneratedShape, Generator, GradientStop, MAX_GRADIENT_STOPS, Paint, Rgba, Spread, Stroke,
+};
+pub use ids::{ClipId, CompositionId, EffectResourceId, NodeId, ProjectId, TrackId};
+pub use lint::{LintEdge, LintIssue, LintOwner};
+pub use mask::{MAX_CLIP_MASKS, MaskMode, MaskShape, Matte, MatteMode, ShapeMask};
+pub use project::{
+    BlendSpace, CURRENT_SCHEMA_VERSION, ColorPipeline, HDR_PEAK_NITS_RANGE, HdrSources,
+    MAX_CANVAS_DIMENSION, MAX_CANVAS_PIXELS, MAX_CLIPS, MAX_CLIPS_PER_TRACK,
+    MAX_PROJECT_JSON_BYTES, MAX_TRACKS, MAX_TRANSITIONS_PER_TRACK, Project, ProjectSettings, Rgb,
+    SAMPLE_RATE_RANGE,
+};
+pub use provider::{
+    LinearPrimaries, MAX_LOTTIE_DOCUMENT_BYTES, MAX_PROVIDER_DOCUMENT_BYTES, MAX_SEQUENCE_FRAMES,
+    MAX_SVG_DOCUMENT_BYTES, MissingFrames, ProviderSource,
+};
+pub use resource::{EffectResource, EffectResourceKind};
+#[cfg(feature = "schema")]
+pub use schema::{project_json_schema, project_limits_json};
+pub use source::{MediaKind, MediaSource};
+pub use text::{
+    LINE_HEIGHT_RANGE, MAX_FONT_FAMILY_BYTES, MAX_TEXT_CONTENT_BYTES, MAX_TEXT_GENERATOR_FONT_SIZE,
+    MAX_TEXT_OUTLINE_WIDTH, MAX_TEXT_PADDING, TextAlign, TextBackground, TextOutline, TextStyle,
+};
+pub use time_map::{LOOP_FADE_SECONDS, LoopMode, TimeMap};
+pub use timeline::{CacheIntent, Clip, ClipTransition, Timeline, Track, TrackKind};

@@ -1,0 +1,46 @@
+{
+  "animation.gif": {
+    "durations_ms": [
+      100,
+      50,
+      200,
+      0
+    ],
+    "frames": 4,
+    "height": 32,
+    "width": 48
+  },
+  "animation.png": {
+    "durations_ms": [
+      100.0,
+      50.0,
+      200.0,
+      0.0
+    ],
+    "frames": 4,
+    "height": 32,
+    "width": 48
+  },
+  "animation.webp": {
+    "durations_ms": [
+      100,
+      50,
+      200,
+      0
+    ],
+    "frames": 4,
+    "height": 32,
+    "width": 48
+  },
+  "lossy.webp": {
+    "durations_ms": [
+      100,
+      100,
+      100,
+      100
+    ],
+    "frames": 4,
+    "height": 32,
+    "width": 48
+  }
+}

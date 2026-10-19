@@ -1,0 +1,310 @@
+name: Release
+
+# A tag `v<version>` releases that version everywhere: the crates on crates.io, the npm packages on
+# npm, and the native archives on a GitHub Release, in that order. Every artifact is built and
+# checked before anything is published, since crates.io and npm keep what they receive (a version
+# can only be yanked or deprecated). A dispatch builds and checks the same artifacts and publishes
+# nothing unless it runs on a tag.
+on:
+  workflow_dispatch:
+    inputs:
+      skip-validate:
+        # To try the packaging alone. A tag push always runs the whole gate, and a dispatch
+        # publishes nothing.
+        description: Build the archives without running the CI gate first
+        type: boolean
+        default: false
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  # The release gate is the CI workflow itself, every job of it, so it cannot drift from what CI
+  # checks: a copied subset once ran the GPU tests on a runner without a GPU driver and the npm
+  # layout check without the npm build, and could never pass. Its release-wasm job packs the npm
+  # tarballs that publish-npm publishes.
+  validate:
+    if: ${{ !inputs.skip-validate }}
+    uses: ./.github/workflows/ci.yml
+
+  # One version for the tag, the Cargo workspace (and each crate's dependency on its siblings, in
+  # the root Cargo.toml's workspace.dependencies) and the npm packages (and their pins on each
+  # other), as `npm run version:set` writes them. It needs nothing built, so it runs beside the
+  # gate and a mismatch stops the release before the long jobs finish.
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.match.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Match the tag, the crates and the npm packages to one version
+        id: match
+        run: |
+          # A failing jq or awk inside $(...) stops the step instead of reading as "no mismatch".
+          shopt -s inherit_errexit
+          section_values() {
+            awk -v section="$1" -v pattern="$2" '
+              /^\[/ { in_section = ($0 == "[" section "]"); next }
+              in_section && match($0, pattern) {
+                value = substr($0, RSTART, RLENGTH); sub(/^[^"]*"/, "", value); sub(/".*$/, "", value)
+                print $1 " " value
+              }' Cargo.toml
+          }
+          version="$(section_values workspace.package '^version = "[^"]*"' | awk '{ print $2 }')"
+          test -n "$version"
+          mismatches="$(
+            section_values workspace.dependencies 'version = "[^"]*", path = ' |
+              awk -v want="$version" '$2 != want { print "Cargo.toml workspace.dependencies " $1 " " $2 }'
+            names="$(jq -r '.workspaces[] + "/package.json"' package.json | xargs jq -s '[.[].name]')"
+            for manifest in $(jq -r '.workspaces[] + "/package.json"' package.json); do
+              jq -r --arg want "$version" --argjson names "$names" --arg manifest "$manifest" '
+                (select(.version != $want) | "\($manifest) version \(.version)"),
+                (.dependencies, .peerDependencies, .devDependencies, .optionalDependencies
+                  | to_entries? // [] | .[]
+                  | select((.key as $name | $names | index($name)) and .value != $want)
+                  | "\($manifest) \(.key) \(.value)")' "$manifest"
+            done
+          )"
+          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF_NAME#v}" != "$version" ]]; then
+            mismatches+=$'\n'"tag $GITHUB_REF_NAME"
+          fi
+          if [[ -n "${mismatches//$'\n'/}" ]]; then
+            echo "::error::not at the workspace version $version (npm run version:set -- <version>):"
+            sed '/^$/d' <<< "$mismatches"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  package:
+    name: Package ${{ matrix.target }}
+    needs: [validate, version]
+    # `always()` lets a skipped gate through, which only a dispatch's skip-validate can skip.
+    if: >-
+      ${{ always() && needs.version.result == 'success' &&
+      (needs.validate.result == 'success' || (inputs.skip-validate && needs.validate.result == 'skipped')) }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64
+            runner: ubuntu-22.04
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+          - target: macos-arm64
+            runner: macos-latest
+          # x86_64-pc-windows-msvc, the runner's default Rust target, built from Git Bash with the
+          # image's MSVC, LLVM and 7-Zip; no MSYS2.
+          - target: win-x64
+            runner: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+
+      # Lists the licenses of the crates each archive's programs are compiled from.
+      - run: cargo install cargo-about --version 0.9.2 --locked --features cli
+
+      - name: Install Linux packaging tools
+        if: startsWith(matrix.target, 'linux-')
+        run: sudo apt-get update && sudo apt-get install --yes pkg-config unzip
+
+      - name: Install macOS packaging tools
+        if: startsWith(matrix.target, 'macos-')
+        run: brew install pkg-config
+
+      # thin and bundled archives; win-x64 bundled only. Each bundled archive is smoke-run unpacked,
+      # with no loader environment.
+      - name: Build native archives
+        run: scripts/build-native-release.sh all "${{ matrix.target }}"
+
+      - name: Upload native archives
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: alpha2-native-${{ matrix.target }}
+          if-no-files-found: error
+          path: target/alpha2-native-release/archives/*
+
+  # The publish jobs authenticate by trusted publishing (OIDC, a token that lasts the job); no
+  # registry token is stored. The `release` environment holds them for approval. A crate or package
+  # already at this version is skipped, so a failed job can be run again and finish the rest.
+  publish-crates:
+    name: Publish crates
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [version, package]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # `cargo publish` builds each crate from its package before uploading any, so it needs what
+      # validate builds with: the FFmpeg crates link the pinned SDK.
+      - name: Install native media build dependencies
+        run: >-
+          sudo apt-get update && sudo apt-get install --yes
+          libavcodec-dev libavformat-dev libavutil-dev libswresample-dev
+          libswscale-dev libasound2-dev pkg-config clang
+      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: Pin the FFmpeg SDK that the hardware decode shim builds against
+        run: |
+          sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
+          {
+            echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
+            echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
+            echo "FFMPEG_LINK_MODE=dynamic"
+            echo "LD_LIBRARY_PATH=$sdk_root/lib"
+          } >> "$GITHUB_ENV"
+      - uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+        id: auth
+      # Every crate the workspace publishes (cargo orders them by dependency), less those whose
+      # version the crates.io index already lists.
+      - name: Publish the crates not on crates.io at this version
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          crates="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.publish == null) | .name')"
+          published=()
+          for name in $crates; do
+            case "${#name}" in
+              1) path="1/$name" ;;
+              2) path="2/$name" ;;
+              3) path="3/${name:0:1}/$name" ;;
+              *) path="${name:0:2}/${name:2:2}/$name" ;;
+            esac
+            status="$(curl -sS -o "$RUNNER_TEMP/index" -w '%{http_code}' "https://index.crates.io/$path")"
+            case "$status" in
+              200) if jq -n -e --arg want "$VERSION" 'any(inputs; .vers == $want)' "$RUNNER_TEMP/index" > /dev/null; then
+                     published+=(--exclude "$name")
+                     echo "$name $VERSION is on crates.io; skipped"
+                   fi ;;
+              404) ;;
+              *) echo "::error::the crates.io index answered $status for $name"; exit 1 ;;
+            esac
+          done
+          if (( ${#published[@]} / 2 == $(wc -w <<< "$crates") )); then
+            echo "every crate is on crates.io at $VERSION"
+            exit 0
+          fi
+          cargo publish --locked --workspace "${published[@]}"
+
+  publish-npm:
+    name: Publish npm packages
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [version, package]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # The package list, in the order the workspace builds them (the engine before the packages
+      # pinned to it).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          sparse-checkout: |
+            package.json
+            packages/*/package.json
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1 or later; Node 22 ships npm 10.
+      - run: npm install --global npm@11.21.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: alpha2-npm-packages
+          path: npm-packages
+      # The tarballs CI packed, as they are. `--access public` for the scoped packages' first
+      # publish; a prerelease goes to the `next` tag, never `latest`.
+      - name: Publish the npm packages not on npm at this version
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          dist_tag=latest
+          if [[ "$VERSION" == *-* ]]; then dist_tag=next; fi
+          for manifest in $(jq -r '.workspaces[] + "/package.json"' package.json); do
+            name="$(jq -r .name "$manifest")"
+            # `./`: npm reads `npm-packages/<file>` as a GitHub `owner/repository` spec.
+            tarball="./npm-packages/$(jq -r '.name | ltrimstr("@") | gsub("/"; "-")' "$manifest")-$VERSION.tgz"
+            test -f "$tarball" || { echo "::error::no $tarball in the CI artifact"; exit 1; }
+            # Prints the version when npm has it, nothing (and an error) when it does not.
+            if [[ -n "$(npm view "$name@$VERSION" version 2> /dev/null)" ]]; then
+              echo "$name@$VERSION is on npm; skipped"
+              continue
+            fi
+            npm publish "$tarball" --provenance --access public --tag "$dist_tag"
+          done
+
+  # Last, after both registries have the version: a failed publish leaves no release to point at
+  # packages that are not there.
+  release:
+    name: Publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [publish-crates, publish-npm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # The FFmpeg SDK repository, release and version come from the lock file, the one place that
+      # names them.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          sparse-checkout: release/ffmpeg-lgpl/manifest.toml
+          sparse-checkout-cone-mode: false
+
+      - name: Read the FFmpeg source location from the lock file
+        id: ffmpeg
+        run: |
+          manifest=release/ffmpeg-lgpl/manifest.toml
+          scalar() { awk -F ' *= *' -v key="$1" '$1 == key { gsub(/"/, "", $2); print $2; exit }' "$manifest"; }
+          repository="$(scalar repository)"
+          release_tag="$(scalar release_tag)"
+          ffmpeg_version="$(scalar ffmpeg_version)"
+          test -n "$repository" && test -n "$release_tag" && test -n "$ffmpeg_version"
+          echo "source_url=https://github.com/$repository/releases/download/$release_tag/ffmpeg-$ffmpeg_version.tar.xz" >> "$GITHUB_OUTPUT"
+
+      # Only the native archives: the CI gate uploads artifacts of its own (the npm packages, failed
+      # render goldens).
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: alpha2-native-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: artifacts
+        run: sha256sum -- *.zip *.tar.gz > checksums.sha256
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          name: alpha2 ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          body: |
+            Native archives are dynamically linked to the pinned LGPL FFmpeg 8
+            runtime. `bundled` archives include the replaceable shared runtime;
+            `thin` archives (Linux and macOS) require an ABI-compatible system
+            FFmpeg 8 install; on macOS they look in /opt/homebrew/lib,
+            /usr/local/lib and /opt/local/lib. Windows ships `bundled` only.
+
+            Every archive includes license notices, the exact FFmpeg runtime
+            lock, build audit, dynamic dependency report, and source location.
+
+            Corresponding FFmpeg source: ${{ steps.ffmpeg.outputs.source_url }}
+          files: |
+            artifacts/*.zip
+            artifacts/*.tar.gz
+            artifacts/checksums.sha256

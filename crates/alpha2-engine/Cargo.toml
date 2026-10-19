@@ -1,0 +1,59 @@
+[package]
+name = "alpha2-engine"
+version.workspace = true
+description = "Player and exporter facade for alpha2."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["video", "player", "export", "timeline", "rendering"]
+categories = ["multimedia::video", "rendering::engine"]
+# Builds from its sources and license alone: tests, test-only modules, benches and fixtures
+# stay in the repository, which is where `cargo test` runs.
+include = [
+  "/src/**",
+  "/README.md",
+  "/LICENSE.md",
+  "!/src/**/tests.rs",
+  "!/src/**/*_tests.rs",
+  "!/src/**/tests/**",
+]
+
+[features]
+# The `wgpu` interop surface: the items that take or return `wgpu` types, documented only with this
+# feature (their semver follows wgpu's major). Off by default.
+wgpu-interop = ["alpha2-render/wgpu-interop"]
+
+[dependencies]
+libm = "0.2.16"
+alpha2-audio.workspace = true
+alpha2-eval.workspace = true
+alpha2-gpu.workspace = true
+alpha2-media.workspace = true
+alpha2-model.workspace = true
+alpha2-render.workspace = true
+alpha2-shaders.workspace = true
+alpha2-text.workspace = true
+alpha2-time.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+web-time = "1.1.0"
+wgpu.workspace = true
+
+[dev-dependencies]
+# Tests acquire devices one at a time (`alpha2_gpu::serialize_acquisition`).
+alpha2-gpu = { workspace = true, features = ["serial-acquisition"] }
+alpha2-golden-support.workspace = true
+pollster.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "audio_mix"
+harness = false
+
+[[bench]]
+name = "export_prefetch"
+harness = false

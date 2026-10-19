@@ -1,0 +1,81 @@
+[package]
+name = "alpha2-host"
+version.workspace = true
+description = "Native project-rendering sidecar and batch CLI for alpha2."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["video", "render", "ffmpeg", "sidecar", "cli"]
+categories = ["multimedia::video", "command-line-utilities"]
+# Builds from its sources and license alone: tests, test-only modules, benches and fixtures
+# stay in the repository, which is where `cargo test` runs.
+include = [
+  "/build.rs",
+  "/src/**",
+  "/README.md",
+  "/LICENSE.md",
+  "!/src/**/tests.rs",
+  "!/src/**/*_tests.rs",
+  "!/src/**/tests/**",
+]
+
+[features]
+default = ["hwdecode", "hwencode", "extensions"]
+# SVG, animated images, and image sequences through alpha2-extensions. Without it, those
+# sources are reported as unsupported.
+extensions = ["alpha2-extensions/default"]
+# The renderer's device shared with FFmpeg's hardware contexts. Enable
+# `hwdecode` and/or `hwencode`, not this.
+hwdevice = [
+  "alpha2-native/hwdevice",
+  "dep:alpha2-native-gpu",
+  "alpha2-native-gpu/hwdevice",
+  "dep:alpha2-ffmpeg-bridge",
+]
+# Hardware decode into renderer-imported surfaces.
+hwdecode = ["hwdevice", "alpha2-native/hwdecode"]
+# The GPU-resident export: renderer-packed planes into a hardware encoder.
+hwencode = ["hwdevice", "alpha2-native/hwencode"]
+
+[[bin]]
+name = "alpha2-host"
+path = "src/main.rs"
+
+[dependencies]
+alpha2-assets.workspace = true
+alpha2-extensions = { workspace = true, default-features = false }
+alpha2-audio.workspace = true
+alpha2-engine = { workspace = true, features = ["wgpu-interop"] }
+alpha2-eval.workspace = true
+alpha2-gpu = { workspace = true, features = ["wgpu-interop"] }
+alpha2-media.workspace = true
+alpha2-model.workspace = true
+alpha2-native.workspace = true
+alpha2-native-gpu = { workspace = true, optional = true }
+alpha2-os.workspace = true
+alpha2-ffmpeg-bridge = { workspace = true, optional = true }
+alpha2-render = { workspace = true, features = ["wgpu-interop"] }
+alpha2-time.workspace = true
+bytemuck = "1.25.2"
+bytes.workspace = true
+png.workspace = true
+pollster.workspace = true
+serde.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
+sha2 = "0.11"
+flate2 = "1"
+wgpu.workspace = true
+
+[dev-dependencies]
+# Tests acquire devices one at a time (`alpha2_gpu::serialize_acquisition`).
+alpha2-gpu = { workspace = true, features = ["serial-acquisition"] }
+# The audio contract only: the visual one (a default feature) turns the extension providers on.
+alpha2-provider-contract = { workspace = true, default-features = false }
+alpha2-text.workspace = true
+
+[build-dependencies]
+alpha2-build-support.workspace = true
+
+[lints]
+workspace = true

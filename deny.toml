@@ -1,0 +1,41 @@
+[advisories]
+version = 2
+yanked = "deny"
+# Unmaintained, not vulnerable, and with no maintained release to move to without code changes. Each
+# entry names what would retire it.
+ignore = [
+  { id = "RUSTSEC-2024-0436", reason = "paste, a proc-macro dependency of rsmpeg; goes when rsmpeg drops it" },
+  { id = "RUSTSEC-2026-0206", reason = "rustybuzz, native text shaping; goes with a move to harfrust" },
+  { id = "RUSTSEC-2026-0192", reason = "ttf-parser, native font parsing; goes with the same move" },
+]
+
+[licenses]
+version = 2
+confidence-threshold = 0.8
+allow = [
+  "0BSD",
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "MIT",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# The published crates name the unpublished test crates as versionless path dev-dependencies, which cargo
+# drops when it packages them; normal dependencies of a published crate still need a version.
+allow-wildcard-paths = true
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "id": "host-parity-hdr",
+  "name": "Host parity: PQ and HLG sources tone-mapped by the project's color pipeline, one siting its chroma top-left and one whose PQ only the project declares",
+  "settings": {
+    "width": 64,
+    "height": 48,
+    "frame_rate": { "num": 30, "den": 1 },
+    "sample_rate": 48000,
+    "color": { "hdr": "tone_map", "hdr_peak_nits": 1000 }
+  },
+  "sources": [
+    { "id": "pq", "locator": "fixture://hdr-pq", "kind": "video" },
+    { "id": "hlg", "locator": "fixture://hdr-hlg", "kind": "video" },
+    {
+      "id": "pq-topleft",
+      "locator": "fixture://hdr-pq-topleft",
+      "kind": "video"
+    },
+    {
+      "id": "pq-declared",
+      "locator": "fixture://hdr-pq-untagged",
+      "kind": "video",
+      "color_metadata": {
+        "primaries": "bt2020",
+        "transfer": "pq",
+        "matrix": "bt2020_ncl",
+        "range": "limited",
+        "dynamic_range": "hdr"
+      }
+    }
+  ],
+  "timeline": {
+    "tracks": [
+      {
+        "id": "base",
+        "name": "Base",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "pq-clip",
+            "source_id": "pq",
+            "timeline_range": { "start": 0, "end": 12000 },
+            "source_range": { "start": 0, "end": 12000 }
+          },
+          {
+            "id": "hlg-clip",
+            "source_id": "hlg",
+            "timeline_range": { "start": 12000, "end": 24000 },
+            "source_range": { "start": 0, "end": 12000 }
+          },
+          {
+            "id": "pq-topleft-clip",
+            "source_id": "pq-topleft",
+            "timeline_range": { "start": 24000, "end": 36000 },
+            "source_range": { "start": 0, "end": 12000 }
+          },
+          {
+            "id": "pq-declared-clip",
+            "source_id": "pq-declared",
+            "timeline_range": { "start": 36000, "end": 48000 },
+            "source_range": { "start": 0, "end": 12000 }
+          }
+        ]
+      }
+    ]
+  }
+}

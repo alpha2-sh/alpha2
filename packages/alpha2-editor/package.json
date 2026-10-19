@@ -1,0 +1,81 @@
+{
+  "name": "@alpha2-sh/editor",
+  "version": "0.1.0",
+  "description": "Headless Project-based editing sessions and browser adapters for alpha2.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alpha2-sh/alpha2.git",
+    "directory": "packages/alpha2-editor"
+  },
+  "homepage": "https://github.com/alpha2-sh/alpha2#readme",
+  "bugs": {
+    "url": "https://github.com/alpha2-sh/alpha2/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": [
+    "./dist/browser/worker-entry.js",
+    "./dist/browser/hash-worker-entry.js",
+    "./dist/browser/extensions-worker-entry.js"
+  ],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./browser": {
+      "types": "./dist/browser/index.d.ts",
+      "import": "./dist/browser/index.js"
+    },
+    "./preview-worker": {
+      "types": "./dist/browser/worker-entry.d.ts",
+      "import": "./dist/browser/worker-entry.js"
+    },
+    "./hash-worker": {
+      "types": "./dist/browser/hash-worker-entry.d.ts",
+      "import": "./dist/browser/hash-worker-entry.js"
+    },
+    "./extensions-worker": {
+      "types": "./dist/browser/extensions-worker-entry.d.ts",
+      "import": "./dist/browser/extensions-worker-entry.js"
+    },
+    "./react": {
+      "types": "./dist/react/index.d.ts",
+      "import": "./dist/react/index.js"
+    },
+    "./native-client": {
+      "types": "./dist/native-client/index.d.ts",
+      "import": "./dist/native-client/index.js"
+    }
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.json"
+  },
+  "peerDependencies": {
+    "alpha2": "0.1.0",
+    "react": "^19.3.0"
+  },
+  "devDependencies": {
+    "alpha2": "0.1.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0"
+  },
+  "dependencies": {
+    "mediabunny": "1.56.2"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  }
+}

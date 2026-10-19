@@ -1,0 +1,65 @@
+{
+  "description": "The bytes one planar YUV420 (I420) export readback of each size keeps staged, as alpha2-render lays it out (yuv420p_staging_bytes: each plane row-padded to 256 bytes, each plane on a 512-byte placement boundary, and the 16-byte canary), and the bytes of the packed frame the encoder takes from it (the planes without the canary). alpha2-render readback tests and @alpha2-sh/editor estimatedStagingBytes tests both read this file, so a layout change in one fails the other until both agree.",
+  "sizes": [
+    {
+      "width": 2,
+      "height": 2,
+      "stagingBytes": 1296,
+      "packedBytes": 1280
+    },
+    {
+      "width": 3,
+      "height": 3,
+      "stagingBytes": 1808,
+      "packedBytes": 1792
+    },
+    {
+      "width": 8,
+      "height": 2,
+      "stagingBytes": 1296,
+      "packedBytes": 1280
+    },
+    {
+      "width": 130,
+      "height": 66,
+      "stagingBytes": 34064,
+      "packedBytes": 34048
+    },
+    {
+      "width": 200,
+      "height": 16,
+      "stagingBytes": 8208,
+      "packedBytes": 8192
+    },
+    {
+      "width": 1280,
+      "height": 720,
+      "stagingBytes": 1474576,
+      "packedBytes": 1474560
+    },
+    {
+      "width": 1918,
+      "height": 1080,
+      "stagingBytes": 3317776,
+      "packedBytes": 3317760
+    },
+    {
+      "width": 1920,
+      "height": 1080,
+      "stagingBytes": 3317776,
+      "packedBytes": 3317760
+    },
+    {
+      "width": 3840,
+      "height": 2160,
+      "stagingBytes": 12718096,
+      "packedBytes": 12718080
+    },
+    {
+      "width": 7680,
+      "height": 4320,
+      "stagingBytes": 49766416,
+      "packedBytes": 49766400
+    }
+  ]
+}

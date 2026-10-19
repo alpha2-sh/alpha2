@@ -1,0 +1,50 @@
+{
+  "name": "alpha2-workspace",
+  "private": true,
+  "version": "0.0.0",
+  "workspaces": [
+    "packages/alpha2",
+    "packages/alpha2-node",
+    "packages/alpha2-react",
+    "packages/alpha2-editor"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces",
+    "test:package": "node scripts/check-npm-package.mjs",
+    "test:host-parity": "cargo build -p alpha2-host -p alpha2-native && node scripts/test-host-cli-parity.mjs",
+    "test:node-e2e": "cargo build -p alpha2-host && npm run build --workspace @alpha2-sh/node && node --test packages/alpha2-node/test/e2e/*.test.mjs",
+    "test:node-e2e:release": "cargo build --release -p alpha2-host && npm run build --workspace @alpha2-sh/node && ALPHA2_HOST_BINARY=target/release/alpha2-host node --test packages/alpha2-node/test/e2e/*.test.mjs",
+    "test:gpu-export": "cargo build --release -p alpha2-host && node scripts/test-gpu-export.mjs",
+    "test:audio-determinism": "node scripts/test-audio-determinism.mjs",
+    "test:wasm-parity": "node scripts/test-wasm-parity.mjs",
+    "test:wgsl-browser": "node scripts/test-wgsl-browser.mjs",
+    "test:gpu-validation": "node scripts/test-gpu-validation.mjs",
+    "test:vulkan-validation": "cargo build --release -p alpha2-host && cargo build --release -p alpha2-native --features hwdecode && node scripts/test-vulkan-validation.mjs",
+    "test:wasm-browser": "npm run build && node scripts/test-wasm-browser.mjs",
+    "generate:schema": "cargo run --quiet -p alpha2-model --features schema --example emit-schema -- schema && node scripts/generate-project-types.mjs",
+    "generate:goldens": "node scripts/generate-goldens.mjs",
+    "generate:corpus": "bash tests/corpus/generate/generate.sh",
+    "version:set": "node scripts/set-version.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "eslint",
+    "lint:fix": "eslint --fix",
+    "lint:rust": "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+    "format": "prettier --write \"**/*.{js,mjs,cjs,ts,tsx,mts,cts}\"",
+    "format:check": "prettier --check \"**/*.{js,mjs,cjs,ts,tsx,mts,cts}\"",
+    "test:js": "npm run build:js --workspace alpha2 && npm run build --workspace @alpha2-sh/node && npm run build --workspace @alpha2-sh/react && node --test packages/alpha2/test/*.test.mjs packages/alpha2-node/test/*.test.mjs packages/alpha2-react/test/*.test.mjs scripts/*.test.mjs scripts/lib/*.test.mjs && npm run test:editor",
+    "test:editor": "npm run build --workspace @alpha2-sh/editor && node --test packages/alpha2-editor/test/*.test.mjs",
+    "test:editor:package": "npm run build --workspace @alpha2-sh/editor && node scripts/test-editor-package.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "ajv": "8.20.0",
+    "binaryen": "132.0.0",
+    "eslint": "10.11.0",
+    "eslint-config-prettier": "10.1.8",
+    "globals": "17.12.0",
+    "prettier": "3.9.8",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.70.0",
+    "vite": "7.3.6"
+  }
+}

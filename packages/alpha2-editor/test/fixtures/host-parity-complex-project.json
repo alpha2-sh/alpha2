@@ -1,0 +1,294 @@
+{
+  "schema_version": 1,
+  "id": "host-parity-complex",
+  "name": "Host parity: video, transition, effects, a composition graph, blends, masks, generated sources",
+  "settings": {
+    "width": 96,
+    "height": 64,
+    "frame_rate": { "num": 24, "den": 1 },
+    "sample_rate": 48000
+  },
+  "sources": [
+    { "id": "video", "locator": "fixture://parity-rgb", "kind": "video" },
+    { "id": "still", "locator": "fixture://parity-image", "kind": "image" },
+    {
+      "id": "wash",
+      "kind": "generated",
+      "generator": {
+        "type": "fill",
+        "paint": {
+          "type": "linear_gradient",
+          "start": { "x": 0, "y": 0 },
+          "end": { "x": 1, "y": 1 },
+          "stops": [
+            { "offset": 0, "color": { "red": 1, "green": 0.3, "blue": 0.1, "alpha": 1 } },
+            { "offset": 1, "color": { "red": 0.1, "green": 0.4, "blue": 1, "alpha": 0.2 } }
+          ]
+        }
+      }
+    },
+    {
+      "id": "badge",
+      "kind": "generated",
+      "generator": {
+        "type": "shape",
+        "shape": { "type": "ellipse" },
+        "center": { "x": 0.5, "y": 0.5 },
+        "size": { "x": 0.4, "y": 0.4 },
+        "fill": {
+          "type": "solid",
+          "color": { "red": 1, "green": 0.9, "blue": 0.2, "alpha": 0.8 }
+        }
+      }
+    }
+  ],
+  "compositions": [
+    {
+      "id": "video-clip-look",
+      "nodes": [
+        { "id": "clip", "op": { "type": "clip" } },
+        {
+          "id": "effect-0",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.color-controls",
+              "version": 1,
+              "params": {
+                "exposure": {
+                  "mode": "keyframes",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "value": { "type": "float", "value": -0.5 },
+                      "interpolation": { "type": "linear" }
+                    },
+                    {
+                      "time": 120000,
+                      "value": { "type": "float", "value": 0.5 },
+                      "interpolation": { "type": "hold" }
+                    }
+                  ]
+                },
+                "saturation": {
+                  "mode": "constant",
+                  "value": { "type": "float", "value": 1.4 }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect-0"
+    },
+    {
+      "id": "still-clip-look",
+      "nodes": [
+        { "id": "clip", "op": { "type": "clip" } },
+        {
+          "id": "effect-0",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.vignette",
+              "version": 1,
+              "params": {
+                "amount": {
+                  "mode": "constant",
+                  "value": { "type": "float", "value": 0.6 }
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": "blocks",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.pixelate",
+              "version": 1,
+              "params": {
+                "blocks": {
+                  "mode": "constant",
+                  "value": { "type": "float", "value": 12 }
+                }
+              }
+            }
+          }
+        },
+        { "id": "badge", "op": { "type": "media", "source_id": "badge" } },
+        {
+          "id": "inside",
+          "op": {
+            "type": "matte",
+            "input": "blocks",
+            "matte": "badge",
+            "mode": "alpha"
+          }
+        },
+        {
+          "id": "drift",
+          "op": {
+            "type": "transform",
+            "input": "inside",
+            "transform": {
+              "position": {
+                "mode": "keyframes",
+                "keyframes": [
+                  {
+                    "time": 0,
+                    "value": { "x": 0.35, "y": 0.5 },
+                    "interpolation": { "type": "linear" }
+                  },
+                  {
+                    "time": 90000,
+                    "value": { "x": 0.65, "y": 0.5 },
+                    "interpolation": { "type": "hold" }
+                  }
+                ]
+              },
+              "anchor": { "x": 0.5, "y": 0.5 },
+              "scale": { "mode": "constant", "value": { "x": 0.8, "y": 0.8 } },
+              "rotation_degrees": { "mode": "constant", "value": 0 },
+              "opacity": { "mode": "constant", "value": 1 }
+            }
+          }
+        },
+        {
+          "id": "merge",
+          "op": {
+            "type": "merge",
+            "layers": [
+              { "input": "effect-0" },
+              {
+                "input": "drift",
+                "blend_mode": "screen",
+                "opacity": { "mode": "constant", "value": 0.7 }
+              }
+            ]
+          }
+        }
+      ],
+      "output": "merge"
+    }
+  ],
+  "timeline": {
+    "tracks": [
+      {
+        "id": "base",
+        "name": "Base",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "video-clip",
+            "source_id": "video",
+            "timeline_range": { "start": 0, "end": 120000 },
+            "source_range": { "start": 0, "end": 120000 },
+            "visual": {
+              "position": { "mode": "constant", "value": { "x": 0.5, "y": 0.5 } },
+              "anchor": { "x": 0.5, "y": 0.5 },
+              "scale": {
+                "mode": "keyframes",
+                "keyframes": [
+                  { "time": 0, "value": { "x": 1, "y": 1 }, "interpolation": { "type": "linear" } },
+                  { "time": 120000, "value": { "x": 1.25, "y": 1.25 }, "interpolation": { "type": "hold" } }
+                ]
+              },
+              "rotation_degrees": {
+                "mode": "keyframes",
+                "keyframes": [
+                  { "time": 0, "value": 0, "interpolation": { "type": "linear" } },
+                  { "time": 120000, "value": 12, "interpolation": { "type": "hold" } }
+                ]
+              },
+              "opacity": { "mode": "constant", "value": 1 }
+            },
+            "composition": { "id": "video-clip-look" }
+          },
+          {
+            "id": "still-clip",
+            "source_id": "still",
+            "timeline_range": { "start": 90000, "end": 180000 },
+            "source_range": { "start": 0, "end": 90000 },
+            "composition": { "id": "still-clip-look" }
+          }
+        ],
+        "transitions": [
+          {
+            "from_clip": "video-clip",
+            "to_clip": "still-clip",
+            "timeline_range": { "start": 90000, "end": 120000 },
+            "easing": { "type": "linear" },
+            "effect": { "id": "alpha2.transition.fade", "version": 1 }
+          }
+        ]
+      },
+      {
+        "id": "overlay",
+        "name": "Overlay",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "wash-clip",
+            "source_id": "wash",
+            "timeline_range": { "start": 0, "end": 180000 },
+            "source_range": { "start": 0, "end": 180000 },
+            "blend_mode": "multiply",
+            "visual": {
+              "position": { "mode": "constant", "value": { "x": 0.5, "y": 0.5 } },
+              "anchor": { "x": 0.5, "y": 0.5 },
+              "scale": { "mode": "constant", "value": { "x": 1, "y": 1 } },
+              "rotation_degrees": { "mode": "constant", "value": 0 },
+              "opacity": {
+                "mode": "keyframes",
+                "keyframes": [
+                  { "time": 0, "value": 0.3, "interpolation": { "type": "linear" } },
+                  { "time": 180000, "value": 0.9, "interpolation": { "type": "hold" } }
+                ]
+              }
+            },
+            "masks": [
+              {
+                "shape": { "type": "ellipse" },
+                "center": { "mode": "constant", "value": { "x": 0.5, "y": 0.5 } },
+                "size": { "mode": "constant", "value": { "x": 0.8, "y": 0.7 } },
+                "feather": { "mode": "constant", "value": 0.05 }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "top",
+        "name": "Top",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "badge-clip",
+            "source_id": "badge",
+            "timeline_range": { "start": 30000, "end": 150000 },
+            "source_range": { "start": 0, "end": 120000 },
+            "blend_mode": "screen",
+            "visual": {
+              "position": {
+                "mode": "keyframes",
+                "keyframes": [
+                  { "time": 30000, "value": { "x": 0.25, "y": 0.35 }, "interpolation": { "type": "linear" } },
+                  { "time": 150000, "value": { "x": 0.75, "y": 0.65 }, "interpolation": { "type": "hold" } }
+                ]
+              },
+              "anchor": { "x": 0.5, "y": 0.5 },
+              "scale": { "mode": "constant", "value": { "x": 1, "y": 1 } },
+              "rotation_degrees": { "mode": "constant", "value": 0 },
+              "opacity": { "mode": "constant", "value": 1 }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,6 @@
+# alpha2 text fixtures
+
+- `Alpha2Fixture.ttf` is an unmodified copy of DejaVu Sans 2.37: Latin, Hebrew, Arabic, combining marks, symbols. Text tests, the text golden (`tests/golden/text_raster.json`), and caption, SVG, and extension tests use it. DejaVu's permissive font license is reproduced in `LICENSE-DejaVu.txt`. To refresh it from a DejaVu 2.37 source tree, run `DEJAVU_SANS=/path/to/DejaVuSans.ttf BLACK_HAN_SANS=/path/to/BlackHanSans-Regular.ttf tests/corpus/generate/generate.sh fonts` (both fixture fonts).
+- `Alpha2FixtureHangul.ttf` is a subset of Black Han Sans 1.001 to a few dozen Hangul syllables, renamed "Alpha2 Fixture Hangul". It has no Latin, digits, or space, so with the DejaVu fixture before it every mixed Korean and Latin line splits into runs of both fonts: the fallback tests in `bindings/alpha2-text` and the golden's mixed cases. Black Han Sans is under the SIL Open Font License 1.1 (`OFL-BlackHanSans.txt`) and reserves no font name. Regenerate it with the same command (`tests/corpus/generate/font-hangul.sh`, fontTools); the output is the same bytes each run.
+
+Color emoji are never drawn by the portable host: `emojiPolicy` is `monochrome` (the font's outline, if it has one) or `replace` (one U+FFFD per emoji grapheme). Checksums are in `MANIFEST.md`.

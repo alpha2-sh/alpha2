@@ -1,0 +1,308 @@
+{
+  "cases": [
+    {
+      "contentVersion": 1,
+      "expected": {
+        "ascent": 16.0,
+        "descent": 4.16015625,
+        "firstBaseline": 16.0,
+        "height": 75,
+        "layoutHeight": 75.0,
+        "layoutWidth": 80.0,
+        "layoutX": 0.0,
+        "layoutY": 0.0,
+        "lineCount": 3,
+        "pixelsFnv1a": "f81f4063ccedee61",
+        "width": 80
+      },
+      "name": "wrapped-centre",
+      "request": {
+        "align": "center",
+        "color": [
+          255,
+          100,
+          50,
+          200
+        ],
+        "emojiPolicy": "replace",
+        "fontSize": 20,
+        "lineHeight": 1.25,
+        "maxWidth": 80,
+        "text": "Alpha2 wraps text"
+      }
+    },
+    {
+      "contentVersion": 2,
+      "expected": {
+        "ascent": 14.40000057220459,
+        "descent": 3.6000001430511475,
+        "firstBaseline": 14.40000057220459,
+        "height": 54,
+        "layoutHeight": 54.0,
+        "layoutWidth": 76.728515625,
+        "layoutX": 0.0,
+        "layoutY": 0.0,
+        "lineCount": 2,
+        "pixelsFnv1a": "f998e54319b67949",
+        "width": 77
+      },
+      "name": "lines-end",
+      "request": {
+        "align": "end",
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "fontSize": 18,
+        "lineHeight": 1.5,
+        "text": "Line one\nLine two\n"
+      }
+    },
+    {
+      "contentVersion": 3,
+      "expected": {
+        "ascent": 28.7314453125,
+        "descent": 6.300000190734863,
+        "firstBaseline": 25.200000762939453,
+        "height": 46,
+        "layoutHeight": 37.80000305175781,
+        "layoutWidth": 341.455078125,
+        "layoutX": 0.0,
+        "layoutY": 4.0,
+        "lineCount": 1,
+        "pixelsFnv1a": "f3e50a8188de7421",
+        "width": 342
+      },
+      "name": "emoji-replaced",
+      "request": {
+        "align": "start",
+        "color": [
+          20,
+          40,
+          220,
+          128
+        ],
+        "emojiPolicy": "replace",
+        "fontSize": 31.5,
+        "text": "Sun ☀ © and 0123 🙂"
+      }
+    },
+    {
+      "contentVersion": 20,
+      "expected": {
+        "ascent": 19.200000762939453,
+        "descent": 4.9921875,
+        "firstBaseline": 19.200000762939453,
+        "height": 99,
+        "layoutHeight": 86.4000015258789,
+        "layoutWidth": 150.0,
+        "layoutX": 6.0,
+        "layoutY": 6.0,
+        "lineCount": 3,
+        "pixelsFnv1a": "39c706a3ad768136",
+        "width": 162
+      },
+      "name": "caption-outline-and-boxes",
+      "request": {
+        "align": "center",
+        "background": {
+          "color": [
+            20,
+            20,
+            20,
+            160
+          ],
+          "padding": 6
+        },
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "fontSize": 24,
+        "lineHeight": 1.2,
+        "maxWidth": 150,
+        "outline": {
+          "color": [
+            0,
+            0,
+            0,
+            255
+          ],
+          "width": 2.5
+        },
+        "text": "Captions wrap\nand stack"
+      }
+    },
+    {
+      "contentVersion": 21,
+      "expected": {
+        "ascent": 14.40000057220459,
+        "descent": 3.744140625,
+        "firstBaseline": 14.40000057220459,
+        "height": 26,
+        "layoutHeight": 21.600000381469727,
+        "layoutWidth": 45.298828125,
+        "layoutX": 2.0,
+        "layoutY": 2.0,
+        "lineCount": 1,
+        "pixelsFnv1a": "b9992c80dd6b1bbc",
+        "width": 50
+      },
+      "name": "outline-only-fraction",
+      "request": {
+        "color": [
+          255,
+          220,
+          0,
+          255
+        ],
+        "fontSize": 18,
+        "outline": {
+          "color": [
+            30,
+            0,
+            60,
+            200
+          ],
+          "width": 1.25
+        },
+        "text": "Edge"
+      }
+    },
+    {
+      "contentVersion": 22,
+      "expected": {
+        "ascent": 24.0,
+        "descent": 6.240234375,
+        "firstBaseline": 24.0,
+        "height": 108,
+        "layoutHeight": 108.0,
+        "layoutWidth": 150.0,
+        "layoutX": 0.0,
+        "layoutY": 0.0,
+        "lineCount": 3,
+        "pixelsFnv1a": "04e90813c97adea9",
+        "width": 150
+      },
+      "name": "hangul-and-latin-wrapped",
+      "request": {
+        "align": "center",
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "fontSize": 30.0,
+        "lineHeight": 1.2,
+        "maxWidth": 150.0,
+        "text": "안녕하세요 Alpha2 자막"
+      }
+    },
+    {
+      "contentVersion": 23,
+      "expected": {
+        "ascent": 24.0,
+        "descent": 6.0,
+        "firstBaseline": 24.0,
+        "height": 36,
+        "layoutHeight": 36.0,
+        "layoutWidth": 160.4561767578125,
+        "layoutX": 0.0,
+        "layoutY": 0.0,
+        "lineCount": 1,
+        "pixelsFnv1a": "64b8bcdaefd9da05",
+        "width": 161
+      },
+      "name": "family-first",
+      "request": {
+        "align": "start",
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "fontFamily": "Alpha2 Fixture Hangul",
+        "fontSize": 30.0,
+        "lineHeight": 1.2,
+        "maxWidth": 0.0,
+        "text": "한국어 Hello"
+      }
+    },
+    {
+      "contentVersion": 24,
+      "expected": {
+        "ascent": 25.600000381469727,
+        "descent": 6.400000095367432,
+        "firstBaseline": 25.600000381469727,
+        "height": 116,
+        "layoutHeight": 115.20000457763672,
+        "layoutWidth": 120.0,
+        "layoutX": 0.0,
+        "layoutY": 0.0,
+        "lineCount": 3,
+        "pixelsFnv1a": "30f2a6efad59424d",
+        "width": 120
+      },
+      "name": "right-to-left-wrapped",
+      "request": {
+        "align": "start",
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "fontSize": 32.0,
+        "lineHeight": 1.2,
+        "maxWidth": 120.0,
+        "text": "שלום עולם 123"
+      }
+    },
+    {
+      "contentVersion": 25,
+      "expected": {
+        "ascent": 25.600000381469727,
+        "descent": 7.8125,
+        "firstBaseline": 25.600000381469727,
+        "height": 39,
+        "layoutHeight": 38.400001525878906,
+        "layoutWidth": 208.71875,
+        "layoutX": 0.0,
+        "layoutY": 0.0,
+        "lineCount": 1,
+        "pixelsFnv1a": "007bfb20f53d7439",
+        "width": 209
+      },
+      "name": "arabic-joined-in-latin",
+      "request": {
+        "align": "end",
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "fontSize": 32.0,
+        "lineHeight": 1.2,
+        "maxWidth": 0.0,
+        "text": "Hi مرحبا 2024"
+      }
+    }
+  ],
+  "fonts": [
+    {
+      "family": "Alpha2 Fixture",
+      "path": "tests/fonts/Alpha2Fixture.ttf"
+    },
+    {
+      "family": "Alpha2 Fixture Hangul",
+      "path": "tests/fonts/Alpha2FixtureHangul.ttf"
+    }
+  ]
+}

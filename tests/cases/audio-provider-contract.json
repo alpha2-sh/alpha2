@@ -1,0 +1,119 @@
+{
+  "$comment": "The AudioBlockProvider contract every provider passes: the native host's windows, the native one-shot decode, the wasm store, and the JavaScript decoders. Positions are samples at projectSampleRate. The source is 5.1 PCM (FL FR FC LFE BL BR) with one level per speaker, whose stream starts after its container does; before firstSample and from endSample on the source is silent. Each request must be answered by a span that covers it, carries every channel and names the speaker each feeds, and gives exactly level/scale inside the stream and zero outside it, however the provider spells the silence. Each of `layouts` is a source that declares its speakers some other way (a WAVE channel mask, QuickTime `chan` descriptions or a layout tag, an ISO `chnl` channel configuration or speaker positions, more channels than a 7.1), one level per plane in the file's order; a decoding provider reports those speakers in that order, the planes unchanged, over its first layoutFrames samples, from sample 0. Each of `codecLayouts` is a compressed source whose codec (its header, a frame header, its channel count for Opus mapping family 1 and Vorbis or, for FLAC, a channel-mask comment) declares its speakers, each speaker a tone of its own frequency (Hz): a decoding provider reports the speakers and delivers each plane as the tone of the speaker it names.",
+  "source": "corpus/audio-surround-offset.mov",
+  "projectSampleRate": 48000,
+  "stream": {
+    "firstSample": 2400,
+    "endSample": 7200,
+    "speakers": ["FL", "FR", "FC", "LFE", "BL", "BR"],
+    "levels": [3277, 6554, 9830, 13107, 16384, 19661],
+    "scale": 32768
+  },
+  "requests": [
+    { "name": "before the stream starts", "startSample": 0, "frames": 1200 },
+    { "name": "across the stream's start", "startSample": 2000, "frames": 1024 },
+    { "name": "inside the stream", "startSample": 4000, "frames": 1024 },
+    { "name": "across the stream's end", "startSample": 6800, "frames": 1024 },
+    { "name": "past the stream's end", "startSample": 9000, "frames": 512 }
+  ],
+  "layoutFrames": 4800,
+  "layouts": [
+    {
+      "source": "corpus/audio-3.0.wav",
+      "speakers": ["FL", "FR", "FC"],
+      "levels": [3277, 6554, 9830]
+    },
+    {
+      "source": "corpus/audio-quad.wav",
+      "speakers": ["FL", "FR", "BL", "BR"],
+      "levels": [3277, 6554, 9830, 13107]
+    },
+    {
+      "source": "corpus/audio-lcr.mov",
+      "speakers": ["FC", "FL", "FR"],
+      "levels": [9830, 3277, 6554]
+    },
+    {
+      "source": "corpus/audio-quad.mov",
+      "speakers": ["FL", "FR", "BL", "BR"],
+      "levels": [3277, 6554, 9830, 13107]
+    },
+    {
+      "source": "corpus/audio-5.1.4.wav",
+      "speakers": ["FL", "FR", "FC", "LFE", "SL", "SR", "TFL", "TFR", "TBL", "TBR"],
+      "levels": [1638, 3277, 4915, 6554, 8192, 9830, 11469, 13107, 14746, 16384]
+    },
+    {
+      "source": "corpus/audio-ipcm-lcr.mp4",
+      "speakers": ["FC", "FL", "FR"],
+      "levels": [9830, 3277, 6554]
+    },
+    {
+      "source": "corpus/audio-ipcm-quad.mp4",
+      "speakers": ["FL", "FR", "BL", "BR"],
+      "levels": [3277, 6554, 9830, 13107]
+    }
+  ],
+  "codecLayouts": [
+    {
+      "source": "corpus/audio-aac-3.0.mp4",
+      "speakers": ["FL", "FR", "FC"],
+      "tones": [300, 500, 700]
+    },
+    {
+      "source": "corpus/audio-aac-5.1.mp4",
+      "speakers": ["FL", "FR", "FC", "LFE", "BL", "BR"],
+      "tones": [300, 500, 700, 60, 900, 1100]
+    },
+    {
+      "source": "corpus/audio-aac-quad.mp4",
+      "speakers": ["FL", "FR", "BL", "BR"],
+      "tones": [300, 500, 900, 1100]
+    },
+    {
+      "source": "corpus/audio-aac-7.1.mp4",
+      "speakers": ["FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR"],
+      "tones": [300, 500, 700, 60, 900, 1100, 1300, 1500]
+    },
+    {
+      "source": "corpus/audio-adts-3.0.aac",
+      "speakers": ["FL", "FR", "FC"],
+      "tones": [300, 500, 700]
+    },
+    {
+      "source": "corpus/audio-ac3-5.1.mp4",
+      "speakers": ["FL", "FR", "FC", "LFE", "SL", "SR"],
+      "tones": [300, 500, 700, 60, 1300, 1500]
+    },
+    {
+      "source": "corpus/audio-eac3-5.0.mp4",
+      "speakers": ["FL", "FR", "FC", "SL", "SR"],
+      "tones": [300, 500, 700, 1300, 1500]
+    },
+    {
+      "source": "corpus/audio-dts-5.1.mkv",
+      "speakers": ["FL", "FR", "FC", "LFE", "SL", "SR"],
+      "tones": [300, 500, 700, 60, 1300, 1500]
+    },
+    {
+      "source": "corpus/audio-flac-4.0.flac",
+      "speakers": ["FL", "FR", "FC", "BC"],
+      "tones": [300, 500, 700, 1700]
+    },
+    {
+      "source": "corpus/audio-flac-4.0.mkv",
+      "speakers": ["FL", "FR", "FC", "BC"],
+      "tones": [300, 500, 700, 1700]
+    },
+    {
+      "source": "corpus/audio-opus-5.1.webm",
+      "speakers": ["FL", "FR", "FC", "LFE", "BL", "BR"],
+      "tones": [300, 500, 700, 60, 900, 1100]
+    },
+    {
+      "source": "corpus/audio-vorbis-5.1.ogg",
+      "speakers": ["FL", "FR", "FC", "LFE", "BL", "BR"],
+      "tones": [300, 500, 700, 60, 900, 1100]
+    }
+  ]
+}

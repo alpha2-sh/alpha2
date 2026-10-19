@@ -1,0 +1,40 @@
+[package]
+name = "alpha2-eval"
+version.workspace = true
+description = "Pure alpha2 timeline evaluation."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["video", "timeline", "animation", "keyframes"]
+categories = ["multimedia::video"]
+# Builds from its sources and license alone: tests, test-only modules, benches and fixtures
+# stay in the repository, which is where `cargo test` runs.
+include = [
+  "/src/**",
+  "/README.md",
+  "/LICENSE.md",
+  "!/src/**/tests.rs",
+  "!/src/**/*_tests.rs",
+  "!/src/**/tests/**",
+]
+
+[dependencies]
+alpha2-media.workspace = true
+alpha2-model.workspace = true
+alpha2-time.workspace = true
+
+[dev-dependencies]
+alpha2-scaling-support.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "timeline_evaluation"
+harness = false
+
+[[bench]]
+name = "timeline_features"
+harness = false

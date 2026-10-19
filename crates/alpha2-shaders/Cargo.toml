@@ -1,0 +1,29 @@
+[package]
+name = "alpha2-shaders"
+version.workspace = true
+description = "WGSL and WESL shader assets for alpha2."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["wgsl", "wesl", "shaders", "video", "transitions"]
+categories = ["rendering", "graphics"]
+# Builds from its sources and license alone: tests, test-only modules, benches and fixtures
+# stay in the repository, which is where `cargo test` runs.
+include = [
+  "/build.rs",
+  "/src/**",
+  "/shaders/**",
+  "/README.md",
+  "/LICENSE.md",
+  "/THIRD_PARTY_NOTICES.md",
+  "!/src/**/tests.rs",
+  "!/src/**/*_tests.rs",
+  "!/src/**/tests/**",
+]
+
+[build-dependencies]
+wesl = "=0.1.2"
+
+[lints]
+workspace = true

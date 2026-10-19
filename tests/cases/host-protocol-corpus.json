@@ -1,0 +1,472 @@
+[
+  {
+    "name": "capabilities success",
+    "requestValid": true,
+    "request": {
+      "protocolVersion": 1,
+      "operation": "capabilities",
+      "requestId": "caps-1"
+    },
+    "messages": [
+      {
+        "protocolVersion": 1,
+        "requestId": "caps-1",
+        "ok": true,
+        "result": {
+          "status": "ready",
+          "capabilities": {
+            "schema": "alpha2-capabilities",
+            "version": 1,
+            "runtime": "native",
+            "encode": { "container": "mp4", "video": [], "audio": [] }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "export progress and success",
+    "requestValid": true,
+    "request": {
+      "protocolVersion": 1,
+      "operation": "export",
+      "requestId": "export-1",
+      "project": {},
+      "assets": { "video": "/staging/video.mp4" },
+      "effects": [],
+      "startTicks": 0,
+      "endTicks": 120000,
+      "frameRate": { "num": 30, "den": 1 },
+      "includeAudio": true,
+      "videoCodec": "h264",
+      "audioCodec": "aac",
+      "output": "/staging/output.mp4"
+    },
+    "messages": [
+      {
+        "protocolVersion": 1,
+        "type": "progress",
+        "requestId": "export-1",
+        "phase": "frames",
+        "completed": 1,
+        "total": 30
+      },
+      {
+        "protocolVersion": 1,
+        "type": "progress",
+        "requestId": "export-1",
+        "phase": "finalizing",
+        "completed": 30,
+        "total": 30
+      },
+      {
+        "protocolVersion": 1,
+        "requestId": "export-1",
+        "ok": true,
+        "result": { "frames": 30 }
+      }
+    ]
+  },
+  {
+    "name": "unsupported major is structured",
+    "requestValid": false,
+    "expectedErrorCode": "UNSUPPORTED_PROTOCOL",
+    "request": {
+      "protocolVersion": 2,
+      "operation": "capabilities",
+      "requestId": "future-1"
+    },
+    "messages": [
+      {
+        "protocolVersion": 1,
+        "requestId": "future-1",
+        "ok": false,
+        "error": {
+          "code": "UNSUPPORTED_PROTOCOL",
+          "message": "unsupported protocol major 2; this host supports 1"
+        }
+      }
+    ]
+  },
+  {
+    "name": "startup GPU failure is distinct",
+    "requestValid": true,
+    "request": {
+      "protocolVersion": 1,
+      "operation": "capabilities",
+      "requestId": "caps-gpu"
+    },
+    "messages": [
+      {
+        "protocolVersion": 1,
+        "type": "fatal",
+        "error": {
+          "code": "GPU_INIT_FAILED",
+          "message": "no compatible adapter"
+        }
+      }
+    ]
+  },
+  {
+    "name": "export with a quality level",
+    "requestValid": true,
+    "request": {
+      "protocolVersion": 1,
+      "operation": "export",
+      "requestId": "export-with-a-quality-level",
+      "project": {},
+      "assets": {
+        "video": "/staging/video.mp4"
+      },
+      "effects": [],
+      "startTicks": 0,
+      "endTicks": 120000,
+      "frameRate": {
+        "num": 30,
+        "den": 1
+      },
+      "includeAudio": true,
+      "videoCodec": "h264",
+      "audioCodec": "aac",
+      "output": "/staging/output.mp4",
+      "videoQuality": "medium",
+      "audioQuality": "low"
+    },
+    "messages": []
+  },
+  {
+    "name": "export with an explicit constant rate",
+    "requestValid": true,
+    "request": {
+      "protocolVersion": 1,
+      "operation": "export",
+      "requestId": "export-with-an-explicit-constant-rate",
+      "project": {},
+      "assets": {
+        "video": "/staging/video.mp4"
+      },
+      "effects": [],
+      "startTicks": 0,
+      "endTicks": 120000,
+      "frameRate": {
+        "num": 30,
+        "den": 1
+      },
+      "includeAudio": true,
+      "videoCodec": "h264",
+      "audioCodec": "aac",
+      "output": "/staging/output.mp4",
+      "videoQuality": {
+        "bitrate": 8000000,
+        "mode": "constant"
+      },
+      "audioQuality": {
+        "bitrate": 128000
+      }
+    },
+    "messages": []
+  },
+  {
+    "name": "an unknown quality level is the caller's input",
+    "requestValid": false,
+    "request": {
+      "protocolVersion": 1,
+      "operation": "export",
+      "requestId": "an-unknown-quality-level-is-the-caller's-input",
+      "project": {},
+      "assets": {
+        "video": "/staging/video.mp4"
+      },
+      "effects": [],
+      "startTicks": 0,
+      "endTicks": 120000,
+      "frameRate": {
+        "num": 30,
+        "den": 1
+      },
+      "includeAudio": true,
+      "videoCodec": "h264",
+      "audioCodec": "aac",
+      "output": "/staging/output.mp4",
+      "videoQuality": "lossless"
+    },
+    "messages": [],
+    "expectedErrorCode": "INVALID_INPUT"
+  },
+  {
+    "name": "a zero explicit bitrate is the caller's input",
+    "requestValid": false,
+    "request": {
+      "protocolVersion": 1,
+      "operation": "export",
+      "requestId": "a-zero-explicit-bitrate-is-the-caller's-input",
+      "project": {},
+      "assets": {
+        "video": "/staging/video.mp4"
+      },
+      "effects": [],
+      "startTicks": 0,
+      "endTicks": 120000,
+      "frameRate": {
+        "num": 30,
+        "den": 1
+      },
+      "includeAudio": true,
+      "videoCodec": "h264",
+      "audioCodec": "aac",
+      "output": "/staging/output.mp4",
+      "videoQuality": {
+        "bitrate": 0
+      }
+    },
+    "messages": [],
+    "expectedErrorCode": "INVALID_INPUT"
+  },
+  {
+    "name": "an explicit rate with an unknown key is the caller's input",
+    "requestValid": false,
+    "request": {
+      "protocolVersion": 1,
+      "operation": "export",
+      "requestId": "an-explicit-rate-with-an-unknown-key-is-the-caller's-input",
+      "project": {},
+      "assets": {
+        "video": "/staging/video.mp4"
+      },
+      "effects": [],
+      "startTicks": 0,
+      "endTicks": 120000,
+      "frameRate": {
+        "num": 30,
+        "den": 1
+      },
+      "includeAudio": true,
+      "videoCodec": "h264",
+      "audioCodec": "aac",
+      "output": "/staging/output.mp4",
+      "videoQuality": {
+        "bitrate": 8000000,
+        "crf": 23
+      }
+    },
+    "messages": [],
+    "expectedErrorCode": "INVALID_INPUT"
+  },
+  {
+    "name": "export normalized to a loudness target",
+    "requestValid": true,
+    "request": {
+      "protocolVersion": 1,
+      "operation": "export",
+      "requestId": "export-normalized-to-a-loudness-target",
+      "project": {},
+      "assets": {
+        "video": "/staging/video.mp4"
+      },
+      "effects": [],
+      "startTicks": 0,
+      "endTicks": 120000,
+      "frameRate": {
+        "num": 30,
+        "den": 1
+      },
+      "includeAudio": true,
+      "videoCodec": "h264",
+      "audioCodec": "aac",
+      "output": "/staging/output.mp4",
+      "loudness": {
+        "targetLufs": -14,
+        "truePeakCeilingDbtp": -1
+      }
+    },
+    "messages": []
+  },
+  {
+    "name": "a loudness target above 0 LUFS is the caller's input",
+    "requestValid": false,
+    "request": {
+      "protocolVersion": 1,
+      "operation": "export",
+      "requestId": "a-loudness-target-above-0-LUFS-is-the-callers-input",
+      "project": {},
+      "assets": {
+        "video": "/staging/video.mp4"
+      },
+      "effects": [],
+      "startTicks": 0,
+      "endTicks": 120000,
+      "frameRate": {
+        "num": 30,
+        "den": 1
+      },
+      "includeAudio": true,
+      "videoCodec": "h264",
+      "audioCodec": "aac",
+      "output": "/staging/output.mp4",
+      "loudness": {
+        "targetLufs": 2,
+        "truePeakCeilingDbtp": -1
+      }
+    },
+    "messages": [],
+    "expectedErrorCode": "INVALID_INPUT"
+  },
+  {
+    "name": "loudness without audio is the caller's input",
+    "requestValid": false,
+    "request": {
+      "protocolVersion": 1,
+      "operation": "export",
+      "requestId": "loudness-without-audio-is-the-callers-input",
+      "project": {},
+      "assets": {
+        "video": "/staging/video.mp4"
+      },
+      "effects": [],
+      "startTicks": 0,
+      "endTicks": 120000,
+      "frameRate": {
+        "num": 30,
+        "den": 1
+      },
+      "includeAudio": false,
+      "videoCodec": "h264",
+      "audioCodec": "aac",
+      "output": "/staging/output.mp4",
+      "loudness": {
+        "targetLufs": -14,
+        "truePeakCeilingDbtp": -1
+      }
+    },
+    "messages": [],
+    "expectedErrorCode": "INVALID_INPUT"
+  },
+  {
+    "name": "export with caption fonts",
+    "requestValid": true,
+    "request": {
+      "protocolVersion": 1,
+      "operation": "export",
+      "requestId": "export-captions",
+      "project": {},
+      "assets": { "video": "/staging/video.mp4" },
+      "effects": [],
+      "startTicks": 0,
+      "endTicks": 120000,
+      "frameRate": { "num": 30, "den": 1 },
+      "includeAudio": true,
+      "videoCodec": "h264",
+      "audioCodec": "aac",
+      "output": "/staging/output.mp4",
+      "fonts": [
+        "/staging/fonts/Inter.ttf",
+        "/staging/fonts/NotoSansCJK.otf"
+      ]
+    },
+    "messages": [
+      {
+        "protocolVersion": 1,
+        "type": "progress",
+        "requestId": "export-captions",
+        "completed": 1,
+        "total": 30
+      },
+      {
+        "protocolVersion": 1,
+        "requestId": "export-captions",
+        "ok": true,
+        "result": { "frames": 30 }
+      }
+    ]
+  },
+  {
+    "name": "fonts must be a list of paths",
+    "requestValid": false,
+    "request": {
+      "protocolVersion": 1,
+      "operation": "export",
+      "requestId": "export-bad-fonts",
+      "project": {},
+      "assets": { "video": "/staging/video.mp4" },
+      "effects": [],
+      "startTicks": 0,
+      "endTicks": 120000,
+      "frameRate": { "num": 30, "den": 1 },
+      "includeAudio": true,
+      "videoCodec": "h264",
+      "audioCodec": "aac",
+      "output": "/staging/output.mp4",
+      "fonts": "/staging/fonts/Inter.ttf"
+    },
+    "messages": [],
+    "expectedErrorCode": "INVALID_REQUEST"
+  },
+  {
+    "name": "export baking frames into a render cache",
+    "requestValid": true,
+    "request": {
+      "protocolVersion": 1,
+      "operation": "export",
+      "requestId": "export-baking-frames-into-a-render-cache",
+      "project": {},
+      "assets": { "video": "/staging/video.mp4" },
+      "effects": [],
+      "startTicks": 0,
+      "endTicks": 120000,
+      "frameRate": { "num": 30, "den": 1 },
+      "includeAudio": false,
+      "videoCodec": "mpeg4-part2",
+      "audioCodec": "aac",
+      "output": "/staging/output.mp4",
+      "renderCache": {
+        "directory": "/staging/render-cache",
+        "quotaBytes": 1073741824
+      }
+    },
+    "messages": []
+  },
+  {
+    "name": "a render cache without a directory is the caller's input",
+    "requestValid": false,
+    "request": {
+      "protocolVersion": 1,
+      "operation": "export",
+      "requestId": "a-render-cache-without-a-directory-is-the-callers-input",
+      "project": {},
+      "assets": { "video": "/staging/video.mp4" },
+      "effects": [],
+      "startTicks": 0,
+      "endTicks": 120000,
+      "frameRate": { "num": 30, "den": 1 },
+      "includeAudio": false,
+      "videoCodec": "mpeg4-part2",
+      "audioCodec": "aac",
+      "output": "/staging/output.mp4",
+      "renderCache": { "quotaBytes": 1024 }
+    },
+    "messages": [],
+    "expectedErrorCode": "INVALID_INPUT"
+  },
+  {
+    "name": "a zero render cache quota is the caller's input",
+    "requestValid": false,
+    "request": {
+      "protocolVersion": 1,
+      "operation": "export",
+      "requestId": "a-zero-render-cache-quota-is-the-callers-input",
+      "project": {},
+      "assets": { "video": "/staging/video.mp4" },
+      "effects": [],
+      "startTicks": 0,
+      "endTicks": 120000,
+      "frameRate": { "num": 30, "den": 1 },
+      "includeAudio": false,
+      "videoCodec": "mpeg4-part2",
+      "audioCodec": "aac",
+      "output": "/staging/output.mp4",
+      "renderCache": { "directory": "/staging/render-cache", "quotaBytes": 0 }
+    },
+    "messages": [],
+    "expectedErrorCode": "INVALID_INPUT"
+  }
+]

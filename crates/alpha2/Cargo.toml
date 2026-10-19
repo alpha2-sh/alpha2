@@ -1,0 +1,46 @@
+[package]
+name = "alpha2"
+version.workspace = true
+description = "Facade crate for the standalone alpha2 media engine."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["video", "video-editing", "rendering", "timeline", "webgpu"]
+categories = ["multimedia::video", "rendering::engine", "graphics"]
+# Builds from its sources and license alone: tests, test-only modules, benches and fixtures
+# stay in the repository, which is where `cargo test` runs.
+include = [
+  "/src/**",
+  "/README.md",
+  "/LICENSE.md",
+  "!/src/**/tests.rs",
+  "!/src/**/*_tests.rs",
+  "!/src/**/tests/**",
+]
+
+[features]
+# The `wgpu` interop surface of every crate below: `alpha2::gpu::wgpu`, adopting or handing out
+# `wgpu` handles, rendering into a hardware encoder's planes. Documented only with this feature;
+# its semver follows wgpu's major. Off by default.
+wgpu-interop = ["alpha2-engine/wgpu-interop"]
+
+[dependencies]
+alpha2-audio.workspace = true
+alpha2-engine.workspace = true
+alpha2-gpu.workspace = true
+alpha2-media.workspace = true
+alpha2-model.workspace = true
+alpha2-render.workspace = true
+alpha2-time.workspace = true
+
+[dev-dependencies]
+alpha2-gpu = { workspace = true, features = ["serial-acquisition"] }
+pollster.workspace = true
+
+[lints]
+workspace = true
+
+[[test]]
+name = "wgpu_reexport"
+required-features = ["wgpu-interop"]

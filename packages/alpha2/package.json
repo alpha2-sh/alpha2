@@ -1,0 +1,166 @@
+{
+  "name": "alpha2",
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "JavaScript bindings for the standalone alpha2 media engine.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/alpha2-sh/alpha2.git",
+    "directory": "packages/alpha2"
+  },
+  "homepage": "https://github.com/alpha2-sh/alpha2#readme",
+  "bugs": {
+    "url": "https://github.com/alpha2-sh/alpha2/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "sideEffects": [
+    "./dist/audio-worklet-processor.js"
+  ],
+  "scripts": {
+    "build": "npm run build:wasm && npm run build:js",
+    "build:js": "rm -rf dist && tsc -p tsconfig.json",
+    "build:wasm": "node scripts/build-wasm.mjs"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./player": {
+      "types": "./dist/player.d.ts",
+      "import": "./dist/player.js"
+    },
+    "./project": {
+      "types": "./dist/project.d.ts",
+      "import": "./dist/project.js"
+    },
+    "./exporter": {
+      "types": "./dist/exporter.d.ts",
+      "import": "./dist/exporter.js"
+    },
+    "./export-destination": {
+      "types": "./dist/export-destination.d.ts",
+      "import": "./dist/export-destination.js"
+    },
+    "./export-retry": {
+      "types": "./dist/export-retry.d.ts",
+      "import": "./dist/export-retry.js"
+    },
+    "./export-failure": {
+      "types": "./dist/export-failure.d.ts",
+      "import": "./dist/export-failure.js"
+    },
+    "./frame-supply": {
+      "types": "./dist/frame-supply.d.ts",
+      "import": "./dist/frame-supply.js"
+    },
+    "./assets": {
+      "types": "./dist/assets.d.ts",
+      "import": "./dist/assets.js"
+    },
+    "./extensions": {
+      "types": "./dist/extensions.d.ts",
+      "import": "./dist/extensions.js"
+    },
+    "./hdr-frames": {
+      "types": "./dist/hdr-frames.d.ts",
+      "import": "./dist/hdr-frames.js"
+    },
+    "./loudness": {
+      "types": "./dist/loudness.d.ts",
+      "import": "./dist/loudness.js"
+    },
+    "./media": {
+      "types": "./dist/media.d.ts",
+      "import": "./dist/media.js"
+    },
+    "./text": {
+      "types": "./dist/text.d.ts",
+      "import": "./dist/text.js"
+    },
+    "./rate-control": {
+      "types": "./dist/rate-control.d.ts",
+      "import": "./dist/rate-control.js"
+    },
+    "./robustness": {
+      "types": "./dist/robustness.d.ts",
+      "import": "./dist/robustness.js"
+    },
+    "./mediabunny": {
+      "types": "./dist/mediabunny.d.ts",
+      "import": "./dist/mediabunny.js"
+    },
+    "./audio-worklet": {
+      "types": "./dist/audio-worklet.d.ts",
+      "import": "./dist/audio-worklet.js"
+    },
+    "./audio-worklet-processor": {
+      "types": "./dist/audio-worklet-processor.d.ts",
+      "import": "./dist/audio-worklet-processor.js"
+    },
+    "./audio": {
+      "types": "./dist/audio.d.ts",
+      "import": "./dist/audio.js"
+    },
+    "./audio-timeline": {
+      "types": "./dist/audio-timeline.d.ts",
+      "import": "./dist/audio-timeline.js"
+    },
+    "./audio-worker": {
+      "types": "./dist/audio-worker.d.ts",
+      "import": "./dist/audio-worker.js"
+    },
+    "./builder": {
+      "types": "./dist/builder.d.ts",
+      "import": "./dist/builder.js"
+    },
+    "./captions": {
+      "types": "./dist/captions.d.ts",
+      "import": "./dist/captions.js"
+    },
+    "./edit": {
+      "types": "./dist/edit.d.ts",
+      "import": "./dist/edit.js"
+    },
+    "./effects": {
+      "types": "./dist/effects.d.ts",
+      "import": "./dist/effects.js"
+    },
+    "./waveform": {
+      "types": "./dist/waveform.d.ts",
+      "import": "./dist/waveform.js"
+    },
+    "./video-frames": {
+      "types": "./dist/video-frames.d.ts",
+      "import": "./dist/video-frames.js"
+    },
+    "./worker": {
+      "types": "./dist/worker.d.ts",
+      "import": "./dist/worker.js"
+    },
+    "./wasm": {
+      "types": "./wasm/alpha2_wasm.d.ts",
+      "import": "./wasm/alpha2_wasm.js"
+    },
+    "./wasm/alpha2_wasm_bg.wasm": "./wasm/alpha2_wasm_bg.wasm",
+    "./wasm/alpha2_audio_worklet.wasm": "./wasm/alpha2_audio_worklet.wasm",
+    "./extensions-wasm": {
+      "types": "./wasm/alpha2_extensions.d.ts",
+      "import": "./wasm/alpha2_extensions.js"
+    },
+    "./wasm/alpha2_extensions_bg.wasm": "./wasm/alpha2_extensions_bg.wasm"
+  },
+  "files": [
+    "dist",
+    "wasm",
+    "README.md",
+    "LICENSE.md",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "optionalDependencies": {
+    "mediabunny": "1.56.2"
+  }
+}

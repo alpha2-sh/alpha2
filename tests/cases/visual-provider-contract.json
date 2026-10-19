@@ -1,0 +1,891 @@
+{
+  "$comment": "The visual extension provider contract (tests/provider_contract/src/visual.rs): each case's input (a file under tests/, text, or base64), and what the providers, registered as a host registers them (SVG, animated images, Lottie, OpenEXR), conclude: which provider claims it, what probing concludes ('ok', 'none' for no provider, or the refusal's kind: 'too large', 'malformed', 'unsupported'), what opening the source the probe describes concludes, its size and frame count, and each render's size (or refusal) for a frame (past the last, the last) and a size to fit ([0, 0] for its own). The native providers (cargo test -p alpha2-provider-contract) and the browser module (npm run test:wasm-browser, extension-provider-contract) reach these conclusions alike.",
+  "cases": [
+    {
+      "name": "an SVG of text and shapes",
+      "file": "corpus/extensions/label.svg",
+      "frames": 1,
+      "open": "ok",
+      "probe": "ok",
+      "provider": "svg",
+      "renders": [
+        {
+          "fit": [
+            0,
+            0
+          ],
+          "frame": 0,
+          "size": [
+            64,
+            24
+          ]
+        },
+        {
+          "fit": [
+            256,
+            256
+          ],
+          "frame": 0,
+          "size": [
+            256,
+            96
+          ]
+        },
+        {
+          "fit": [
+            97,
+            61
+          ],
+          "frame": 1000000,
+          "size": [
+            97,
+            36
+          ]
+        }
+      ],
+      "size": [
+        64,
+        24
+      ]
+    },
+    {
+      "name": "an SVG of shapes",
+      "file": "corpus/extensions/shapes.svg",
+      "frames": 1,
+      "open": "ok",
+      "probe": "ok",
+      "provider": "svg",
+      "renders": [
+        {
+          "fit": [
+            0,
+            0
+          ],
+          "frame": 0,
+          "size": [
+            64,
+            32
+          ]
+        },
+        {
+          "fit": [
+            256,
+            256
+          ],
+          "frame": 0,
+          "size": [
+            256,
+            128
+          ]
+        },
+        {
+          "fit": [
+            97,
+            61
+          ],
+          "frame": 1000000,
+          "size": [
+            97,
+            49
+          ]
+        }
+      ],
+      "size": [
+        64,
+        32
+      ]
+    },
+    {
+      "name": "a GIF",
+      "file": "corpus/extensions/animation.gif",
+      "frames": 4,
+      "open": "ok",
+      "probe": "ok",
+      "provider": "animated-image",
+      "renders": [
+        {
+          "fit": [
+            0,
+            0
+          ],
+          "frame": 0,
+          "size": [
+            48,
+            32
+          ]
+        },
+        {
+          "fit": [
+            256,
+            256
+          ],
+          "frame": 0,
+          "size": [
+            48,
+            32
+          ]
+        },
+        {
+          "fit": [
+            97,
+            61
+          ],
+          "frame": 1000000,
+          "size": [
+            48,
+            32
+          ]
+        }
+      ],
+      "size": [
+        48,
+        32
+      ]
+    },
+    {
+      "name": "an APNG",
+      "file": "corpus/extensions/animation.png",
+      "frames": 4,
+      "open": "ok",
+      "probe": "ok",
+      "provider": "animated-image",
+      "renders": [
+        {
+          "fit": [
+            0,
+            0
+          ],
+          "frame": 0,
+          "size": [
+            48,
+            32
+          ]
+        },
+        {
+          "fit": [
+            256,
+            256
+          ],
+          "frame": 0,
+          "size": [
+            48,
+            32
+          ]
+        },
+        {
+          "fit": [
+            97,
+            61
+          ],
+          "frame": 1000000,
+          "size": [
+            48,
+            32
+          ]
+        }
+      ],
+      "size": [
+        48,
+        32
+      ]
+    },
+    {
+      "name": "an animated WebP",
+      "file": "corpus/extensions/animation.webp",
+      "frames": 4,
+      "open": "ok",
+      "probe": "ok",
+      "provider": "animated-image",
+      "renders": [
+        {
+          "fit": [
+            0,
+            0
+          ],
+          "frame": 0,
+          "size": [
+            48,
+            32
+          ]
+        },
+        {
+          "fit": [
+            256,
+            256
+          ],
+          "frame": 0,
+          "size": [
+            48,
+            32
+          ]
+        },
+        {
+          "fit": [
+            97,
+            61
+          ],
+          "frame": 1000000,
+          "size": [
+            48,
+            32
+          ]
+        }
+      ],
+      "size": [
+        48,
+        32
+      ]
+    },
+    {
+      "name": "a lossy animated WebP",
+      "file": "corpus/extensions/lossy.webp",
+      "frames": 4,
+      "open": "ok",
+      "probe": "ok",
+      "provider": "animated-image",
+      "renders": [
+        {
+          "fit": [
+            0,
+            0
+          ],
+          "frame": 0,
+          "size": [
+            48,
+            32
+          ]
+        },
+        {
+          "fit": [
+            256,
+            256
+          ],
+          "frame": 0,
+          "size": [
+            48,
+            32
+          ]
+        },
+        {
+          "fit": [
+            97,
+            61
+          ],
+          "frame": 1000000,
+          "size": [
+            48,
+            32
+          ]
+        }
+      ],
+      "size": [
+        48,
+        32
+      ]
+    },
+    {
+      "name": "a still PNG, no animated image's",
+      "file": "corpus/extensions/sequence_0007.png",
+      "probe": "none"
+    },
+    {
+      "name": "a Lottie animation",
+      "file": "corpus/extensions/moving.json",
+      "frames": 10,
+      "open": "ok",
+      "probe": "ok",
+      "provider": "lottie",
+      "renders": [
+        {
+          "fit": [
+            0,
+            0
+          ],
+          "frame": 0,
+          "size": [
+            64,
+            48
+          ]
+        },
+        {
+          "fit": [
+            256,
+            256
+          ],
+          "frame": 0,
+          "size": [
+            256,
+            192
+          ]
+        },
+        {
+          "fit": [
+            97,
+            61
+          ],
+          "frame": 1000000,
+          "size": [
+            81,
+            61
+          ]
+        }
+      ],
+      "size": [
+        64,
+        48
+      ]
+    },
+    {
+      "name": "a Lottie animation with a split position",
+      "file": "corpus/extensions/split.json",
+      "probe": "unsupported",
+      "provider": "lottie"
+    },
+    {
+      "name": "a Lottie animation with what the backend does not draw",
+      "file": "corpus/extensions/unsupported.json",
+      "frames": 10,
+      "open": "ok",
+      "probe": "ok",
+      "provider": "lottie",
+      "renders": [
+        {
+          "fit": [
+            0,
+            0
+          ],
+          "frame": 0,
+          "size": [
+            64,
+            48
+          ]
+        },
+        {
+          "fit": [
+            256,
+            256
+          ],
+          "frame": 0,
+          "size": [
+            256,
+            192
+          ]
+        },
+        {
+          "fit": [
+            97,
+            61
+          ],
+          "frame": 1000000,
+          "size": [
+            81,
+            61
+          ]
+        }
+      ],
+      "size": [
+        64,
+        48
+      ]
+    },
+    {
+      "name": "a dotLottie package of two animations",
+      "file": "corpus/extensions/pair.lottie",
+      "frames": 10,
+      "open": "ok",
+      "probe": "ok",
+      "provider": "lottie",
+      "renders": [
+        {
+          "fit": [
+            0,
+            0
+          ],
+          "frame": 0,
+          "size": [
+            64,
+            48
+          ]
+        },
+        {
+          "fit": [
+            256,
+            256
+          ],
+          "frame": 0,
+          "size": [
+            256,
+            192
+          ]
+        },
+        {
+          "fit": [
+            97,
+            61
+          ],
+          "frame": 1000000,
+          "size": [
+            81,
+            61
+          ]
+        }
+      ],
+      "size": [
+        64,
+        48
+      ]
+    },
+    {
+      "name": "a dotLottie package whose first animation is refused",
+      "file": "corpus/extensions/first-refused.lottie",
+      "frames": 10,
+      "open": "ok",
+      "probe": "ok",
+      "provider": "lottie",
+      "renders": [
+        {
+          "fit": [
+            0,
+            0
+          ],
+          "frame": 0,
+          "size": [
+            64,
+            48
+          ]
+        },
+        {
+          "fit": [
+            256,
+            256
+          ],
+          "frame": 0,
+          "size": [
+            256,
+            192
+          ]
+        },
+        {
+          "fit": [
+            97,
+            61
+          ],
+          "frame": 1000000,
+          "size": [
+            81,
+            61
+          ]
+        }
+      ],
+      "size": [
+        64,
+        48
+      ]
+    },
+    {
+      "name": "an OpenEXR image in floats",
+      "file": "corpus/extensions/float.exr",
+      "frames": 1,
+      "open": "ok",
+      "probe": "ok",
+      "provider": "exr",
+      "renders": [
+        {
+          "fit": [
+            0,
+            0
+          ],
+          "frame": 0,
+          "size": [
+            4,
+            2
+          ]
+        },
+        {
+          "fit": [
+            256,
+            256
+          ],
+          "frame": 0,
+          "size": [
+            4,
+            2
+          ]
+        },
+        {
+          "fit": [
+            97,
+            61
+          ],
+          "frame": 1000000,
+          "size": [
+            4,
+            2
+          ]
+        }
+      ],
+      "size": [
+        4,
+        2
+      ]
+    },
+    {
+      "name": "an OpenEXR image in halves",
+      "file": "corpus/extensions/half.exr",
+      "frames": 1,
+      "open": "ok",
+      "probe": "ok",
+      "provider": "exr",
+      "renders": [
+        {
+          "fit": [
+            0,
+            0
+          ],
+          "frame": 0,
+          "size": [
+            4,
+            2
+          ]
+        },
+        {
+          "fit": [
+            256,
+            256
+          ],
+          "frame": 0,
+          "size": [
+            4,
+            2
+          ]
+        },
+        {
+          "fit": [
+            97,
+            61
+          ],
+          "frame": 1000000,
+          "size": [
+            4,
+            2
+          ]
+        }
+      ],
+      "size": [
+        4,
+        2
+      ]
+    },
+    {
+      "name": "an OpenEXR image with samples that are not numbers",
+      "file": "corpus/extensions/nonfinite.exr",
+      "frames": 1,
+      "open": "ok",
+      "probe": "ok",
+      "provider": "exr",
+      "renders": [
+        {
+          "fit": [
+            0,
+            0
+          ],
+          "frame": 0,
+          "size": [
+            2,
+            1
+          ]
+        },
+        {
+          "fit": [
+            256,
+            256
+          ],
+          "frame": 0,
+          "size": [
+            2,
+            1
+          ]
+        },
+        {
+          "fit": [
+            97,
+            61
+          ],
+          "frame": 1000000,
+          "size": [
+            2,
+            1
+          ]
+        }
+      ],
+      "size": [
+        2,
+        1
+      ]
+    },
+    {
+      "name": "an OpenEXR image whose data window is part of its display window",
+      "file": "corpus/extensions/window.exr",
+      "frames": 1,
+      "open": "ok",
+      "probe": "ok",
+      "provider": "exr",
+      "renders": [
+        {
+          "fit": [
+            0,
+            0
+          ],
+          "frame": 0,
+          "size": [
+            4,
+            3
+          ]
+        },
+        {
+          "fit": [
+            256,
+            256
+          ],
+          "frame": 0,
+          "size": [
+            4,
+            3
+          ]
+        },
+        {
+          "fit": [
+            97,
+            61
+          ],
+          "frame": 1000000,
+          "size": [
+            4,
+            3
+          ]
+        }
+      ],
+      "size": [
+        4,
+        3
+      ]
+    },
+    {
+      "name": "an SVG filter that would run for hours",
+      "text": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1920\" height=\"1080\"><filter id=\"f\" x=\"0\" y=\"0\" width=\"1\" height=\"1\"><feMorphology operator=\"dilate\" radius=\"400\"/></filter><rect width=\"1920\" height=\"1080\" fill=\"red\" filter=\"url(#f)\"/></svg>",
+      "probe": "too large",
+      "provider": "svg"
+    },
+    {
+      "name": "an SVG nested deeper than its parsers' stack",
+      "text": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"64\" height=\"64\"><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><rect width=\"8\" height=\"8\"/></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></svg>",
+      "probe": "too large",
+      "provider": "svg"
+    },
+    {
+      "name": "an SVG nested as deep as it may be",
+      "text": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"64\" height=\"64\"><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><g><rect width=\"8\" height=\"8\"/></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></g></svg>",
+      "frames": 1,
+      "open": "ok",
+      "probe": "ok",
+      "provider": "svg",
+      "renders": [
+        {
+          "fit": [
+            0,
+            0
+          ],
+          "frame": 0,
+          "size": [
+            64,
+            64
+          ]
+        },
+        {
+          "fit": [
+            256,
+            256
+          ],
+          "frame": 0,
+          "size": [
+            256,
+            256
+          ]
+        },
+        {
+          "fit": [
+            97,
+            61
+          ],
+          "frame": 1000000,
+          "size": [
+            61,
+            61
+          ]
+        }
+      ],
+      "size": [
+        64,
+        64
+      ]
+    },
+    {
+      "name": "an SVG triangle a billion units tall",
+      "text": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 16 16\"><path d=\"M 10 6 L 6 13 L 14 14 L 1 -1e9 z\"/></svg>",
+      "probe": "too large",
+      "provider": "svg"
+    },
+    {
+      "name": "an SVG drawn larger than its own reach allows",
+      "text": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\"><path d=\"M 0 0 L 20000 8 L 0 16 Z\"/></svg>",
+      "frames": 1,
+      "open": "ok",
+      "probe": "ok",
+      "provider": "svg",
+      "renders": [
+        {
+          "fit": [
+            0,
+            0
+          ],
+          "frame": 0,
+          "size": [
+            16,
+            16
+          ]
+        },
+        {
+          "fit": [
+            256,
+            256
+          ],
+          "frame": 0,
+          "refused": "too large"
+        }
+      ],
+      "size": [
+        16,
+        16
+      ]
+    },
+    {
+      "name": "an SVG icon whose arc ends 1.8e31 away",
+      "text": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"22\" height=\"22\"><path d=\"M 16.5 14 A 2.4999914 2.4999914 0 0 0 14 16.5 A 2.4999914 2.4999914 0 0 0 14.416016 17.81e30 L 15.148438 17.144531 Z\"/></svg>",
+      "probe": "too large",
+      "provider": "svg"
+    },
+    {
+      "name": "an SVG marker copied past a million elements",
+      "text": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"64\" height=\"64\"><marker id=\"m\" markerWidth=\"5\" markerHeight=\"5\"><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/><rect/></marker><path d=\"M 0 0 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1 L 1 1\" stroke=\"red\" marker-mid=\"url(#m)\"/></svg>",
+      "probe": "too large",
+      "provider": "svg"
+    },
+    {
+      "name": "a Lottie shape whose type is a number",
+      "text": "{\"v\":\"5.7.4\",\"fr\":10,\"ip\":0,\"op\":10,\"w\":64,\"h\":48,\"nm\":\"moving box\",\"ddd\":0,\"assets\":[],\"layers\":[{\"ddd\":0,\"ind\":1,\"ty\":4,\"nm\":\"box\",\"sr\":1,\"ks\":{\"o\":{\"a\":0,\"k\":100},\"r\":{\"a\":0,\"k\":0},\"p\":{\"a\":1,\"k\":[{\"t\":0,\"s\":[16,24,0],\"i\":{\"x\":[1],\"y\":[1]},\"o\":{\"x\":[0],\"y\":[0]}},{\"t\":10,\"s\":[48,24,0]}]},\"a\":{\"a\":0,\"k\":[0,0,0]},\"s\":{\"a\":0,\"k\":[100,100,100]}},\"ao\":0,\"shapes\":[{\"ty\":\"gr\",\"nm\":\"group\",\"it\":[{\"ty\":\"rc\",\"nm\":\"rect\",\"d\":1,\"s\":{\"a\":0,\"k\":[16,16]},\"p\":{\"a\":0,\"k\":[0,0]},\"r\":{\"a\":0,\"k\":0}},{\"ty\":\"fl\",\"nm\":\"fill\",\"c\":{\"a\":0,\"k\":[1,0,0,1]},\"o\":{\"a\":0,\"k\":100},\"r\":1},{\"ty\":\"gr\",\"nm\":\"inner\",\"it\":[{\"ty\":7,\"nm\":\"repeat\",\"c\":{\"a\":0,\"k\":1000000},\"o\":{\"a\":0,\"k\":0},\"m\":1,\"tr\":{\"ty\":\"tr\",\"p\":{\"a\":0,\"k\":[1,0]},\"a\":{\"a\":0,\"k\":[0,0]},\"s\":{\"a\":0,\"k\":[100,100]},\"r\":{\"a\":0,\"k\":0},\"so\":{\"a\":0,\"k\":100},\"eo\":{\"a\":0,\"k\":100}}}]},{\"ty\":\"tr\",\"p\":{\"a\":0,\"k\":[0,0]},\"a\":{\"a\":0,\"k\":[0,0]},\"s\":{\"a\":0,\"k\":[100,100]},\"r\":{\"a\":0,\"k\":0},\"o\":{\"a\":0,\"k\":100}}]}],\"ip\":0,\"op\":10,\"st\":0,\"bm\":0}]}",
+      "probe": "malformed",
+      "provider": "lottie"
+    },
+    {
+      "name": "a Lottie animation that paints 300 canvases a frame",
+      "text": "{\"v\":\"5.7.4\",\"fr\":10,\"ip\":0,\"op\":10,\"w\":64,\"h\":48,\"nm\":\"moving box\",\"ddd\":0,\"assets\":[],\"layers\":[{\"ddd\":0,\"ind\":1,\"ty\":4,\"nm\":\"box\",\"sr\":1,\"ks\":{\"o\":{\"a\":0,\"k\":100},\"r\":{\"a\":0,\"k\":0},\"p\":{\"a\":1,\"k\":[{\"t\":0,\"s\":[16,24,0],\"i\":{\"x\":[1],\"y\":[1]},\"o\":{\"x\":[0],\"y\":[0]}},{\"t\":10,\"s\":[48,24,0]}]},\"a\":{\"a\":0,\"k\":[0,0,0]},\"s\":{\"a\":0,\"k\":[100,100,100]}},\"ao\":0,\"shapes\":[{\"ty\":\"gr\",\"nm\":\"group\",\"it\":[{\"ty\":\"rc\",\"nm\":\"rect\",\"d\":1,\"s\":{\"a\":0,\"k\":[64,48]},\"p\":{\"a\":0,\"k\":[0,0]},\"r\":{\"a\":0,\"k\":0}},{\"ty\":\"fl\",\"nm\":\"fill\",\"c\":{\"a\":0,\"k\":[1,0,0,1]},\"o\":{\"a\":0,\"k\":50},\"r\":1},{\"ty\":\"rp\",\"nm\":\"repeat\",\"c\":{\"a\":0,\"k\":300},\"o\":{\"a\":0,\"k\":0},\"m\":1,\"tr\":{\"ty\":\"tr\",\"p\":{\"a\":0,\"k\":[0,0]},\"a\":{\"a\":0,\"k\":[0,0]},\"s\":{\"a\":0,\"k\":[100,100]},\"r\":{\"a\":0,\"k\":0},\"so\":{\"a\":0,\"k\":100},\"eo\":{\"a\":0,\"k\":100}}},{\"ty\":\"tr\",\"p\":{\"a\":0,\"k\":[0,0]},\"a\":{\"a\":0,\"k\":[0,0]},\"s\":{\"a\":0,\"k\":[100,100]},\"r\":{\"a\":0,\"k\":0},\"o\":{\"a\":0,\"k\":100}}]}],\"ip\":0,\"op\":10,\"st\":0,\"bm\":0}]}",
+      "probe": "too large",
+      "provider": "lottie"
+    },
+    {
+      "name": "a Lottie shape scaled a hundred-million-fold",
+      "text": "{\"v\":\"5.7.4\",\"fr\":10,\"ip\":0,\"op\":10,\"w\":64,\"h\":48,\"nm\":\"moving box\",\"ddd\":0,\"assets\":[],\"layers\":[{\"ddd\":0,\"ind\":1,\"ty\":4,\"nm\":\"box\",\"sr\":1,\"ks\":{\"o\":{\"a\":0,\"k\":100},\"r\":{\"a\":0,\"k\":0},\"p\":{\"a\":1,\"k\":[{\"t\":0,\"s\":[16,24,0],\"i\":{\"x\":[1],\"y\":[1]},\"o\":{\"x\":[0],\"y\":[0]}},{\"t\":10,\"s\":[48,24,0]}]},\"a\":{\"a\":0,\"k\":[0,0,0]},\"s\":{\"a\":0,\"k\":[100,100,100]}},\"ao\":0,\"shapes\":[{\"ty\":\"gr\",\"nm\":\"group\",\"it\":[{\"ty\":\"rc\",\"nm\":\"rect\",\"d\":1,\"s\":{\"a\":0,\"k\":[1000,1000]},\"p\":{\"a\":0,\"k\":[0,0]},\"r\":{\"a\":0,\"k\":0}},{\"ty\":\"fl\",\"nm\":\"fill\",\"c\":{\"a\":0,\"k\":[1,0,0,1]},\"o\":{\"a\":0,\"k\":100},\"r\":1},{\"ty\":\"tr\",\"p\":{\"a\":0,\"k\":[0,0]},\"a\":{\"a\":0,\"k\":[0,0]},\"s\":{\"a\":0,\"k\":[100,100000000.0]},\"r\":{\"a\":0,\"k\":0},\"o\":{\"a\":0,\"k\":100}}]}],\"ip\":0,\"op\":10,\"st\":0,\"bm\":0}]}",
+      "frames": 10,
+      "open": "ok",
+      "probe": "ok",
+      "provider": "lottie",
+      "renders": [
+        {
+          "fit": [
+            0,
+            0
+          ],
+          "frame": 0,
+          "size": [
+            64,
+            48
+          ]
+        },
+        {
+          "fit": [
+            1920,
+            1080
+          ],
+          "frame": 5,
+          "size": [
+            1440,
+            1080
+          ]
+        }
+      ],
+      "size": [
+        64,
+        48
+      ]
+    },
+    {
+      "name": "a Lottie repeater whose copies grow by a tenth each",
+      "text": "{\"v\":\"5.7.4\",\"fr\":10,\"ip\":0,\"op\":10,\"w\":64,\"h\":48,\"nm\":\"moving box\",\"ddd\":0,\"assets\":[],\"layers\":[{\"ddd\":0,\"ind\":1,\"ty\":4,\"nm\":\"box\",\"sr\":1,\"ks\":{\"o\":{\"a\":0,\"k\":100},\"r\":{\"a\":0,\"k\":0},\"p\":{\"a\":1,\"k\":[{\"t\":0,\"s\":[16,24,0],\"i\":{\"x\":[1],\"y\":[1]},\"o\":{\"x\":[0],\"y\":[0]}},{\"t\":10,\"s\":[48,24,0]}]},\"a\":{\"a\":0,\"k\":[0,0,0]},\"s\":{\"a\":0,\"k\":[100,100,100]}},\"ao\":0,\"shapes\":[{\"ty\":\"gr\",\"nm\":\"group\",\"it\":[{\"ty\":\"rc\",\"nm\":\"rect\",\"d\":1,\"s\":{\"a\":0,\"k\":[16,16]},\"p\":{\"a\":0,\"k\":[0,0]},\"r\":{\"a\":0,\"k\":0}},{\"ty\":\"fl\",\"nm\":\"fill\",\"c\":{\"a\":0,\"k\":[1,0,0,1]},\"o\":{\"a\":0,\"k\":100},\"r\":1},{\"ty\":\"rp\",\"nm\":\"repeat\",\"c\":{\"a\":0,\"k\":200},\"o\":{\"a\":0,\"k\":0},\"m\":1,\"tr\":{\"ty\":\"tr\",\"p\":{\"a\":0,\"k\":[0,0]},\"a\":{\"a\":0,\"k\":[0,0]},\"s\":{\"a\":0,\"k\":[100,110]},\"r\":{\"a\":0,\"k\":0},\"so\":{\"a\":0,\"k\":100},\"eo\":{\"a\":0,\"k\":100}}},{\"ty\":\"tr\",\"p\":{\"a\":0,\"k\":[0,0]},\"a\":{\"a\":0,\"k\":[0,0]},\"s\":{\"a\":0,\"k\":[100,100]},\"r\":{\"a\":0,\"k\":0},\"o\":{\"a\":0,\"k\":100}}]}],\"ip\":0,\"op\":10,\"st\":0,\"bm\":0}]}",
+      "frames": 10,
+      "open": "ok",
+      "probe": "ok",
+      "provider": "lottie",
+      "renders": [
+        {
+          "fit": [
+            0,
+            0
+          ],
+          "frame": 0,
+          "size": [
+            64,
+            48
+          ]
+        },
+        {
+          "fit": [
+            1920,
+            1080
+          ],
+          "frame": 9,
+          "size": [
+            1440,
+            1080
+          ]
+        }
+      ],
+      "size": [
+        64,
+        48
+      ]
+    },
+    {
+      "name": "a dotLottie package of end records that describe no directory",
+      "base64": "UEsDBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAAUEsFBgAAAAABAAEAAAAAAAAAAAAAAFBLBQYAAAAAAQABAAAAAAAAAAAAAABQSwUGAAAAAAEAAQAAAAAAAAAAAAAA",
+      "probe": "malformed",
+      "provider": "lottie"
+    },
+    {
+      "name": "an OpenEXR header with a second channel list",
+      "base64": "di8xAQIAAABjaGFubmVscwBjaGxpc3QASQAAAEEAAgAAAAAAAAABAAAAAQAAAEIAAgAAAAAAAAABAAAAAQAAAEcAAgAAAAAAAAABAAAAAQAAAFIAAgAAAAAAAAABAAAAAQAAAABjb21wcmFubmVsc2xzAGNobGlzdABJAAAAQQACAAAAAAAAAAEAAAACAAAAQgACAAAAAAAAAAEAAAABAAAARwACAAAAAAAAAAEAAAABAAAAUgACAAAAAAAAAAEAAAABAAAAAGNvbXByYW5uZWxzAGNobGlzdABJAAAAQQACAAAAAAAAAAEAAABCAAEAAAACAAAAAAAAAAEAAAABAAAARwACAAAAAAAAAAEAAAABAAAAUgACAAAAAAAAAAEAAAABAAAAAGNvbXByZXNzaW9uAGNvbXByZXNzaW9uAAEAAAAAZGF0YVdpbmRvdwBib3gyaQAQAAAAAAAAAAAAAAADAAAAAQAAAGRpc3BsYXlXaW4AY2hsaXN0AEkAAABBAAIAAAAAAAAAAQAAAAEAAABCAAIAAAAAAAAAAQAAAAEAAABHAAIAAAAAAAAAAQAAAAEAAABSAAIAAAAAAAAAAQAAAAEAAAAAY29tcHJlc3Npb24AY29tcHJlc3Npb24AAQAAAABkYXRhV2luZG93AGJveDJpABAAAAAAAAAAAAAAAAMAAAABAAAAZGlzcGxheVdpbmRvdwBib3gyaQAQAAAAAAAAAAAAAAADAAAAAQAAAAAAAQAAAAAAAABsaW4AAEEAAgAAAAAAAAA/AABZ////ZGF0YVc=",
+      "probe": "malformed",
+      "provider": "exr"
+    },
+    {
+      "name": "an OpenEXR channel list behind an attribute type that starts with a null byte",
+      "base64": "di8xAQIAAABjaGFubmVscwBjaGxpc3QANwAAAEIAAgAAAAAAAAABAAAAAQAAAEcAAgAAAAAAAAABAAAAAQAAAFIAAgAAAAAAAAABAAAAAQAAAABjb21pcmVzc2lvAAAAAAAAAGRpaGFufmV3AGJveDJpABAAAAAAAAAAAAAAAAEAMS92AAAAZGlzcGxheVdpbmRvdwBib3gyaQAQAAAAAAAAAAAAAAABbgABAAAAAGRhdGFXaW5kb3cAYm94MmkAEAAAAAAAAAAAAAAAAQAAAAAAAABkaXNwbGF5V2luZG93AGJveDJpABAAAAAAAAAAAP////4AAAAAAAAAbGluZU9yZGVyAGxpbmVPcmRlcgABAAAAAHBpeGVsxEFzcGVjdFJhdGlvAGZsb2F0AAQAAAAAAAAAV2lubm5lbHMAY2hsaXN0ADcAAABCAAIAAAAAAAAAAgAAAAEAAABH9f///wAAAAAAAQAAAAEAAABSAAIAAAAAAAAAAQAAAAEAAAAAY29tcHJlc3Npb24AY29tcHJlc3Npb24AAQAAAABkYXRhV2luZG93AGJveDJpABAAAAAAAAAAAAAAAAEAAAAAAAAAZGloYW5uZWxzAGNobGlzdAA3AAAAQgAAAAAAAAAAAAABbgABAAcAAGRhdGFXaW5kb3cAYm94PwBBAQAAAAAAPwAAgH8AAAA/AADAfwAAAD8AAAAAAAAAZGEAAGNoYW4AAAAAAAAAAEEAAQAAAAAAAGxpbmVPcmRlcgBsaW5lT29uAGNvbXI=",
+      "probe": "malformed",
+      "provider": "exr"
+    },
+    {
+      "name": "bytes no provider reads",
+      "text": "neither an image nor an animation",
+      "probe": "none"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+# Generated or vendored output.
+dist/
+packages/*/dist/
+packages/*/wasm/
+target/
+fuzz/target/
+node_modules/
+
+# Written by their own tools.
+package-lock.json
+
+# Fixtures and corpora are data shared with the Rust side, and the release manifests are generated;
+# their byte layout is not ours to restyle.
+tests/*
+!tests/fixtures/
+release/
+
+# Only JavaScript and TypeScript are formatted. Prose is wrapped by hand and the docs carry
+# hand-built tables, so Markdown and the remaining JSON stay as written even if someone runs
+# prettier over the whole tree.
+*.md
+*.json
