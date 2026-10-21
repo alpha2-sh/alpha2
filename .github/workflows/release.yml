@@ -1,16 +1,9 @@
 name: Release
 
-# A tag `v<version>` releases that version everywhere: the crates on crates.io, the npm packages on
-# npm, and the native archives on a GitHub Release, in that order. Every artifact is built and
-# checked before anything is published, since crates.io and npm keep what they receive (a version
-# can only be yanked or deprecated). A dispatch builds and checks the same artifacts and publishes
-# nothing unless it runs on a tag.
 on:
   workflow_dispatch:
     inputs:
       skip-validate:
-        # To try the packaging alone. A tag push always runs the whole gate, and a dispatch
-        # publishes nothing.
         description: Build the archives without running the CI gate first
         type: boolean
         default: false
@@ -22,18 +15,10 @@ permissions:
   contents: read
 
 jobs:
-  # The release gate is the CI workflow itself, every job of it, so it cannot drift from what CI
-  # checks: a copied subset once ran the GPU tests on a runner without a GPU driver and the npm
-  # layout check without the npm build, and could never pass. Its release-wasm job packs the npm
-  # tarballs that publish-npm publishes.
   validate:
     if: ${{ !inputs.skip-validate }}
     uses: ./.github/workflows/ci.yml
 
-  # One version for the tag, the Cargo workspace (and each crate's dependency on its siblings, in
-  # the root Cargo.toml's workspace.dependencies) and the npm packages (and their pins on each
-  # other), as `npm run version:set` writes them. It needs nothing built, so it runs beside the
-  # gate and a mismatch stops the release before the long jobs finish.
   version:
     runs-on: ubuntu-latest
     outputs:
@@ -43,7 +28,6 @@ jobs:
       - name: Match the tag, the crates and the npm packages to one version
         id: match
         run: |
-          # A failing jq or awk inside $(...) stops the step instead of reading as "no mismatch".
           shopt -s inherit_errexit
           section_values() {
             awk -v section="$1" -v pattern="$2" '
@@ -81,7 +65,6 @@ jobs:
   package:
     name: Package ${{ matrix.target }}
     needs: [validate, version]
-    # `always()` lets a skipped gate through, which only a dispatch's skip-validate can skip.
     if: >-
       ${{ always() && needs.version.result == 'success' &&
       (needs.validate.result == 'success' || (inputs.skip-validate && needs.validate.result == 'skipped')) }}
@@ -96,8 +79,6 @@ jobs:
             runner: ubuntu-24.04-arm
           - target: macos-arm64
             runner: macos-latest
-          # x86_64-pc-windows-msvc, the runner's default Rust target, built from Git Bash with the
-          # image's MSVC, LLVM and 7-Zip; no MSYS2.
           - target: win-x64
             runner: windows-latest
     defaults:
@@ -109,7 +90,6 @@ jobs:
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
 
-      # Lists the licenses of the crates each archive's programs are compiled from.
       - run: cargo install cargo-about --version 0.9.2 --locked --features cli
 
       - name: Install Linux packaging tools
@@ -120,8 +100,6 @@ jobs:
         if: startsWith(matrix.target, 'macos-')
         run: brew install pkg-config
 
-      # thin and bundled archives; win-x64 bundled only. Each bundled archive is smoke-run unpacked,
-      # with no loader environment.
       - name: Build native archives
         run: scripts/build-native-release.sh all "${{ matrix.target }}"
 
@@ -132,9 +110,6 @@ jobs:
           if-no-files-found: error
           path: target/alpha2-native-release/archives/*
 
-  # The publish jobs authenticate by trusted publishing (OIDC, a token that lasts the job); no
-  # registry token is stored. The `release` environment holds them for approval. A crate or package
-  # already at this version is skipped, so a failed job can be run again and finish the rest.
   publish-crates:
     name: Publish crates
     if: startsWith(github.ref, 'refs/tags/v')
@@ -146,8 +121,6 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      # `cargo publish` builds each crate from its package before uploading any, so it needs what
-      # validate builds with: the FFmpeg crates link the pinned SDK.
       - name: Install native media build dependencies
         run: >-
           sudo apt-get update && sudo apt-get install --yes
@@ -166,8 +139,6 @@ jobs:
           } >> "$GITHUB_ENV"
       - uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
         id: auth
-      # Every crate the workspace publishes (cargo orders them by dependency), less those whose
-      # version the crates.io index already lists.
       - name: Publish the crates not on crates.io at this version
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
@@ -208,8 +179,6 @@ jobs:
       contents: read
       id-token: write
     steps:
-      # The package list, in the order the workspace builds them (the engine before the packages
-      # pinned to it).
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           sparse-checkout: |
@@ -220,14 +189,11 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
-      # Trusted publishing needs npm 11.5.1 or later; Node 22 ships npm 10.
       - run: npm install --global npm@11.21.0
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: alpha2-npm-packages
           path: npm-packages
-      # The tarballs CI packed, as they are. `--access public` for the scoped packages' first
-      # publish; a prerelease goes to the `next` tag, never `latest`.
       - name: Publish the npm packages not on npm at this version
         env:
           VERSION: ${{ needs.version.outputs.version }}
@@ -236,10 +202,8 @@ jobs:
           if [[ "$VERSION" == *-* ]]; then dist_tag=next; fi
           for manifest in $(jq -r '.workspaces[] + "/package.json"' package.json); do
             name="$(jq -r .name "$manifest")"
-            # `./`: npm reads `npm-packages/<file>` as a GitHub `owner/repository` spec.
             tarball="./npm-packages/$(jq -r '.name | ltrimstr("@") | gsub("/"; "-")' "$manifest")-$VERSION.tgz"
             test -f "$tarball" || { echo "::error::no $tarball in the CI artifact"; exit 1; }
-            # Prints the version when npm has it, nothing (and an error) when it does not.
             if [[ -n "$(npm view "$name@$VERSION" version 2> /dev/null)" ]]; then
               echo "$name@$VERSION is on npm; skipped"
               continue
@@ -247,8 +211,6 @@ jobs:
             npm publish "$tarball" --provenance --access public --tag "$dist_tag"
           done
 
-  # Last, after both registries have the version: a failed publish leaves no release to point at
-  # packages that are not there.
   release:
     name: Publish GitHub release
     if: startsWith(github.ref, 'refs/tags/v')
@@ -257,8 +219,6 @@ jobs:
     permissions:
       contents: write
     steps:
-      # The FFmpeg SDK repository, release and version come from the lock file, the one place that
-      # names them.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           sparse-checkout: release/ffmpeg-lgpl/manifest.toml
@@ -275,8 +235,6 @@ jobs:
           test -n "$repository" && test -n "$release_tag" && test -n "$ffmpeg_version"
           echo "source_url=https://github.com/$repository/releases/download/$release_tag/ffmpeg-$ffmpeg_version.tar.xz" >> "$GITHUB_OUTPUT"
 
-      # Only the native archives: the CI gate uploads artifacts of its own (the npm packages, failed
-      # render goldens).
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: alpha2-native-*
