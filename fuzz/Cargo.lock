@@ -167,6 +167,8 @@ version = "0.1.0"
 dependencies = [
  "ab_glyph_rasterizer",
  "alpha2-media",
+ "libm",
+ "png",
  "rustybuzz",
  "unicode-bidi",
  "unicode-linebreak",
