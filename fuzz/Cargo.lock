@@ -34,7 +34,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "alpha2-audio"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "alpha2-media",
  "alpha2-time",
@@ -43,7 +43,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "alpha2-audio",
  "alpha2-eval",
@@ -63,7 +63,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-eval"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "alpha2-media",
  "alpha2-model",
@@ -72,7 +72,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-extensions"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "alpha2-model",
  "alpha2-time",
@@ -113,7 +113,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-gpu"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "web-time",
  "wgpu",
@@ -121,7 +121,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-media"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "alpha2-time",
  "bytes",
@@ -130,7 +130,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-model"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "alpha2-media",
  "alpha2-time",
@@ -141,7 +141,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-render"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "alpha2-gpu",
  "alpha2-media",
@@ -156,17 +156,19 @@ dependencies = [
 
 [[package]]
 name = "alpha2-shaders"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "wesl",
 ]
 
 [[package]]
 name = "alpha2-text"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ab_glyph_rasterizer",
  "alpha2-media",
+ "libm",
+ "png",
  "rustybuzz",
  "unicode-bidi",
  "unicode-linebreak",
@@ -176,7 +178,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-time"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
 ]

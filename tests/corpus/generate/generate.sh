@@ -13,6 +13,9 @@
 #   fonts       font-dejavu.sh, font-hangul.sh: the source fonts DEJAVU_SANS (DejaVuSans.ttf 2.37)
 #               and BLACK_HAN_SANS (BlackHanSans-Regular.ttf 1.001) and fontTools' pyftsubset, into
 #               tests/fonts.
+#   emoji-fonts font-emoji.sh, font-color.py: the source fonts NOTO_EMOJI_COLRV1 (Noto-COLRv1.ttf)
+#               and NOTO_EMOJI_CBDT (NotoColorEmoji.ttf) from noto-emoji v2.051 and fontTools'
+#               pyftsubset, into tests/fonts.
 #
 # Usage: generate.sh [--out DIR] [STEP...]
 #
@@ -36,8 +39,8 @@ fonts="$tests/fonts"
 named=("$@")
 for step in "${named[@]}"; do
   case "$step" in
-    media | recovery | extensions | fonts) ;;
-    *) echo "error: unknown step '$step' (media, recovery, extensions, fonts)" >&2; exit 2 ;;
+    media | recovery | extensions | fonts | emoji-fonts) ;;
+    *) echo "error: unknown step '$step' (media, recovery, extensions, fonts, emoji-fonts)" >&2; exit 2 ;;
   esac
 done
 
@@ -82,4 +85,9 @@ if wanted fonts "$([[ -n "${DEJAVU_SANS:-}" && -n "${BLACK_HAN_SANS:-}" ]] && co
   mkdir -p "$fonts"
   sh "$here/font-dejavu.sh" "$DEJAVU_SANS" "$fonts"
   sh "$here/font-hangul.sh" "$BLACK_HAN_SANS" "$fonts"
+fi
+
+if wanted emoji-fonts "$([[ -n "${NOTO_EMOJI_COLRV1:-}" && -n "${NOTO_EMOJI_CBDT:-}" ]] && command -v pyftsubset >/dev/null || echo 'NOTO_EMOJI_COLRV1, NOTO_EMOJI_CBDT and pyftsubset')"; then
+  mkdir -p "$fonts"
+  sh "$here/font-emoji.sh" "$NOTO_EMOJI_COLRV1" "$NOTO_EMOJI_CBDT" "$fonts"
 fi

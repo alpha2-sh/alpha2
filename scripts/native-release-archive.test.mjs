@@ -21,6 +21,10 @@ import test from "node:test";
 const root = resolve(import.meta.dirname, "..");
 const buildRelease = join(root, "scripts/build-native-release.sh");
 const smokeArchive = join(root, "release/ffmpeg-lgpl/smoke-archive.sh");
+// The archives are named after the workspace version.
+const version = readFileSync(join(root, "Cargo.toml"), "utf8").match(
+  /^version = "([^"]+)"$/m,
+)[1];
 
 function run(command, args, options = {}) {
   return spawnSync(command, args, { encoding: "utf8", ...options });
@@ -45,7 +49,7 @@ test("win-x64 releases the bundled archive only, the other targets thin and bund
   const windows = plan("all", "win-x64");
   assert.equal(windows.status, 0, windows.stderr);
   assert.deepEqual(windows.stdout.trim().split("\n"), [
-    "alpha2-0.1.0-win-x64-bundled.zip",
+    `alpha2-${version}-win-x64-bundled.zip`,
   ]);
 
   const thin = plan("thin", "win-x64");
@@ -56,8 +60,8 @@ test("win-x64 releases the bundled archive only, the other targets thin and bund
     const result = plan("all", target);
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(result.stdout.trim().split("\n"), [
-      `alpha2-0.1.0-${target}-thin.tar.gz`,
-      `alpha2-0.1.0-${target}-bundled.tar.gz`,
+      `alpha2-${version}-${target}-thin.tar.gz`,
+      `alpha2-${version}-${target}-bundled.tar.gz`,
     ]);
   }
 });
@@ -74,7 +78,7 @@ const elfFixtures =
 // libavdevice.so.62 needing libavfilter.so.11 with no RUNPATH of its own. `direct` makes the
 // executables need libavfilter themselves, so their RUNPATH reaches it.
 function elfBundle(scratch, target, { direct }) {
-  const name = `alpha2-0.1.0-${target}-bundled`;
+  const name = `alpha2-${version}-${target}-bundled`;
   const package_ = join(scratch, "build", name);
   const lib = join(package_, "lib");
   const bin = join(package_, "bin");
@@ -179,7 +183,7 @@ test(
       });
       // A loader environment pointing at the bundle's lib/ hides the gap when run directly.
       const hidden = run(
-        join(scratch, "build/alpha2-0.1.0-linux-x64-bundled/bin/alpha2"),
+        join(scratch, `build/alpha2-${version}-linux-x64-bundled/bin/alpha2`),
         [],
         {
           env: { ...process.env, LD_LIBRARY_PATH: lib },
@@ -555,7 +559,7 @@ function fakeMacRelease(scratch) {
       join(
         ws,
         "target/alpha2-native-release",
-        `alpha2-0.1.0-macos-arm64-${mode}/bin/${exe}.rpaths`,
+        `alpha2-${version}-macos-arm64-${mode}/bin/${exe}.rpaths`,
       ),
     )
       .trim()
@@ -565,7 +569,7 @@ function fakeMacRelease(scratch) {
       join(
         ws,
         "target/alpha2-native-release",
-        `alpha2-0.1.0-macos-arm64-${mode}/compliance/TOOLCHAIN.txt`,
+        `alpha2-${version}-macos-arm64-${mode}/compliance/TOOLCHAIN.txt`,
       ),
     );
   const crateLicenses = (mode) =>
@@ -573,7 +577,7 @@ function fakeMacRelease(scratch) {
       join(
         ws,
         "target/alpha2-native-release",
-        `alpha2-0.1.0-macos-arm64-${mode}/licenses/rust-crate-licenses.md`,
+        `alpha2-${version}-macos-arm64-${mode}/licenses/rust-crate-licenses.md`,
       ),
     );
   return { ws, env, rpaths, toolchain, crateLicenses };

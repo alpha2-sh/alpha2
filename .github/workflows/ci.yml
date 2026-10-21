@@ -1,13 +1,9 @@
 name: ci
 
-# Every job on every pull request and every push to main: the release calls this whole workflow as
-# its gate (release.yml), so a job a pull request skipped could first fail at a release. Pull requests from forks run with the read-only token and no secrets.
 on:
   pull_request:
   push:
-    branches: [main]
-  # A dispatch can name the jobs to run (job ids, comma-separated, e.g. `validate,browser`) to retry
-  # a few without paying for the macOS and Windows matrix; empty runs every job.
+    branches: [main, "prerelease-v*"]
   workflow_dispatch:
     inputs:
       jobs:
@@ -19,35 +15,28 @@ on:
 permissions:
   contents: read
 
-# Debug builds keep line tables only, and nothing incremental: validate builds the workspace several
-# ways into one target directory, which at full debug info outgrows a hosted runner's disk.
-# Backtraces still name files and lines.
 env:
   CARGO_INCREMENTAL: 0
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  # Pull requests restore the caches their base branch saved; saving from them would only fill the
+  # repository quota with caches no other run can read.
+  RUST_CACHE_SAVE: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/prerelease-v') }}
 
-# A new push to a pull request cancels its earlier run. Every other run has a group of its own, so
-# each push to main and each release finishes (a shared group would also drop a queued run).
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || format('ci-run-{0}', github.run_id) }}
   cancel-in-progress: true
 
 jobs:
-  validate:
-    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',validate,') }}
+  rust-checks:
+    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',rust-checks,') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      # This job builds the workspace several ways into one target directory, which outgrows the
-      # disk the image leaves free; the SDKs removed here are never used.
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL \
             /usr/local/share/boost
           df -h /
-      # `mesa-vulkan-drivers` is lavapipe: the engine frame tests need a GPU adapter, and it is also
-      # a Vulkan device without Vulkan Video, which the hardware-decode `auto` fallback must
-      # survive.
       - name: Install native media build dependencies
         run: >-
           sudo apt-get update && sudo apt-get install --yes
@@ -55,6 +44,10 @@ jobs:
           libswscale-dev libasound2-dev pkg-config clang mesa-vulkan-drivers
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: false
+          save-if: ${{ env.RUST_CACHE_SAVE }}
       - name: Pin the FFmpeg SDK that the hardware decode shim builds against
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
@@ -71,55 +64,138 @@ jobs:
       - run: npm ci
       - run: cargo fmt --check
       - run: npm run lint:rust
-      # `lint:rust` enables every feature; this lints the native binding as a plain decode/encode
-      # consumer gets it, without `timeline`.
       - run: cargo clippy -p alpha2-native --all-targets -- -D warnings
-      # The published schema and the TypeScript types generated from it match the Rust model
-      # (`npm run generate:schema`).
       - run: scripts/check-schema-fresh.sh
-      # --no-fail-fast: cargo test stops at the first failing test binary, which would hide every
-      # later crate's result.
-      - run: cargo test --workspace --all-features --no-fail-fast
-      - run: cargo test --workspace --no-default-features --no-fail-fast
       - run: scripts/check-extension-features.sh
-      # Each hardware and host feature of alpha2-host, alpha2-native and alpha2-native-gpu linted
-      # alone, as a consumer that enables only that one gets it.
       - run: scripts/check-native-features.sh
       - run: cargo bench -p alpha2-eval --bench timeline_evaluation
-      # Every benchmark still builds; their times are recorded, not gated. The allocation budgets
-      # run as ordinary tests above (`alpha2-alloc-budget`).
       - run: cargo bench --workspace --all-features --no-run
-      - run: cargo build -p alpha2-wasm --target wasm32-unknown-unknown
-      - run: cargo build -p alpha2-audio-worklet --target wasm32-unknown-unknown
-      - run: npm run test:audio-determinism
+
+  rust-tests:
+    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',rust-tests,') }}
+    name: Rust tests (--${{ matrix.features }})
+    strategy:
+      fail-fast: false
+      matrix:
+        features: [all-features, no-default-features]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/boost
+          df -h /
+      - name: Install native media build dependencies
+        run: >-
+          sudo apt-get update && sudo apt-get install --yes
+          libavcodec-dev libavformat-dev libavutil-dev libswresample-dev
+          libswscale-dev libasound2-dev pkg-config clang mesa-vulkan-drivers
+      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ${{ matrix.features }}
+          cache-bin: false
+          save-if: ${{ env.RUST_CACHE_SAVE }}
+      - name: Pin the FFmpeg SDK that the hardware decode shim builds against
+        run: |
+          sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
+          {
+            echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
+            echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
+            echo "FFMPEG_LINK_MODE=dynamic"
+            echo "LD_LIBRARY_PATH=$sdk_root/lib"
+          } >> "$GITHUB_ENV"
+      - run: cargo test --workspace --${{ matrix.features }} --no-fail-fast
+
+  js:
+    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',js,') }}
+    needs: release-wasm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install native media build dependencies
+        run: >-
+          sudo apt-get update && sudo apt-get install --yes
+          libavcodec-dev libavformat-dev libavutil-dev libswresample-dev
+          libswscale-dev libasound2-dev pkg-config clang mesa-vulkan-drivers
+      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: false
+          save-if: ${{ env.RUST_CACHE_SAVE }}
+      - name: Pin the FFmpeg SDK that the hardware decode shim builds against
+        run: |
+          sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
+          {
+            echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
+            echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
+            echo "FFMPEG_LINK_MODE=dynamic"
+            echo "LD_LIBRARY_PATH=$sdk_root/lib"
+          } >> "$GITHUB_ENV"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
       - run: npm run format:check
-      - run: cargo install wasm-bindgen-cli --version 0.2.128 --locked
-      - run: cargo install cargo-about --version 0.9.2 --locked --features cli
-      - run: npm run build
-      # After the build, so the tests that drive the packaged wasm run instead of skipping;
-      # ALPHA2_REQUIRE_WASM=1 fails any that would still skip.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: alpha2-build
+          path: packages
       - run: npm run test:js
         env:
           ALPHA2_REQUIRE_WASM: "1"
-      # After the build, which emits `alpha2`'s declarations: `@alpha2-sh/node` type-checks, and
-      # its type-aware lint resolves `alpha2`'s types, against them. Before it, every import from
-      # `alpha2` is an error type.
       - run: npm run lint
       - run: npm run typecheck
-      # The packaged wasm computes what native code pinned: text rasters and waveform summaries. The
-      # fixed audio mix needs the packaged engine's WebGPU device, so the browser job plays it
-      # (test:wasm-browser's fixed-audio-mix).
       - run: npm run test:wasm-parity
-      # Native against the packaged browser engine in the runner image's Chrome (SwiftShader): the
-      # browser half is what holds the two renderers to the same pixels, so a runner without Chrome
-      # fails rather than passing on the native half.
+      - run: npm run test:package
+      - run: scripts/test-clean-consumers.sh
+
+  host:
+    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',host,') }}
+    needs: release-wasm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install native media build dependencies
+        run: >-
+          sudo apt-get update && sudo apt-get install --yes
+          libavcodec-dev libavformat-dev libavutil-dev libswresample-dev
+          libswscale-dev libasound2-dev pkg-config clang mesa-vulkan-drivers
+      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: false
+          save-if: ${{ env.RUST_CACHE_SAVE }}
+      - name: Pin the FFmpeg SDK that the hardware decode shim builds against
+        run: |
+          sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
+          {
+            echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
+            echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
+            echo "FFMPEG_LINK_MODE=dynamic"
+            echo "LD_LIBRARY_PATH=$sdk_root/lib"
+          } >> "$GITHUB_ENV"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: cargo build -p alpha2-wasm --target wasm32-unknown-unknown
+      - run: cargo build -p alpha2-audio-worklet --target wasm32-unknown-unknown
+      - run: npm run test:audio-determinism
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: alpha2-build
+          path: packages
       - run: npm run test:host-parity
         env:
           ALPHA2_REQUIRE_BROWSER: "1"
       - name: A Vulkan device without Vulkan Video falls back to software
-        # Mesa 23.2 installs lavapipe's ICD as `lvp_icd.x86_64.json`, the 25.2 in Ubuntu 24.04's
-        # updates as `lvp_icd.json`. Pointing at a file that is not there leaves the loader with no
-        # driver at all.
         run: |
           set -- /usr/share/vulkan/icd.d/lvp_icd*.json
           icd="$1"
@@ -132,8 +208,6 @@ jobs:
             2> "$RUNNER_TEMP/lavapipe.log" || { cat "$RUNNER_TEMP/lavapipe.log"; exit 1; }
           grep "hardware decode unavailable, using software" "$RUNNER_TEMP/lavapipe.log"
       - run: npm run test:node-e2e
-      - run: npm run test:package
-      - run: scripts/test-clean-consumers.sh
 
   msrv:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',msrv,') }}
@@ -145,14 +219,16 @@ jobs:
           sudo apt-get update && sudo apt-get install --yes
           libavcodec-dev libavformat-dev libavutil-dev libswresample-dev
           libswscale-dev libasound2-dev pkg-config clang
-      # The floor is Cargo.toml's rust-version. `+` names it, since rust-toolchain.toml would
-      # otherwise choose the pinned release inside the checkout.
       - name: Install the rust-version toolchain
         run: |
           msrv="$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)"
           test -n "$msrv"
           rustup toolchain install "$msrv" --profile minimal
           echo "MSRV=$msrv" >> "$GITHUB_ENV"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: false
+          save-if: ${{ env.RUST_CACHE_SAVE }}
       - name: Pin the FFmpeg SDK that the hardware decode shim builds against
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
@@ -164,8 +240,6 @@ jobs:
           } >> "$GITHUB_ENV"
       - run: cargo "+$MSRV" check --workspace --all-targets --all-features
 
-  # The FFmpeg boundary under memcheck. A test that passes can still read uninitialized memory
-  # inside FFmpeg (rsmpeg 0.18's `AVChannelLayout::clone` did), which only this sees.
   valgrind:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',valgrind,') }}
     runs-on: ubuntu-latest
@@ -178,6 +252,10 @@ jobs:
           libswscale-dev libasound2-dev pkg-config clang valgrind libvulkan-dev
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: false
+          save-if: ${{ env.RUST_CACHE_SAVE }}
       - name: Pin the FFmpeg SDK the bridge builds against
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
@@ -187,20 +265,14 @@ jobs:
             echo "FFMPEG_LINK_MODE=dynamic"
             echo "LD_LIBRARY_PATH=$sdk_root/lib"
           } >> "$GITHUB_ENV"
-      # The bridge's hardware-device half and its C shims build only with `hwdevice`; its Vulkan
-      # shim tests need no GPU, only the loader installed above.
       - name: Bridge and native binding tests under valgrind
         env:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: valgrind --error-exitcode=9 --quiet
-          # Memcheck decodes a frame many times slower; the test builds' decode work limit (10 s
-          # between frames) would fail decodes that are only slow.
           ALPHA2_TEST_DECODE_WORK_LIMIT_MS: "600000"
         run: cargo test -p alpha2-ffmpeg-bridge -p alpha2-native --features alpha2-ffmpeg-bridge/hwdevice --lib --bins --tests --no-fail-fast
       - name: GPU timeout configuration under ThreadSanitizer
         run: bash scripts/test-gpu-timeout-race.sh
 
-  # The wasm binding and the renderer's wasm-only code compile nowhere else, so the workspace lint
-  # above never sees them.
   wasm-lint:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',wasm-lint,') }}
     runs-on: ubuntu-latest
@@ -208,13 +280,14 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: false
+          save-if: ${{ env.RUST_CACHE_SAVE }}
       - run: >-
           cargo clippy -p alpha2-wasm -p alpha2-audio-worklet
           --target wasm32-unknown-unknown -- -D warnings
 
-  # The fuzz targets are their own workspace, so nothing above builds them, and an engine API change
-  # could leave a target such as `audio_render` uncompilable unnoticed. Stable checks them; running
-  # them needs nightly and cargo-fuzz.
   fuzz-check:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',fuzz-check,') }}
     runs-on: ubuntu-latest
@@ -222,13 +295,14 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: fuzz
+          cache-bin: false
+          save-if: ${{ env.RUST_CACHE_SAVE }}
       - run: cargo fmt --manifest-path fuzz/Cargo.toml --check
       - run: cargo clippy --manifest-path fuzz/Cargo.toml --locked --bins -- -D warnings
 
-  # The VideoToolbox and D3D12VA interop only compiles on its own platform, so the Linux job above
-  # cannot tell whether either shim still builds. The host is also linked and started, which lint
-  # alone never does: on Windows that is the MSVC linker against the SDK's generated import
-  # libraries.
   hwdecode-targets:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',hwdecode-targets,') }}
     name: Hardware decode shim (${{ matrix.target }})
@@ -239,8 +313,6 @@ jobs:
         include:
           - target: macos-arm64
             runner: macos-latest
-          # x86_64-pc-windows-msvc, the runner's default Rust target, with the image's MSVC and
-          # LLVM; no MSYS2.
           - target: win-x64
             runner: windows-latest
     defaults:
@@ -250,11 +322,13 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: false
+          save-if: ${{ env.RUST_CACHE_SAVE }}
       - name: Install macOS build tools
         if: startsWith(matrix.target, 'macos-')
         run: brew install pkg-config
-      # macOS finds the SDK through pkg-config. The Windows image has none, so there rusty_ffmpeg
-      # and the shim take the SDK's include and lib directories directly.
       - name: Pin the FFmpeg SDK that the hardware decode shim builds against
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh ${{ matrix.target }})"
@@ -273,20 +347,12 @@ jobs:
               echo "FFMPEG_LINK_MODE=dynamic"
             } >> "$GITHUB_ENV"
           fi
-      # --all-targets compiles each platform's own tests (the Mac's VideoToolbox, Metal and
-      # GPU-resident ones), which only hardware with that GPU runs.
       - run: cargo clippy -p alpha2-native -p alpha2-native-gpu -p alpha2-host --all-features --all-targets -- -D warnings
       - name: Link and start the host
         run: |
           cargo build -p alpha2-host
-          # It exits non-zero after printing its usage.
           { target/debug/alpha2-host 2>&1 || true; } | grep "usage: alpha2-host"
 
-  # The Node client's process lifecycle (cancellation that settles only after the host exits,
-  # HOST_EXITED, the failure report and stderr tail, the decode-stall retry) meets each OS's own
-  # process semantics: Windows ends a process at once and reports a kill as an exit code with no
-  # signal. validate runs the suite on Linux; this runs it on the other hosted platforms. Its fake
-  # hosts are Node scripts, so it needs no Rust or FFmpeg.
   node-client:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',node-client,') }}
     name: Node client (${{ matrix.runner }})
@@ -310,13 +376,6 @@ jobs:
       - run: npm run build --workspace @alpha2-sh/node
       - run: node --test packages/alpha2-node/test/*.test.mjs
 
-  # The pinned cross-platform constants on every OS and architecture the native release ships
-  # (release.yml's package matrix): the fixed audio mixes (tests/audio_determinism),
-  # alpha2-audio's DSP references, alpha2-eval's keyframe, curve, and time-map values, and the text
-  # rasters. validate pins them on Linux x64 only, and a platform-dependent result (aarch64's
-  # min/max on signed zeros, a target-specific dependency feature, an MSVC-only path) passes there
-  # while that platform's export stops matching the browser preview. None of them needs a GPU or
-  # FFmpeg; render-goldens runs the GPU pins, apart, so a GPU failure cannot hide these.
   determinism:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',determinism,') }}
     name: Determinism pins (${{ matrix.target }})
@@ -337,10 +396,12 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: false
+          save-if: ${{ env.RUST_CACHE_SAVE }}
       - run: cargo test -p alpha2-audio -p alpha2-audio-determinism -p alpha2-eval -p alpha2-text --no-fail-fast
 
-  # RustSec advisories (deny.toml's [advisories], with the ignores it gives reasons for) and the
-  # license, ban and source policy.
   security:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',security,') }}
     runs-on: ubuntu-latest
@@ -351,22 +412,42 @@ jobs:
           command: check
 
   release-wasm:
-    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',release-wasm,') }}
+    # Builds the packages once; js, host and browser test this build.
+    if: >-
+      ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',release-wasm,') ||
+      contains(format(',{0},', inputs.jobs), ',js,') || contains(format(',{0},', inputs.jobs), ',host,') ||
+      contains(format(',{0},', inputs.jobs), ',browser,') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
+      # The npm packages a release tag publishes come from this job, so a tag builds them and their
+      # tools from source rather than from caches.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        with:
+          cache-bin: false
+          save-if: ${{ env.RUST_CACHE_SAVE }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: cargo install wasm-bindgen-cli --version 0.2.128 --locked
-      - run: cargo install cargo-about --version 0.9.2 --locked --features cli
+      - uses: taiki-e/cache-cargo-install-action@9ee83daaa7b96a6fab930949ecf1122bba04a389 # v3.0.8
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        with:
+          tool: wasm-bindgen-cli@0.2.128
+      - uses: taiki-e/cache-cargo-install-action@9ee83daaa7b96a6fab930949ecf1122bba04a389 # v3.0.8
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        with:
+          tool: cargo-about@0.9.2
+          features: cli
+      - if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          cargo install wasm-bindgen-cli --version 0.2.128 --locked
+          cargo install cargo-about --version 0.9.2 --locked --features cli
       - run: npm run build
-      # Every npm package, as the release publishes it: release.yml takes these tarballs as they
-      # are, from a runner's fresh checkout and empty cargo target, and builds nothing again.
       - name: Pack the npm packages
         run: |
           mkdir -p target/npm-release
@@ -376,11 +457,14 @@ jobs:
           name: alpha2-npm-packages
           if-no-files-found: error
           path: target/npm-release/*.tgz
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: alpha2-build
+          if-no-files-found: error
+          path: |
+            packages/*/dist
+            packages/*/wasm
 
-  # The renderer on every GPU API it ships on, with the API's validation on. Hosted runners have no
-  # GPU: Linux runs Mesa's lavapipe and llvmpipe, Windows runs WARP (D3D12's software rasterizer,
-  # the only adapter there), and macOS runs the VM's paravirtual Metal device. A mismatching render
-  # is kept as an artifact, since none of these can be reproduced locally.
   render-goldens:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',render-goldens,') }}
     name: Render goldens (${{ matrix.backend }})
@@ -400,8 +484,6 @@ jobs:
     env:
       WGPU_BACKEND: ${{ matrix.backend }}
       LIBGL_ALWAYS_SOFTWARE: "1"
-      # The D3D12 debug layer and Metal API validation. Test builds already enable wgpu's
-      # validation; this states it for the backends that need the platform's own layer as well.
       WGPU_VALIDATION: "1"
       MTL_DEBUG_LAYER: "1"
       ALPHA2_GOLDEN_ACTUAL_DIR: ${{ github.workspace }}/target/golden-actual
@@ -409,21 +491,19 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: false
+          save-if: ${{ env.RUST_CACHE_SAVE }}
       - name: Install Mesa software GPU drivers
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install --yes libegl1 libegl-mesa0 mesa-vulkan-drivers
-      # The D3D12 debug layer ships with the optional Graphics Tools feature, which the runner image
-      # leaves out; without it wgpu only warns.
       - name: Install the D3D12 debug layer
         if: runner.os == 'Windows'
         shell: pwsh
         run: Add-WindowsCapability -Online -Name "Tools.Graphics.DirectX~~~~0.0.1.0"
       - name: Run render goldens and engine frame tests on ${{ matrix.backend }}
-        # --no-fail-fast: cargo runs alpha2-engine's tests before alpha2-render's, and stopping at
-        # the first failing binary would hide every render golden on that backend.
         run: cargo test -p alpha2-render -p alpha2-engine --no-fail-fast -- --test-threads=1
-      # Every adapter here renders half floats, so the 8-bit intermediate an adapter without them
-      # falls back to is reached only by asking for it.
       - name: Run render goldens on the 8-bit intermediate on ${{ matrix.backend }}
         if: ${{ !cancelled() }}
         env:
@@ -436,13 +516,9 @@ jobs:
           path: target/golden-actual
           if-no-files-found: ignore
 
-  # The browser's own WGSL compiler, and the packaged wasm engine on WebGPU and WebGL2, in the
-  # runner image's Chrome. naga, which validates WGSL for wgpu, leaves out the fragment uniformity
-  # rule that Tint and WebKit enforce. SwiftShader is the GPU here, which cannot present a WebGPU
-  # canvas or import a VideoFrame; those cases skip and are listed at the end of the run. A headed
-  # Chrome on a real GPU runs them with `--no-skips` (scripts/test-wasm-browser.mjs).
   browser:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',browser,') }}
+    needs: release-wasm
     runs-on: ubuntu-latest
     env:
       ALPHA2_REQUIRE_BROWSER: "1"
@@ -450,13 +526,19 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: false
+          save-if: ${{ env.RUST_CACHE_SAVE }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: cargo install wasm-bindgen-cli --version 0.2.128 --locked
-      - run: cargo install cargo-about --version 0.9.2 --locked --features cli
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: alpha2-build
+          path: packages
       - run: npm run test:wgsl-browser
-      - run: npm run test:wasm-browser
+      - run: node scripts/test-wasm-browser.mjs
       - run: npm run test:editor:package

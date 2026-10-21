@@ -251,7 +251,7 @@ test("monochrome asks for text presentation without splitting a sequence", () =>
     "1️⃣",
   ])
     assert.equal(monochrome(sequence), sequence);
-  // Letters and the native-color default are untouched.
+  // Letters and the color default are untouched.
   assert.equal(monochrome("Title"), "Title");
   assert.equal(rasterize({ text: "⭐", maxWidth: 0 }).text, "⭐");
 });
