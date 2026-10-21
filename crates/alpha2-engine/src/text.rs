@@ -430,7 +430,7 @@ fn text_request(text: &str, style: &TextStyle, size: RenderSize, key: u64) -> Te
             TextAlign::End => alpha2_media::TextAlign::End,
         },
         color: rgba8(style.color),
-        emoji_policy: EmojiPolicy::Monochrome,
+        emoji_policy: EmojiPolicy::Color,
         content_version: key,
         outline: style.outline.map(|outline| alpha2_text::TextOutline {
             color: rgba8(outline.color),

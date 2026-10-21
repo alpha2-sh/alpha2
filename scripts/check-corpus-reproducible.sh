@@ -5,7 +5,8 @@
 # cannot tell a changed generator from a changed file.
 #
 # With FFMPEG_ENCODERS set, the files needing other encoders are generated too and everything is
-# checked run against run only. DEJAVU_SANS and BLACK_HAN_SANS add the fixture fonts.
+# checked run against run only. DEJAVU_SANS and BLACK_HAN_SANS add the fixture fonts, and
+# NOTO_EMOJI_COLRV1 and NOTO_EMOJI_CBDT the color ones.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"

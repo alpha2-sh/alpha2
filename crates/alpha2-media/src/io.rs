@@ -882,11 +882,18 @@ pub enum TextAlign {
     End,
 }
 
-/// Policy for glyphs whose only available representation is a color emoji.
+/// How a text host draws emoji and other color glyphs.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub enum EmojiPolicy {
-    /// Rasterize a monochrome outline when the selected host stack provides one.
+    /// Draw a glyph a font has in color (a COLR painting, or a CBDT or sbix
+    /// bitmap) in its own colors; a grapheme shown as an emoji (as for
+    /// [`Self::Replace`]) tries the stack's color fonts first, and one
+    /// asking for text (U+FE0E) the others.
     #[default]
+    Color,
+    /// Rasterize a monochrome outline when the selected host stack provides
+    /// one: every glyph is drawn as an outline in the text's color, and an
+    /// emoji tries the fonts without color glyphs first.
     Monochrome,
     /// Draw each grapheme shown as an emoji (UTS #51: one with an
     /// `Emoji_Presentation` character, or U+FE0F with a pictograph or a

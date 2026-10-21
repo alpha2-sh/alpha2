@@ -57,8 +57,9 @@ if (packageNotices !== workspaceNotices) {
 // Raise a budget when a feature needs it; do not contort code to fit. Keep each budget at least 5%
 // over what the pinned toolchain builds, so another compiler release does not fail here.
 const wasmBudgets = {
-  // Includes the text host's Unicode tables (about 90 KB). Rust 1.99.0 builds 5,773,851 bytes.
-  "alpha2_wasm_bg.wasm": 6_062_544,
+  // Includes the text host's Unicode tables (about 90 KB) and its color glyph painting and PNG
+  // decoding (about 170 KB). Rust 1.99.0 builds 5,940,977 bytes.
+  "alpha2_wasm_bg.wasm": 6_238_026,
   // Includes the band-limited resampling converter. Rust 1.99.0 builds 113,964 bytes.
   "alpha2_audio_worklet.wasm": 119_662,
   // Loaded only for SVG, animated image, Lottie, OpenEXR or image sequence sources. Rust 1.99.0

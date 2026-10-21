@@ -381,6 +381,8 @@ dependencies = [
  "ab_glyph_rasterizer",
  "alpha2-media",
  "alpha2-scaling-support",
+ "libm",
+ "png",
  "rustybuzz",
  "serde_json",
  "unicode-bidi",

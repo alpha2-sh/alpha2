@@ -293,6 +293,218 @@
         "maxWidth": 0.0,
         "text": "Hi مرحبا 2024"
       }
+    },
+    {
+      "contentVersion": 26,
+      "expected": {
+        "ascent": 36.25,
+        "descent": 8.75,
+        "firstBaseline": 32.0,
+        "height": 58,
+        "layoutHeight": 48.0,
+        "layoutWidth": 338.90625,
+        "layoutX": 0.0,
+        "layoutY": 5.0,
+        "lineCount": 1,
+        "pixelsFnv1a": "e5cd14a112c9c5e6",
+        "width": 339
+      },
+      "name": "emoji-colr-sequences",
+      "request": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "fontSize": 40,
+        "text": "A 😀👁️👍🏽👨‍👩‍👧🇰🇷1️⃣"
+      }
+    },
+    {
+      "contentVersion": 27,
+      "expected": {
+        "ascent": 37.06421661376953,
+        "descent": 9.908256530761719,
+        "firstBaseline": 32.0,
+        "height": 60,
+        "layoutHeight": 48.0,
+        "layoutWidth": 338.90625,
+        "layoutX": 1.0,
+        "layoutY": 6.0,
+        "lineCount": 1,
+        "pixelsFnv1a": "dbf8fb90ab6c9010",
+        "width": 341
+      },
+      "name": "emoji-bitmap-sequences",
+      "request": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "fontFamily": "Alpha2 Fixture Emoji Bitmap",
+        "fontSize": 40,
+        "text": "A 😀👁️👍🏽👨‍👩‍👧🇰🇷1️⃣"
+      }
+    },
+    {
+      "contentVersion": 28,
+      "expected": {
+        "ascent": 166.7889862060547,
+        "descent": 44.587154388427734,
+        "firstBaseline": 144.0,
+        "height": 263,
+        "layoutHeight": 216.00001525878906,
+        "layoutWidth": 224.12109375,
+        "layoutX": 0.0,
+        "layoutY": 23.0,
+        "lineCount": 1,
+        "pixelsFnv1a": "512021a5e0df5cf1",
+        "width": 225
+      },
+      "name": "emoji-bitmap-enlarged",
+      "request": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "fontFamily": "Alpha2 Fixture Emoji Bitmap",
+        "fontSize": 180,
+        "text": "😀"
+      }
+    },
+    {
+      "contentVersion": 29,
+      "expected": {
+        "ascent": 28.0,
+        "descent": 6.400000095367432,
+        "firstBaseline": 25.600000381469727,
+        "height": 45,
+        "layoutHeight": 38.400001525878906,
+        "layoutWidth": 113.8125,
+        "layoutX": 0.0,
+        "layoutY": 3.0,
+        "lineCount": 1,
+        "pixelsFnv1a": "a9eafa4137d861d6",
+        "width": 114
+      },
+      "name": "emoji-presentation-selectors",
+      "request": {
+        "color": [
+          255,
+          200,
+          0,
+          255
+        ],
+        "fontSize": 32,
+        "text": "❤ ❤︎ ❤️"
+      }
+    },
+    {
+      "contentVersion": 30,
+      "expected": {
+        "ascent": 29.0,
+        "descent": 7.0,
+        "firstBaseline": 25.600000381469727,
+        "height": 85,
+        "layoutHeight": 76.80000305175781,
+        "layoutWidth": 160.0,
+        "layoutX": 0.0,
+        "layoutY": 4.0,
+        "lineCount": 2,
+        "pixelsFnv1a": "2d54a12c7d7f2f20",
+        "width": 160
+      },
+      "name": "emoji-in-right-to-left",
+      "request": {
+        "align": "end",
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "fontSize": 32,
+        "maxWidth": 160,
+        "text": "שלום 👨‍👩‍👧 עולם 👍🏽"
+      }
+    },
+    {
+      "contentVersion": 31,
+      "expected": {
+        "ascent": 38.400001525878906,
+        "descent": 9.600000381469727,
+        "firstBaseline": 38.400001525878906,
+        "height": 66,
+        "layoutHeight": 57.60000228881836,
+        "layoutWidth": 288.0,
+        "layoutX": 4.0,
+        "layoutY": 4.0,
+        "lineCount": 1,
+        "pixelsFnv1a": "58a09dd5144bb549",
+        "width": 296
+      },
+      "name": "color-paintings-outlined",
+      "request": {
+        "background": {
+          "color": [
+            255,
+            255,
+            255,
+            128
+          ],
+          "padding": 4
+        },
+        "color": [
+          40,
+          160,
+          255,
+          160
+        ],
+        "fontSize": 48,
+        "outline": {
+          "color": [
+            0,
+            0,
+            0,
+            255
+          ],
+          "width": 2.5
+        },
+        "text": ""
+      }
+    },
+    {
+      "contentVersion": 32,
+      "expected": {
+        "ascent": 25.71875,
+        "descent": 6.400000095367432,
+        "firstBaseline": 25.600000381469727,
+        "height": 41,
+        "layoutHeight": 38.400001525878906,
+        "layoutWidth": 161.421875,
+        "layoutX": 0.0,
+        "layoutY": 1.0,
+        "lineCount": 1,
+        "pixelsFnv1a": "6bccacd1b46a3839",
+        "width": 162
+      },
+      "name": "emoji-monochrome",
+      "request": {
+        "color": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "emojiPolicy": "monochrome",
+        "fontSize": 32,
+        "text": " 😀 A"
+      }
     }
   ],
   "fonts": [
@@ -303,6 +515,18 @@
     {
       "family": "Alpha2 Fixture Hangul",
       "path": "tests/fonts/Alpha2FixtureHangul.ttf"
+    },
+    {
+      "family": "Alpha2 Fixture Emoji Colr",
+      "path": "tests/fonts/Alpha2FixtureEmojiColr.ttf"
+    },
+    {
+      "family": "Alpha2 Fixture Emoji Bitmap",
+      "path": "tests/fonts/Alpha2FixtureEmojiBitmap.ttf"
+    },
+    {
+      "family": "Alpha2 Fixture Color",
+      "path": "tests/fonts/Alpha2FixtureColor.ttf"
     }
   ]
 }
