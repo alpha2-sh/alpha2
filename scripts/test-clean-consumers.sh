@@ -1,7 +1,7 @@
 #!/bin/sh
 # Packs the npm packages and installs them into fresh projects (plain Node, React) and the Rust
 # crates into a fresh crate, so a published entry point that only resolves inside the workspace
-# fails here.
+# fails here. Run `npm run build` first.
 set -eu
 
 workspace=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -9,7 +9,6 @@ scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT HUP INT TERM
 
 cd "$workspace"
-npm run build
 node scripts/check-npm-package.mjs
 package=$(npm pack --workspace alpha2 --pack-destination "$scratch" --silent)
 node_package=$(npm pack --workspace @alpha2-sh/node --pack-destination "$scratch" --silent)
