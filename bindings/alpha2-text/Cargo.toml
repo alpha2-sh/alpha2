@@ -23,6 +23,9 @@ alpha2-media.workspace = true
 # Without `std` (so with `libm`): on x86 `std` picks an AVX2 or SSE4.2 line drawing at run time,
 # and the one scalar path keeps native and wasm glyphs the same bytes.
 ab_glyph_rasterizer = { version = "0.1.10", default-features = false, features = ["libm"] }
+# The sweep gradient's angle: `libm`'s `atan2f`, not the target's, so color glyphs match too.
+libm = "0.2.16"
+png.workspace = true
 rustybuzz = "0.20.1"
 unicode-bidi = "0.3.18"
 unicode-linebreak = "0.1.5"
@@ -34,7 +37,8 @@ workspace = true
 
 [dev-dependencies]
 alpha2-scaling-support.workspace = true
-serde_json.workspace = true
+# Exact float parsing, so a pinned f32 metric reads back as the value it was written from.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 
 [[bench]]
 name = "caption_raster"

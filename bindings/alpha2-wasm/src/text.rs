@@ -64,6 +64,7 @@ enum AlignWire {
 #[serde(rename_all = "lowercase")]
 enum EmojiWire {
     #[default]
+    Color,
     Monochrome,
     Replace,
 }
@@ -82,6 +83,7 @@ impl TextRequestWire {
             },
             color: self.color,
             emoji_policy: match self.emoji_policy {
+                EmojiWire::Color => EmojiPolicy::Color,
                 EmojiWire::Monochrome => EmojiPolicy::Monochrome,
                 EmojiWire::Replace => EmojiPolicy::Replace,
             },

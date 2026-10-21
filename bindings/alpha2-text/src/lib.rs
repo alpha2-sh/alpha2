@@ -4,7 +4,8 @@
 //! one host for it, in pure Rust, from font bytes the caller supplies. Each
 //! paragraph is split by direction (UAX #9), script, and font, rustybuzz
 //! shapes each run, lines break where UAX #14 allows, and each glyph's
-//! outline is drawn by `ab_glyph_rasterizer` when it is placed. It builds
+//! outline is drawn by `ab_glyph_rasterizer` when it is placed, or its
+//! color form (a COLR painting or a CBDT or sbix bitmap) by `color`. It builds
 //! the same way natively and for wasm, and the same request with the same
 //! fonts gives the same pixels on every target, so a browser preview and a
 //! native export of one project draw identical text. `alpha2/text` exposes
@@ -17,7 +18,7 @@ use std::fmt;
 use std::ops::Range;
 use std::sync::Arc;
 
-use ab_glyph_rasterizer::{Rasterizer, point};
+use ab_glyph_rasterizer::{Point, Rasterizer, point};
 use alpha2_media::{
     EmojiPolicy, HostTexture, HostTexturePixels, Premultiplication, RasterColorSpace, TextAlign,
     TextTexture,
@@ -29,6 +30,7 @@ use unicode_linebreak::BreakOpportunity;
 use unicode_script::{Script, UnicodeScript};
 use unicode_segmentation::UnicodeSegmentation;
 
+mod color;
 mod unicode_tables;
 
 const MAX_TEXT_BYTES: usize = 64 * 1024;
@@ -62,9 +64,11 @@ pub struct TextRasterRequest {
     /// Per-line horizontal alignment.
     pub align: TextAlign,
     /// Straight (not premultiplied), sRGB-encoded RGBA color. The output is
-    /// premultiplied by glyph coverage and this alpha.
+    /// premultiplied by glyph coverage and this alpha. A color glyph keeps
+    /// its own colors, but for the parts its font draws in the text's
+    /// color, and takes this alpha as its opacity.
     pub color: [u8; 4],
-    /// Explicit handling for color-only emoji.
+    /// Whether color glyphs are drawn in color, and which fonts emoji take.
     pub emoji_policy: EmojiPolicy,
     /// Caller-managed version. Change it whenever content/style/font inputs change.
     pub content_version: u64,
@@ -435,6 +439,7 @@ impl TextRasterizer {
                 request.font_size,
                 request.max_width,
                 &order,
+                request.emoji_policy,
             ) {
                 lines.push(line);
                 if lines.last().is_some_and(|line| line.has_glyphs) {
@@ -461,7 +466,7 @@ impl TextRasterizer {
             (TextAlign::Start, false) | (TextAlign::End, true) => 0.0,
             (TextAlign::End, false) | (TextAlign::Start, true) => layout_width - line.width,
         };
-        let mut outlines = HashMap::<(usize, u16), Outline>::new();
+        let mut drawings = HashMap::<(usize, u16), Drawing>::new();
         let mut placed = Vec::new();
         // Ink past the box on each axis, and the ink's own reach above and below its baselines.
         let (mut overflow_x, mut overflow_y) = (0_i64, 0_i64);
@@ -470,10 +475,10 @@ impl TextRasterizer {
             let offset = line_offset(line);
             let baseline = index as f32 * line_advance + ascent;
             for glyph in &line.glyphs {
-                let outline = outlines
+                let drawing = drawings
                     .entry((glyph.font, glyph.glyph_index))
-                    .or_insert_with(|| Outline::of(&faces.parsed[glyph.font], glyph.glyph_index));
-                let Some(bounds) = outline.bounds else {
+                    .or_insert_with(|| Drawing::of(&faces, glyph.font, glyph.glyph_index, request));
+                let Some(bounds) = drawing.bounds() else {
                     continue;
                 };
                 let scale = request.font_size / faces.units_per_em(glyph.font);
@@ -521,6 +526,8 @@ impl TextRasterizer {
             })
             .ok_or(TextRasterError::TooLarge)?;
         let mut coverage = vec![0_u8; pixel_count];
+        // Color glyphs, premultiplied RGBA, only once one is placed.
+        let mut colors: Option<Vec<u8>> = None;
         let mut line_boxes = Vec::with_capacity(lines.len());
         for (index, line) in lines.iter().enumerate() {
             if line.width > 0.0 {
@@ -528,18 +535,40 @@ impl TextRasterizer {
             }
         }
         for (key, origin, scale, pixels) in placed {
-            let alpha = outlines[&key].draw(origin, scale, pixels);
-            place_glyph(
-                &mut coverage,
-                width,
-                height,
+            let (origin_x, origin_y) = (
                 pixels.left + i64::from(margin_x),
                 pixels.top + i64::from(margin_y),
-                usize::try_from(pixels.right - pixels.left).unwrap_or(0),
-                &alpha,
             );
+            let glyph_width = usize::try_from(pixels.right - pixels.left).unwrap_or(0);
+            match &drawings[&key] {
+                Drawing::Outline(outline) => place_glyph(
+                    &mut coverage,
+                    width,
+                    height,
+                    origin_x,
+                    origin_y,
+                    glyph_width,
+                    &outline.draw(origin, scale, pixels),
+                ),
+                drawing => place_color_glyph(
+                    colors.get_or_insert_with(|| vec![0; pixel_count * 4]),
+                    width,
+                    height,
+                    origin_x,
+                    origin_y,
+                    glyph_width,
+                    &drawing.draw_color(origin, scale, pixels),
+                ),
+            }
         }
-        let rgba8 = compose(request, &coverage, width, [margin_x, margin_y], &line_boxes);
+        let rgba8 = compose(
+            request,
+            &coverage,
+            colors.as_deref(),
+            width,
+            [margin_x, margin_y],
+            &line_boxes,
+        );
         let texture = HostTexture {
             content_version: request.content_version,
             width,
@@ -585,6 +614,8 @@ impl TextRasterizer {
 struct Faces<'a> {
     parsed: Vec<ttf_parser::Face<'a>>,
     shapers: Vec<OnceCell<rustybuzz::Face<'a>>>,
+    /// Whether each face has color glyphs (a COLR, CBDT, or sbix table).
+    color: Vec<bool>,
 }
 
 impl<'a> Faces<'a> {
@@ -600,6 +631,13 @@ impl<'a> Faces<'a> {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             shapers: parsed.iter().map(|_| OnceCell::new()).collect(),
+            color: parsed
+                .iter()
+                .map(|face| {
+                    let tables = face.tables();
+                    tables.colr.is_some() || tables.cbdt.is_some() || tables.sbix.is_some()
+                })
+                .collect(),
             parsed,
         })
     }
@@ -736,10 +774,11 @@ fn layout_paragraph(
     font_size: f32,
     max_width: f32,
     order: &[usize],
+    policy: EmojiPolicy,
 ) -> Vec<LaidLine> {
     let bidi = ParagraphBidiInfo::new(paragraph, None);
     let rtl = bidi.paragraph_level.is_rtl();
-    let glyphs = shape_paragraph(faces, paragraph, &bidi, font_size, order);
+    let glyphs = shape_paragraph(faces, paragraph, &bidi, font_size, order, policy);
     let clusters = clusters(&glyphs, paragraph);
     break_lines(&clusters, max_width)
         .into_iter()
@@ -829,6 +868,10 @@ struct Run {
 /// `order` with all it draws; one of only common characters (spaces, digits,
 /// punctuation) stays in the font before it when that has them, and one no
 /// font has takes the font of its base character, else the font before it.
+/// A grapheme shown as an emoji tries the color fonts first under
+/// [`EmojiPolicy::Color`] and the others first otherwise, as one asking for
+/// text (U+FE0E) does, and stays only in a font of the kind it tries first
+/// when the stack has one.
 /// A grapheme of common characters takes the script before it, or after it
 /// at the paragraph's start.
 fn itemize(
@@ -836,8 +879,22 @@ fn itemize(
     paragraph: &str,
     bidi: &ParagraphBidiInfo<'_>,
     order: &[usize],
+    policy: EmojiPolicy,
 ) -> Vec<Run> {
     let first = order.first().copied().unwrap_or(0);
+    let (color, text): (Vec<usize>, Vec<usize>) =
+        order.iter().partition(|&&font| faces.color[font]);
+    let color_first = color.iter().chain(&text).copied().collect::<Vec<_>>();
+    let text_first = text.iter().chain(&color).copied().collect::<Vec<_>>();
+    // Whether a font is of the kind a grapheme wants, or the stack has none of that kind.
+    let fits = |font: usize, color_wanted: bool| {
+        faces.color[font] == color_wanted
+            || if color_wanted {
+                color.is_empty()
+            } else {
+                text.is_empty()
+            }
+    };
     let mut graphemes = Vec::<(usize, usize, Option<Script>, bool)>::new();
     let mut current = None;
     for (start, grapheme) in paragraph.grapheme_indices(true) {
@@ -845,7 +902,24 @@ fn itemize(
             .chars()
             .map(|character| character.script())
             .find(|script| !matches!(script, Script::Common | Script::Inherited | Script::Unknown));
-        let stays = current.filter(|&font| script.is_none() && faces.covers(font, grapheme));
+        // Whether the grapheme wants a color font, when it wants one kind.
+        let wants_color = if grapheme.contains('\u{fe0e}') {
+            Some(false)
+        } else if is_emoji(grapheme) {
+            Some(policy == EmojiPolicy::Color)
+        } else {
+            None
+        };
+        let order = match wants_color {
+            Some(true) => color_first.as_slice(),
+            Some(false) => text_first.as_slice(),
+            None => order,
+        };
+        let stays = current.filter(|&font| {
+            script.is_none()
+                && wants_color.is_none_or(|wanted| fits(font, wanted))
+                && faces.covers(font, grapheme)
+        });
         let font = stays
             .or_else(|| {
                 order
@@ -906,9 +980,10 @@ fn shape_paragraph(
     bidi: &ParagraphBidiInfo<'_>,
     font_size: f32,
     order: &[usize],
+    policy: EmojiPolicy,
 ) -> Vec<ShapedGlyph> {
     let mut glyphs = Vec::new();
-    for run in itemize(faces, paragraph, bidi, order) {
+    for run in itemize(faces, paragraph, bidi, order, policy) {
         let face = faces.shaper(run.font);
         let units = faces.units_per_em(run.font);
         let mut buffer = UnicodeBuffer::new();
@@ -1078,6 +1153,53 @@ struct PositionedGlyph {
     y_offset: f32,
 }
 
+/// How a glyph is drawn: its outline, as coverage the text's color fills,
+/// or under [`EmojiPolicy::Color`] its color form when the font has one.
+enum Drawing {
+    Outline(Outline),
+    Painting(color::Painting),
+    Bitmap(color::Bitmap),
+}
+
+impl Drawing {
+    /// The glyph's COLR painting, else its bitmap, else its outline. The
+    /// painting takes the text's color, opaque, where it asks for it: the
+    /// text's alpha applies to the whole glyph when it is composed.
+    fn of(faces: &Faces<'_>, font: usize, glyph: u16, request: &TextRasterRequest) -> Self {
+        let face = &faces.parsed[font];
+        if request.emoji_policy == EmojiPolicy::Color && faces.color[font] {
+            let [red, green, blue, _] = request.color;
+            if let Some(painting) = color::Painting::of(face, glyph, [red, green, blue, 255]) {
+                return Self::Painting(painting);
+            }
+            if let Some(bitmap) = color::Bitmap::of(face, glyph, request.font_size) {
+                return Self::Bitmap(bitmap);
+            }
+        }
+        Self::Outline(Outline::of(face, glyph))
+    }
+
+    /// `[x_min, y_min, x_max, y_max]` in font units of all it may draw;
+    /// `None` when it draws nothing.
+    fn bounds(&self) -> Option<[f32; 4]> {
+        match self {
+            Self::Outline(outline) => outline.bounds,
+            Self::Painting(painting) => painting.bounds(),
+            Self::Bitmap(bitmap) => Some(bitmap.bounds()),
+        }
+    }
+
+    /// A color glyph over `pixels`, premultiplied RGBA8; an outline draws
+    /// nothing here.
+    fn draw_color(&self, origin: [f32; 2], scale: f32, pixels: PixelBox) -> Vec<u8> {
+        match self {
+            Self::Outline(_) => Vec::new(),
+            Self::Painting(painting) => painting.draw(origin, scale, pixels),
+            Self::Bitmap(bitmap) => bitmap.draw(origin, scale, pixels),
+        }
+    }
+}
+
 /// A glyph's outline in font units, y up, as the font draws it.
 #[derive(Default)]
 struct Outline {
@@ -1146,10 +1268,23 @@ impl Outline {
     fn draw(&self, origin: [f32; 2], scale: f32, pixels: PixelBox) -> Vec<u8> {
         let width = usize::try_from(pixels.right - pixels.left).unwrap_or(0);
         let height = usize::try_from(pixels.bottom - pixels.top).unwrap_or(0);
-        let mut raster = Rasterizer::new(width, height);
         let (left, top) = (pixels.left as f32, pixels.top as f32);
-        let at =
-            |[x, y]: [f32; 2]| point(origin[0] + x * scale - left, (origin[1] - y * scale) - top);
+        let raster = self.raster(width, height, |[x, y]| {
+            point(origin[0] + x * scale - left, (origin[1] - y * scale) - top)
+        });
+        let mut alpha = vec![0_u8; width * height];
+        raster.for_each_pixel(|index, coverage| {
+            alpha[index] = (coverage.min(1.0) * 255.0).round() as u8;
+        });
+        alpha
+    }
+}
+
+impl Outline {
+    /// The outline drawn into a `width` by `height` raster, each point where
+    /// `at` puts it.
+    fn raster(&self, width: usize, height: usize, at: impl Fn([f32; 2]) -> Point) -> Rasterizer {
+        let mut raster = Rasterizer::new(width, height);
         for segment in &self.segments {
             match *segment {
                 Segment::Line(from, to) => raster.draw_line(at(from), at(to)),
@@ -1159,11 +1294,7 @@ impl Outline {
                 }
             }
         }
-        let mut alpha = vec![0_u8; width * height];
-        raster.for_each_pixel(|index, coverage| {
-            alpha[index] = (coverage.min(1.0) * 255.0).round() as u8;
-        });
-        alpha
+        raster
     }
 }
 
@@ -1290,6 +1421,36 @@ fn place_glyph(
     }
 }
 
+/// Adds a color glyph to the color layer, premultiplied RGBA8: where
+/// glyphs overlap, the later one goes over.
+fn place_color_glyph(
+    colors: &mut [u8],
+    width: u32,
+    height: u32,
+    origin_x: i64,
+    origin_y: i64,
+    glyph_width: usize,
+    rgba8: &[u8],
+) {
+    for (index, source) in rgba8.as_chunks::<4>().0.iter().enumerate() {
+        let x = origin_x + i64::try_from(index % glyph_width.max(1)).unwrap_or(0);
+        let y = origin_y + i64::try_from(index / glyph_width.max(1)).unwrap_or(0);
+        if x < 0 || y < 0 || x >= i64::from(width) || y >= i64::from(height) || source[3] == 0 {
+            continue;
+        }
+        let pixel =
+            u64::try_from(y).unwrap_or(0) * u64::from(width) + u64::try_from(x).unwrap_or(0);
+        let slot = &mut colors[usize::try_from(pixel).unwrap_or(0) * 4..][..4];
+        let blended = over(
+            std::array::from_fn(|channel| u32::from(source[channel])),
+            std::array::from_fn(|channel| u32::from(slot[channel])),
+        );
+        for (byte, value) in slot.iter_mut().zip(blended) {
+            *byte = u8::try_from(value.min(255)).unwrap_or(u8::MAX);
+        }
+    }
+}
+
 impl TextRasterRequest {
     /// Pixels the decorations reach past the layout box on every side when
     /// no ink does: the outline's disc and the background's padding, whole.
@@ -1342,7 +1503,9 @@ fn over(source: [u32; 4], destination: [u32; 4]) -> [u32; 4] {
 
 /// The text over its outline over its line boxes, premultiplied RGBA8, all
 /// in integers so every target gives the same bytes. Undecorated text is its
-/// coverage in its color alone.
+/// coverage in its color alone, with the color glyphs (`colors`,
+/// premultiplied RGBA8) over it at the color's alpha. The outline surrounds
+/// both: its band dilates the coverage and the color glyphs' alpha.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -1351,15 +1514,23 @@ fn over(source: [u32; 4], destination: [u32; 4]) -> [u32; 4] {
 fn compose(
     request: &TextRasterRequest,
     coverage: &[u8],
+    colors: Option<&[u8]>,
     width: u32,
     margin: [u32; 2],
     line_boxes: &[(f32, f32, f32)],
 ) -> Vec<u8> {
     let outline = request.outline.map(|outline| {
+        let ink = colors.map(|colors| {
+            coverage
+                .iter()
+                .zip(colors.as_chunks::<4>().0)
+                .map(|(&text, color)| text.max(color[3]))
+                .collect::<Vec<_>>()
+        });
         (
             outline.color,
             dilate(
-                coverage,
+                ink.as_deref().unwrap_or(coverage),
                 width,
                 u32::try_from(coverage.len() / width.max(1) as usize).unwrap_or(0),
                 outline.width,
@@ -1414,6 +1585,16 @@ fn compose(
             pixel = over(premultiplied(*color, band[index]), pixel);
         }
         pixel = over(premultiplied(request.color, text), pixel);
+        if let Some(colors) = colors {
+            let color = &colors[index * 4..][..4];
+            if color[3] > 0 {
+                let opacity = u32::from(request.color[3]);
+                pixel = over(
+                    std::array::from_fn(|channel| u32::from(color[channel]) * opacity / 255),
+                    pixel,
+                );
+            }
+        }
         for (channel, value) in pixel.iter().enumerate() {
             rgba8[index * 4 + channel] = (*value).min(255) as u8;
         }

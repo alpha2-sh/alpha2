@@ -63,7 +63,7 @@ fn run(
         line_height: 1.2,
         align: TextAlign::Center,
         color: [255, 255, 255, 255],
-        emoji_policy: EmojiPolicy::Monochrome,
+        emoji_policy: EmojiPolicy::Color,
         content_version: 1,
         outline: (outline > 0.0).then(|| TextOutline {
             color: [0, 0, 0, 255],

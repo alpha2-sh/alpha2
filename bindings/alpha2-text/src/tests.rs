@@ -82,7 +82,8 @@ fn fixture_requests_match_the_pinned_rasters() {
                 color: rgba(&request["color"]),
                 emoji_policy: match request["emojiPolicy"].as_str() {
                     Some("replace") => EmojiPolicy::Replace,
-                    _ => EmojiPolicy::Monochrome,
+                    Some("monochrome") => EmojiPolicy::Monochrome,
+                    _ => EmojiPolicy::Color,
                 },
                 content_version: case["contentVersion"].as_u64().expect("version"),
                 outline: request.get("outline").map(|outline| TextOutline {
@@ -314,11 +315,27 @@ fn a_requested_family_draws_first_and_the_stack_fills_in() {
 
 /// The runs `text` splits into with fonts tried in `order`, as (font, text).
 fn runs(rasterizer: &TextRasterizer, text: &str, order: &[usize]) -> Vec<(usize, String)> {
+    runs_under(rasterizer, text, order, EmojiPolicy::Color)
+}
+
+/// The runs `text` splits into under `policy`, as (font, text).
+fn runs_under(
+    rasterizer: &TextRasterizer,
+    text: &str,
+    order: &[usize],
+    policy: EmojiPolicy,
+) -> Vec<(usize, String)> {
     let faces = Faces::new(&rasterizer.fonts).expect("faces");
-    itemize(&faces, text, &ParagraphBidiInfo::new(text, None), order)
-        .into_iter()
-        .map(|run| (run.font, text[run.range].to_owned()))
-        .collect()
+    itemize(
+        &faces,
+        text,
+        &ParagraphBidiInfo::new(text, None),
+        order,
+        policy,
+    )
+    .into_iter()
+    .map(|run| (run.font, text[run.range].to_owned()))
+    .collect()
 }
 
 #[test]
@@ -374,7 +391,7 @@ fn caption(text: &str, outline: Option<TextOutline>, version: u64) -> TextRaster
         line_height: 1.2,
         align: TextAlign::Center,
         color: [255, 255, 255, 255],
-        emoji_policy: EmojiPolicy::Monochrome,
+        emoji_policy: EmojiPolicy::Color,
         content_version: version,
         outline,
         background: Some(TextBackground {
@@ -450,10 +467,17 @@ fn a_glyph_a_font_substitutes_but_does_not_have_draws_as_notdef() {
     .expect("the font loads");
     let faces = Faces::new(&rasterizer.fonts).expect("faces");
     assert_eq!(
-        shape_paragraph(&faces, "A", &ParagraphBidiInfo::new("A", None), 54.0, &[0])
-            .iter()
-            .map(|glyph| glyph.glyph_index)
-            .collect::<Vec<_>>(),
+        shape_paragraph(
+            &faces,
+            "A",
+            &ParagraphBidiInfo::new("A", None),
+            54.0,
+            &[0],
+            EmojiPolicy::Color,
+        )
+        .iter()
+        .map(|glyph| glyph.glyph_index)
+        .collect::<Vec<_>>(),
         [0],
         "a glyph past the font's {glyphs} draws as .notdef"
     );
@@ -681,7 +705,7 @@ fn plain(
             line_height,
             align: TextAlign::Start,
             color: [255, 255, 255, 255],
-            emoji_policy: EmojiPolicy::Monochrome,
+            emoji_policy: EmojiPolicy::Color,
             content_version: 1,
             outline: None,
             background: None,
@@ -888,7 +912,7 @@ fn request(text: &str, size: f32) -> TextRasterRequest {
         line_height: 1.2,
         align: TextAlign::Start,
         color: [255, 255, 255, 255],
-        emoji_policy: EmojiPolicy::Monochrome,
+        emoji_policy: EmojiPolicy::Color,
         content_version: 1,
         outline: None,
         background: None,
@@ -1420,6 +1444,7 @@ fn the_background_is_every_line_box_byte_for_byte() {
             compose(
                 &request,
                 &vec![0; pixels],
+                None,
                 width,
                 [margin, margin],
                 &line_boxes
@@ -1447,4 +1472,186 @@ fn rename_family(bytes: &[u8], from: &str, to: &str) -> Vec<u8> {
         }
     }
     out
+}
+
+/// The fixture, then the color fixtures: Noto's `COLRv1` and CBDT emoji and
+/// the drawn COLR glyphs at U+E000.
+fn color_stack() -> TextRasterizer {
+    TextRasterizer::new(vec![
+        font("Alpha2Fixture.ttf", "Alpha2 Fixture"),
+        font("Alpha2FixtureEmojiColr.ttf", "Alpha2 Fixture Emoji Colr"),
+        font(
+            "Alpha2FixtureEmojiBitmap.ttf",
+            "Alpha2 Fixture Emoji Bitmap",
+        ),
+        font("Alpha2FixtureColor.ttf", "Alpha2 Fixture Color"),
+    ])
+    .expect("color fixtures")
+}
+
+/// The premultiplied pixel at layout-box position `(x, y)`.
+fn pixel_at(result: &TextRasterResult, x: i64, y: i64) -> [u8; 4] {
+    #[allow(clippy::cast_possible_truncation)]
+    let (left, top) = (
+        result.descriptor.layout_x as i64 + x,
+        result.descriptor.layout_y as i64 + y,
+    );
+    let width = i64::from(result.descriptor.texture.width);
+    let index = usize::try_from((top * width + left) * 4).expect("inside the texture");
+    result.pixels.rgba8[index..index + 4]
+        .try_into()
+        .expect("four channels")
+}
+
+#[test]
+fn an_emoji_tries_the_color_fonts_first_and_a_text_request_the_others() {
+    let rasterizer = color_stack();
+    let order = [0, 1, 2, 3];
+    let under = |text: &str, order: &[usize], policy| runs_under(&rasterizer, text, order, policy);
+    // A heart is text by default: the first font with one draws it, the color font when it comes
+    // first, but U+FE0E asks for text.
+    let (heart, text_heart) = ("\u{2764}", "\u{2764}\u{fe0e}");
+    assert_eq!(
+        under(heart, &order, EmojiPolicy::Color),
+        [(0, heart.into())]
+    );
+    assert_eq!(
+        under(heart, &[1, 0, 2, 3], EmojiPolicy::Color),
+        [(1, heart.into())]
+    );
+    assert_eq!(
+        under(text_heart, &[1, 0, 2, 3], EmojiPolicy::Color),
+        [(0, text_heart.into())]
+    );
+    // U+FE0F asks for an emoji: a color font, though a text font with a heart comes first.
+    assert_eq!(
+        under("\u{2764}\u{fe0f}", &order, EmojiPolicy::Color),
+        [(1, "\u{2764}\u{fe0f}".into())]
+    );
+    // Monochrome asks for outlines: the text font first.
+    assert_eq!(
+        under("\u{2764}\u{fe0f}", &order, EmojiPolicy::Monochrome),
+        [(0, "\u{2764}\u{fe0f}".into())]
+    );
+    // Each sequence stays whole, in the color font, not in the text font before it.
+    let emoji = "\u{1f441}\u{fe0f}\u{1f44d}\u{1f3fd}\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{1f1f0}\u{1f1f7}1\u{fe0f}\u{20e3}";
+    assert_eq!(
+        under(&format!("A {emoji}"), &order, EmojiPolicy::Color),
+        [(0, "A ".into()), (1, emoji.into())]
+    );
+    // A family the stack names first draws them, the bitmaps.
+    assert_eq!(
+        under(emoji, &[2, 0, 1, 3], EmojiPolicy::Color),
+        [(2, emoji.into())]
+    );
+}
+
+#[test]
+fn a_stack_without_color_fonts_keeps_emoji_where_they_fell() {
+    // No color font: an emoji under the color policy falls back, and stays, as any grapheme does.
+    let rasterizer = fixture();
+    for policy in [EmojiPolicy::Color, EmojiPolicy::Monochrome] {
+        assert_eq!(
+            runs_under(&rasterizer, "A\u{2764}\u{fe0f}", &[0], policy),
+            [(0, "A\u{2764}\u{fe0f}".into())]
+        );
+    }
+}
+
+#[test]
+fn a_color_glyph_keeps_its_colors_and_takes_the_text_color_where_asked() {
+    let mut rasterizer = color_stack();
+    // At 100 px on a 1000-unit em: a red square over x 10..90 and y 0..80, an octagon in the text's
+    // color, and a half-transparent blue bar across y 30..50.
+    let mut draw = |color, emoji_policy| {
+        rasterizer.clear();
+        rasterizer
+            .rasterize(&TextRasterRequest {
+                color,
+                emoji_policy,
+                ..request("\u{e000}", 100.0)
+            })
+            .expect("draws")
+    };
+    let blue = draw([0, 0, 255, 255], EmojiPolicy::Color);
+    let green = draw([0, 255, 0, 255], EmojiPolicy::Color);
+    let faded = draw([0, 0, 255, 128], EmojiPolicy::Color);
+    let monochrome = draw([0, 0, 255, 255], EmojiPolicy::Monochrome);
+    // The square's corner, outside the octagon: the palette's red whatever the text's color.
+    assert_eq!(pixel_at(&blue, 12, 2), [255, 0, 0, 255]);
+    assert_eq!(pixel_at(&green, 12, 2), [255, 0, 0, 255]);
+    // The octagon above the bar: the text's color.
+    assert_eq!(pixel_at(&blue, 50, 15), [0, 0, 255, 255]);
+    assert_eq!(pixel_at(&green, 50, 15), [0, 255, 0, 255]);
+    // The bar: blue at 128/255 over the octagon.
+    assert_eq!(pixel_at(&green, 50, 40), [0, 127, 128, 255]);
+    // The text's alpha is the glyph's opacity.
+    assert_eq!(pixel_at(&faded, 12, 2), [128, 0, 0, 128]);
+    assert_eq!(pixel_at(&faded, 50, 15), [0, 0, 128, 128]);
+    // Monochrome draws the base glyph's outline, the square, in the text's color.
+    assert_eq!(pixel_at(&monochrome, 12, 2), [0, 0, 255, 255]);
+    assert_eq!(pixel_at(&monochrome, 50, 40), [0, 0, 255, 255]);
+}
+
+#[test]
+fn an_outline_surrounds_a_color_glyph() {
+    let mut rasterizer = color_stack();
+    let plain = rasterizer
+        .rasterize(&request("\u{e000}", 100.0))
+        .expect("draws");
+    let outlined = rasterizer
+        .rasterize(&TextRasterRequest {
+            content_version: 2,
+            outline: Some(TextOutline {
+                color: [0, 0, 0, 255],
+                width: 4.0,
+            }),
+            ..request("\u{e000}", 100.0)
+        })
+        .expect("draws");
+    // Three pixels left of the square: nothing, then the band.
+    assert_eq!(pixel_at(&plain, 7, 40), [0, 0, 0, 0]);
+    assert_eq!(pixel_at(&outlined, 7, 40), [0, 0, 0, 255]);
+    // The glyph goes over its band.
+    assert_eq!(pixel_at(&outlined, 12, 2), [255, 0, 0, 255]);
+}
+
+#[test]
+fn a_bitmap_glyph_fills_its_em_at_any_size() {
+    let mut rasterizer = color_stack();
+    for (version, size) in [(1, 20.0), (2, 109.0), (3, 300.0)] {
+        let result = rasterizer
+            .rasterize(&TextRasterRequest {
+                content_version: version,
+                font_family: Some("Alpha2 Fixture Emoji Bitmap".into()),
+                ..request("\u{1f600}", size)
+            })
+            .expect("draws");
+        let (left, top, right, bottom) = ink_box(&result);
+        #[allow(clippy::cast_possible_truncation)]
+        let em = size as i64;
+        // The face spans about an em across, from the baseline's height above to below it.
+        assert!(
+            (left..=right).contains(&(em / 2)),
+            "{size}: {left}..{right}"
+        );
+        assert!(
+            right - left >= em * 3 / 4 && right - left <= em * 5 / 4,
+            "{size}: {left}..{right}"
+        );
+        assert!(
+            bottom - top >= em * 3 / 4 && bottom - top <= em * 5 / 4,
+            "{size}: {top}..{bottom}"
+        );
+        // Its middle is the face's opaque yellow, averaged or interpolated.
+        let [red, green, blue, alpha] = pixel_at(
+            &result,
+            i64::midpoint(left, right),
+            top + (bottom - top) / 4,
+        );
+        assert!(
+            alpha == 255 && red > 200 && green > 150 && blue < 100,
+            "{size}: {red} {green} {blue} {alpha}"
+        );
+    }
 }

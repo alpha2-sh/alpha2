@@ -57,12 +57,12 @@ export interface BrowserTextRequest {
   /** A CSS color (default opaque white). */
   readonly color?: string;
   /**
-   * How emoji are drawn (default `native-color`): in the platform's color font, as text
-   * presentation where there is one (`monochrome`), or as one U+FFFD per grapheme shown as an
-   * emoji (`replace`), as the portable host replaces them. Symbols shown as text by default, such
-   * as (c), stay.
+   * How emoji are drawn (default `color`): in the platform's color font, as text presentation
+   * where there is one (`monochrome`), or as one U+FFFD per grapheme shown as an emoji
+   * (`replace`), as the portable host replaces them. Symbols shown as text by default, such as
+   * (c), stay.
    */
-  readonly emojiPolicy?: "native-color" | "monochrome" | "replace";
+  readonly emojiPolicy?: "color" | "monochrome" | "replace";
 }
 
 /**
@@ -137,21 +137,24 @@ export interface WasmTextRequest {
   /** Straight (not premultiplied), sRGB-encoded RGBA, each in `0..=255`. */
   readonly color: readonly [number, number, number, number];
   /**
-   * What becomes of color-only emoji (default `monochrome`); `replace` draws each emoji grapheme as
-   * one U+FFFD.
+   * How emoji are drawn (default `color`): a font's color glyphs (COLR, CBDT, sbix) in their own
+   * colors, an emoji trying the color fonts first; `monochrome` draws every glyph as an outline in
+   * `color`, an emoji trying the other fonts first; `replace` draws each emoji grapheme as one
+   * U+FFFD.
    */
-  readonly emojiPolicy?: "monochrome" | "replace";
+  readonly emojiPolicy?: "color" | "monochrome" | "replace";
 }
 
 /**
  * The engine's portable text host (`alpha2-text`: Unicode bidirectional
  * layout and line breaking, rustybuzz shaping, `ab_glyph_rasterizer`
- * outlines) running in wasm.
+ * outlines, COLR paintings and CBDT or sbix bitmaps) running in wasm.
  *
  * It is the same code a native host rasterizes with, so with the same font bytes a browser preview
  * and a native export draw identical text; the platform's own rasterizer, {@link
  * OffscreenTextRasterizer}, does not. Fonts are caller-supplied bytes in fallback order; system
- * fonts are not reachable. Color emoji are drawn as outlines or replaced (`emojiPolicy`).
+ * fonts are not reachable. Color emoji are drawn in color from the fonts given, as outlines, or
+ * replaced (`emojiPolicy`).
  */
 export class WasmTextRasterizer {
   readonly #handle: WasmTextRasterizerHandle;
@@ -316,7 +319,7 @@ export class OffscreenTextRasterizer {
     probe.textBaseline = "alphabetic";
     const normalizedText = normalizeEmoji(
       request.text,
-      request.emojiPolicy ?? "native-color",
+      request.emojiPolicy ?? "color",
     );
     const lines = wrapLines(probe, normalizedText, request.maxWidth ?? 0);
     probe.textAlign = request.align ?? "start";
@@ -604,7 +607,7 @@ function normalizeEmoji(
   text: string,
   policy: NonNullable<BrowserTextRequest["emojiPolicy"]>,
 ): string {
-  if (policy === "native-color") return text;
+  if (policy === "color") return text;
   let normalized = "";
   for (const segment of graphemes(text)) {
     if (policy === "replace") {
