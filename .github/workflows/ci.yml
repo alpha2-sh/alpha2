@@ -422,7 +422,10 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
+      # The npm packages a release tag publishes come from this job, so a tag builds them and their
+      # tools from source rather than from caches.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         with:
           cache-bin: false
           save-if: ${{ env.RUST_CACHE_SAVE }}
@@ -432,12 +435,18 @@ jobs:
           cache: npm
       - run: npm ci
       - uses: taiki-e/cache-cargo-install-action@9ee83daaa7b96a6fab930949ecf1122bba04a389 # v3.0.8
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         with:
           tool: wasm-bindgen-cli@0.2.128
       - uses: taiki-e/cache-cargo-install-action@9ee83daaa7b96a6fab930949ecf1122bba04a389 # v3.0.8
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         with:
           tool: cargo-about@0.9.2
           features: cli
+      - if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          cargo install wasm-bindgen-cli --version 0.2.128 --locked
+          cargo install cargo-about --version 0.9.2 --locked --features cli
       - run: npm run build
       - name: Pack the npm packages
         run: |
