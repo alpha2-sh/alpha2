@@ -40,6 +40,7 @@ import {
   PhysicalFrameAliases,
   type PhysicalFrameIdentity,
 } from "./physical-frames.js";
+import { sendsBitmaps, uploadPresentedFrame } from "./presented-frames.js";
 
 /**
  * A message the main thread posts to the render worker. Every request carries an `id` the worker
@@ -510,16 +511,20 @@ class WasmRenderWorkerHost implements RenderWorkerHost {
       this.#physicalFrames.record(identity, exact);
       return;
     }
+    const upload = [
+      frame.sourceId,
+      frame.requestedTimeTicks,
+      frame.frame,
+      this.#outputSize.width,
+      this.#outputSize.height,
+      rotation,
+      mirror,
+    ] as const;
+    // A frame the engine takes directly still uploads synchronously.
     this.#pendingUploads.push(
-      this.#wasm.uploadPresentedVideoFrame(
-        frame.sourceId,
-        frame.requestedTimeTicks,
-        frame.frame,
-        this.#outputSize.width,
-        this.#outputSize.height,
-        rotation,
-        mirror,
-      ),
+      sendsBitmaps(this.#wasm)
+        ? await uploadPresentedFrame(this.#wasm, ...upload)
+        : this.#wasm.uploadPresentedVideoFrame(...upload),
     );
     this.#physicalFrames.record(identity, exact);
   }

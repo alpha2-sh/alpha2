@@ -133,6 +133,85 @@ report({
 `;
 }
 
+// A bitmap upload renders as the frame upload does, and `uploadPresentedFrame` sends bitmaps only
+// where WebGPU refused a frame. `rejectVideoFrame` refuses VideoFrame copies as Firefox does.
+export function bitmapUploads(webgl, rejectVideoFrame = false) {
+  return `
+${webgl ? 'Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });' : 'if (!navigator.gpu) throw new Error("this browser offers no WebGPU");'}
+${
+  rejectVideoFrame
+    ? `const copyExternalImage = GPUQueue.prototype.copyExternalImageToTexture;
+GPUQueue.prototype.copyExternalImageToTexture = function (source, ...rest) {
+  if (source.source instanceof VideoFrame)
+    throw new TypeError("GPUQueue.copyExternalImageToTexture: 'source' member of GPUCopyExternalImageSourceInfo is not an object of one of ImageBitmap, HTMLImageElement, HTMLCanvasElement, OffscreenCanvas.");
+  return copyExternalImage.call(this, source, ...rest);
+};`
+    : ""
+}
+let draws = 0;
+const drawImage = OffscreenCanvasRenderingContext2D.prototype.drawImage;
+OffscreenCanvasRenderingContext2D.prototype.drawImage = function (...args) {
+  draws += 1;
+  return drawImage.apply(this, args);
+};
+const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+const { uploadPresentedFrame } = await import("/packages/alpha2/dist/presented-frames.js");
+await init();
+const engine = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(64, 48));
+engine.loadProject(JSON.stringify({
+  schema_version: 1, id: "bitmaps", name: "Bitmaps",
+  settings: { width: 64, height: 48, frame_rate: { num: 30, den: 1 }, sample_rate: 48000 },
+  sources: [{ id: "video", locator: "fixture://video", kind: "video" }],
+  timeline: { tracks: [{ id: "v", name: "V", kind: "video", clips: [{
+    id: "clip", source_id: "video",
+    timeline_range: { start: 0, end: 120000 }, source_range: { start: 0, end: 120000 },
+  }] }] },
+}));
+const exported = async () => {
+  const ticket = engine.beginExportAt(0n, "h264");
+  const rendered = ticket.kind === "rendered" ? await ticket.readback : ticket;
+  if (rendered.kind !== "rendered") throw new Error("the frame did not render: " + rendered.kind);
+  const { offset, stride } = rendered.layout[0];
+  return Array.from({ length: 48 }, (_, row) =>
+    Array.from(rendered.pixels.subarray(offset + row * stride, offset + row * stride + 64))).flat();
+};
+const frame = (texel) => {
+  const pixels = new Uint8Array(16 * 12 * 4);
+  for (let y = 0; y < 12; y++) for (let x = 0; x < 16; x++) pixels.set(texel(x, y), (y * 16 + x) * 4);
+  return new VideoFrame(pixels, { format: "RGBA", codedWidth: 16, codedHeight: 12, timestamp: 0 });
+};
+const pictures = {
+  edges: (x, y) => (x >= 4 && x < 12 && y >= 3 && y < 9 ? [255, 255, 255, 255] : [0, 0, 0, 0]),
+  half: () => [255, 255, 255, 128],
+  corner: (x, y) => (x < 4 && y < 3 ? [255, 255, 255, 255] : [40, 40, 40, 255]),
+};
+const before = engine.videoFrameCopy;
+const worst = {};
+for (const [name, texel] of Object.entries(pictures)) {
+  const rotation = name === "corner" ? 90 : 0;
+  engine.uploadPresentedVideoFrame("video", 0n, frame(texel), 64, 48, rotation, false);
+  const sent = await exported();
+  const bitmap = await createImageBitmap(frame(texel), { premultiplyAlpha: "none", resizeWidth: 16, resizeHeight: 12 });
+  engine.uploadPresentedImageBitmap("video", 0n, bitmap, 64, 48, rotation, false);
+  const drawn = await exported();
+  worst[name] = Math.max(...sent.map((value, index) => Math.abs(value - drawn[index])));
+}
+const mode = engine.videoFrameCopy;
+const drawsBefore = draws;
+const handed = frame(pictures.half);
+await uploadPresentedFrame(engine, "video", 0n, handed, 64, 48, 0, false);
+const helperDraws = draws - drawsBefore;
+// Firefox refuses every VideoFrame; Chrome and Safari take them.
+const expected = ${webgl ? '["canvas"]' : rejectVideoFrame ? '["bitmap"]' : '["direct", "bitmap"]'};
+report({
+  ok: Object.values(worst).every((value) => value <= ${webgl ? 2 : 1}) && expected.includes(mode) &&
+    before === ${webgl ? '"canvas"' : '"untried"'} && helperDraws === ${webgl ? 1 : 0} &&
+    handed.format === null && !engine.deviceLost,
+  worst, before, mode, helperDraws,
+});
+`;
+}
+
 // The only case that reaches the composite's second layer and the bounded-layer region copy.
 export function layers(webgl) {
   return `

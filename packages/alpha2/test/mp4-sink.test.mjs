@@ -41,8 +41,13 @@ class TestVideoFrame {
   close() {}
 }
 
-/** Set to make the next video encoder's flush fail, as a browser encoder can at the end. */
-const encoders = { failFlush: false };
+/**
+ * How the next video encoder misbehaves: `failFlush` fails its flush; `stall` puts nothing out and
+ * holds its encodes or its flush for `STALL_MS`; `delayMs` delays each frame. `configs` records
+ * each encoder's configuration.
+ */
+const encoders = { failFlush: false, stall: null, delayMs: 0, configs: [] };
+const STALL_MS = 500;
 
 /** Encodes each sample as a three-byte keyframe at the sample's own time. */
 class StampEncoder extends CustomVideoEncoder {
@@ -51,8 +56,25 @@ class StampEncoder extends CustomVideoEncoder {
   }
   init() {
     this.configured = false;
+    encoders.configs.push(this.config);
   }
   encode(sample) {
+    if (encoders.stall === "encode")
+      return new Promise((resolve) => setTimeout(resolve, STALL_MS));
+    if (encoders.stall === "flush") return;
+    if (encoders.delayMs > 0) {
+      const timestamp = sample.timestamp;
+      const duration = sample.duration;
+      return new Promise((resolve) =>
+        setTimeout(() => {
+          this.put(timestamp, duration);
+          resolve();
+        }, encoders.delayMs),
+      );
+    }
+    this.put(sample.timestamp, sample.duration);
+  }
+  put(timestamp, duration) {
     const meta = this.configured
       ? undefined
       : {
@@ -64,17 +86,14 @@ class StampEncoder extends CustomVideoEncoder {
         };
     this.configured = true;
     this.onPacket(
-      new EncodedPacket(
-        new Uint8Array([1, 2, 3]),
-        "key",
-        sample.timestamp,
-        sample.duration,
-      ),
+      new EncodedPacket(new Uint8Array([1, 2, 3]), "key", timestamp, duration),
       meta,
     );
   }
   flush() {
     if (encoders.failFlush) throw new Error("encoder flush failed");
+    if (encoders.stall === "flush")
+      return new Promise((resolve) => setTimeout(resolve, STALL_MS));
   }
   close() {}
 }
@@ -173,8 +192,9 @@ function exporter(frames, failAt, onBegin = () => {}) {
   );
 }
 
-function streamSink(file, tracks = { video: true }) {
+function streamSink(file, tracks = { video: true }, options = {}) {
   return new MediabunnyMp4Sink({
+    ...options,
     ...(tracks.video
       ? {
           videoCodec: "vp9",
@@ -428,4 +448,93 @@ test("the sink's video track keeps one sample duration at every rate it declares
       `${num}/${den}: each sample lasts one frame (${delta}/${timescale} s)`,
     );
   }
+});
+
+/** Runs `run` with the encoders set as `settings` say. */
+async function withEncoders(settings, run) {
+  Object.assign(encoders, settings);
+  try {
+    return await run();
+  } finally {
+    Object.assign(encoders, { failFlush: false, stall: null, delayMs: 0 });
+  }
+}
+
+test("an encoder that holds its frames without putting one out fails the write, not the export forever", async () => {
+  const file = swapFile();
+  const sink = streamSink(file, { video: true }, { stallTimeoutMs: 50 });
+  const failure = await withEncoders({ stall: "encode" }, () =>
+    exportToSink(exporter(30), sink, async () => {}).then(
+      () => assert.fail("the export finished"),
+      (error) => error,
+    ),
+  );
+  assert.equal(
+    failure.cause?.code ?? failure.code,
+    "ENCODE_STALLED",
+    String(failure),
+  );
+  assert.match(
+    String(failure.cause ?? failure),
+    /video encoder stalled: no output for \d+ ms with 4 frames queued/,
+  );
+  assert.equal(file.committed, null);
+  assert.equal(file.aborted, true);
+});
+
+test("an encoder whose flush puts nothing out fails the finish", async () => {
+  const file = swapFile();
+  const sink = streamSink(file, { video: true }, { stallTimeoutMs: 50 });
+  const failure = await withEncoders({ stall: "flush" }, () =>
+    exportToSink(exporter(3), sink, async () => {}).then(
+      () => assert.fail("the export finished"),
+      (error) => error,
+    ),
+  );
+  const stalled = failure.cause ?? failure;
+  assert.equal(stalled.code, "ENCODE_STALLED", String(failure));
+  assert.deepEqual(stalled.failure, {
+    code: "GPU_TIMEOUT",
+    phase: "encode",
+    stage: "encoder-stalled",
+    resource: "unknown",
+  });
+  assert.equal(file.committed, null);
+  assert.equal(file.aborted, true);
+});
+
+test("a slow encoder that keeps putting frames out is not taken to be stalled", async () => {
+  const file = swapFile();
+  const sink = streamSink(file, { video: true }, { stallTimeoutMs: 50 });
+  await withEncoders({ delayMs: 30 }, () =>
+    exportToSink(exporter(12), sink, async () => {}),
+  );
+  assert.ok(file.committed !== null);
+  assert.deepEqual(await tracksOf(file.committed), [["video", 0.4]]);
+});
+
+test("the video encoder opens in the latency mode the sink is given, else in the measured one", async () => {
+  for (const given of [undefined, "realtime", "quality"]) {
+    encoders.configs = [];
+    const sink = streamSink(
+      swapFile(),
+      { video: true },
+      given === undefined ? {} : { videoLatencyMode: given },
+    );
+    await exportToSink(exporter(2), sink, async () => {});
+    const mode = given ?? "quality";
+    assert.equal(sink.videoLatencyMode, mode);
+    assert.deepEqual(
+      encoders.configs.map((config) => config.latencyMode),
+      [mode],
+    );
+  }
+});
+
+test("a stall timeout out of range is refused at construction", () => {
+  for (const stallTimeoutMs of [0, -1, 1.5, 2 ** 31])
+    assert.throws(
+      () => streamSink(swapFile(), { video: true }, { stallTimeoutMs }),
+      RangeError,
+    );
 });
