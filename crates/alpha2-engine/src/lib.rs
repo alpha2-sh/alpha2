@@ -50,4 +50,7 @@ pub use player::{PlaybackFrame, Player};
 pub use policy::{MissingFramePolicy, color_policy};
 pub use quality::QualityProfile;
 pub use snapshot::EngineProject;
-pub use text::{FramesWithText, TextError, TextTexture, TextTextures, text_key};
+pub use text::{
+    CanvasRect, FramesWithText, TextBounds, TextError, TextTexture, TextTextures, measure_text,
+    text_key,
+};

@@ -472,3 +472,163 @@ fn a_caption_stays_under_the_track_after_it_over_a_matte_no_clip_uses() {
     }
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
+
+/// The frame at one second of a `size` project: a grey backdrop, and over it
+/// a clip of a text generator drawing `text` in a style (JSON) when given,
+/// prepared in `texts`.
+fn titled_frame(
+    renderer: &Renderer,
+    texts: &mut crate::TextTextures,
+    size: RenderSize,
+    text: Option<(&str, &str)>,
+) -> Vec<u8> {
+    let (width, height) = (size.width, size.height);
+    let source = text.map_or_else(String::new, |(text, style)| {
+        format!(
+            r#"{{ "id": "title", "kind": "generated", "generator": {{ "type": "text",
+                "text": {text:?}, "style": {style} }} }},"#
+        )
+    });
+    let track = if text.is_some() {
+        r#", { "id": "titles", "name": "Titles", "kind": "video", "clips": [
+            { "id": "t", "source_id": "title", "timeline_range": { "start": 0, "end": 240000 },
+              "source_range": { "start": 0, "end": 240000 } } ] }"#
+    } else {
+        ""
+    };
+    let project = crate::EngineProject::new(
+        alpha2_model::Project::from_json(&format!(
+            r#"{{ "schema_version": 1, "id": "p", "name": "P",
+              "settings": {{ "width": {width}, "height": {height}, "frame_rate": {{ "num": 30, "den": 1 }},
+                "sample_rate": 48000 }},
+              "sources": [ {source}
+                {{ "id": "grey", "kind": "generated", "generator": {{ "type": "fill", "paint": {{
+                  "type": "solid", "color": {{ "red": 0.3, "green": 0.3, "blue": 0.3, "alpha": 1 }} }} }} }} ],
+              "timeline": {{ "tracks": [
+                {{ "id": "back", "name": "Back", "kind": "video", "clips": [
+                  {{ "id": "backdrop", "source_id": "grey", "timeline_range": {{ "start": 0, "end": 240000 }},
+                    "source_range": {{ "start": 0, "end": 240000 }} }} ] }} {track} ] }} }}"#
+        ))
+        .expect("a valid project"),
+    )
+    .expect("indexed");
+    let time = MediaTime::from_ticks(120_000);
+    texts
+        .prepare_at(renderer, &project, time, size)
+        .expect("text");
+    let frame = project.evaluate(time).expect("frame");
+    let output = renderer
+        .render_frame(size, &frame, &CaptionFrames(texts))
+        .expect("frame renders");
+    read_rgba8(renderer, &output.texture.expect("complete"))
+}
+
+#[test]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss
+)]
+fn a_text_measure_bounds_the_pixels_a_frame_draws_of_it() {
+    let _lock = gpu_test_lock();
+    let mut renderer = Renderer::new(gpu());
+    pollster::block_on(renderer.register_effect(alpha2_render::generator_definition()))
+        .expect("the generator compiles");
+    let (width, height) = (320_u32, 180_u32);
+    let size = RenderSize::new(width, height).expect("size");
+    let mut texts = crate::TextTextures::new();
+    texts
+        .add_font(
+            "Alpha2 Fixture",
+            std::fs::read("../../tests/fonts/Alpha2Fixture.ttf").expect("fixture font"),
+            0,
+        )
+        .expect("font");
+    let red = r#""color": { "red": 1, "green": 0, "blue": 0, "alpha": 1 }"#;
+    let grey = titled_frame(&renderer, &mut texts, size, None);
+    let cases = [
+        ("default", "Qgjy Title", format!("{{ {red} }}")),
+        (
+            "outlined top left",
+            "Outlined",
+            format!(
+                r#"{{ {red}, "font_size": 0.12, "align": "start", "position": {{ "x": 0.1, "y": 0.1 }},
+                    "anchor": {{ "x": 0, "y": 0 }},
+                    "outline": {{ "color": {{ "red": 0, "green": 0, "blue": 0, "alpha": 1 }}, "width": 0.1 }} }}"#
+            ),
+        ),
+        (
+            "boxed right",
+            "One\nlonger line",
+            format!(
+                r#"{{ {red}, "font_size": 0.1, "align": "end", "max_width": 0.5,
+                    "position": {{ "x": 0.9, "y": 0.5 }}, "anchor": {{ "x": 1, "y": 0.5 }},
+                    "background": {{ "color": {{ "red": 0, "green": 0, "blue": 0.4, "alpha": 0.6 }}, "padding": 0.3 }} }}"#
+            ),
+        ),
+        (
+            "wrapped tight",
+            "a paragraph wrapped onto lines",
+            format!(
+                r#"{{ {red}, "font_size": 0.09, "max_width": 0.4, "line_height": 0.9,
+                    "position": {{ "x": 0.37, "y": 0.43 }}, "anchor": {{ "x": 0.3, "y": 0.6 }} }}"#
+            ),
+        ),
+    ];
+    for (label, text, style_json) in cases {
+        let style: alpha2_model::TextStyle = serde_json::from_str(&style_json).expect("style");
+        let bounds = texts.measure(text, &style, size).expect("measures");
+        // The layout box's anchor lies at the position.
+        let layout = bounds.layout;
+        let anchored = [
+            layout.left + style.anchor.x * (layout.right - layout.left),
+            layout.top + style.anchor.y * (layout.bottom - layout.top),
+        ];
+        assert!(
+            (anchored[0] - style.position.x).abs() < 1e-4
+                && (anchored[1] - style.position.y).abs() < 1e-4,
+            "{label}: {layout:?} anchors at {anchored:?}"
+        );
+        let pixels = titled_frame(&renderer, &mut texts, size, Some((text, &style_json)));
+        let mut drawn = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
+        for (index, (pixel, backdrop)) in pixels.chunks(4).zip(grey.chunks(4)).enumerate() {
+            if pixel != backdrop {
+                let (x, y) = (
+                    (index % width as usize) as i64,
+                    (index / width as usize) as i64,
+                );
+                drawn = (
+                    drawn.0.min(x),
+                    drawn.1.min(y),
+                    drawn.2.max(x + 1),
+                    drawn.3.max(y + 1),
+                );
+            }
+        }
+        let ink = bounds.ink.expect("the text draws");
+        let ink = [
+            ink.left * width as f32,
+            ink.top * height as f32,
+            ink.right * width as f32,
+            ink.bottom * height as f32,
+        ];
+        let drawn = [drawn.0, drawn.1, drawn.2, drawn.3].map(|edge| edge as f32);
+        // Sampled between pixels, the texture's edge spreads a pixel into each neighbour.
+        for side in 0..4 {
+            let inward = if side < 2 { 1.0 } else { -1.0 };
+            let past = (drawn[side] - ink[side]) * inward;
+            assert!(
+                (-2.0..=2.0).contains(&past),
+                "{label}: ink {ink:?} against the drawn {drawn:?}"
+            );
+        }
+        let content = bounds.content;
+        assert!(
+            content.left >= layout.left - 1e-4
+                && content.right <= layout.right + 1e-4
+                && content.top >= layout.top - 1e-4
+                && content.bottom <= layout.bottom + 1e-4,
+            "{label}: {content:?} outside {layout:?}"
+        );
+    }
+}

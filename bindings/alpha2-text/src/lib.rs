@@ -115,6 +115,37 @@ pub struct TextRasterResult {
     pub pixels: HostTexturePixels,
 }
 
+/// Where a request's text lies, without drawing it
+/// ([`TextRasterizer::measure`]): rectangles as `[left, top, right, bottom]`
+/// in pixels from the layout box's top-left corner, y down. The texture
+/// [`TextRasterizer::rasterize`] draws for the request holds that corner at
+/// ([`TextTexture::layout_x`], [`TextTexture::layout_y`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextMeasure {
+    /// The layout box's width in whole pixels: the width the request wraps
+    /// at, else its widest line, rounded up.
+    pub box_width: u32,
+    /// The layout box's height in whole pixels: every line's em box, rounded
+    /// up.
+    pub box_height: u32,
+    /// [`TextRasterRequest::decoration_margin`].
+    pub decoration_margin: u32,
+    /// From the start of the line that starts farthest left to the end of
+    /// the one that ends farthest right, the box's height, grown by the
+    /// decoration margin as the box is. It moves only as the lines' advances
+    /// do, not as glyphs with more or less ink are typed.
+    pub content: [f32; 4],
+    /// What the text draws: each glyph's outline (its curves, not their
+    /// control points) or color form, the outline's band around them, and
+    /// the background's boxes. Every pixel the raster gives any alpha meets
+    /// it, and it reaches at most a pixel past them, or past a COLR glyph's
+    /// outlines and clip boxes, which may hold a little more than it paints.
+    /// `None` when the text draws nothing.
+    pub ink: Option<[f32; 4]>,
+    /// Number of laid-out lines.
+    pub line_count: u32,
+}
+
 /// Typed text-host failure.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -414,19 +445,78 @@ impl TextRasterizer {
         self.cache.entries.len()
     }
 
-    #[allow(
-        clippy::cast_possible_truncation,
-        clippy::cast_precision_loss,
-        clippy::too_many_lines
-    )]
-    fn rasterize_uncached(
-        &self,
-        request: &TextRasterRequest,
-    ) -> Result<TextRasterResult, TextRasterError> {
-        let line_advance = request.font_size * request.line_height;
-        let ascent = request.font_size * 0.8;
-        let descent = request.font_size * 0.2;
+    /// Where `request`'s text lies, laid out as [`Self::rasterize`] lays it
+    /// out, without drawing it or touching the result cache.
+    ///
+    /// # Errors
+    /// Returns the validation, font, or size error [`Self::rasterize`]
+    /// returns for the same request.
+    #[allow(clippy::cast_precision_loss)]
+    pub fn measure(&self, request: &TextRasterRequest) -> Result<TextMeasure, TextRasterError> {
+        validate_request(request)?;
+        if self.fonts.is_empty() {
+            return Err(TextRasterError::NoFonts);
+        }
         let faces = Faces::new(&self.fonts)?;
+        let layout = self.lay_out(&faces, request)?;
+        let mut ink = None;
+        layout.each_glyph(
+            &faces,
+            request,
+            &mut HashMap::new(),
+            |drawing, origin, scale, _| {
+                if let Some([x_min, y_min, x_max, y_max]) = drawing.ink_bounds() {
+                    include(
+                        &mut ink,
+                        [
+                            origin[0] + x_min * scale,
+                            origin[1] - y_max * scale,
+                            origin[0] + x_max * scale,
+                            origin[1] - y_min * scale,
+                        ],
+                    );
+                }
+            },
+        );
+        // The band reaches past each pixel with ink by the disc's radius and one more pixel for
+        // the rim taps it weights in part: see `Disc::new`.
+        let band = request.outline.map_or(0.0, |outline| outline.width + 1.0);
+        ink = ink.map(|bounds| grown(bounds, band));
+        let padding = request.background.map(|background| background.padding);
+        let mut content = None;
+        for (index, line) in layout.lines.iter().enumerate() {
+            let left = layout.line_offset(line, request.align);
+            let top = index as f32 * layout.line_advance;
+            include(&mut content, [left, 0.0, left + line.width, layout.height]);
+            if let (Some(padding), true) = (padding, line.width > 0.0) {
+                include(
+                    &mut ink,
+                    grown(
+                        [left, top, left + line.width, top + request.font_size],
+                        padding,
+                    ),
+                );
+            }
+        }
+        let content = content.unwrap_or([0.0, 0.0, 0.0, layout.height]);
+        Ok(TextMeasure {
+            box_width: layout.box_width,
+            box_height: layout.box_height,
+            decoration_margin: request.decoration_margin(),
+            content: grown(content, request.decoration_margin() as f32),
+            ink,
+            line_count: layout.line_count,
+        })
+    }
+
+    /// `request`'s lines, broken and placed in its layout box.
+    #[allow(clippy::cast_precision_loss)]
+    fn lay_out(
+        &self,
+        faces: &Faces<'_>,
+        request: &TextRasterRequest,
+    ) -> Result<Layout, TextRasterError> {
+        let line_advance = request.font_size * request.line_height;
         let order = self.font_order(request.font_family.as_deref());
         let mut lines = Vec::new();
         // Lines up to the last with glyphs stay, however little ink they have; blank lines after it
@@ -434,7 +524,7 @@ impl TextRasterizer {
         let mut kept = 1;
         for paragraph in normalize(&request.text, request.emoji_policy).split('\n') {
             for line in layout_paragraph(
-                &faces,
+                faces,
                 paragraph,
                 request.font_size,
                 request.max_width,
@@ -449,40 +539,53 @@ impl TextRasterizer {
         }
         lines.truncate(kept);
         let line_count = u32::try_from(lines.len()).map_err(|_| TextRasterError::TooLarge)?;
-        let layout_width = if request.max_width > 0.0 {
+        let width = if request.max_width > 0.0 {
             request.max_width
         } else {
             lines.iter().map(|line| line.width).fold(0.0, f32::max)
         }
         .max(1.0);
         // Every line's nominal em box fits, the last one's too when lines are closer than an em.
-        let layout_height =
+        let height =
             ((line_count - 1) as f32 * line_advance + line_advance.max(request.font_size)).max(1.0);
-        let box_width = checked_dimension(layout_width)?;
-        let box_height = checked_dimension(layout_height)?;
-        // Where each line starts in the box: Start and End are the paragraph's own sides.
-        let line_offset = |line: &LaidLine| match (request.align, line.rtl) {
-            (TextAlign::Center, _) => (layout_width - line.width) * 0.5,
-            (TextAlign::Start, false) | (TextAlign::End, true) => 0.0,
-            (TextAlign::End, false) | (TextAlign::Start, true) => layout_width - line.width,
-        };
+        Ok(Layout {
+            box_width: checked_dimension(width)?,
+            box_height: checked_dimension(height)?,
+            lines,
+            line_count,
+            line_advance,
+            ascent: request.font_size * 0.8,
+            descent: request.font_size * 0.2,
+            width,
+            height,
+        })
+    }
+
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        clippy::too_many_lines
+    )]
+    fn rasterize_uncached(
+        &self,
+        request: &TextRasterRequest,
+    ) -> Result<TextRasterResult, TextRasterError> {
+        let faces = Faces::new(&self.fonts)?;
+        let layout = self.lay_out(&faces, request)?;
+        let (box_width, box_height) = (layout.box_width, layout.box_height);
         let mut drawings = HashMap::<(usize, u16), Drawing>::new();
         let mut placed = Vec::new();
         // Ink past the box on each axis, and the ink's own reach above and below its baselines.
         let (mut overflow_x, mut overflow_y) = (0_i64, 0_i64);
-        let (mut ink_ascent, mut ink_descent) = (ascent, descent);
-        for (index, line) in lines.iter().enumerate() {
-            let offset = line_offset(line);
-            let baseline = index as f32 * line_advance + ascent;
-            for glyph in &line.glyphs {
-                let drawing = drawings
-                    .entry((glyph.font, glyph.glyph_index))
-                    .or_insert_with(|| Drawing::of(&faces, glyph.font, glyph.glyph_index, request));
+        let (mut ink_ascent, mut ink_descent) = (layout.ascent, layout.descent);
+        layout.each_glyph(
+            &faces,
+            request,
+            &mut drawings,
+            |drawing, origin, scale, glyph| {
                 let Some(bounds) = drawing.bounds() else {
-                    continue;
+                    return;
                 };
-                let scale = request.font_size / faces.units_per_em(glyph.font);
-                let origin = [glyph.x + glyph.x_offset + offset, baseline - glyph.y_offset];
                 let pixels = PixelBox::of(bounds, origin, scale);
                 overflow_x = overflow_x
                     .max(pixels.left.saturating_neg())
@@ -493,8 +596,8 @@ impl TextRasterizer {
                 ink_ascent = ink_ascent.max(bounds[3] * scale + glyph.y_offset);
                 ink_descent = ink_descent.max(-(bounds[1] * scale + glyph.y_offset));
                 placed.push(((glyph.font, glyph.glyph_index), origin, scale, pixels));
-            }
-        }
+            },
+        );
         // The texture is the box plus a margin, equal on both ends of an axis so the box stays
         // centred, with room for decorations and for outlined ink past the box.
         let (outline, padding) = decoration_extents(request);
@@ -528,10 +631,14 @@ impl TextRasterizer {
         let mut coverage = vec![0_u8; pixel_count];
         // Color glyphs, premultiplied RGBA, only once one is placed.
         let mut colors: Option<Vec<u8>> = None;
-        let mut line_boxes = Vec::with_capacity(lines.len());
-        for (index, line) in lines.iter().enumerate() {
+        let mut line_boxes = Vec::with_capacity(layout.lines.len());
+        for (index, line) in layout.lines.iter().enumerate() {
             if line.width > 0.0 {
-                line_boxes.push((line_offset(line), line.width, index as f32 * line_advance));
+                line_boxes.push((
+                    layout.line_offset(line, request.align),
+                    line.width,
+                    index as f32 * layout.line_advance,
+                ));
             }
         }
         for (key, origin, scale, pixels) in placed {
@@ -581,12 +688,12 @@ impl TextRasterizer {
                 texture: texture.clone(),
                 layout_x: margin_x as f32,
                 layout_y: margin_y as f32,
-                layout_width,
-                layout_height,
-                first_baseline: ascent,
+                layout_width: layout.width,
+                layout_height: layout.height,
+                first_baseline: layout.ascent,
                 ascent: ink_ascent,
                 descent: ink_descent,
-                line_count,
+                line_count: layout.line_count,
             },
             pixels: HostTexturePixels { texture, rgba8 },
         })
@@ -751,6 +858,76 @@ fn is_hangul(character: char) -> bool {
             | '\u{ac00}'..='\u{d7a3}'
             | '\u{d7b0}'..='\u{d7ff}'
     )
+}
+
+/// A request's lines, broken and placed: pixels from its layout box's
+/// top-left corner, y down.
+struct Layout {
+    lines: Vec<LaidLine>,
+    line_count: u32,
+    /// Baseline to baseline.
+    line_advance: f32,
+    /// The nominal ascent and descent lines are spaced by.
+    ascent: f32,
+    descent: f32,
+    /// The layout box: as wide as the request wraps at, else its widest
+    /// line, and every line's em box tall.
+    width: f32,
+    height: f32,
+    /// The box rounded up to whole pixels, as the texture holds it.
+    box_width: u32,
+    box_height: u32,
+}
+
+impl Layout {
+    /// Where `line` starts in the box: Start and End are the paragraph's own sides.
+    fn line_offset(&self, line: &LaidLine, align: TextAlign) -> f32 {
+        match (align, line.rtl) {
+            (TextAlign::Center, _) => (self.width - line.width) * 0.5,
+            (TextAlign::Start, false) | (TextAlign::End, true) => 0.0,
+            (TextAlign::End, false) | (TextAlign::Start, true) => self.width - line.width,
+        }
+    }
+
+    /// Calls `place` with each glyph's drawing, read once a glyph into
+    /// `drawings`, its origin in the box, and its pixels a font unit.
+    #[allow(clippy::cast_precision_loss)]
+    fn each_glyph(
+        &self,
+        faces: &Faces<'_>,
+        request: &TextRasterRequest,
+        drawings: &mut HashMap<(usize, u16), Drawing>,
+        mut place: impl FnMut(&Drawing, [f32; 2], f32, &PositionedGlyph),
+    ) {
+        for (index, line) in self.lines.iter().enumerate() {
+            let offset = self.line_offset(line, request.align);
+            let baseline = index as f32 * self.line_advance + self.ascent;
+            for glyph in &line.glyphs {
+                let drawing = drawings
+                    .entry((glyph.font, glyph.glyph_index))
+                    .or_insert_with(|| Drawing::of(faces, glyph.font, glyph.glyph_index, request));
+                let scale = request.font_size / faces.units_per_em(glyph.font);
+                let origin = [glyph.x + glyph.x_offset + offset, baseline - glyph.y_offset];
+                place(drawing, origin, scale, glyph);
+            }
+        }
+    }
+}
+
+/// Grows `bounds` to hold `[left, top, right, bottom]`.
+fn include(bounds: &mut Option<[f32; 4]>, [left, top, right, bottom]: [f32; 4]) {
+    let held = bounds.get_or_insert([left, top, right, bottom]);
+    *held = [
+        held[0].min(left),
+        held[1].min(top),
+        held[2].max(right),
+        held[3].max(bottom),
+    ];
+}
+
+/// `[left, top, right, bottom]` grown by `by` on every side.
+fn grown([left, top, right, bottom]: [f32; 4], by: f32) -> [f32; 4] {
+    [left - by, top - by, right + by, bottom + by]
 }
 
 /// One line of a paragraph, laid out.
@@ -1189,6 +1366,18 @@ impl Drawing {
         }
     }
 
+    /// `[x_min, y_min, x_max, y_max]` in font units of what it draws: an
+    /// outline's curves themselves, not their control points, a bitmap's
+    /// pixels with alpha, or a painting's bounds; `None` when it draws
+    /// nothing.
+    fn ink_bounds(&self) -> Option<[f32; 4]> {
+        match self {
+            Self::Outline(outline) => outline.curve_bounds(),
+            Self::Painting(painting) => painting.bounds(),
+            Self::Bitmap(bitmap) => bitmap.ink_bounds(),
+        }
+    }
+
     /// A color glyph over `pixels`, premultiplied RGBA8; an outline draws
     /// nothing here.
     fn draw_color(&self, origin: [f32; 2], scale: f32, pixels: PixelBox) -> Vec<u8> {
@@ -1281,6 +1470,62 @@ impl Outline {
 }
 
 impl Outline {
+    /// `[x_min, y_min, x_max, y_max]` of the curves themselves: their ends
+    /// and where they turn along an axis. A curve stays within its control
+    /// points but seldom reaches them, so this is tighter than `bounds`.
+    fn curve_bounds(&self) -> Option<[f32; 4]> {
+        let mut bounds = None;
+        let mut hold = |[x, y]: [f32; 2]| include(&mut bounds, [x, y, x, y]);
+        for segment in &self.segments {
+            match *segment {
+                Segment::Line(from, to) => {
+                    hold(from);
+                    hold(to);
+                }
+                Segment::Quad(from, control, to) => {
+                    hold(from);
+                    hold(to);
+                    for axis in 0..2 {
+                        // Where the derivative, linear in t, is zero.
+                        let curvature = from[axis] - 2.0 * control[axis] + to[axis];
+                        let t = (from[axis] - control[axis]) / curvature;
+                        if t > 0.0 && t < 1.0 {
+                            hold(std::array::from_fn(|axis| {
+                                let u = 1.0 - t;
+                                u * u * from[axis] + 2.0 * u * t * control[axis] + t * t * to[axis]
+                            }));
+                        }
+                    }
+                }
+                Segment::Cubic(from, first, second, to) => {
+                    hold(from);
+                    hold(to);
+                    for axis in 0..2 {
+                        let [p0, p1, p2, p3] = [from[axis], first[axis], second[axis], to[axis]];
+                        for t in quadratic_roots(
+                            -p0 + 3.0 * (p1 - p2) + p3,
+                            2.0 * (p0 - 2.0 * p1 + p2),
+                            p1 - p0,
+                        )
+                        .into_iter()
+                        .flatten()
+                        .filter(|t| *t > 0.0 && *t < 1.0)
+                        {
+                            hold(std::array::from_fn(|axis| {
+                                let u = 1.0 - t;
+                                u * u * u * from[axis]
+                                    + 3.0 * u * u * t * first[axis]
+                                    + 3.0 * u * t * t * second[axis]
+                                    + t * t * t * to[axis]
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+        bounds
+    }
+
     /// The outline drawn into a `width` by `height` raster, each point where
     /// `at` puts it.
     fn raster(&self, width: usize, height: usize, at: impl Fn([f32; 2]) -> Point) -> Rasterizer {
@@ -1296,6 +1541,24 @@ impl Outline {
         }
         raster
     }
+}
+
+/// The real roots of `a t^2 + b t + c`: a cubic's turning points, where its
+/// derivative is zero. A non-finite one, from a zero divisor, is no root.
+fn quadratic_roots(a: f32, b: f32, c: f32) -> [Option<f32>; 2] {
+    let finite = |t: f32| t.is_finite().then_some(t);
+    if a.abs() <= f32::EPSILON * (b.abs() + c.abs()) {
+        return [finite(-c / b), None];
+    }
+    let discriminant = b * b - 4.0 * a * c;
+    if discriminant < 0.0 {
+        return [None, None];
+    }
+    let root = discriminant.sqrt();
+    [
+        finite((-b + root) / (2.0 * a)),
+        finite((-b - root) / (2.0 * a)),
+    ]
 }
 
 /// Collects an outline from ttf-parser, closing every contour.

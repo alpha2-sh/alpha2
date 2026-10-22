@@ -11,6 +11,7 @@ import { ResourceRegistry } from "./resources.js";
 import { ExportJob, requireExportFrameRate } from "./jobs.js";
 import { attemptOptions } from "./runtime/budget.js";
 import { createWorkerPreview } from "./worker.js";
+import { registerCaptionFonts } from "./runtime/caption-fonts.js";
 import { AssetLibrary, streamPeaks } from "./runtime/assets.js";
 import {
   SourcePixels,
@@ -276,6 +277,9 @@ export function createBrowserBridge(options) {
   };
   /** The engine's asset decisions, from the wasm module, loaded on first use. */
   const decisions = async () => (decisionBinding ??= await loadWasm());
+  /** What `measureText` lays text out with, made on first use, and the font stack it holds. */
+  let measurer = null,
+    measuredFonts = null;
   const registry = new ResourceRegistry(resourceLimit);
   /**
    * The runtimes this session holds, by {@link ownerKey}: a lease and the registry revision it was
@@ -2056,6 +2060,8 @@ export function createBrowserBridge(options) {
       proxies.clear();
       registry.dispose();
       engine = null;
+      measurer?.free();
+      measurer = null;
       detachOwner();
     })();
     return disposal;
@@ -2184,6 +2190,24 @@ export function createBrowserBridge(options) {
         if (family && !families.includes(family)) families.push(family);
       }
       return families;
+    },
+    async measureText(generator) {
+      const { WasmTextMeasurer } = await loadWasm();
+      if (disposed)
+        throw new EditorError("disposed", "Bridge is disposed", "browser");
+      // The fonts and canvas preview draws the draft with.
+      const document = editor.draft;
+      const fonts = fontStackOf(document);
+      measurer ??= new WasmTextMeasurer();
+      if (!sameList(measuredFonts, fonts)) {
+        // A font the engine refuses is left out here as preview leaves it out, and reported there.
+        registerCaptionFonts(measurer, fonts);
+        measuredFonts = fonts;
+      }
+      const { width, height } = document.project.settings;
+      return JSON.parse(
+        measurer.measure(JSON.stringify(generator), width, height),
+      );
     },
     conform,
     /**

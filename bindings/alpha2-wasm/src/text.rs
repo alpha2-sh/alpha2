@@ -5,7 +5,7 @@
 //! with the same fonts.
 
 use alpha2_media::{EmojiPolicy, TextAlign};
-use alpha2_text::{TextFont, TextRasterRequest, TextRasterResult};
+use alpha2_text::{TextFont, TextRasterRequest, TextRasterResult, TextRasterizer};
 use serde::Deserialize;
 
 /// The JSON request `WasmTextRasterizer.rasterize` takes (camelCase, as the
@@ -121,6 +121,57 @@ pub(crate) fn descriptor_json(result: &TextRasterResult) -> String {
     .to_string()
 }
 
+/// Why a text generator could not be measured.
+#[derive(Debug)]
+pub(crate) enum MeasureError {
+    /// Not a text generator a project could hold, or no canvas.
+    Input(String),
+    /// The text host refused: no fonts, say.
+    Text(alpha2_engine::TextError),
+}
+
+/// Where the text generator `generator_json`, as a project holds it, lies on
+/// a `width` by `height` canvas ([`alpha2_engine::measure_text`]), as the
+/// JSON `WasmTextMeasurer.measure` returns.
+pub(crate) fn measure_json(
+    rasterizer: &TextRasterizer,
+    generator_json: &str,
+    width: u32,
+    height: u32,
+) -> Result<String, MeasureError> {
+    let generator: alpha2_model::Generator = serde_json::from_str(generator_json)
+        .map_err(|error| MeasureError::Input(format!("invalid text generator: {error}")))?;
+    if !generator.is_valid() {
+        return Err(MeasureError::Input(
+            "the text generator has a field out of range".into(),
+        ));
+    }
+    let alpha2_model::Generator::Text { text, style } = &generator else {
+        return Err(MeasureError::Input(
+            "only a text generator draws text".into(),
+        ));
+    };
+    let size = alpha2_render::RenderSize::new(width, height)
+        .map_err(|error| MeasureError::Input(format!("invalid canvas size: {error}")))?;
+    let bounds =
+        alpha2_engine::measure_text(rasterizer, text, style, size).map_err(MeasureError::Text)?;
+    let rect = |rect: alpha2_engine::CanvasRect| {
+        serde_json::json!({
+            "left": rect.left,
+            "top": rect.top,
+            "right": rect.right,
+            "bottom": rect.bottom,
+        })
+    };
+    Ok(serde_json::json!({
+        "layout": rect(bounds.layout),
+        "content": rect(bounds.content),
+        "ink": bounds.ink.map(rect),
+        "lineCount": bounds.line_count,
+    })
+    .to_string())
+}
+
 pub(crate) fn font(family: String, bytes: Vec<u8>, face_index: u32) -> TextFont {
     TextFont {
         family,
@@ -133,8 +184,10 @@ pub(crate) fn font(family: String, bytes: Vec<u8>, face_index: u32) -> TextFont 
 mod web {
     use std::sync::Arc;
 
-    use super::{TextRasterResult, TextRequestWire, descriptor_json, font};
-    use alpha2_text::TextRasterizer;
+    use super::{
+        MeasureError, TextRasterResult, TextRasterizer, TextRequestWire, descriptor_json, font,
+        measure_json,
+    };
     use wasm_bindgen::prelude::*;
     use web_sys::js_sys::Uint8Array;
 
@@ -245,6 +298,79 @@ mod web {
         #[must_use]
         pub fn cache_size(&self) -> usize {
             self.inner.cache_len()
+        }
+    }
+
+    /// Measures text generators with caller-supplied fonts, without a GPU:
+    /// where the engine draws each one's text on the canvas. Given the fonts
+    /// a renderer draws with, in the same order, it answers for that
+    /// renderer's frames.
+    #[wasm_bindgen]
+    pub struct WasmTextMeasurer {
+        inner: TextRasterizer,
+    }
+
+    #[wasm_bindgen]
+    impl WasmTextMeasurer {
+        /// A measurer with no fonts; add them in fallback order.
+        #[wasm_bindgen(constructor)]
+        #[must_use]
+        pub fn new() -> Self {
+            Self {
+                inner: TextRasterizer::empty(),
+            }
+        }
+
+        /// Appends an OpenType font to the fallback stack.
+        ///
+        /// # Errors
+        /// Rejects malformed font bytes.
+        #[wasm_bindgen(js_name = addFont)]
+        pub fn add_font(
+            &mut self,
+            family: String,
+            bytes: Vec<u8>,
+            face_index: u32,
+        ) -> Result<(), JsValue> {
+            self.inner
+                .add_font(font(family, bytes, face_index))
+                .map_err(|error| typed_error(&error))
+        }
+
+        /// Drops every font.
+        #[wasm_bindgen(js_name = clearFonts)]
+        pub fn clear_fonts(&mut self) {
+            self.inner = TextRasterizer::empty();
+        }
+
+        /// Where the text generator `generator_json` (`{ "type": "text",
+        /// "text", "style" }`, as a project holds it) lies on a `width` by
+        /// `height` canvas, as JSON `{ layout, content, ink, lineCount }`:
+        /// each a `{ left, top, right, bottom }` rectangle in fractions of the
+        /// canvas, as the style's position is, on the picture the generator
+        /// draws before its clip's transform; `ink` is `null` when the text
+        /// draws nothing. Measure at the project's canvas size: text laid out
+        /// at another size can break its lines elsewhere.
+        ///
+        /// # Errors
+        /// Rejects JSON that is no valid text generator, an empty canvas, and
+        /// a measurer without fonts.
+        pub fn measure(
+            &self,
+            generator_json: &str,
+            width: u32,
+            height: u32,
+        ) -> Result<String, JsValue> {
+            measure_json(&self.inner, generator_json, width, height).map_err(|error| match error {
+                MeasureError::Input(message) => invalid_input(message),
+                MeasureError::Text(error) => typed_error(&error),
+            })
+        }
+    }
+
+    impl Default for WasmTextMeasurer {
+        fn default() -> Self {
+            Self::new()
         }
     }
 
