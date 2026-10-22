@@ -9,7 +9,12 @@ import type {
 
 /** What media is read for. */
 export type MediaPurpose =
-  "preview" | "thumbnail" | "remote_edit" | "export_original" | "export_proxy";
+  | "preview"
+  | "preview_proxy"
+  | "thumbnail"
+  | "remote_edit"
+  | "export_original"
+  | "export_proxy";
 
 /** Whether a source's original media can be read. */
 export type OriginalState =

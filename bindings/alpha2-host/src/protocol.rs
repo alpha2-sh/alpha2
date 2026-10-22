@@ -199,6 +199,7 @@ impl ExportMedia {
 #[serde(rename_all = "kebab-case")]
 pub enum PurposeRequest {
     Preview,
+    PreviewProxy,
     Thumbnail,
     RemoteEdit,
     #[default]
@@ -210,6 +211,7 @@ impl PurposeRequest {
     pub const fn purpose(self) -> MediaPurpose {
         match self {
             Self::Preview => MediaPurpose::Preview,
+            Self::PreviewProxy => MediaPurpose::PreviewProxy,
             Self::Thumbnail => MediaPurpose::Thumbnail,
             Self::RemoteEdit => MediaPurpose::RemoteEdit,
             Self::ExportOriginal => MediaPurpose::ExportOriginal,

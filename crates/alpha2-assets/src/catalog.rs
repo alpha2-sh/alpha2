@@ -193,6 +193,9 @@ pub enum ProxyState {
 pub enum MediaPurpose {
     /// Interactive playback: the original, else a proxy.
     Preview,
+    /// Interactive playback the caller asked to make lighter: a proxy, else
+    /// the original.
+    PreviewProxy,
     /// A small still: a proxy, else the original.
     Thumbnail,
     /// Editing away from the originals: a proxy, else the original.
@@ -371,8 +374,9 @@ fn aspects_agree(original: (u32, u32), proxy: (u32, u32)) -> bool {
 
 /// The media `purpose` reads for `entry`, with `reference` the best evidence
 /// of the original. The original is preferred for preview and required for
-/// an original export; a proxy is preferred for thumbnails, remote editing,
-/// and a proxy export. Nothing falls back to a stale or invalid proxy.
+/// an original export; a proxy is preferred for proxy preview, thumbnails,
+/// remote editing, and a proxy export. Nothing falls back to a stale or
+/// invalid proxy.
 #[must_use]
 pub fn select(
     entry: &AssetEntry,
@@ -392,9 +396,10 @@ pub fn select(
     };
     let chosen = match purpose {
         MediaPurpose::Preview => original.then_some(Selection::Original).or_else(proxy),
-        MediaPurpose::Thumbnail | MediaPurpose::RemoteEdit | MediaPurpose::ExportProxy => {
-            proxy().or_else(|| original.then_some(Selection::Original))
-        }
+        MediaPurpose::PreviewProxy
+        | MediaPurpose::Thumbnail
+        | MediaPurpose::RemoteEdit
+        | MediaPurpose::ExportProxy => proxy().or_else(|| original.then_some(Selection::Original)),
         MediaPurpose::ExportOriginal => original.then_some(Selection::Original),
     };
     chosen.unwrap_or(Selection::Unavailable)

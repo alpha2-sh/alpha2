@@ -1,7 +1,7 @@
 // What the bridge's preview keeps between frames and edits, run in Node against the recording
 // renderer (support/): the media check a scrub repeats, a seek an edit overtakes, background
-// proxies beside playback and exports, the monitor level across bindings, and fonts the renderer
-// refuses.
+// proxies beside playback and exports, preview preferring proxies, the monitor level across
+// bindings, and fonts the renderer refuses.
 import { FakeCanvas } from "./support/preview-stubs.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -86,10 +86,10 @@ function addColor(editor) {
 
 /**
  * A bridge on the recording renderer whose media adapter stages any object carrying a fingerprint
- * (as a video) and whose proxy store counts lookups and holds each conversion until the test lets
- * it finish. The engine's decisions are the packaged wasm, with each conform counted.
+ * (as a video) and whose proxy store counts lookups, finds the proxies `kept` by their original's
+ * hash, and holds each conversion until the test lets it finish. The engine's decisions are the packaged wasm, with each conform counted.
  */
-async function session({ document } = {}) {
+async function session({ document, kept = {} } = {}) {
   const reported = [];
   const engine = await engineWasm();
   const counts = { conform: 0, find: 0 };
@@ -130,9 +130,9 @@ async function session({ document } = {}) {
       async hold() {
         return { release: async () => {} };
       },
-      async find() {
+      async find(hash) {
         counts.find += 1;
-        return null;
+        return kept[hash] ?? null;
       },
       generate(file, made_from, { signal }) {
         return new Promise((resolve, reject) => {
@@ -154,6 +154,33 @@ async function session({ document } = {}) {
     },
   });
   return { editor, bridge, reported, counts, conversions };
+}
+
+/** Puts a one-second clip of source `id` on a new track. */
+function place(editor, id) {
+  const trackId = crypto.randomUUID();
+  ok(
+    editor.dispatch({
+      type: "transaction",
+      commands: [
+        {
+          type: "track.add",
+          track: { id: trackId, kind: "video", name: "V", clips: [] },
+        },
+        {
+          type: "clip.insert",
+          trackId,
+          clip: {
+            id: crypto.randomUUID(),
+            source_id: id,
+            timeline_range: { start: 0, end: 120000 },
+            source_range: { start: 0, end: 120000 },
+            time_map: { type: "forward" },
+          },
+        },
+      ],
+    }),
+  );
 }
 
 /** Imports a video whose file this session holds, keeping it in the bin only. */
@@ -284,6 +311,52 @@ test(
     await settle(40);
     assert.equal(bridge.playing, true, "playback goes on");
     bridge.pause();
+    assert.deepEqual(reported, []);
+    await bridge.dispose();
+    editor.dispose();
+  },
+);
+
+test(
+  "preview prefers an online source's kept proxy only when asked, and the host still sees the original",
+  { skip },
+  async () => {
+    const { editor, bridge, reported } = await session({
+      kept: {
+        [hash("a")]: {
+          record: {
+            made_from: { content_sha256: hash("a"), byte_length: 10 },
+            width: 32,
+            height: 18,
+          },
+          file: { name: "clip.proxy", fingerprint: {} },
+        },
+      },
+    });
+    await importClip(bridge, "clip", "a");
+    place(editor, "clip");
+    await bridge.bindPreview(new FakeCanvas(64, 36));
+    assert.equal(await bridge.seek(0), true);
+    assert.equal(bridge.previewMedia, "original");
+    assert.equal(bridge.proxyStatus("clip").reading, "original");
+    assert.equal(
+      bridge.proxyStatus("clip").available,
+      false,
+      "not looked up while the original is online",
+    );
+    let heard = 0;
+    bridge.subscribeAssets(() => (heard += 1));
+    bridge.setPreviewMedia("proxies");
+    assert.equal(bridge.previewMedia, "proxies");
+    assert.equal(await bridge.seek(0), true);
+    assert.equal(bridge.proxyStatus("clip").available, true);
+    assert.equal(bridge.proxyStatus("clip").reading, "proxy");
+    assert.ok(heard > 0, "asset listeners hear what preview reads");
+    assert.equal(bridge.getAsset("clip").file.name, "clip");
+    bridge.setPreviewMedia("original");
+    assert.equal(await bridge.seek(0), true);
+    assert.equal(bridge.proxyStatus("clip").reading, "original");
+    assert.throws(() => bridge.setPreviewMedia("half"));
     assert.deepEqual(reported, []);
     await bridge.dispose();
     editor.dispose();
