@@ -304,6 +304,8 @@ export function createBrowserBridge(options) {
   let previewSelection = new Map();
   /** What that selection was decided from (see `loaded`). */
   let previewConformKey = null;
+  /** What preview prefers where a source has a fresh proxy (see `setPreviewMedia`). */
+  let preferredPreviewMedia = "original";
   const hashOf = (asset) => asset?.fingerprint?.content_sha256;
   const originalOf = (document, id) => {
     const descriptor = document.assets[id];
@@ -400,7 +402,10 @@ export function createBrowserBridge(options) {
    * A proxy this session makes is adopted directly.
    */
   let absentProxies = new Set();
-  /** Finds the kept proxies of sources this session has no original for. */
+  /**
+   * Finds the kept proxies of sources this session has no original for, and of every source while
+   * preview prefers proxies.
+   */
   async function discoverProxies(document) {
     for (const source of document.project.sources) {
       const descriptor = document.assets[source.id];
@@ -409,7 +414,8 @@ export function createBrowserBridge(options) {
         !hash ||
         proxies.has(hash) ||
         absentProxies.has(hash) ||
-        originalOf(document, source.id)
+        (preferredPreviewMedia === "original" &&
+          originalOf(document, source.id))
       )
         continue;
       // Held before it is read, so no page removes it between.
@@ -824,13 +830,15 @@ export function createBrowserBridge(options) {
     const conformKey =
       checked.revisionKey +
       JSON.stringify(previewOutput) +
+      preferredPreviewMedia +
       JSON.stringify(catalog);
+    const before = JSON.stringify([...previewSelection]);
     if (conformKey !== previewConformKey) {
       const selected = conformProject(
         await decisions(),
         compiled.project,
         catalog,
-        "preview",
+        preferredPreviewMedia === "proxies" ? "preview_proxy" : "preview",
       );
       previewSelection = new Map(
         selected.sources.map((source) => [source.source_id, source.selection]),
@@ -838,6 +846,8 @@ export function createBrowserBridge(options) {
       previewConformKey = conformKey;
     }
     const selectionKey = JSON.stringify([...previewSelection]);
+    // `proxyStatus` reports what preview reads.
+    if (selectionKey !== before) notifyAssets();
     const used = shownSources(compiled.project);
     for (const source of compiled.project.sources)
       if (
@@ -2178,7 +2188,7 @@ export function createBrowserBridge(options) {
     conform,
     /**
      * Makes a proxy of a source whose original this session holds, keeps it, and previews from it
-     * wherever the original goes offline.
+     * wherever the original goes offline, or while preview prefers proxies.
      */
     async generateProxy(id, { signal } = {}) {
       const descriptor = editor.document.assets[id];
@@ -2275,6 +2285,22 @@ export function createBrowserBridge(options) {
     },
     get previewOutput() {
       return previewOutput;
+    },
+    /**
+     * Makes preview read a fresh proxy wherever a source has one (`proxies`), or the original
+     * wherever it is online (`original`, the default). Preview only: an export reads what its own
+     * `media` says.
+     */
+    setPreviewMedia(media) {
+      if (media !== "original" && media !== "proxies")
+        throw Error("Preview media must be original or proxies");
+      if (media === preferredPreviewMedia) return;
+      preferredPreviewMedia = media;
+      renderKey = null;
+      if (engine) void seek(tick).catch(onError);
+    },
+    get previewMedia() {
+      return preferredPreviewMedia;
     },
     hasOriginal: (id) => !!originalOf(editor.document, id),
     /**
@@ -2479,7 +2505,12 @@ export function createBrowserBridge(options) {
     get catalog() {
       return engine?.catalog ?? null;
     },
-    getAsset: (id) => library.get(id),
+    // A source's own media while it is online, whichever preview reads: its size, file and peaks
+    // are the original's.
+    getAsset: (id) =>
+      (preferredPreviewMedia === "proxies" &&
+        sourceView(editor.draft, id, originalOf(editor.draft, id))) ||
+      library.get(id),
   };
 }
 

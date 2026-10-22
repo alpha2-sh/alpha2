@@ -197,6 +197,10 @@ fn each_purpose_reads_its_media() {
             [Selection::Original, Selection::Original, half.clone()],
         ),
         (
+            MediaPurpose::PreviewProxy,
+            [half.clone(), Selection::Original, half.clone()],
+        ),
+        (
             MediaPurpose::Thumbnail,
             [half.clone(), Selection::Original, half.clone()],
         ),

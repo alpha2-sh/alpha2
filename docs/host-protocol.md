@@ -42,7 +42,7 @@ Reports which media each source of a project would read, and what blocks it, wit
 | `assets` | `{ "<source-id>": "<path>" }` | `{}` | The original file of each source. |
 | `proxies` | `{ "<source-id>": [{ "path": "<path>", "madeFrom"?: <fingerprint>, "colorPipeline"?: "<string>" }] }` | `{}` | Proxies made from each original, in order of preference. |
 | `frames` | `{ "<source-id>": ["<path>" or null, ...] }` | `{}` | The frame files of each image sequence, in order; `null` where the sequence has a gap. |
-| `purpose` | `preview`, `thumbnail`, `remote-edit`, `export-original`, `export-proxy` | `export-original` | What the media is read for. |
+| `purpose` | `preview`, `preview-proxy`, `thumbnail`, `remote-edit`, `export-original`, `export-proxy` | `export-original` | What the media is read for. |
 
 The result is `{ "catalog": ..., "report": ... }`: what the host found for each source, and per source what the purpose reads and its issues. `report.ready` is `false` when an issue blocks. The types are `AssetCatalog` and `ConformReport` in `alpha2/assets`.
 

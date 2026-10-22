@@ -31,8 +31,8 @@ pub fn compare_fingerprints(recorded: &str, found: &str) -> Result<String, JsVal
 }
 
 /// Whether `project`'s media, as `catalog` describes it, is ready for
-/// `purpose` (`preview`, `thumbnail`, `remote_edit`, `export_original`, or
-/// `export_proxy`), as a JSON `ConformReport`.
+/// `purpose` (`preview`, `preview_proxy`, `thumbnail`, `remote_edit`,
+/// `export_original`, or `export_proxy`), as a JSON `ConformReport`.
 ///
 /// # Errors
 /// Rejects an invalid project, catalog (one whose fingerprints are not well
@@ -44,6 +44,7 @@ pub fn conform_project(project: &str, catalog: &str, purpose: &str) -> Result<St
     catalog.validate().map_err(invalid_input)?;
     let purpose = match purpose {
         "preview" => MediaPurpose::Preview,
+        "preview_proxy" => MediaPurpose::PreviewProxy,
         "thumbnail" => MediaPurpose::Thumbnail,
         "remote_edit" => MediaPurpose::RemoteEdit,
         "export_original" => MediaPurpose::ExportOriginal,

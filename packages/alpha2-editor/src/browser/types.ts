@@ -300,9 +300,10 @@ export interface BrowserBridge {
   /** The engine's built-in effects and transitions; `null` until a preview is bound. */
   readonly catalog: BuiltinEffectCatalog | null;
   /**
-   * What preview reads for source `id` of the draft: its original, or the kept proxy standing in
-   * while the original is offline; opened with the provider settings the document names. Use {@link
-   * BrowserBridge.hasOriginal} to ask whether the original itself is linked.
+   * Source `id` of the draft: its original while it is online, even where preview reads a proxy
+   * (see {@link BrowserBridge.setPreviewMedia}), else the kept proxy standing in for it; opened
+   * with the provider settings the document names. Use {@link BrowserBridge.hasOriginal} to ask
+   * whether the original itself is linked.
    */
   getAsset(id: string): RuntimeAsset | null;
   /**
@@ -477,6 +478,14 @@ export interface BrowserBridge {
     readonly compositionId: string;
     readonly nodeId: string;
   } | null;
+  /**
+   * Makes preview read a fresh proxy wherever a source has one (`proxies`), or the original
+   * wherever it is online (`original`, the default). Preview only: an export reads what its own
+   * `media` says. {@link BrowserBridge.proxyStatus} reports what each source reads.
+   */
+  setPreviewMedia(media: "original" | "proxies"): void;
+  /** What {@link BrowserBridge.setPreviewMedia} last set. */
+  readonly previewMedia: "original" | "proxies";
   /**
    * Shows another animation of a dotLottie source, keeping its clips. Throws `EditorError`
    * `unsupported_media` for another kind of source or an animation the package lacks.
