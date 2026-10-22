@@ -222,11 +222,12 @@ const chrome = chromeExecutable();
 const page = (script) =>
   `data:text/html,${encodeURIComponent(`<title>pending</title><script>${script}</script>`)}`;
 
-/** How `promise` settles, and after how many seconds; a watchdog stands in for a hung run. */
-async function settled(promise, watchdogMs) {
-  const started = Date.now();
+async function settled(start, watchdogMs) {
+  let opened = null;
   const outcome = await Promise.race([
-    promise.then(
+    start(() => {
+      opened = Date.now();
+    }).then(
       (value) => ({ value }),
       (error) => ({ error: error.message }),
     ),
@@ -234,7 +235,10 @@ async function settled(promise, watchdogMs) {
       setTimeout(() => resolve({ hung: true }), watchdogMs).unref(),
     ),
   ]);
-  return { ...outcome, seconds: (Date.now() - started) / 1000 };
+  return {
+    ...outcome,
+    seconds: opened === null ? null : (Date.now() - opened) / 1000,
+  };
 }
 
 test(
@@ -242,14 +246,17 @@ test(
   { skip: chrome === null && "no Chrome on this machine" },
   async () => {
     const outcome = await settled(
-      runChromePage(chrome, page("setTimeout(() => { for (;;) {} }, 200);"), {
-        timeoutMs: 3_000,
-      }),
-      30_000,
+      (onPage) =>
+        runChromePage(chrome, page("setTimeout(() => { for (;;) {} }, 200);"), {
+          timeoutMs: 3_000,
+          onPage,
+        }),
+      90_000,
     );
     assert.equal(outcome.hung, undefined, "the check never ended");
     assert.match(outcome.error, /browser page timed out/);
-    assert.ok(outcome.seconds < 20, `${outcome.seconds} s`);
+    // The 3 s timeout, then up to 2 s to stop Chrome.
+    assert.ok(outcome.seconds < 10, `${outcome.seconds} s`);
   },
 );
 
@@ -258,14 +265,16 @@ test(
   { skip: chrome === null && "no Chrome on this machine" },
   async () => {
     const outcome = await settled(
-      runChromePage(chrome, page(""), {
-        timeoutMs: 20_000,
-        onPage: (cdp, sessionId) => {
-          // Page.crash never answers: the renderer is gone.
-          cdp.send("Page.crash", {}, sessionId).catch(() => {});
-        },
-      }),
-      30_000,
+      (opened) =>
+        runChromePage(chrome, page(""), {
+          timeoutMs: 20_000,
+          onPage: (cdp, sessionId) => {
+            opened();
+            // Page.crash never answers: the renderer is gone.
+            cdp.send("Page.crash", {}, sessionId).catch(() => {});
+          },
+        }),
+      90_000,
     );
     assert.equal(outcome.hung, undefined, "the check never ended");
     assert.match(outcome.error, /crashed|closed/);
@@ -278,14 +287,15 @@ test(
   { skip: chrome === null && "no Chrome on this machine" },
   async () => {
     const outcome = await settled(
-      runChromePage(
-        chrome,
-        page(
-          "document.title = encodeURIComponent(JSON.stringify({ ok: true }));",
+      (onPage) =>
+        runChromePage(
+          chrome,
+          page(
+            "document.title = encodeURIComponent(JSON.stringify({ ok: true }));",
+          ),
+          { timeoutMs: 10_000, onPage },
         ),
-        { timeoutMs: 10_000 },
-      ),
-      30_000,
+      90_000,
     );
     assert.equal(outcome.value, encodeURIComponent('{"ok":true}'));
   },
