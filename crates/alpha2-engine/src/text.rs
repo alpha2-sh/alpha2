@@ -64,6 +64,44 @@ pub struct TextTexture<'a> {
     pub cache_key: Option<RenderCacheKey>,
 }
 
+/// Where a text lies, as fractions of the canvas, `(0, 0)` top-left to
+/// `(1, 1)` bottom-right, as its style's position is: on the picture a text
+/// generator draws, before its clip's transform and effects, and on the
+/// canvas for a caption. [`measure_text`] measures it.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct TextBounds {
+    /// The box the style's anchor and position place: the wrapping width
+    /// wide, every line's em box tall, and the whole pixels of outline and
+    /// background padding around that.
+    pub layout: CanvasRect,
+    /// The lines' advances: from the start of the line that starts farthest
+    /// left to the end of the one that ends farthest right, as tall as the
+    /// layout, with the same decorations around it. It moves only as the
+    /// advances do, not as glyphs with more or less ink are typed.
+    pub content: CanvasRect,
+    /// What the text draws: its glyphs, their outline, and the background's
+    /// boxes, as [`alpha2_text::TextMeasure::ink`] bounds them at the measured
+    /// size. Every pixel the text gives any alpha there meets it, give or
+    /// take the pixel sampling the texture spreads it by. `None` when the text
+    /// draws nothing.
+    pub ink: Option<CanvasRect>,
+    /// Number of laid-out lines.
+    pub line_count: u32,
+}
+
+/// A rectangle as fractions of the canvas, y down.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct CanvasRect {
+    /// Left edge, a fraction of the canvas width.
+    pub left: f32,
+    /// Top edge, a fraction of the canvas height.
+    pub top: f32,
+    /// Right edge, a fraction of the canvas width.
+    pub right: f32,
+    /// Bottom edge, a fraction of the canvas height.
+    pub bottom: f32,
+}
+
 /// Why text could not be prepared.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -254,6 +292,20 @@ impl TextTextures {
             .map_err(crate::EngineError::Text)
     }
 
+    /// Where `text` in `style` lies on a canvas of `size`, drawn with these
+    /// fonts: [`measure_text`].
+    ///
+    /// # Errors
+    /// Returns [`TextError::Raster`] as [`Self::prepare`] would for the text.
+    pub fn measure(
+        &self,
+        text: &str,
+        style: &TextStyle,
+        size: RenderSize,
+    ) -> Result<TextBounds, TextError> {
+        measure_text(&self.rasterizer, text, style, size)
+    }
+
     /// The prepared text with `key`, as [`text_key`] names it.
     #[must_use]
     pub fn get(&self, key: u64) -> Option<TextTexture<'_>> {
@@ -405,6 +457,47 @@ pub fn text_key(text: &str, style: &TextStyle, size: RenderSize) -> u64 {
     feed(&size.width.to_le_bytes());
     feed(&size.height.to_le_bytes());
     hash.max(1)
+}
+
+/// Where `text` in `style` lies on a canvas of `size` ([`TextBounds`]), laid
+/// out with `rasterizer`'s fonts as [`TextTextures::prepare`] lays it out and
+/// placed as a frame places it, without drawing it. Measured at the size a
+/// frame is drawn at, it agrees with that frame to the pixel; text laid out
+/// at another size can break its lines elsewhere.
+///
+/// # Errors
+/// Returns [`TextError::Raster`] when the text host refuses the text: no
+/// fonts, or a style out of range.
+#[allow(clippy::cast_precision_loss)]
+pub fn measure_text(
+    rasterizer: &TextRasterizer,
+    text: &str,
+    style: &TextStyle,
+    size: RenderSize,
+) -> Result<TextBounds, TextError> {
+    let request = text_request(text, style, size, text_key(text, style, size));
+    let measure = rasterizer.measure(&request).map_err(TextError::Raster)?;
+    let (width, height) = (size.width as f32, size.height as f32);
+    let margin = measure.decoration_margin as f32;
+    let (box_width, box_height) = (measure.box_width as f32, measure.box_height as f32);
+    // The layout box's top-left corner on the canvas: the anchor of the box with its decorations
+    // lies at the position, as `text_placement` places the texture.
+    let origin = [
+        style.position.x * width - style.anchor.x * (box_width + 2.0 * margin) + margin,
+        style.position.y * height - style.anchor.y * (box_height + 2.0 * margin) + margin,
+    ];
+    let rect = |[left, top, right, bottom]: [f32; 4]| CanvasRect {
+        left: (origin[0] + left) / width,
+        top: (origin[1] + top) / height,
+        right: (origin[0] + right) / width,
+        bottom: (origin[1] + bottom) / height,
+    };
+    Ok(TextBounds {
+        layout: rect([-margin, -margin, box_width + margin, box_height + margin]),
+        content: rect(measure.content),
+        ink: measure.ink.map(rect),
+        line_count: measure.line_count,
+    })
 }
 
 /// A straight, sRGB-encoded color as bytes.

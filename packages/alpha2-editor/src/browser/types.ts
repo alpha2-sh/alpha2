@@ -1,4 +1,4 @@
-import type { MediaFingerprint, Project } from "alpha2/project";
+import type { Generator, MediaFingerprint, Project } from "alpha2/project";
 import type { AssetBinding, ConformReport, MediaPurpose } from "alpha2/assets";
 import type { BuiltinEffectCatalog } from "alpha2/effects";
 import type { EditorSession } from "../core/session.js";
@@ -266,6 +266,39 @@ export interface ProxyRemoval {
  * ticks (120000 per second). Methods that change the document dispatch through the session, so
  * they are undoable.
  */
+/** A rectangle in fractions of the canvas, y down, as a text style's `position` is. */
+export interface CanvasRect {
+  readonly left: number;
+  readonly top: number;
+  readonly right: number;
+  readonly bottom: number;
+}
+
+/**
+ * Where a text generator's text lies on the picture it draws, before its clip's transform and
+ * effects: what {@link BrowserBridge.measureText} answers.
+ */
+export interface TextBounds {
+  /**
+   * The box the style's `anchor` and `position` place: `max_width` wide, every line's em box tall,
+   * and the whole pixels of outline and background padding around that.
+   */
+  readonly layout: CanvasRect;
+  /**
+   * From the start of the line that starts farthest left to the end of the one that ends farthest
+   * right, as tall as `layout`, with the same decorations around it. It moves only as the lines'
+   * advances do, not as glyphs with more or less ink are typed: steady handles for a text clip.
+   */
+  readonly content: CanvasRect;
+  /**
+   * What the text draws: its glyphs, their outline, and the background's boxes. Every pixel the
+   * frame gives the text meets it, give or take the pixel the texture's sampling spreads it by;
+   * `null` when the text draws nothing (only spaces).
+   */
+  readonly ink: CanvasRect | null;
+  readonly lineCount: number;
+}
+
 export interface BrowserBridge {
   /** Where the preview renders: nowhere until `bindPreview`, then a worker or the main thread. */
   readonly previewBackend: "unbound" | "worker" | "main-thread";
@@ -409,6 +442,17 @@ export interface BrowserBridge {
    * name tables.
    */
   captionFontFamilies(): Promise<string[]>;
+  /**
+   * Where the engine draws a text generator's text (see {@link TextBounds}): laid out as preview
+   * lays it out, with the same fonts, at the draft's canvas size, without rendering. A clip's
+   * transform maps these rectangles as it maps the rest of its picture.
+   *
+   * Rejects a generator that is not a valid text generator (`INVALID_INPUT`), with no fonts to
+   * draw it, and once the bridge is disposed (`disposed`).
+   */
+  measureText(
+    generator: Extract<Generator, { type: "text" }>,
+  ): Promise<TextBounds>;
   /**
    * The files a native export of `document` (the current one by default) needs, for upload:
    * shown media (or their proxies with `media: "proxies"`), an image sequence's frames, font

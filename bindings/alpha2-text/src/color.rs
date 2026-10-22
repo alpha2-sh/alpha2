@@ -621,6 +621,34 @@ impl Bitmap {
         self.bounds
     }
 
+    /// `[x_min, y_min, x_max, y_max]` in font units of the image's pixels
+    /// with any alpha, which a strike often pads with transparent ones;
+    /// `None` when it has none.
+    #[allow(clippy::cast_precision_loss)]
+    pub(super) fn ink_bounds(&self) -> Option<[f32; 4]> {
+        let (mut left, mut top, mut right, mut bottom) = (usize::MAX, usize::MAX, 0, 0);
+        for (index, pixel) in self.pixels.iter().enumerate() {
+            if pixel[3] > 0.0 {
+                let (x, y) = (index % self.width, index / self.width);
+                (left, top) = (left.min(x), top.min(y));
+                (right, bottom) = (right.max(x + 1), bottom.max(y + 1));
+            }
+        }
+        if left > right {
+            return None;
+        }
+        // Image rows run top down; font units up.
+        let [x_min, y_min, x_max, y_max] = self.bounds;
+        let across = (x_max - x_min) / self.width as f32;
+        let down = (y_max - y_min) / self.height as f32;
+        Some([
+            x_min + left as f32 * across,
+            y_max - bottom as f32 * down,
+            x_min + right as f32 * across,
+            y_max - top as f32 * down,
+        ])
+    }
+
     /// The image over `pixels`, premultiplied RGBA8 row by row, with its
     /// origin at `origin` at `scale`: each pixel the mean of the image over
     /// its footprint, at least one image pixel wide, so a strike drawn

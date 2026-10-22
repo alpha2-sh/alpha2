@@ -1655,3 +1655,155 @@ fn a_bitmap_glyph_fills_its_em_at_any_size() {
         );
     }
 }
+
+/// Asserts `measure`'s ink meets every pixel `result` gives any alpha and
+/// reaches at most `slack` pixels past them.
+#[allow(clippy::cast_precision_loss)]
+fn assert_ink_fits(label: &str, measure: &TextMeasure, result: &TextRasterResult, slack: f32) {
+    let [left, top, right, bottom] = measure.ink.expect("the text draws");
+    let (x0, y0, x1, y1) = ink_box(result);
+    let (x0, y0, x1, y1) = (x0 as f32, y0 as f32, x1 as f32 + 1.0, y1 as f32 + 1.0);
+    assert!(
+        left < x0 + 1.0 && top < y0 + 1.0 && right > x1 - 1.0 && bottom > y1 - 1.0,
+        "{label}: {:?} misses ink {:?}",
+        measure.ink,
+        (x0, y0, x1, y1)
+    );
+    assert!(
+        left >= x0 - slack && top >= y0 - slack && right <= x1 + slack && bottom <= y1 + slack,
+        "{label}: {:?} is loose around ink {:?}",
+        measure.ink,
+        (x0, y0, x1, y1)
+    );
+}
+
+#[test]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn a_measure_holds_the_ink_the_raster_draws_and_no_more() {
+    let mut rasterizer = color_stack();
+    rasterizer.add_font(hangul()).expect("hangul");
+    let outline = Some(TextOutline {
+        color: [0, 0, 0, 255],
+        width: 6.0,
+    });
+    let cases = [
+        ("round", request("Qgo&@ jy", 64.0)),
+        (
+            "wrapped",
+            TextRasterRequest {
+                max_width: 300.0,
+                align: TextAlign::Center,
+                ..request("Wrapped onto several lines of text", 48.0)
+            },
+        ),
+        (
+            "outlined",
+            TextRasterRequest {
+                outline,
+                ..request("Outlined Qg", 56.0)
+            },
+        ),
+        (
+            "captioned",
+            caption("Boxed and outlined\nsecond line", outline, 1),
+        ),
+        ("accented", request("\u{c5}\u{e9}\u{1e9e} \u{f1}", 72.0)),
+        (
+            "right to left",
+            TextRasterRequest {
+                max_width: 400.0,
+                align: TextAlign::End,
+                ..request("\u{5e9}\u{5dc}\u{5d5}\u{5dd} abc", 40.0)
+            },
+        ),
+        ("hangul", request("\u{d55c}\u{ae00} text", 50.0)),
+        ("colr emoji", request("a\u{2764}\u{fe0f}b", 60.0)),
+        (
+            "bitmap emoji",
+            TextRasterRequest {
+                font_family: Some("Alpha2 Fixture Emoji Bitmap".into()),
+                ..request("\u{2764}\u{fe0f}", 60.0)
+            },
+        ),
+    ];
+    for (label, request) in cases {
+        let measure = rasterizer.measure(&request).expect("measures");
+        assert_eq!(
+            rasterizer.cache_len(),
+            0,
+            "{label}: measuring caches nothing"
+        );
+        rasterizer.clear();
+        let result = rasterizer.rasterize(&request).expect("draws");
+        rasterizer.clear();
+        let descriptor = &result.descriptor;
+        assert_eq!(
+            (measure.box_width, measure.box_height, measure.line_count),
+            (
+                descriptor.layout_width.ceil() as u32,
+                descriptor.layout_height.ceil() as u32,
+                descriptor.line_count
+            ),
+            "{label}"
+        );
+        assert_eq!(
+            measure.decoration_margin,
+            request.decoration_margin(),
+            "{label}"
+        );
+        // A COLR glyph is measured by what it paints with, which may hold a little more than it
+        // paints; a bitmap drawn larger than its strike interpolates past its last pixels.
+        let slack = if label.ends_with("emoji") { 2.0 } else { 1.0 };
+        assert_ink_fits(label, &measure, &result, slack);
+        let [left, top, right, bottom] = measure.content;
+        assert!(
+            left <= right && top <= bottom,
+            "{label}: {:?}",
+            measure.content
+        );
+    }
+}
+
+#[test]
+fn content_follows_the_advances_and_ink_the_glyphs() {
+    let rasterizer = fixture();
+    let short = rasterizer.measure(&request("ace", 64.0)).expect("measures");
+    let tall = rasterizer.measure(&request("agj", 64.0)).expect("measures");
+    // The content spans the lines' em boxes whatever their ink; the descenders and the dot reach
+    // further.
+    assert_eq!(
+        [short.content[1], short.content[3]],
+        [tall.content[1], tall.content[3]]
+    );
+    assert_eq!(short.content[0], 0.0);
+    let [_, short_top, _, short_bottom] = short.ink.expect("ink");
+    let [_, tall_top, _, tall_bottom] = tall.ink.expect("ink");
+    assert!(tall_bottom > short_bottom + 8.0 && tall_top < short_top);
+    // Centred in a wider box, the line sits in its middle.
+    let centred = rasterizer
+        .measure(&TextRasterRequest {
+            max_width: 1_000.0,
+            align: TextAlign::Center,
+            ..request("ace", 64.0)
+        })
+        .expect("measures");
+    let width = short.content[2] - short.content[0];
+    assert_eq!(centred.box_width, 1_000);
+    assert!((centred.content[0] - (1_000.0 - width) / 2.0).abs() < 1e-3);
+    // Spaces alone draw nothing, and hang past the line as trailing spaces do.
+    let blank = rasterizer.measure(&request("   ", 64.0)).expect("measures");
+    assert_eq!(blank.ink, None);
+    assert_eq!(blank.content[0], blank.content[2]);
+}
+
+#[test]
+fn a_measure_refuses_what_a_raster_refuses() {
+    assert_eq!(
+        TextRasterizer::empty().measure(&request("a", 10.0)),
+        Err(TextRasterError::NoFonts)
+    );
+    assert_eq!(
+        fixture().measure(&request("a", f32::NAN)),
+        Err(TextRasterError::InvalidRequest)
+    );
+}

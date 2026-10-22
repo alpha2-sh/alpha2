@@ -222,7 +222,9 @@ pub enum Spread {
 }
 
 impl Generator {
-    pub(crate) fn is_valid(&self) -> bool {
+    /// Whether every field is in range, as a project needs it to be.
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
         match self {
             Self::Fill { paint } => paint.is_valid(),
             Self::Shape {
