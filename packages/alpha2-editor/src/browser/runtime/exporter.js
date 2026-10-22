@@ -486,6 +486,7 @@ export async function exportTimeline({
       },
       // `quantizer` when the encoder accepted constant-quantizer encoding, else the bitrate path.
       appliedVideoRateControl: sink.appliedVideoRateControl ?? null,
+      videoLatencyMode: sink.videoLatencyMode ?? null,
       audioCodec,
       audioRateControl:
         audioBitrate === undefined

@@ -155,6 +155,20 @@ pub(crate) fn upload_frame_through_canvas(
         alpha2_render::SourceAlpha::Straight
     };
     let bitmap = frame_bitmap(frame, width, height)?;
+    upload_bitmap_through_gl(gpu, &bitmap, texture, width, height);
+    bitmap.close();
+    Ok(alpha)
+}
+
+/// Uploads `bitmap` into `texture` on the WebGL2 backend.
+/// The caller closes the bitmap.
+fn upload_bitmap_through_gl(
+    gpu: &alpha2_gpu::GpuContext,
+    bitmap: &web_sys::ImageBitmap,
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+) {
     gpu.queue().copy_external_image_to_texture(
         &wgpu::CopyExternalImageSourceInfo {
             source: wgpu::ExternalImageSource::ImageBitmap(bitmap.clone()),
@@ -178,8 +192,6 @@ pub(crate) fn upload_frame_through_canvas(
     // wgpu's GL backend records the copy and runs it at the next submission; the bitmap has to
     // stay open until then, and no longer.
     gpu.submit([]);
-    bitmap.close();
-    Ok(alpha)
 }
 
 // wgpu's WebGPU backend unwraps the browser's `copyExternalImageToTexture` result, so a source the
@@ -258,6 +270,30 @@ pub(crate) fn upload_frame_webgpu(
     let copied = copy_external_image(queue, &bitmap, texture, width, height);
     bitmap.close();
     copied.map_err(|error| browser_rejected("ImageBitmap", &error))?;
+    Ok(alpha2_render::SourceAlpha::Straight)
+}
+
+/// Uploads a bitmap made with `premultiplyAlpha: "none"` into `texture`, as
+/// straight color. The caller closes the bitmap.
+pub(crate) fn upload_bitmap(
+    gpu: &alpha2_gpu::GpuContext,
+    browser_webgpu: bool,
+    bitmap: &web_sys::ImageBitmap,
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+) -> Result<alpha2_render::SourceAlpha, JsValue> {
+    if !browser_webgpu {
+        upload_bitmap_through_gl(gpu, bitmap, texture, width, height);
+        return Ok(alpha2_render::SourceAlpha::Straight);
+    }
+    let (Some(queue), Some(texture)) = (gpu.queue().as_webgpu(), texture.as_webgpu()) else {
+        return Err(internal_error(
+            "the WebGPU upload has no browser queue or texture",
+        ));
+    };
+    copy_external_image(queue, bitmap, texture, width, height)
+        .map_err(|error| browser_rejected("ImageBitmap", &error))?;
     Ok(alpha2_render::SourceAlpha::Straight)
 }
 

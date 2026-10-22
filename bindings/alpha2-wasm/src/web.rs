@@ -668,10 +668,10 @@ impl WebEffectRegistry {
                 return Err(typed_error(&error));
             }
         };
-        self.upload_presented_video_frame_inner(
+        self.upload_presented_inner(
             source_id,
             media_time_ticks,
-            frame,
+            PresentedImage::Frame(frame),
             output_size,
             Orientation::UPRIGHT,
         )
@@ -716,6 +716,7 @@ impl WebEffectRegistry {
     /// Browser WebGPU copies the frame into a texture directly, or, where the
     /// browser does not take a `VideoFrame` (Firefox), copies it through a
     /// reused 2D canvas's bitmap. WebGL2 always uploads that bitmap.
+    /// `videoFrameCopy` says which.
     ///
     /// Both copies go through the page's own color conversion, so an HDR
     /// frame (PQ or HLG, by the color the project declares for the source,
@@ -736,98 +737,141 @@ impl WebEffectRegistry {
         rotation_degrees: u32,
         mirror: bool,
     ) -> Result<JsValue, JsValue> {
-        let output_size = match RenderSize::new(output_width, output_height) {
-            Ok(size) => size,
-            Err(error) => {
-                frame.close();
-                return Err(typed_error(&error));
-            }
-        };
-        let rotation = match rotation_degrees {
-            0 => Rotation::Deg0,
-            90 => Rotation::Deg90,
-            180 => Rotation::Deg180,
-            270 => Rotation::Deg270,
-            _ => {
-                frame.close();
-                return Err(invalid_input(
-                    "VideoFrame rotation must be 0, 90, 180, or 270",
-                ));
-            }
-        };
-        self.upload_presented_video_frame_inner(
-            source_id,
-            media_time_ticks,
-            frame,
-            output_size,
-            Orientation { rotation, mirror },
-        )
+        let image = PresentedImage::Frame(frame);
+        let (output_size, orientation) =
+            match presented_placement(output_width, output_height, rotation_degrees, mirror) {
+                Ok(placement) => placement,
+                Err(error) => {
+                    image.close();
+                    return Err(error);
+                }
+            };
+        self.upload_presented_inner(source_id, media_time_ticks, image, output_size, orientation)
     }
 
-    #[allow(clippy::needless_pass_by_value)] // Takes ownership and closes the frame.
-    fn upload_presented_video_frame_inner(
+    /// [`Self::upload_presented_video_frame`] for a bitmap made of the frame
+    /// with `createImageBitmap(frame, { premultiplyAlpha: "none" })`, which
+    /// skips the canvas draw where `videoFrameCopy` is `"bitmap"`. Always
+    /// closes `bitmap`; a source the project declares HDR is refused.
+    #[wasm_bindgen(js_name = uploadPresentedImageBitmap)]
+    #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+    pub fn upload_presented_image_bitmap(
         &mut self,
         source_id: String,
         media_time_ticks: i64,
-        frame: web_sys::VideoFrame,
+        bitmap: web_sys::ImageBitmap,
+        output_width: u32,
+        output_height: u32,
+        rotation_degrees: u32,
+        mirror: bool,
+    ) -> Result<JsValue, JsValue> {
+        let image = PresentedImage::Bitmap(bitmap);
+        let (output_size, orientation) =
+            match presented_placement(output_width, output_height, rotation_degrees, mirror) {
+                Ok(placement) => placement,
+                Err(error) => {
+                    image.close();
+                    return Err(error);
+                }
+            };
+        self.upload_presented_inner(source_id, media_time_ticks, image, output_size, orientation)
+    }
+
+    /// How [`Self::upload_presented_video_frame`] copies a frame: `"direct"`,
+    /// `"bitmap"` (through a canvas, once WebGPU refused a frame), `"untried"`,
+    /// or `"canvas"` on WebGL2.
+    #[wasm_bindgen(getter, js_name = videoFrameCopy)]
+    #[must_use]
+    pub fn video_frame_copy_mode(&self) -> String {
+        match (self.browser_webgpu, self.video_frame_copy) {
+            (false, _) => "canvas",
+            (true, crate::interop::VideoFrameCopy::Bitmap) => "bitmap",
+            (true, crate::interop::VideoFrameCopy::Direct) => "direct",
+            (true, crate::interop::VideoFrameCopy::Untried) => "untried",
+        }
+        .to_owned()
+    }
+
+    #[allow(clippy::needless_pass_by_value)] // Takes ownership and closes the image.
+    fn upload_presented_inner(
+        &mut self,
+        source_id: String,
+        media_time_ticks: i64,
+        image: PresentedImage,
         output_size: RenderSize,
         orientation: Orientation,
     ) -> Result<JsValue, JsValue> {
-        if self.shows_hdr(&source_id, &frame) {
-            frame.close();
+        let hdr = match &image {
+            PresentedImage::Frame(frame) => self.shows_hdr(&source_id, frame),
+            PresentedImage::Bitmap(_) => self.hdr_source(&source_id),
+        };
+        if hdr {
+            image.close();
             return Err(invalid_input(format!(
                 "source {source_id} is HDR (PQ or HLG): upload its frames' planes with \
                  uploadYuvFrame, which converts them under the project's color pipeline; a \
-                 VideoFrame upload would show the browser's own conversion"
+                 {} upload would show the browser's own conversion",
+                image.kind()
             )));
         }
-        let width = frame.display_width();
-        let height = frame.display_height();
+        let (width, height) = image.size();
         if width == 0 || height == 0 {
-            frame.close();
-            return Err(invalid_input("VideoFrame dimensions must be non-zero"));
+            image.close();
+            return Err(invalid_input(format!(
+                "{} dimensions must be non-zero",
+                image.kind()
+            )));
         }
         if let Err(error) = validate_texture_extent(
             self.renderer.limits().max_texture_dimension_2d,
             width,
             height,
         ) {
-            frame.close();
+            image.close();
             return Err(error);
         }
         let source_size = match RenderSize::new(width, height) {
             Ok(size) => size,
             Err(error) => {
-                frame.close();
+                image.close();
                 return Err(typed_error(&error));
             }
         };
         let texture = match self.renderer.acquire_rgba8_upload_texture(source_size) {
             Ok(texture) => texture,
             Err(error) => {
-                frame.close();
+                image.close();
                 return Err(typed_error(&error));
             }
         };
-        let alpha = if self.browser_webgpu {
-            crate::interop::upload_frame_webgpu(
-                self.gpu.queue(),
-                &frame,
-                texture.texture(),
-                width,
-                height,
-                &mut self.video_frame_copy,
-            )
-        } else {
-            crate::interop::upload_frame_through_canvas(
+        let alpha = match &image {
+            PresentedImage::Frame(frame) if self.browser_webgpu => {
+                crate::interop::upload_frame_webgpu(
+                    self.gpu.queue(),
+                    frame,
+                    texture.texture(),
+                    width,
+                    height,
+                    &mut self.video_frame_copy,
+                )
+            }
+            PresentedImage::Frame(frame) => crate::interop::upload_frame_through_canvas(
                 &self.gpu,
-                &frame,
+                frame,
                 texture.texture(),
                 width,
                 height,
-            )
+            ),
+            PresentedImage::Bitmap(bitmap) => crate::interop::upload_bitmap(
+                &self.gpu,
+                self.browser_webgpu,
+                bitmap,
+                texture.texture(),
+                width,
+                height,
+            ),
         };
-        frame.close();
+        image.close();
         let alpha = alpha?;
         let prepared = self
             .renderer
@@ -2790,6 +2834,48 @@ fn rotation_from_degrees(degrees: u32) -> Result<Rotation, JsValue> {
         270 => Rotation::Deg270,
         _ => return Err(invalid_input("frame rotation must be 0, 90, 180, or 270")),
     })
+}
+
+/// The output size and orientation a presented upload is shown at.
+fn presented_placement(
+    output_width: u32,
+    output_height: u32,
+    rotation_degrees: u32,
+    mirror: bool,
+) -> Result<(RenderSize, Orientation), JsValue> {
+    let output_size =
+        RenderSize::new(output_width, output_height).map_err(|error| typed_error(&error))?;
+    let rotation = rotation_from_degrees(rotation_degrees)?;
+    Ok((output_size, Orientation { rotation, mirror }))
+}
+
+/// What a presented upload copies.
+enum PresentedImage {
+    Frame(web_sys::VideoFrame),
+    Bitmap(web_sys::ImageBitmap),
+}
+
+impl PresentedImage {
+    fn size(&self) -> (u32, u32) {
+        match self {
+            Self::Frame(frame) => (frame.display_width(), frame.display_height()),
+            Self::Bitmap(bitmap) => (bitmap.width(), bitmap.height()),
+        }
+    }
+
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Frame(_) => "VideoFrame",
+            Self::Bitmap(_) => "ImageBitmap",
+        }
+    }
+
+    fn close(&self) {
+        match self {
+            Self::Frame(frame) => frame.close(),
+            Self::Bitmap(bitmap) => bitmap.close(),
+        }
+    }
 }
 
 /// Pixels a page hands over for GPU presentation.

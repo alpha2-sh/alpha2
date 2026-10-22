@@ -189,6 +189,18 @@ export interface WasmCanvasRenderer extends WasmEffectRegistry {
     rotationDegrees: number,
     mirror: boolean,
   ): FrameUploadReceipt;
+  /** `"direct"`, `"bitmap"`, `"untried"`, or `"canvas"` (WebGL2): see `uploadPresentedVideoFrame`. */
+  readonly videoFrameCopy: string;
+  /** `uploadPresentedVideoFrame` for a bitmap made with `premultiplyAlpha: "none"`. */
+  uploadPresentedImageBitmap(
+    sourceId: string,
+    mediaTimeTicks: bigint,
+    bitmap: ImageBitmap,
+    outputWidth: number,
+    outputHeight: number,
+    rotationDegrees: number,
+    mirror: boolean,
+  ): FrameUploadReceipt;
   uploadRgbaFrame(
     sourceId: string,
     mediaTimeTicks: bigint,

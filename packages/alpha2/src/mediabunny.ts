@@ -81,6 +81,8 @@ const DEFAULT_MAX_CACHED_FRAMES = 2;
 const MIN_CACHED_FRAMES = 2;
 /** How long reading one frame may take before the decoder is taken to be stuck. */
 const DEFAULT_STALL_TIMEOUT_MS = 5_000;
+/** How long the video encoder may hold frames without output before it is taken to be stuck. */
+const DEFAULT_ENCODER_STALL_TIMEOUT_MS = 10_000;
 /** Bytes of copied frames the reverse window keeps by default: about forty 1080p frames. */
 const DEFAULT_MAX_REVERSE_FRAME_BYTES = 128 * 1024 * 1024;
 const TICKS_PER_SECOND = 120_000;
@@ -1456,6 +1458,13 @@ export interface MediabunnyMp4SinkOptions {
    * refuses it; `appliedVideoRateControl` says which ran.
    */
   readonly videoRateControl?: VideoRateControl;
+  /** The video encoder's latency mode; by default the one {@link videoEncoderLatencyMode} measures. */
+  readonly videoLatencyMode?: VideoEncoderLatencyMode;
+  /**
+   * How long the video encoder may hold frames without output before writes reject with
+   * `ENCODE_STALLED` (default 10 s).
+   */
+  readonly stallTimeoutMs?: number;
   /** The audio bitrate in bits per second, already resolved. Required with `audioCodec`. */
   readonly audioBitrate?: number;
   /**
@@ -1521,6 +1530,128 @@ export async function canEncodeVideoTrack(
     height: options.height,
     quality: videoEncoderQuality(options.rate),
   }).catch(() => false);
+}
+
+/** How a browser's video encoder is opened: see {@link videoEncoderLatencyMode}. */
+export type VideoEncoderLatencyMode = "quality" | "realtime";
+
+/** The profiles mediabunny opens (H.264 High, HEVC Main), at a level for the probe's frames. */
+const LATENCY_PROBE_CODECS = {
+  avc: "avc1.64001e",
+  hevc: "hev1.1.6.L93.B0",
+  vp9: "vp09.00.10.08",
+  av1: "av01.0.04M.08",
+} as const;
+const LATENCY_PROBE_WIDTH = 320;
+const LATENCY_PROBE_HEIGHT = 240;
+/** More frames than Safari's encoder takes in before it stops. */
+const LATENCY_PROBE_FRAMES = 6;
+/** How long a probe encoder has to put out its first chunk. */
+const LATENCY_PROBE_TIMEOUT_MS = 1_500;
+const latencyModes = new Map<
+  keyof typeof LATENCY_PROBE_CODECS,
+  Promise<VideoEncoderLatencyMode>
+>();
+
+/**
+ * The latency mode {@link MediabunnyMp4Sink} opens `codec`'s encoder with: `"realtime"` only where a
+ * quality-mode encoder puts out nothing (Safari 27's H.264) and a realtime one works. Measured once
+ * per codec.
+ */
+export function videoEncoderLatencyMode(
+  codec: "avc" | "hevc" | "vp9" | "av1",
+): Promise<VideoEncoderLatencyMode> {
+  let mode = latencyModes.get(codec);
+  if (mode === undefined) {
+    mode = measureLatencyMode(codec);
+    latencyModes.set(codec, mode);
+  }
+  return mode;
+}
+
+async function measureLatencyMode(
+  codec: keyof typeof LATENCY_PROBE_CODECS,
+): Promise<VideoEncoderLatencyMode> {
+  if (typeof VideoEncoder === "undefined") return "quality";
+  // One at a time: on Chrome a realtime encoder opening at once delays the quality one.
+  if ((await encoderPutsOut(codec, "quality")) !== false) return "quality";
+  return (await encoderPutsOut(codec, "realtime")) === true
+    ? "realtime"
+    : "quality";
+}
+
+/** `true` once the encoder puts out a chunk, `false` if it puts out none, `undefined` if it failed. */
+async function encoderPutsOut(
+  codec: keyof typeof LATENCY_PROBE_CODECS,
+  latencyMode: VideoEncoderLatencyMode,
+): Promise<boolean | undefined> {
+  const config: VideoEncoderConfig = {
+    codec: LATENCY_PROBE_CODECS[codec],
+    width: LATENCY_PROBE_WIDTH,
+    height: LATENCY_PROBE_HEIGHT,
+    bitrate: 500_000,
+    framerate: 30,
+    latencyMode,
+    ...(codec === "avc" ? { avc: { format: "avc" as const } } : {}),
+  };
+  try {
+    if (!(await VideoEncoder.isConfigSupported(config)).supported)
+      return undefined;
+  } catch {
+    return undefined;
+  }
+  let outputs = 0;
+  let failed = false;
+  let encoder: VideoEncoder | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let putOut = () => {};
+  const firstOutput = new Promise<void>((resolve) => (putOut = resolve));
+  try {
+    encoder = new VideoEncoder({
+      output: () => {
+        outputs += 1;
+        putOut();
+      },
+      error: () => (failed = true),
+    });
+    encoder.configure(config);
+    const pixels = new Uint8Array(
+      LATENCY_PROBE_WIDTH * LATENCY_PROBE_HEIGHT * 1.5,
+    );
+    for (let index = 0; index < LATENCY_PROBE_FRAMES; index += 1) {
+      pixels.fill(16 + index * 32, 0, LATENCY_PROBE_WIDTH);
+      const frame = new VideoFrame(pixels, {
+        format: "I420",
+        codedWidth: LATENCY_PROBE_WIDTH,
+        codedHeight: LATENCY_PROBE_HEIGHT,
+        timestamp: Math.round((index * 1_000_000) / 30),
+        duration: Math.round(1_000_000 / 30),
+      });
+      try {
+        encoder.encode(frame, { keyFrame: index === 0 });
+      } finally {
+        frame.close();
+      }
+    }
+    await Promise.race([
+      firstOutput,
+      encoder.flush().catch(() => (failed = true)),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, LATENCY_PROBE_TIMEOUT_MS);
+      }),
+    ]);
+    if (outputs > 0) return true;
+    return failed ? undefined : false;
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+    try {
+      if (encoder?.state !== "closed") encoder?.close();
+    } catch {
+      // Already closed by its own failure.
+    }
+  }
 }
 
 /**
@@ -1698,8 +1829,9 @@ export interface AppliedVideoRateControl {
  * has ended. Either track's `abort` discards the whole file, and the other runner's next write
  * fails.
  *
- * The constructor throws `RangeError` when no track is configured, a codec lacks its rate, or a
- * memory destination's `maxBytes` is not a positive safe integer.
+ * The constructor throws `RangeError` when no track is configured, a codec lacks its rate, a
+ * memory destination's `maxBytes` is not a positive safe integer, or `stallTimeoutMs` is out of
+ * range.
  */
 export class MediabunnyMp4Sink
   implements BrowserEncodeSink, BrowserAudioBlockSink
@@ -1714,7 +1846,14 @@ export class MediabunnyMp4Sink
   readonly #output: Output;
   #written = 0;
   #overflow: ExportFailureError | undefined;
-  readonly #video?: VideoSampleSource;
+  readonly #hasVideo: boolean;
+  #video?: VideoSampleSource;
+  #latencyMode?: VideoEncoderLatencyMode;
+  readonly #stallTimeoutMs: number;
+  #framesIn = 0;
+  #framesOut = 0;
+  /** When the encoder last put a frame out, or was given one while it owed none. */
+  #progressAt = 0;
   readonly #audio?: AudioSampleSource;
   readonly #audioRate?: number;
   readonly #audioResampler?: AudioResamplerBinding;
@@ -1780,38 +1919,20 @@ export class MediabunnyMp4Sink
       format: new Mp4OutputFormat({ fastStart: false }),
       target: this.#target,
     });
-    if (options.videoCodec !== undefined) {
-      const rate = options.videoRateControl;
-      if (rate === undefined)
-        throw new RangeError("videoRateControl is required with videoCodec");
-      this.#video = new VideoSampleSource({
-        codec: options.videoCodec,
-        quality: videoEncoderQuality(rate),
-        // mediabunny reports each candidate config before it asks the browser whether it is
-        // supported and stops at the first that is, so the last one reported is the one that runs.
-        onEncoderConfig: (config) => {
-          const mode = config.bitrateMode as string | undefined;
-          this.#applied = {
-            bitrateMode:
-              mode === "quantizer" || mode === "constant" ? mode : "variable",
-            ...(config.bitrate === undefined
-              ? {}
-              : { bitrate: config.bitrate }),
-          };
-        },
-      });
-      const frameRate = options.frameRate;
-      this.#frameDuration =
-        frameRate !== undefined && frameRate.num > 0 && frameRate.den > 0
-          ? frameRate.den / frameRate.num
-          : undefined;
-      this.#output.addVideoTrack(
-        this.#video,
-        this.#frameDuration === undefined
-          ? undefined
-          : { frameRate: 1 / this.#frameDuration },
-      );
-    }
+    this.#hasVideo = options.videoCodec !== undefined;
+    if (this.#hasVideo && options.videoRateControl === undefined)
+      throw new RangeError("videoRateControl is required with videoCodec");
+    const frameRate = options.frameRate;
+    this.#frameDuration =
+      this.#hasVideo &&
+      frameRate !== undefined &&
+      frameRate.num > 0 &&
+      frameRate.den > 0
+        ? frameRate.den / frameRate.num
+        : undefined;
+    this.#stallTimeoutMs =
+      options.stallTimeoutMs ?? DEFAULT_ENCODER_STALL_TIMEOUT_MS;
+    validateStallTimeout(this.#stallTimeoutMs);
     if (options.audioCodec !== undefined) {
       if (options.audioBitrate === undefined)
         throw new RangeError("audioBitrate is required with audioCodec");
@@ -1824,11 +1945,92 @@ export class MediabunnyMp4Sink
         codec: options.audioCodec,
         quality: new Quality({ bitrate: options.audioBitrate }),
       });
-      this.#output.addAudioTrack(this.#audio);
     }
-    if (this.#video === undefined && this.#audio === undefined)
+    if (!this.#hasVideo && this.#audio === undefined)
       throw new RangeError("at least one output track is required");
-    this.#ready = this.#output.start();
+    this.#ready = this.#open(options);
+  }
+
+  /** Adds the tracks once the video latency mode is known, and starts the file. */
+  async #open(options: MediabunnyMp4SinkOptions): Promise<void> {
+    const codec = options.videoCodec;
+    const rate = options.videoRateControl;
+    if (codec !== undefined && rate !== undefined) {
+      const latencyMode =
+        options.videoLatencyMode ?? (await videoEncoderLatencyMode(codec));
+      if (this.#output.state === "canceled") return;
+      this.#latencyMode = latencyMode;
+      this.#video = new VideoSampleSource({
+        codec,
+        quality: videoEncoderQuality(rate),
+        latencyMode,
+        // mediabunny reports each candidate config before it asks the browser whether it is
+        // supported and stops at the first that is, so the last one reported is the one that runs.
+        onEncoderConfig: (config) => {
+          const mode = config.bitrateMode as string | undefined;
+          this.#applied = {
+            bitrateMode:
+              mode === "quantizer" || mode === "constant" ? mode : "variable",
+            ...(config.bitrate === undefined
+              ? {}
+              : { bitrate: config.bitrate }),
+          };
+        },
+        onEncodedPacket: () => {
+          this.#framesOut += 1;
+          this.#progressAt = performance.now();
+        },
+      });
+      this.#output.addVideoTrack(
+        this.#video,
+        this.#frameDuration === undefined
+          ? undefined
+          : { frameRate: 1 / this.#frameDuration },
+      );
+    }
+    if (this.#audio !== undefined) this.#output.addAudioTrack(this.#audio);
+    await this.#output.start();
+  }
+
+  /** `work`, unless the video encoder holds frames without output for `stallTimeoutMs`. */
+  #watched<T>(work: Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const timer = setInterval(
+        () => {
+          const waited = performance.now() - this.#progressAt;
+          if (
+            this.#framesOut >= this.#framesIn ||
+            waited < this.#stallTimeoutMs
+          )
+            return;
+          clearInterval(timer);
+          const held = this.#framesIn - this.#framesOut;
+          reject(
+            Object.assign(
+              new Error(
+                `video encoder stalled: no output for ${Math.round(waited)} ms with ${held} frames queued`,
+              ),
+              {
+                code: "ENCODE_STALLED",
+                failure: {
+                  code: "GPU_TIMEOUT",
+                  phase: "encode",
+                  stage: "encoder-stalled",
+                  resource: "unknown",
+                },
+              },
+            ),
+          );
+        },
+        Math.min(1_000, this.#stallTimeoutMs),
+      );
+      void work.finally(() => clearInterval(timer)).then(resolve, reject);
+    });
+  }
+
+  /** The latency mode the video encoder was opened with; undefined until the sink has started. */
+  get videoLatencyMode(): VideoEncoderLatencyMode | undefined {
+    return this.#latencyMode;
   }
 
   /**
@@ -1837,8 +2039,7 @@ export class MediabunnyMp4Sink
    * its `abort` discards the file. Throws `RangeError` when no video track is configured.
    */
   get videoTrack(): BrowserEncodeSink {
-    if (this.#video === undefined)
-      throw new RangeError("video track is not configured");
+    if (!this.#hasVideo) throw new RangeError("video track is not configured");
     this.#videoTrack ??= {
       writeVideo: (output) => this.writeVideo(output),
       finish: () => this.#endTrack("video"),
@@ -1875,7 +2076,7 @@ export class MediabunnyMp4Sink
       (track === "video" ? this.#video : this.#audio)?.close();
     }
     if (
-      (this.#video === undefined || this.#ended.has("video")) &&
+      (!this.#hasVideo || this.#ended.has("video")) &&
       (this.#audio === undefined || this.#ended.has("audio"))
     )
       await this.finish();
@@ -1893,25 +2094,37 @@ export class MediabunnyMp4Sink
   /**
    * Encodes one frame at its output time (`output.timeTicks`, counted from the output's zero).
    * Closes `output.frame` whether or not it succeeds. Rejects with `RESOURCE_LIMIT` once a memory
-   * destination has passed `maxBytes`, or when no video track is configured.
+   * destination has passed `maxBytes`, with `ENCODE_STALLED` when the encoder stalls, or when no
+   * video track is configured.
    */
   async writeVideo(output: ExportedFrame): Promise<void> {
-    await this.#ready;
+    try {
+      await this.#ready;
+    } catch (error) {
+      output.frame.close();
+      throw error;
+    }
     if (this.#overflow) {
       output.frame.close();
       throw this.#overflow;
     }
     if (this.#video === undefined) {
       output.frame.close();
-      throw new Error("video track is not configured");
+      throw new Error(
+        this.#hasVideo
+          ? "the output was cancelled before its video track started"
+          : "video track is not configured",
+      );
     }
     // Declaring the duration keeps sample durations uniform instead of inferred from float deltas.
     const sample = new VideoSample(output.frame, {
       timestamp: Number(output.timeTicks) / 120_000,
       duration: this.#frameDuration,
     });
+    if (this.#framesOut >= this.#framesIn) this.#progressAt = performance.now();
+    this.#framesIn += 1;
     try {
-      await this.#video.add(sample);
+      await this.#watched(this.#video.add(sample));
     } finally {
       sample.close();
       output.frame.close();
@@ -2009,15 +2222,16 @@ export class MediabunnyMp4Sink
 
   /**
    * Finalizes the file and commits a stream destination; calling it again after it resolved does
-   * nothing. Rejects with `RESOURCE_LIMIT` when a memory destination passed `maxBytes`, and with
-   * what the muxer or the destination refused; a stream destination is then discarded.
+   * nothing. Rejects with `RESOURCE_LIMIT` when a memory destination passed `maxBytes`, with
+   * `ENCODE_STALLED` when the encoder stalls, and with what the muxer or the destination refused; a
+   * stream destination is then discarded.
    */
   async finish(): Promise<void> {
     if (this.#finished) return;
     await this.#ready;
     try {
       await this.#flushAudio();
-      await this.#output.finalize();
+      await this.#watched(this.#output.finalize());
       if (this.#overflow) throw this.#overflow;
       await this.#file?.close();
     } catch (error) {

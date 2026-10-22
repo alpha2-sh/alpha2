@@ -15,6 +15,11 @@ import {
 } from "./hdr-frames.js";
 import { decoderConsumerId } from "./media.js";
 import {
+  type PresentedFrameEngine,
+  sendsBitmaps,
+  uploadPresentedFrame,
+} from "./presented-frames.js";
+import {
   PhysicalFrameAliases,
   type PhysicalFrameIdentity,
 } from "./physical-frames.js";
@@ -344,6 +349,8 @@ export interface FrameSupplyEngine {
     rotation: number | undefined,
     mirror: boolean,
   ): FrameUploadReceipt;
+  readonly videoFrameCopy?: string;
+  uploadPresentedImageBitmap?: PresentedFrameEngine["uploadPresentedImageBitmap"];
   /**
    * Converts planar YUV with the project's color pipeline. An engine that has it takes every HDR
    * frame this way, never through the browser's conversion, and every other planar frame unless
@@ -720,18 +727,20 @@ export class FrameSupply {
               this.#planarCopies.release(copied.data);
             }
           } else {
-            // Called on the engine: these methods lose their receiver when detached.
-            if (this.#engine.uploadPresentedVideoFrame === undefined)
-              throw new Error("engine cannot consume a VideoFrame directly");
-            upload = this.#engine.uploadPresentedVideoFrame(
+            const engine = this.#presentedEngine();
+            const presented = [
               need.sourceId,
               sourceTicks,
               videoFrame.frame,
               width,
               height,
-              videoFrame.rotation,
+              videoFrame.rotation ?? 0,
               videoFrame.mirror ?? false,
-            );
+            ] as const;
+            // A frame the engine takes directly still uploads synchronously.
+            upload = sendsBitmaps(engine)
+              ? await uploadPresentedFrame(engine, ...presented)
+              : engine.uploadPresentedVideoFrame(...presented);
           }
           validateUploadReceipt(upload);
           uploaded.push(upload);
@@ -1007,6 +1016,14 @@ export class FrameSupply {
               height,
             ),
     };
+  }
+
+  /** The engine, which must take presented `VideoFrame` uploads. */
+  #presentedEngine(): PresentedFrameEngine {
+    const engine = this.#engine;
+    if (!takesPresentedFrames(engine))
+      throw new Error("engine cannot consume a VideoFrame directly");
+    return engine;
   }
 
   #planarEngine(): PlanarYuvEngine {
@@ -1348,6 +1365,13 @@ function validatePositiveInteger(value: number, name: string): void {
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new RangeError(`${name} must be a positive safe integer`);
   }
+}
+
+/** Whether `engine` takes presented `VideoFrame` uploads (`uploadPresentedVideoFrame`). */
+function takesPresentedFrames(
+  engine: FrameSupplyEngine,
+): engine is FrameSupplyEngine & PresentedFrameEngine {
+  return typeof engine.uploadPresentedVideoFrame === "function";
 }
 
 function closeDecodedNeeds(decoded: readonly DecodedNeed[]): void {

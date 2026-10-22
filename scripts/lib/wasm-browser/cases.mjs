@@ -18,6 +18,7 @@ import {
   audioWorkletQuanta,
 } from "./audio-worklet.mjs";
 import {
+  bitmapUploads,
   layers,
   smoke,
   transparentEdges,
@@ -108,6 +109,9 @@ export const cases = {
   "webgl2-effect-backend-compile": webgl2EffectBackendCompile,
   "webgl2-without-float-color-buffers": webgl2WithoutFloatColorBuffers,
   "webgpu-video-frame-rejected": () => transparentEdges(false, true),
+  "webgl2-bitmap-uploads": () => bitmapUploads(true),
+  "webgpu-bitmap-uploads": () => bitmapUploads(false),
+  "webgpu-bitmap-uploads-rejected": () => bitmapUploads(false, true),
   "extension-module-restart": extensionModuleRestart,
   "extension-svg-budgets": extensionSvgBudgets,
   "extension-provider-contract": extensionProviderContract,
@@ -129,6 +133,8 @@ export const cases = {
 export const videoImportCases = new Set([
   "webgpu-transparent-edges",
   "webgpu-video-frame-rejected",
+  "webgpu-bitmap-uploads",
+  "webgpu-bitmap-uploads-rejected",
   "video-color-contract",
   "browser-video-conversion",
   "sdr-chroma-siting",
