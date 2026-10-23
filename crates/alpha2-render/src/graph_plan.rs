@@ -92,7 +92,9 @@ impl RenderGraph<'_> {
                 RenderNode::Effect { .. }
                 | RenderNode::Transition { .. }
                 | RenderNode::Generator { .. } => Some(quality.max_filter_samples.max(1)),
-                RenderNode::Source(_) | RenderNode::Composite { .. } => None,
+                RenderNode::Source(_)
+                | RenderNode::Composite { .. }
+                | RenderNode::Vector { .. } => None,
             })
             .collect();
         let count = quality.motion_blur_subframes.max(1);

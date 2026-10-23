@@ -4,7 +4,8 @@
 //! issue it reports is certain, and something it misses is not an error.
 
 use crate::{
-    Animated, ClipId, Generator, MaskShape, MediaKind, Paint, Project, TrackId, TrackKind,
+    Animated, AnimatedPoint, ClipId, CompositionId, Generator, MediaKind, NodeId, Paint, Project,
+    ShapeGeometry, ShapeItem, TrackId, TrackKind,
 };
 use alpha2_media::SourceId;
 use alpha2_time::{FrameRate, MediaTime, TICKS_PER_SECOND, TimeRange};
@@ -69,6 +70,40 @@ pub enum LintIssue {
         /// The source.
         source: SourceId,
     },
+    /// A path's subpath without vertices, which draws nothing.
+    EmptySubpath {
+        /// The shapes generator.
+        owner: ShapeLintOwner,
+        /// The path, like `items[0].path`, and the subpath in a keyframe.
+        at: String,
+    },
+    /// A fill or stroke with no geometry before it in its group, which
+    /// paints nothing.
+    PaintWithoutGeometry {
+        /// The shapes generator.
+        owner: ShapeLintOwner,
+        /// The paint item, like `items[1].items[0]`.
+        at: String,
+    },
+}
+
+/// The shapes generator a shape [`LintIssue`] is about.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ShapeLintOwner {
+    /// A generated source's.
+    Source {
+        /// The source.
+        source: SourceId,
+    },
+    /// A composition's generator node's.
+    Node {
+        /// The composition.
+        composition: CompositionId,
+        /// The node.
+        node: NodeId,
+    },
 }
 
 /// What a [`LintIssue`] is about.
@@ -111,8 +146,9 @@ pub enum LintEdge {
 
 impl Project {
     /// Diagnostics that do not stop the project rendering, in a fixed order:
-    /// sources, then tracks in order and each track's clips, transitions, and
-    /// cues in order.
+    /// sources, then shapes generators (sources', then composition nodes'),
+    /// then tracks in order and each track's clips, transitions, and cues in
+    /// order.
     #[must_use]
     pub fn lint(&self) -> Vec<LintIssue> {
         let mut issues = Vec::new();
@@ -128,6 +164,7 @@ impl Project {
                 });
             }
         }
+        self.lint_shapes(&mut issues);
         let refused = self.settings.color.hdr == crate::HdrSources::Reject;
         for source in self.hdr_sources().into_iter().filter(|_| refused) {
             issues.push(LintIssue::HdrSource {
@@ -202,6 +239,33 @@ impl Project {
             }
         }
         issues
+    }
+
+    /// Every shapes generator's empty subpaths and paints without geometry:
+    /// sources' first, then composition nodes', in order.
+    fn lint_shapes(&self, issues: &mut Vec<LintIssue>) {
+        for source in &self.sources {
+            if let Some(Generator::Shapes { items }) = &source.generator {
+                let owner = ShapeLintOwner::Source {
+                    source: source.id.clone(),
+                };
+                lint_shape_items(&owner, items, "items", issues);
+            }
+        }
+        for composition in &self.compositions {
+            for node in &composition.nodes {
+                if let crate::NodeOp::Generator {
+                    generator: Generator::Shapes { items },
+                } = &node.op
+                {
+                    let owner = ShapeLintOwner::Node {
+                        composition: composition.id.clone(),
+                        node: node.id.clone(),
+                    };
+                    lint_shape_items(&owner, items, "items", issues);
+                }
+            }
+        }
     }
 
     /// The clips on video tracks that certainly cover the whole frame,
@@ -366,51 +430,133 @@ struct Keyframes<'a> {
 impl Keyframes<'_> {
     fn check_clip(&mut self, clip: &crate::Clip) {
         let visual = &clip.visual;
-        self.check("visual.position", &visual.position);
+        self.check_point("visual.position", &visual.position);
         self.check("visual.scale", &visual.scale);
         self.check("visual.rotation_degrees", &visual.rotation_degrees);
         self.check("visual.opacity", &visual.opacity);
         for (index, mask) in clip.masks.iter().enumerate() {
-            self.check(&format!("masks[{index}].center"), &mask.center);
-            self.check(&format!("masks[{index}].size"), &mask.size);
-            self.check(
-                &format!("masks[{index}].rotation_degrees"),
-                &mask.rotation_degrees,
-            );
+            self.check_geometry(&format!("masks[{index}].shape"), &mask.shape);
             self.check(&format!("masks[{index}].feather"), &mask.feather);
-            if let MaskShape::Rectangle { corner_radius } = &mask.shape {
-                self.check(
-                    &format!("masks[{index}].shape.corner_radius"),
-                    corner_radius,
-                );
-            }
         }
         self.check("audio.gain", &clip.audio.gain);
         self.check("audio.pan", &clip.audio.pan);
     }
 
+    fn check_geometry(&mut self, at: &str, geometry: &ShapeGeometry) {
+        match geometry {
+            ShapeGeometry::Rectangle(rectangle) => {
+                self.check_point(&format!("{at}.center"), &rectangle.center);
+                self.check(&format!("{at}.size"), &rectangle.size);
+                self.check(&format!("{at}.corner_radius"), &rectangle.corner_radius);
+                self.check(
+                    &format!("{at}.rotation_degrees"),
+                    &rectangle.rotation_degrees,
+                );
+            }
+            ShapeGeometry::Ellipse(ellipse) => {
+                self.check_point(&format!("{at}.center"), &ellipse.center);
+                self.check(&format!("{at}.size"), &ellipse.size);
+                self.check(&format!("{at}.rotation_degrees"), &ellipse.rotation_degrees);
+            }
+            ShapeGeometry::Polystar(star) => {
+                self.check_point(&format!("{at}.center"), &star.center);
+                self.check(&format!("{at}.points"), &star.points);
+                self.check(&format!("{at}.outer_radius"), &star.outer_radius);
+                self.check(&format!("{at}.inner_radius"), &star.inner_radius);
+                self.check(&format!("{at}.outer_roundness"), &star.outer_roundness);
+                self.check(&format!("{at}.inner_roundness"), &star.inner_roundness);
+                self.check(&format!("{at}.rotation_degrees"), &star.rotation_degrees);
+            }
+            ShapeGeometry::Path(path) => self.check(&format!("{at}.path"), &path.path),
+        }
+    }
+
+    fn check_point(&mut self, property: &str, animated: &AnimatedPoint) {
+        if let AnimatedPoint::Keyframes { keyframes } = animated {
+            let times: Vec<MediaTime> = keyframes.iter().map(|keyframe| keyframe.time).collect();
+            self.check_times(property, &times);
+        }
+    }
+
+    fn check<T>(&mut self, property: &str, animated: &Animated<T>) {
+        if let Animated::Keyframes { keyframes } = animated {
+            let times: Vec<MediaTime> = keyframes.iter().map(|keyframe| keyframe.time).collect();
+            self.check_times(property, &times);
+        }
+    }
+
     /// Keyframe `i` shapes values only strictly between its neighbours'
     /// times (the first one back to the start of time, the last one on to
     /// its end); outside every shown tick of `active`, it has no effect.
-    fn check<T>(&mut self, property: &str, animated: &Animated<T>) {
-        let Animated::Keyframes { keyframes } = animated else {
-            return;
-        };
+    fn check_times(&mut self, property: &str, times: &[MediaTime]) {
         let (start, last) = (self.active.start().ticks(), self.active.end().ticks() - 1);
-        for (index, keyframe) in keyframes.iter().enumerate() {
+        for (index, time) in times.iter().enumerate() {
             let after = index.checked_sub(1).map_or(i64::MIN, |previous| {
-                keyframes[previous].time.ticks().saturating_add(1)
+                times[previous].ticks().saturating_add(1)
             });
-            let before = keyframes
+            let before = times
                 .get(index + 1)
-                .map_or(i64::MAX, |next| next.time.ticks().saturating_sub(1));
+                .map_or(i64::MAX, |next| next.ticks().saturating_sub(1));
             if after.max(start) > before.min(last) {
                 self.issues.push(LintIssue::UnreachedKeyframe {
                     owner: self.owner.clone(),
                     property: property.to_owned(),
-                    time: keyframe.time,
+                    time: *time,
                 });
             }
         }
     }
+}
+
+/// Reports a content tree's empty subpaths and its paints with nothing
+/// before them to paint, in document order. Returns whether the items hold
+/// any geometry, so an enclosing group knows its paints have some.
+fn lint_shape_items(
+    owner: &ShapeLintOwner,
+    items: &[ShapeItem],
+    at: &str,
+    issues: &mut Vec<LintIssue>,
+) -> bool {
+    let mut geometry = false;
+    for (index, item) in items.iter().enumerate() {
+        let at = format!("{at}[{index}]");
+        match item {
+            ShapeItem::Group { items, .. } => {
+                geometry |= lint_shape_items(owner, items, &format!("{at}.items"), issues);
+            }
+            ShapeItem::Rectangle(_) | ShapeItem::Ellipse(_) | ShapeItem::Polystar(_) => {
+                geometry = true;
+            }
+            ShapeItem::Path(path) => {
+                geometry = true;
+                let paths: Vec<&crate::Path> = match &path.path {
+                    Animated::Constant { value } => vec![value],
+                    Animated::Keyframes { keyframes } => {
+                        keyframes.iter().map(|keyframe| &keyframe.value).collect()
+                    }
+                };
+                // Keyframes share their structure, so the first tells.
+                if let Some(first) = paths.first() {
+                    for (subpath, entry) in first.subpaths.iter().enumerate() {
+                        if entry.vertices.is_empty() {
+                            issues.push(LintIssue::EmptySubpath {
+                                owner: owner.clone(),
+                                at: format!("{at}.path.subpaths[{subpath}]"),
+                            });
+                        }
+                    }
+                }
+            }
+            ShapeItem::Fill { .. } | ShapeItem::Stroke(_) => {
+                if !geometry {
+                    issues.push(LintIssue::PaintWithoutGeometry {
+                        owner: owner.clone(),
+                        at,
+                    });
+                }
+            }
+            ShapeItem::Trim(_) => {}
+        }
+    }
+    geometry
 }

@@ -7,19 +7,19 @@
 
 use alpha2_eval::{
     ActiveClip, ActiveComposition, ActiveEffect, ActiveTransition, EvaluatedVisual, FrameDesc,
-    StepOp, sample_scalar, sample_vec2, sample_visual,
+    ShapesPlan, StepOp, sample_scalar, sample_visual,
 };
 use alpha2_media::{SourceId, YuvEncoding};
 use alpha2_model::{
-    ClipBlendMode, EffectValue, Generator, MaskMode, MaskShape, MatteMode, Rgb, ShapeMask,
-    TextStyle,
+    ClipBlendMode, EffectValue, Generator, MaskMode, MatteMode, Rgb, ShapeMask, TextStyle,
 };
 use alpha2_render::{
     BlendMode, CacheIntent, Color, EffectId, EffectInputs, EffectParams, EffectResources,
     EffectRuntime, FrameSubmitTimings, GENERATOR_EFFECT_ID, GraphError, GraphLayer, LayerTransform,
-    MAX_SHAPE_MASKS, Nv12PlaneTargets, ParamSpec, ParamValue, PendingSourceWork, RenderCacheKey,
-    RenderError, RenderGraph, RenderNodeId, RenderNodeKind, RenderSize, RenderedTexture, Renderer,
-    SHAPE_MASK_EFFECT_ID, SHAPE_MASK_PARAMS, SourceView, TRACK_MATTE_EFFECT_ID, Yuv420pReadback,
+    MASK_COMBINE_EFFECT_IDS, MASK_COMBINE_NAMES, MAX_SHAPE_MASKS, Nv12PlaneTargets, ParamSpec,
+    ParamValue, PendingSourceWork, RenderCacheKey, RenderError, RenderGraph, RenderNodeId,
+    RenderNodeKind, RenderSize, RenderedTexture, Renderer, SourceView, TRACK_MATTE_EFFECT_ID,
+    Yuv420pReadback,
 };
 use alpha2_time::MediaTime;
 
@@ -623,7 +623,7 @@ fn attach_texts<'t>(
                 continue;
             };
             for (step, slot) in composition.plan().steps.iter().zip(media.iter_mut()) {
-                if let StepOp::Generator(generator) = &step.op {
+                if let StepOp::Generator { generator, .. } = &step.op {
                     *slot = lookup(generator).map(StepFrame::Text);
                 }
             }
@@ -913,15 +913,7 @@ fn clip_layer<'a>(
         )?,
     };
     if !clip.masks.is_empty() {
-        source = graph
-            .add_effect_with_resources(
-                EffectId::from_static(SHAPE_MASK_EFFECT_ID, 1),
-                source,
-                mask_params(clip.masks, time),
-                EffectResources::new(),
-                timeless(runtime),
-            )
-            .map_err(GraphError::into_render_error)?;
+        source = mask_node(graph, source, clip.masks, time, runtime)?;
     }
     // The clip's finished picture is where reuse pays: everything above it
     // changes with the layer stack, everything below it is in its key. A bare
@@ -963,14 +955,31 @@ fn clip_picture<'a>(
         (Some(Generator::Text { .. }), _) => {
             textures.text.ok_or(RenderError::MissingText)?.add_to(graph)
         }
+        (Some(Generator::Shapes { .. }), _) => {
+            let plan = clip.shapes.ok_or(RenderError::InvalidGraph)?;
+            Ok(shapes_node(graph, plan, clip.source_time))
+        }
         (Some(generator), _) => Ok(generator_node(graph, generator, runtime)),
         (None, Some(frame)) => Ok(frame.add_to(graph)),
         (None, None) => Err(RenderError::InvalidGraph),
     }
 }
 
-/// A generated picture does not change over time, so its node has the same
-/// cache key in every frame.
+/// A shapes generator's picture at `time`, the picture's own: its tree
+/// evaluated there (its fixed parts shared) and drawn as a vector scene at
+/// the graph's size. A frame that draws the same scene has the same key.
+fn shapes_node(graph: &mut RenderGraph<'_>, plan: &ShapesPlan, time: MediaTime) -> RenderNodeId {
+    let size = graph.size();
+    let canvas = alpha2_geometry::CanvasSize::new(size.width, size.height);
+    let aspect = f64::from(size.width) / f64::from(size.height);
+    let items = plan.evaluate(time, aspect);
+    graph.add_vector(std::sync::Arc::new(alpha2_geometry::build_scene(
+        &items, canvas,
+    )))
+}
+
+/// A fill does not change over time, so its node has the same cache key in
+/// every frame.
 fn generator_node(
     graph: &mut RenderGraph<'_>,
     generator: &alpha2_model::Generator,
@@ -1018,12 +1027,13 @@ fn plan_node<'a>(
                 Some(StepFrame::Media(frame)) => frame.add_to(graph),
                 _ => return Err(RenderError::InvalidGraph),
             },
-            StepOp::Generator(Generator::Text { .. }) => {
-                match media.get(index).copied().flatten() {
-                    Some(StepFrame::Text(text)) => text.add_to(graph)?,
-                    _ => return Err(RenderError::MissingText),
-                }
-            }
+            StepOp::Generator {
+                generator: Generator::Text { .. },
+                ..
+            } => match media.get(index).copied().flatten() {
+                Some(StepFrame::Text(text)) => text.add_to(graph)?,
+                _ => return Err(RenderError::MissingText),
+            },
             op => step_node(renderer, graph, op, &built, at, step_runtime)?,
         };
         built.push(node);
@@ -1051,7 +1061,16 @@ fn step_node<'a>(
     let input = |step: usize| step_input(built, step);
     let node = match op {
         StepOp::Clip | StepOp::Media { .. } => return Err(RenderError::InvalidGraph),
-        StepOp::Generator(generator) => generator_node(graph, generator, runtime),
+        StepOp::Generator {
+            generator: Generator::Shapes { .. },
+            start,
+            shapes,
+        } => {
+            let plan = shapes.as_deref().ok_or(RenderError::InvalidGraph)?;
+            let at = MediaTime(time.ticks().saturating_add(start.ticks()));
+            shapes_node(graph, plan, at)
+        }
+        StepOp::Generator { generator, .. } => generator_node(graph, generator, runtime),
         StepOp::Effect {
             input: from,
             inputs,
@@ -1104,7 +1123,7 @@ fn step_node<'a>(
         } => graph
             .add_composite(vec![GraphLayer {
                 source: input(*from)?,
-                visual: layer_transform(sample_visual(transform, time)),
+                visual: layer_transform(sample_visual(transform, time, graph_aspect(graph))),
                 blend_mode: BlendMode::Normal,
             }])
             .map_err(GraphError::into_render_error)?,
@@ -1127,49 +1146,65 @@ fn step_node<'a>(
             matte,
             mode,
         } => matte_node(graph, input(*from)?, input(*matte)?, *mode, runtime)?,
-        StepOp::ShapeMask { input: from, masks } => graph
-            .add_effect_with_resources(
-                EffectId::from_static(SHAPE_MASK_EFFECT_ID, 1),
-                input(*from)?,
-                mask_params(masks, time),
-                EffectResources::new(),
-                timeless(runtime),
-            )
-            .map_err(GraphError::into_render_error)?,
+        StepOp::ShapeMask { input: from, masks } => {
+            mask_node(graph, input(*from)?, masks, time, runtime)?
+        }
     };
     Ok(node)
 }
 
-/// A clip's shape masks sampled at `time`, as the shape-mask pass's
-/// parameters. An overshooting curve cannot make a size, radius, or feather
-/// negative here.
-fn mask_params(masks: &[ShapeMask], time: MediaTime) -> EffectParams<'static> {
-    let shown = masks.len().min(MAX_SHAPE_MASKS);
-    let mut params = EffectParams::with_capacity(1 + shown * 8);
-    #[allow(clippy::cast_precision_loss)]
-    params.insert("count", ParamValue::Float(masks.len() as f32));
-    for (mask, names) in masks.iter().zip(SHAPE_MASK_PARAMS) {
-        let center = sample_vec2(&mask.center, time);
-        let size = sample_vec2(&mask.size, time);
-        let (ellipse, radius) = match &mask.shape {
-            MaskShape::Ellipse => (true, 0.0),
-            MaskShape::Rectangle { corner_radius } => (false, sample_scalar(corner_radius, time)),
-        };
-        params.insert(names.center, ParamValue::Vec2([center.x, center.y]));
-        params.insert(
-            names.size,
-            ParamValue::Vec2([size.x.max(0.0), size.y.max(0.0)]),
-        );
-        params.insert(
-            names.rotation,
-            ParamValue::Float(sample_scalar(&mask.rotation_degrees, time).to_radians()),
-        );
-        params.insert(names.radius, ParamValue::Float(radius.max(0.0)));
-        params.insert(
-            names.feather,
-            ParamValue::Float(sample_scalar(&mask.feather, time).max(0.0)),
-        );
-        params.insert(names.ellipse, ParamValue::Bool(ellipse));
+/// The width over the height of the graph's pictures: what a position
+/// moving along a spatial curve is measured in.
+fn graph_aspect(graph: &RenderGraph<'_>) -> f64 {
+    let size = graph.size();
+    f64::from(size.width) / f64::from(size.height)
+}
+
+/// `source` kept inside `masks` at `time`. Each mask's outline, evaluated
+/// in the picture's normalized space, is drawn as a vector scene of opaque
+/// white under its fill rule; a feathered one is blurred by a Gaussian of
+/// deviation `0.3125 * feather` (of the shorter side), whose 10 to 90
+/// percent ramp is `0.8 * feather` wide. One pass then combines them in
+/// order and keeps the source by the result.
+fn mask_node(
+    graph: &mut RenderGraph<'_>,
+    source: RenderNodeId,
+    masks: &[ShapeMask],
+    time: MediaTime,
+    runtime: EffectRuntime,
+) -> Result<RenderNodeId, RenderError> {
+    let size = graph.size();
+    let canvas = alpha2_geometry::CanvasSize::new(size.width, size.height);
+    let aspect = graph_aspect(graph);
+    let unit = size.width.min(size.height);
+    let white = alpha2_model::Paint::Solid {
+        color: alpha2_model::Rgba::new(1.0, 1.0, 1.0, 1.0),
+    };
+    let shown = &masks[..masks.len().min(MAX_SHAPE_MASKS)];
+    if shown.is_empty() {
+        return Ok(source);
+    }
+    let mut inputs = EffectInputs::new();
+    let mut params = EffectParams::with_capacity(shown.len() * 2);
+    for (mask, names) in shown.iter().zip(MASK_COMBINE_NAMES) {
+        let outline = alpha2_eval::evaluate_geometry(&mask.shape, time, aspect);
+        let items = [
+            alpha2_geometry::EvaluatedItem::Geometry(outline),
+            alpha2_geometry::EvaluatedItem::Fill {
+                paint: white.clone(),
+                opacity: 1.0,
+                rule: mask.fill_rule,
+            },
+        ];
+        let coverage = graph.add_vector(std::sync::Arc::new(alpha2_geometry::build_scene(
+            &items, canvas,
+        )));
+        #[allow(clippy::cast_precision_loss)]
+        let sigma = 0.3125 * sample_scalar(&mask.feather, time).max(0.0) * unit as f32;
+        let coverage = graph
+            .add_gaussian_pixels(coverage, sigma, timeless(runtime))
+            .map_err(GraphError::into_render_error)?;
+        inputs.insert(names.input, coverage);
         params.insert(names.invert, ParamValue::Bool(mask.invert));
         params.insert(
             names.mode,
@@ -1180,7 +1215,16 @@ fn mask_params(masks: &[ShapeMask], time: MediaTime) -> EffectParams<'static> {
             }),
         );
     }
-    params
+    graph
+        .add_effect_with_inputs(
+            EffectId::from_static(MASK_COMBINE_EFFECT_IDS[shown.len() - 1], 1),
+            source,
+            inputs,
+            params,
+            EffectResources::new(),
+            timeless(runtime),
+        )
+        .map_err(GraphError::into_render_error)
 }
 
 const fn is_inverted(mode: MatteMode) -> bool {

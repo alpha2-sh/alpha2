@@ -1,0 +1,33 @@
+[package]
+name = "alpha2-geometry"
+version.workspace = true
+description = "Deterministic vector geometry and coverage rasterization for alpha2 shapes."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["vector", "bezier", "rasterizer", "shapes", "animation"]
+categories = ["graphics", "multimedia::video"]
+# Builds from its sources and license alone: tests, test-only modules, benches and fixtures
+# stay in the repository, which is where `cargo test` runs.
+include = [
+  "/src/**",
+  "/README.md",
+  "/LICENSE.md",
+  "!/src/**/tests.rs",
+  "!/src/**/*_tests.rs",
+  "!/src/**/tests/**",
+]
+
+[dependencies]
+alpha2-model.workspace = true
+# libm, so trigonometry is the same code on every target. A host build that also links velato gets
+# kurbo's `std` math for its stroker; the shared coverage goldens pin that both agree.
+kurbo = { version = "0.13.1", default-features = false, features = ["libm"] }
+libm = "0.2.16"
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

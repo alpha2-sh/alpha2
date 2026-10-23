@@ -23,6 +23,8 @@ pub struct Renderer {
     pub(crate) diagnostics: crate::diagnostics::SharedDiagnostics,
     pub(crate) quality: Mutex<QualityState>,
     pub(crate) result_cache: Mutex<crate::result_cache::ResultCache>,
+    /// Vector coverage kept between frames, and the rasterizer's buffers.
+    pub(crate) vector_state: Mutex<crate::vector::VectorState>,
     pub(crate) timestamp_probe: std::sync::OnceLock<Option<crate::runtime_effect::TimestampProbe>>,
     pub(crate) pass_timing: std::sync::atomic::AtomicBool,
     /// Test-only: composite every layer as a full-frame pass, culling
@@ -35,6 +37,10 @@ pub struct Renderer {
     /// with the loop pipeline.
     #[cfg(test)]
     pub(crate) composite_batch_limit: std::sync::atomic::AtomicUsize,
+    /// Test-only: the tile rows of a vector atlas page when nonzero, so a
+    /// small scene fills several pages.
+    #[cfg(test)]
+    pub(crate) vector_page_rows: std::sync::atomic::AtomicU32,
     /// Test-only: the pipeline each composite pass drew with, and how many
     /// composite pipelines were created.
     #[cfg(test)]
@@ -308,12 +314,15 @@ impl Renderer {
             diagnostics: Arc::new(Mutex::new(crate::diagnostics::DiagnosticsState::default())),
             quality: Mutex::new(QualityState::new(filter_sample_limit)),
             result_cache: Mutex::new(crate::result_cache::ResultCache::default()),
+            vector_state: Mutex::default(),
             timestamp_probe: std::sync::OnceLock::new(),
             pass_timing: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
             full_frame_layers: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
             composite_batch_limit: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            vector_page_rows: std::sync::atomic::AtomicU32::new(0),
             #[cfg(test)]
             composite_pipelines: Mutex::new(crate::composite::CompositePipelineLog::default()),
             retired_leases: Arc::new(crate::yuv::RetiredLeases::default()),
@@ -712,6 +721,12 @@ impl Renderer {
         self.readback_buffers.clear();
         self.uniform_buffers.clear();
         self.canaries.clear();
+        // Kept vector coverage is host memory, given back with the rest.
+        self.vector_state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .cache
+            .clear();
         self.retirement.retired_bytes().saturating_sub(before)
     }
 

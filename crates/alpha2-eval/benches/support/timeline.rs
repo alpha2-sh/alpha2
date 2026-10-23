@@ -226,7 +226,7 @@ fn keyframes(clip: &mut Clip) {
     clip.visual.opacity = Animated::Keyframes {
         keyframes: frames(&scalar),
     };
-    clip.visual.position = Animated::Keyframes {
+    clip.visual.position = alpha2_model::AnimatedPoint::from(Animated::Keyframes {
         keyframes: frames(&scalar)
             .into_iter()
             .map(|keyframe| Keyframe {
@@ -235,7 +235,7 @@ fn keyframes(clip: &mut Clip) {
                 interpolation: keyframe.interpolation,
             })
             .collect(),
-    };
+    });
     clip.visual.scale = Animated::Keyframes {
         keyframes: frames(&|step| 1.0 + scalar(step))
             .into_iter()

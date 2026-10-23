@@ -482,15 +482,16 @@ pub fn lut_3d_definition() -> EffectDef {
 }
 
 /// The passes the engine inserts itself, hidden from the effect catalog.
-pub(crate) fn internal_effect_definitions() -> [EffectDef; 6] {
-    [
+pub(crate) fn internal_effect_definitions() -> Vec<EffectDef> {
+    let mut definitions = vec![
         gaussian_blur_pass_definition(),
         glow_threshold_definition(),
         glow_combine_definition(),
-        crate::masking::shape_mask_definition(),
         crate::masking::track_matte_definition(),
         crate::generator::generator_definition(),
-    ]
+    ];
+    definitions.extend(crate::masking::mask_combine_definitions());
+    definitions
 }
 
 impl Renderer {

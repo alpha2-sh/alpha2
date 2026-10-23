@@ -84,8 +84,9 @@ pub struct ActiveClip<'a> {
     pub blend_mode: ClipBlendMode,
     /// Whether a runtime may keep and reuse the clip's rendered picture.
     pub cache: alpha2_model::CacheIntent,
-    /// Shape masks, in order; their animated values are sampled at the
-    /// frame's time with [`crate::sample_scalar`] and [`crate::sample_vec2`].
+    /// Shape masks, in order; their outlines are evaluated at the frame's
+    /// time with [`crate::evaluate_geometry`], their feathers with
+    /// [`crate::sample_scalar`].
     pub masks: &'a [ShapeMask],
     /// The clip whose picture sets where this one is visible.
     pub matte: Option<&'a Matte>,
@@ -93,8 +94,11 @@ pub struct ActiveClip<'a> {
     /// that matte, never composited itself.
     pub is_matte: bool,
     /// What the engine draws for a generated source, which needs no frame
-    /// from the host.
+    /// from the host. It is drawn at the clip's `source_time`.
     pub generator: Option<&'a Generator>,
+    /// A shapes generator's tree, its fixed parts evaluated once: evaluate
+    /// it at `source_time`.
+    pub shapes: Option<&'a crate::ShapesPlan>,
     /// For a composition source, its composition at the clip's source time:
     /// the clip's picture, which the host supplies no frame for.
     pub source_composition: Option<crate::ActiveComposition<'a>>,

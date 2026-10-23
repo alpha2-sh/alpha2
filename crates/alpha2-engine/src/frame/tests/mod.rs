@@ -26,6 +26,7 @@ mod effects_and_transitions;
 mod export_steps;
 mod layers;
 mod missing_sources;
+mod shapes;
 mod submissions;
 mod timing;
 mod transition_quality;
@@ -299,9 +300,10 @@ fn caption_project_with(sources: &str, tracks: CaptionExtraTracks) -> crate::Eng
           "sources": [ SOURCES
             { "id": "grey", "kind": "generated", "generator": { "type": "fill", "paint": {
                 "type": "solid", "color": { "red": 0.3, "green": 0.3, "blue": 0.3, "alpha": 1 } } } },
-            { "id": "square", "kind": "generated", "generator": { "type": "shape",
-                "shape": { "type": "rectangle" }, "center": { "x": 0.5, "y": 0.9 }, "size": { "x": 0.05, "y": 0.1 },
-                "fill": { "type": "solid", "color": { "red": 1, "green": 0, "blue": 0, "alpha": 1 } } } }
+            { "id": "square", "kind": "generated", "generator": { "type": "shapes", "items": [
+                { "type": "rectangle", "center": { "mode": "constant", "value": { "x": 0.5, "y": 0.9 } },
+                  "size": { "mode": "constant", "value": { "x": 0.05, "y": 0.1 } } },
+                { "type": "fill", "paint": { "mode": "constant", "value": { "type": "solid", "color": { "red": 1, "green": 0, "blue": 0, "alpha": 1 } } } } ] } }
           ],
           "timeline": { "tracks": [ BOTTOM
             { "id": "back", "name": "Back", "kind": "video", "clips": [

@@ -115,6 +115,13 @@ pub fn project_limits_json() -> Value {
         ("MAX_MERGE_LAYERS", json!(crate::MAX_MERGE_LAYERS)),
         ("MAX_CLIP_MASKS", json!(crate::MAX_CLIP_MASKS)),
         ("MAX_GRADIENT_STOPS", json!(crate::MAX_GRADIENT_STOPS)),
+        ("MAX_SHAPE_ITEMS", json!(crate::MAX_SHAPE_ITEMS)),
+        ("MAX_SHAPE_DEPTH", json!(crate::MAX_SHAPE_DEPTH)),
+        ("MAX_PATH_VERTICES", json!(crate::MAX_PATH_VERTICES)),
+        ("MAX_PATH_SUBPATHS", json!(crate::MAX_PATH_SUBPATHS)),
+        ("MAX_DASH_ENTRIES", json!(crate::MAX_DASH_ENTRIES)),
+        ("MIN_POLYSTAR_POINTS", json!(crate::MIN_POLYSTAR_POINTS)),
+        ("MAX_POLYSTAR_POINTS", json!(crate::MAX_POLYSTAR_POINTS)),
         (
             "MAX_TEXT_CONTENT_BYTES",
             json!(crate::MAX_TEXT_CONTENT_BYTES),

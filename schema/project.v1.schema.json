@@ -1,5 +1,51 @@
 {
   "$defs": {
+    "AnimatedPoint": {
+      "description": "A position that can move along curves between its keyframes.\n\nIts JSON is that of an `Animated<Vec2>`, plus optional spatial tangents on\neach keyframe: with them, the value travels along the cubic Bezier from\none keyframe's value through its `out_tangent` and the next keyframe's\n`in_tangent`, at the speed its timing curve sets along the curve's\nlength. Without them it moves in a straight line, as an `Animated<Vec2>`\ndoes.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A value without animation.",
+          "properties": {
+            "mode": {
+              "const": "constant",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/Vec2",
+              "description": "Value used at every timestamp."
+            }
+          },
+          "required": [
+            "mode",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Values evaluated from their keyframe sequence.",
+          "properties": {
+            "keyframes": {
+              "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
+              "items": {
+                "$ref": "#/$defs/PointKeyframe"
+              },
+              "type": "array"
+            },
+            "mode": {
+              "const": "keyframes",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "keyframes"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "Animated_EffectValue": {
       "description": "A value that is either constant or controlled by sorted keyframes.",
       "oneOf": [
@@ -30,6 +76,98 @@
               "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
               "items": {
                 "$ref": "#/$defs/Keyframe_EffectValue"
+              },
+              "type": "array"
+            },
+            "mode": {
+              "const": "keyframes",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "keyframes"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Animated_Paint": {
+      "description": "A value that is either constant or controlled by sorted keyframes.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A value without animation.",
+          "properties": {
+            "mode": {
+              "const": "constant",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/Paint",
+              "description": "Value used at every timestamp."
+            }
+          },
+          "required": [
+            "mode",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Values evaluated from their keyframe sequence.",
+          "properties": {
+            "keyframes": {
+              "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
+              "items": {
+                "$ref": "#/$defs/Keyframe_Paint"
+              },
+              "type": "array"
+            },
+            "mode": {
+              "const": "keyframes",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "keyframes"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Animated_Path": {
+      "description": "A value that is either constant or controlled by sorted keyframes.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A value without animation.",
+          "properties": {
+            "mode": {
+              "const": "constant",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/Path",
+              "description": "Value used at every timestamp."
+            }
+          },
+          "required": [
+            "mode",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Values evaluated from their keyframe sequence.",
+          "properties": {
+            "keyframes": {
+              "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
+              "items": {
+                "$ref": "#/$defs/Keyframe_Path"
               },
               "type": "array"
             },
@@ -947,6 +1085,31 @@
       ],
       "type": "object"
     },
+    "Dash": {
+      "additionalProperties": false,
+      "description": "A dash pattern.",
+      "properties": {
+        "offset": {
+          "$ref": "#/$defs/Animated_float",
+          "default": {
+            "mode": "constant",
+            "value": 0.0
+          },
+          "description": "How far into the pattern the stroke starts."
+        },
+        "pattern": {
+          "description": "Alternating dash and gap lengths, as fractions of the shorter side:\none to [`MAX_DASH_ENTRIES`] non-negative entries, not all zero. An\nodd count repeats once more to pair up.",
+          "items": {
+            "$ref": "#/$defs/Animated_float"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "pattern"
+      ],
+      "type": "object"
+    },
     "Ducking": {
       "additionalProperties": false,
       "description": "Sidechain ducking authored on the track that is attenuated.",
@@ -1298,6 +1461,21 @@
         }
       ]
     },
+    "FillRule": {
+      "description": "Which regions of a path are inside it.",
+      "oneOf": [
+        {
+          "const": "nonzero",
+          "description": "Where the outline winds around a point at all.",
+          "type": "string"
+        },
+        {
+          "const": "evenodd",
+          "description": "Where it winds around a point an odd number of times.",
+          "type": "string"
+        }
+      ]
+    },
     "FrameRate": {
       "additionalProperties": false,
       "description": "A positive rational frame rate in reduced form, at most one frame per tick\n(120 000 frames per second).",
@@ -1323,47 +1501,8 @@
       ],
       "type": "object"
     },
-    "GeneratedShape": {
-      "description": "The outline of a [`Generator::Shape`].",
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "description": "A rectangle, optionally with rounded corners.",
-          "properties": {
-            "corner_radius": {
-              "default": 0.0,
-              "description": "Corner radius, as a fraction of the picture's shorter side.\nNon-negative; a radius past half the rectangle is capped.",
-              "format": "float",
-              "type": "number"
-            },
-            "type": {
-              "const": "rectangle",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "The ellipse inscribed in the size.",
-          "properties": {
-            "type": {
-              "const": "ellipse",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        }
-      ]
-    },
     "Generator": {
-      "description": "The picture of a generated source.\n\nA generated picture has the canvas's size and aspect, like a source that\nfills the frame at scale 1. Positions are in its normalized space, `(0, 0)`\ntop-left to `(1, 1)` bottom-right; lengths (radii, stroke widths) are\nfractions of its shorter side, so the picture is the same at any render\nresolution. It does not change over time: a clip animates it with its\ntransform, effects, and masks.",
+      "description": "The picture of a generated source.\n\nA generated picture has the canvas's size and aspect, like a source that\nfills the frame at scale 1. Positions are in its normalized space, `(0, 0)`\ntop-left to `(1, 1)` bottom-right; lengths (radii, stroke widths) are\nfractions of its shorter side, so the picture is the same at any render\nresolution. A fill or text does not change over time (a clip animates it\nwith its transform, effects, and masks); shapes may.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -1386,60 +1525,23 @@
         },
         {
           "additionalProperties": false,
-          "description": "One shape on a transparent picture, filled, stroked, or both.",
+          "description": "Shapes drawn from an ordered content tree, as an After Effects shape\nlayer or a Lottie shape layer draws them. Unlike the other\ngenerators, its picture changes over time: every value in the tree\nmay be keyframed, in the picture's time.",
           "properties": {
-            "center": {
-              "$ref": "#/$defs/Vec2",
-              "description": "Centre of the shape."
-            },
-            "fill": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/Paint"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "description": "Paint inside the outline."
-            },
-            "rotation_degrees": {
-              "default": 0.0,
-              "description": "Clockwise rotation about the centre, in degrees.",
-              "format": "float",
-              "type": "number"
-            },
-            "shape": {
-              "$ref": "#/$defs/GeneratedShape",
-              "description": "The shape's outline."
-            },
-            "size": {
-              "$ref": "#/$defs/Vec2",
-              "description": "Full width and height of the shape, before rotation. Non-negative."
-            },
-            "stroke": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/Stroke"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "default": null,
-              "description": "Paint along the outline, drawn over the fill."
+            "items": {
+              "description": "The content tree, front first. See [`ShapeItem`].",
+              "items": {
+                "$ref": "#/$defs/ShapeItem"
+              },
+              "type": "array"
             },
             "type": {
-              "const": "shape",
+              "const": "shapes",
               "type": "string"
             }
           },
           "required": [
             "type",
-            "shape",
-            "center",
-            "size"
+            "items"
           ],
           "type": "object"
         },
@@ -1620,6 +1722,54 @@
       ],
       "type": "object"
     },
+    "Keyframe_Paint": {
+      "additionalProperties": false,
+      "description": "One timestamped control value.",
+      "properties": {
+        "interpolation": {
+          "$ref": "#/$defs/Interpolation",
+          "description": "Interpolation from this keyframe to its successor."
+        },
+        "time": {
+          "$ref": "#/$defs/MediaTime",
+          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time."
+        },
+        "value": {
+          "$ref": "#/$defs/Paint",
+          "description": "Value at `time`."
+        }
+      },
+      "required": [
+        "time",
+        "value",
+        "interpolation"
+      ],
+      "type": "object"
+    },
+    "Keyframe_Path": {
+      "additionalProperties": false,
+      "description": "One timestamped control value.",
+      "properties": {
+        "interpolation": {
+          "$ref": "#/$defs/Interpolation",
+          "description": "Interpolation from this keyframe to its successor."
+        },
+        "time": {
+          "$ref": "#/$defs/MediaTime",
+          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time."
+        },
+        "value": {
+          "$ref": "#/$defs/Path",
+          "description": "Value at `time`."
+        }
+      },
+      "required": [
+        "time",
+        "value",
+        "interpolation"
+      ],
+      "type": "object"
+    },
     "Keyframe_Vec2": {
       "additionalProperties": false,
       "description": "One timestamped control value.",
@@ -1690,6 +1840,46 @@
       ],
       "type": "object"
     },
+    "LineCap": {
+      "description": "How an open stroke ends.",
+      "oneOf": [
+        {
+          "const": "butt",
+          "description": "Flat at the end point.",
+          "type": "string"
+        },
+        {
+          "const": "round",
+          "description": "A half circle past the end point.",
+          "type": "string"
+        },
+        {
+          "const": "square",
+          "description": "A half square past the end point.",
+          "type": "string"
+        }
+      ]
+    },
+    "LineJoin": {
+      "description": "How stroke segments meet at a vertex.",
+      "oneOf": [
+        {
+          "const": "miter",
+          "description": "Extended edges meeting at a point, up to the miter limit.",
+          "type": "string"
+        },
+        {
+          "const": "round",
+          "description": "A circular arc.",
+          "type": "string"
+        },
+        {
+          "const": "bevel",
+          "description": "A straight cut across the corner.",
+          "type": "string"
+        }
+      ]
+    },
     "LinearPrimaries": {
       "description": "Named RGB primaries linear-light media may be in, each with its own white\npoint.",
       "oneOf": [
@@ -1752,47 +1942,6 @@
           "const": "intersect",
           "description": "Intersection: `c * m`.",
           "type": "string"
-        }
-      ]
-    },
-    "MaskShape": {
-      "description": "The outline of a [`ShapeMask`].",
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "description": "A rectangle, optionally with rounded corners.",
-          "properties": {
-            "corner_radius": {
-              "$ref": "#/$defs/Animated_float",
-              "default": {
-                "mode": "constant",
-                "value": 0.0
-              },
-              "description": "Corner radius, as a fraction of the shorter side of source\nspace. Non-negative; a radius past half the rectangle is capped."
-            },
-            "type": {
-              "const": "rectangle",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "The ellipse inscribed in the size.",
-          "properties": {
-            "type": {
-              "const": "ellipse",
-              "type": "string"
-            }
-          },
-          "required": [
-            "type"
-          ],
-          "type": "object"
         }
       ]
     },
@@ -2627,6 +2776,100 @@
         }
       ]
     },
+    "Path": {
+      "additionalProperties": false,
+      "description": "One or more subpaths.",
+      "properties": {
+        "subpaths": {
+          "description": "The subpaths, at most [`MAX_PATH_SUBPATHS`], with at most\n[`MAX_PATH_VERTICES`] vertices among them.",
+          "items": {
+            "$ref": "#/$defs/Subpath"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "subpaths"
+      ],
+      "type": "object"
+    },
+    "PathVertex": {
+      "additionalProperties": false,
+      "description": "A path vertex and its tangents. The segment from vertex `a` to vertex\n`b` is the cubic Bezier through `a.point`, `a.point + a.out_tangent`,\n`b.point + b.in_tangent`, and `b.point`; zero tangents make it straight.",
+      "properties": {
+        "in_tangent": {
+          "$ref": "#/$defs/Vec2",
+          "default": {
+            "x": 0.0,
+            "y": 0.0
+          },
+          "description": "The control point of the segment ending here, relative to `point`."
+        },
+        "out_tangent": {
+          "$ref": "#/$defs/Vec2",
+          "default": {
+            "x": 0.0,
+            "y": 0.0
+          },
+          "description": "The control point of the segment starting here, relative to `point`."
+        },
+        "point": {
+          "$ref": "#/$defs/Vec2",
+          "description": "Where the vertex lies."
+        }
+      },
+      "required": [
+        "point"
+      ],
+      "type": "object"
+    },
+    "PointKeyframe": {
+      "additionalProperties": false,
+      "description": "One keyframe of an [`AnimatedPoint`].",
+      "properties": {
+        "in_tangent": {
+          "$ref": "#/$defs/Vec2",
+          "description": "The end of the way here from the previous keyframe's value, relative\nto this value: that curve's second control point."
+        },
+        "interpolation": {
+          "$ref": "#/$defs/Interpolation",
+          "description": "Interpolation from this keyframe to its successor: how fast the value\ntravels along the way there."
+        },
+        "out_tangent": {
+          "$ref": "#/$defs/Vec2",
+          "description": "The start of the way to the next keyframe's value, relative to this\nvalue: the curve's first control point."
+        },
+        "time": {
+          "$ref": "#/$defs/MediaTime",
+          "description": "Timestamp of this value, as a [`Keyframe`]'s."
+        },
+        "value": {
+          "$ref": "#/$defs/Vec2",
+          "description": "Value at `time`."
+        }
+      },
+      "required": [
+        "time",
+        "value",
+        "interpolation"
+      ],
+      "type": "object"
+    },
+    "PolystarKind": {
+      "description": "What kind of figure a polystar is.",
+      "oneOf": [
+        {
+          "const": "star",
+          "description": "Points joined by inner corners.",
+          "type": "string"
+        },
+        {
+          "const": "polygon",
+          "description": "Points joined by straight sides.",
+          "type": "string"
+        }
+      ]
+    },
     "ProjectId": {
       "description": "A stable project identifier.",
       "minLength": 1,
@@ -2884,21 +3127,532 @@
       ],
       "type": "object"
     },
+    "ShapeGeometry": {
+      "description": "A geometry alone, as a mask's outline is.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A rectangle, optionally with rounded corners.",
+          "properties": {
+            "center": {
+              "$ref": "#/$defs/AnimatedPoint",
+              "description": "Centre."
+            },
+            "corner_radius": {
+              "$ref": "#/$defs/Animated_float",
+              "default": {
+                "mode": "constant",
+                "value": 0.0
+              },
+              "description": "Corner radius, as a fraction of the shorter side. Non-negative; a\nradius past half the rectangle is capped."
+            },
+            "rotation_degrees": {
+              "$ref": "#/$defs/Animated_float",
+              "default": {
+                "mode": "constant",
+                "value": 0.0
+              },
+              "description": "Clockwise rotation about the centre, in degrees."
+            },
+            "size": {
+              "$ref": "#/$defs/Animated_Vec2",
+              "description": "Full width and height, before rotation. Non-negative."
+            },
+            "type": {
+              "const": "rectangle",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "center",
+            "size"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An ellipse.",
+          "properties": {
+            "center": {
+              "$ref": "#/$defs/AnimatedPoint",
+              "description": "Centre."
+            },
+            "rotation_degrees": {
+              "$ref": "#/$defs/Animated_float",
+              "default": {
+                "mode": "constant",
+                "value": 0.0
+              },
+              "description": "Clockwise rotation about the centre, in degrees."
+            },
+            "size": {
+              "$ref": "#/$defs/Animated_Vec2",
+              "description": "Full width and height, before rotation. Non-negative."
+            },
+            "type": {
+              "const": "ellipse",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "center",
+            "size"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A regular polygon or star.",
+          "properties": {
+            "center": {
+              "$ref": "#/$defs/AnimatedPoint",
+              "description": "Centre."
+            },
+            "inner_radius": {
+              "$ref": "#/$defs/Animated_float",
+              "default": {
+                "mode": "constant",
+                "value": 0.0
+              },
+              "description": "A star's distance of its inner corners from the centre. Non-negative."
+            },
+            "inner_roundness": {
+              "$ref": "#/$defs/Animated_float",
+              "default": {
+                "mode": "constant",
+                "value": 0.0
+              },
+              "description": "How round a star's inner corners are, in `0..=1`."
+            },
+            "kind": {
+              "$ref": "#/$defs/PolystarKind",
+              "description": "A polygon or a star."
+            },
+            "outer_radius": {
+              "$ref": "#/$defs/Animated_float",
+              "description": "Distance of the points from the centre, as a fraction of the shorter\nside. Non-negative."
+            },
+            "outer_roundness": {
+              "$ref": "#/$defs/Animated_float",
+              "default": {
+                "mode": "constant",
+                "value": 0.0
+              },
+              "description": "How round the outer corners are: 0 sharp, 1 a smooth curve through\nthem. In `0..=1`."
+            },
+            "points": {
+              "$ref": "#/$defs/Animated_float",
+              "description": "Number of points (corners of a polygon, tips of a star), from\n[`MIN_POLYSTAR_POINTS`] to [`MAX_POLYSTAR_POINTS`]. A fraction is\ndropped when drawn, as Lottie drops it, so an animated count changes\nthe figure one whole point at a time."
+            },
+            "rotation_degrees": {
+              "$ref": "#/$defs/Animated_float",
+              "default": {
+                "mode": "constant",
+                "value": 0.0
+              },
+              "description": "Clockwise rotation about the centre, in degrees."
+            },
+            "type": {
+              "const": "polystar",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "kind",
+            "center",
+            "points",
+            "outer_radius"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A Bezier path.",
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/Animated_Path",
+              "description": "The path."
+            },
+            "type": {
+              "const": "path",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "path"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ShapeItem": {
+      "description": "One entry of a shapes generator's content tree.\n\nA group is read front to back. Geometry accumulates in its group; a fill\nor a stroke paints the geometry listed before it in the same group,\nnested groups before it included; a trim cuts that geometry and replaces\nit. A paint listed earlier is drawn on top of one listed later, as in\nAfter Effects and Lottie.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Items drawn together, through one transform and opacity. Their\ngeometry also counts as the enclosing group's, for the paints and\ntrims after the group.",
+          "properties": {
+            "items": {
+              "description": "The group's items, front first.",
+              "items": {
+                "$ref": "#/$defs/ShapeItem"
+              },
+              "type": "array"
+            },
+            "transform": {
+              "$ref": "#/$defs/ShapeTransform",
+              "default": {
+                "anchor": {
+                  "mode": "constant",
+                  "value": {
+                    "x": 0.0,
+                    "y": 0.0
+                  }
+                },
+                "opacity": {
+                  "mode": "constant",
+                  "value": 1.0
+                },
+                "position": {
+                  "mode": "constant",
+                  "value": {
+                    "x": 0.0,
+                    "y": 0.0
+                  }
+                },
+                "rotation_degrees": {
+                  "mode": "constant",
+                  "value": 0.0
+                },
+                "scale": {
+                  "mode": "constant",
+                  "value": {
+                    "x": 1.0,
+                    "y": 1.0
+                  }
+                }
+              },
+              "description": "Where the group lies, and how opaque it is."
+            },
+            "type": {
+              "const": "group",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "items"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A rectangle, optionally with rounded corners.",
+          "properties": {
+            "center": {
+              "$ref": "#/$defs/AnimatedPoint",
+              "description": "Centre."
+            },
+            "corner_radius": {
+              "$ref": "#/$defs/Animated_float",
+              "default": {
+                "mode": "constant",
+                "value": 0.0
+              },
+              "description": "Corner radius, as a fraction of the shorter side. Non-negative; a\nradius past half the rectangle is capped."
+            },
+            "rotation_degrees": {
+              "$ref": "#/$defs/Animated_float",
+              "default": {
+                "mode": "constant",
+                "value": 0.0
+              },
+              "description": "Clockwise rotation about the centre, in degrees."
+            },
+            "size": {
+              "$ref": "#/$defs/Animated_Vec2",
+              "description": "Full width and height, before rotation. Non-negative."
+            },
+            "type": {
+              "const": "rectangle",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "center",
+            "size"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "An ellipse.",
+          "properties": {
+            "center": {
+              "$ref": "#/$defs/AnimatedPoint",
+              "description": "Centre."
+            },
+            "rotation_degrees": {
+              "$ref": "#/$defs/Animated_float",
+              "default": {
+                "mode": "constant",
+                "value": 0.0
+              },
+              "description": "Clockwise rotation about the centre, in degrees."
+            },
+            "size": {
+              "$ref": "#/$defs/Animated_Vec2",
+              "description": "Full width and height, before rotation. Non-negative."
+            },
+            "type": {
+              "const": "ellipse",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "center",
+            "size"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A regular polygon or star.",
+          "properties": {
+            "center": {
+              "$ref": "#/$defs/AnimatedPoint",
+              "description": "Centre."
+            },
+            "inner_radius": {
+              "$ref": "#/$defs/Animated_float",
+              "default": {
+                "mode": "constant",
+                "value": 0.0
+              },
+              "description": "A star's distance of its inner corners from the centre. Non-negative."
+            },
+            "inner_roundness": {
+              "$ref": "#/$defs/Animated_float",
+              "default": {
+                "mode": "constant",
+                "value": 0.0
+              },
+              "description": "How round a star's inner corners are, in `0..=1`."
+            },
+            "kind": {
+              "$ref": "#/$defs/PolystarKind",
+              "description": "A polygon or a star."
+            },
+            "outer_radius": {
+              "$ref": "#/$defs/Animated_float",
+              "description": "Distance of the points from the centre, as a fraction of the shorter\nside. Non-negative."
+            },
+            "outer_roundness": {
+              "$ref": "#/$defs/Animated_float",
+              "default": {
+                "mode": "constant",
+                "value": 0.0
+              },
+              "description": "How round the outer corners are: 0 sharp, 1 a smooth curve through\nthem. In `0..=1`."
+            },
+            "points": {
+              "$ref": "#/$defs/Animated_float",
+              "description": "Number of points (corners of a polygon, tips of a star), from\n[`MIN_POLYSTAR_POINTS`] to [`MAX_POLYSTAR_POINTS`]. A fraction is\ndropped when drawn, as Lottie drops it, so an animated count changes\nthe figure one whole point at a time."
+            },
+            "rotation_degrees": {
+              "$ref": "#/$defs/Animated_float",
+              "default": {
+                "mode": "constant",
+                "value": 0.0
+              },
+              "description": "Clockwise rotation about the centre, in degrees."
+            },
+            "type": {
+              "const": "polystar",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "kind",
+            "center",
+            "points",
+            "outer_radius"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A Bezier path.",
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/Animated_Path",
+              "description": "The path."
+            },
+            "type": {
+              "const": "path",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "path"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Paints the inside of the geometry listed before it in its group, all\nof it as one compound path under `rule`. An open path is closed for\nit.",
+          "properties": {
+            "opacity": {
+              "$ref": "#/$defs/Animated_float",
+              "default": {
+                "mode": "constant",
+                "value": 1.0
+              },
+              "description": "Opacity in `0..=1`."
+            },
+            "paint": {
+              "$ref": "#/$defs/Animated_Paint",
+              "description": "What covers it."
+            },
+            "rule": {
+              "$ref": "#/$defs/FillRule",
+              "default": "nonzero",
+              "description": "Which regions of the compound path are inside."
+            },
+            "type": {
+              "const": "fill",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "paint"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Strokes the geometry listed before it in its group.",
+          "properties": {
+            "cap": {
+              "$ref": "#/$defs/LineCap",
+              "default": "butt",
+              "description": "How open ends look."
+            },
+            "dash": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Dash"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "description": "Dashes, or a solid stroke when absent."
+            },
+            "join": {
+              "$ref": "#/$defs/LineJoin",
+              "default": "miter",
+              "description": "How segments meet."
+            },
+            "miter_limit": {
+              "default": 4.0,
+              "description": "Longest a miter join reaches, as a multiple of half the width, before\nit is beveled. At least 1.",
+              "format": "float",
+              "type": "number"
+            },
+            "opacity": {
+              "$ref": "#/$defs/Animated_float",
+              "default": {
+                "mode": "constant",
+                "value": 1.0
+              },
+              "description": "Opacity in `0..=1`."
+            },
+            "paint": {
+              "$ref": "#/$defs/Animated_Paint",
+              "description": "What covers the stroke."
+            },
+            "type": {
+              "const": "stroke",
+              "type": "string"
+            },
+            "width": {
+              "$ref": "#/$defs/Animated_float",
+              "description": "Full width, as a fraction of the shorter side. Non-negative; zero\ndraws nothing."
+            }
+          },
+          "required": [
+            "type",
+            "paint",
+            "width"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Keeps part of the geometry listed before it in its group, by length.",
+          "properties": {
+            "end": {
+              "$ref": "#/$defs/Animated_float",
+              "description": "Where it ends, in `0..=1`. Nothing is kept unless it is after\n`start`."
+            },
+            "mode": {
+              "$ref": "#/$defs/TrimMode",
+              "default": "together",
+              "description": "Whether the span is of all the geometry together or of each part."
+            },
+            "offset": {
+              "$ref": "#/$defs/Animated_float",
+              "default": {
+                "mode": "constant",
+                "value": 0.0
+              },
+              "description": "Turns the span is shifted by; it wraps around a closed path."
+            },
+            "start": {
+              "$ref": "#/$defs/Animated_float",
+              "description": "Where the kept span starts, as a fraction of the length, in `0..=1`."
+            },
+            "type": {
+              "const": "trim",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "start",
+            "end"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "ShapeMask": {
       "additionalProperties": false,
-      "description": "A shape that limits where a clip is visible.\n\nGeometry is in the clip's source space, before its transform, so the mask\nmoves with the clip: `(0, 0)` is the source's top-left corner and `(1, 1)`\nits bottom-right. Distances (`feather`, a rectangle's `corner_radius`) are\nfractions of that space's shorter side, so a mask covers the same part of\nthe picture at any render resolution.",
+      "description": "A shape that limits where a clip is visible.\n\nGeometry is in the clip's source space, before its transform, so the mask\nmoves with the clip: `(0, 0)` is the source's top-left corner and `(1, 1)`\nits bottom-right. Distances (`feather`, a rectangle's `corner_radius`, a\npolystar's radii) are fractions of that space's shorter side, so a mask\ncovers the same part of the picture at any render resolution.",
       "properties": {
-        "center": {
-          "$ref": "#/$defs/Animated_Vec2",
-          "description": "Centre of the shape."
-        },
         "feather": {
           "$ref": "#/$defs/Animated_float",
           "default": {
             "mode": "constant",
             "value": 0.0
           },
-          "description": "Width of the soft edge, centred on the outline. Non-negative; zero is\na one-pixel antialiased edge."
+          "description": "How soft the edge is. Non-negative; zero is the outline's\nantialiased edge. The coverage is blurred by a Gaussian of standard\ndeviation `0.3125 * feather`, which spreads its 10 to 90 percent ramp\nover `0.8 * feather` across the outline."
+        },
+        "fill_rule": {
+          "$ref": "#/$defs/FillRule",
+          "default": "nonzero",
+          "description": "Which regions of the outline are inside it."
         },
         "invert": {
           "default": false,
@@ -2910,28 +3664,70 @@
           "default": "add",
           "description": "How this mask combines with the ones before it."
         },
+        "shape": {
+          "$ref": "#/$defs/ShapeGeometry",
+          "description": "The shape's outline, as a shapes generator's geometry."
+        }
+      },
+      "required": [
+        "shape"
+      ],
+      "type": "object"
+    },
+    "ShapeTransform": {
+      "additionalProperties": false,
+      "description": "A group's placement: in pixel space, translate by `position`, rotate,\nscale, and translate by minus `anchor`, so `anchor` lands on `position`.\nThe default leaves its items where they are.",
+      "properties": {
+        "anchor": {
+          "$ref": "#/$defs/Animated_Vec2",
+          "default": {
+            "mode": "constant",
+            "value": {
+              "x": 0.0,
+              "y": 0.0
+            }
+          },
+          "description": "The point of the items that is placed at `position`."
+        },
+        "opacity": {
+          "$ref": "#/$defs/Animated_float",
+          "default": {
+            "mode": "constant",
+            "value": 1.0
+          },
+          "description": "Opacity of the group as a whole, in `0..=1`: overlapping items are\ncomposited first and faded together."
+        },
+        "position": {
+          "$ref": "#/$defs/AnimatedPoint",
+          "default": {
+            "mode": "constant",
+            "value": {
+              "x": 0.0,
+              "y": 0.0
+            }
+          },
+          "description": "Where `anchor` is placed."
+        },
         "rotation_degrees": {
           "$ref": "#/$defs/Animated_float",
           "default": {
             "mode": "constant",
             "value": 0.0
           },
-          "description": "Clockwise rotation about the centre, in degrees."
+          "description": "Clockwise rotation, in degrees."
         },
-        "shape": {
-          "$ref": "#/$defs/MaskShape",
-          "description": "The shape's outline."
-        },
-        "size": {
+        "scale": {
           "$ref": "#/$defs/Animated_Vec2",
-          "description": "Full width and height of the shape, before rotation. Non-negative."
+          "default": {
+            "mode": "constant",
+            "value": {
+              "x": 1.0,
+              "y": 1.0
+            }
+          },
+          "description": "Per-axis scale; 1 leaves the items unscaled. Stroke widths scale with\nit."
         }
       },
-      "required": [
-        "shape",
-        "center",
-        "size"
-      ],
       "type": "object"
     },
     "SourceId": {
@@ -2988,23 +3784,25 @@
       },
       "type": "object"
     },
-    "Stroke": {
+    "Subpath": {
       "additionalProperties": false,
-      "description": "A shape's outline paint. The stroke is centred on the outline.",
+      "description": "A run of vertices joined by cubic Bezier segments.",
       "properties": {
-        "paint": {
-          "$ref": "#/$defs/Paint",
-          "description": "What covers the stroke."
+        "closed": {
+          "default": false,
+          "description": "Whether a segment joins the last vertex back to the first.",
+          "type": "boolean"
         },
-        "width": {
-          "description": "Full width, as a fraction of the picture's shorter side. Positive.",
-          "format": "float",
-          "type": "number"
+        "vertices": {
+          "description": "The vertices, in order.",
+          "items": {
+            "$ref": "#/$defs/PathVertex"
+          },
+          "type": "array"
         }
       },
       "required": [
-        "width",
-        "paint"
+        "vertices"
       ],
       "type": "object"
     },
@@ -3460,6 +4258,21 @@
         }
       ]
     },
+    "TrimMode": {
+      "description": "What a trim measures.",
+      "oneOf": [
+        {
+          "const": "together",
+          "description": "One span over the length of every subpath end to end, in order.",
+          "type": "string"
+        },
+        {
+          "const": "individually",
+          "description": "A span of each subpath alone.",
+          "type": "string"
+        }
+      ]
+    },
     "Vec2": {
       "additionalProperties": false,
       "description": "A two-dimensional value in normalized output coordinates.",
@@ -3530,8 +4343,8 @@
           "description": "Animated opacity constrained to `0..=1`."
         },
         "position": {
-          "$ref": "#/$defs/Animated_Vec2",
-          "description": "Animated normalized canvas translation."
+          "$ref": "#/$defs/AnimatedPoint",
+          "description": "Animated normalized canvas translation, along spatial curves where its\nkeyframes have tangents."
         },
         "rotation_degrees": {
           "$ref": "#/$defs/Animated_float",

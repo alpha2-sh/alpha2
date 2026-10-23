@@ -12,6 +12,7 @@ alpha2-audio = { path = "../crates/alpha2-audio" }
 alpha2-engine = { path = "../crates/alpha2-engine" }
 alpha2-eval = { path = "../crates/alpha2-eval" }
 alpha2-extensions = { path = "../extensions" }
+alpha2-geometry = { path = "../crates/alpha2-geometry" }
 alpha2-media = { path = "../crates/alpha2-media" }
 alpha2-model = { path = "../crates/alpha2-model" }
 alpha2-time = { path = "../crates/alpha2-time" }
@@ -91,3 +92,10 @@ bench = false
 
 [workspace]
 members = ["."]
+
+[[bin]]
+name = "vector_raster"
+path = "fuzz_targets/vector_raster.rs"
+test = false
+doc = false
+bench = false

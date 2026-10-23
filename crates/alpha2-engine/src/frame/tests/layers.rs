@@ -43,6 +43,7 @@ fn the_project_blend_space_decides_how_a_frame_blends() {
         matte: None,
         is_matte: false,
         generator: None,
+        shapes: None,
         source_composition: None,
     };
     let render = |blend_space| {
@@ -110,6 +111,7 @@ fn a_track_matte_keeps_its_clip_where_the_matte_says_and_is_never_drawn() {
             matte,
             is_matte,
             generator: None,
+            shapes: None,
             source_composition: None,
         };
         let target = clip(
@@ -157,12 +159,15 @@ fn a_track_matte_keeps_its_clip_where_the_matte_says_and_is_never_drawn() {
 
 #[test]
 fn clip_masks_are_applied_after_its_effects_in_source_space() {
-    use alpha2_model::{Animated, MaskMode, MaskShape, ShapeMask};
+    use alpha2_model::{
+        Animated, AnimatedPoint, FillRule, MaskMode, RectangleGeometry, ShapeGeometry, ShapeMask,
+    };
 
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    pollster::block_on(renderer.register_effect(alpha2_render::shape_mask_definition()))
-        .expect("the mask compiles");
+    for definition in alpha2_render::mask_combine_definitions() {
+        pollster::block_on(renderer.register_effect(definition)).expect("the masks compile");
+    }
     let size = RenderSize::new(4, 1).expect("size");
     let white = rgba_image_texture(&renderer, size, &[255; 16]);
     let view = white.create_view(&wgpu::TextureViewDescriptor::default());
@@ -174,19 +179,20 @@ fn clip_masks_are_applied_after_its_effects_in_source_space() {
     // The left half of the source, moved right by the clip's transform: the mask moves with the
     // clip.
     let masks = Vec::leak(vec![ShapeMask {
-        shape: MaskShape::Rectangle {
+        shape: ShapeGeometry::Rectangle(RectangleGeometry {
+            center: AnimatedPoint::Constant {
+                value: Vec2::new(0.25, 0.5),
+            },
+            size: Animated::Constant {
+                value: Vec2::new(0.5, 2.0),
+            },
             corner_radius: Animated::Constant { value: 0.0 },
-        },
-        center: Animated::Constant {
-            value: Vec2::new(0.25, 0.5),
-        },
-        size: Animated::Constant {
-            value: Vec2::new(0.5, 2.0),
-        },
-        rotation_degrees: Animated::Constant { value: 0.0 },
+            rotation_degrees: Animated::Constant { value: 0.0 },
+        }),
         feather: Animated::Constant { value: 0.0 },
         invert: false,
         mode: MaskMode::Add,
+        fill_rule: FillRule::Nonzero,
     }]);
     let frame = FrameDesc {
         time: MediaTime::ZERO,
@@ -208,6 +214,7 @@ fn clip_masks_are_applied_after_its_effects_in_source_space() {
             matte: None,
             is_matte: false,
             generator: None,
+            shapes: None,
             source_composition: None,
         }],
         audio: Vec::new(),
@@ -290,6 +297,7 @@ fn stacked_clips_keep_their_own_source_across_repeated_frames() {
                 matte: None,
                 is_matte: false,
                 generator: None,
+                shapes: None,
                 source_composition: None,
             })
             .collect(),
@@ -378,6 +386,7 @@ fn a_transformed_top_layer_never_samples_another_track_across_many_frames() {
         matte: None,
         is_matte: false,
         generator: None,
+        shapes: None,
         source_composition: None,
     };
     let faint = |opacity: f32| EvaluatedVisual {
@@ -489,6 +498,7 @@ fn two_effected_clips_do_not_share_an_intermediate_texture() {
         matte: None,
         is_matte: false,
         generator: None,
+        shapes: None,
         source_composition: None,
     };
     let faint = |opacity: f32| EvaluatedVisual {
@@ -577,6 +587,7 @@ fn stacked_effect_frame(sources: &[SourceId]) -> FrameDesc<'static> {
         matte: None,
         is_matte: false,
         generator: None,
+        shapes: None,
         source_composition: None,
     };
     FrameDesc {
@@ -712,8 +723,9 @@ fn a_matte_is_drawn_once_where_it_is_named_and_mask_and_matte_keep_their_cache_k
     let mut renderer = Renderer::new(gpu());
     pollster::block_on(renderer.register_effect(alpha2_render::track_matte_definition()))
         .expect("the matte compiles");
-    pollster::block_on(renderer.register_effect(alpha2_render::shape_mask_definition()))
-        .expect("the mask compiles");
+    for definition in alpha2_render::mask_combine_definitions() {
+        pollster::block_on(renderer.register_effect(definition)).expect("the masks compile");
+    }
     let size = RenderSize::new(2, 1).expect("size");
     let red = rgba_image_texture(&renderer, size, &[255, 0, 0, 255, 255, 0, 0, 255]);
     let blue = rgba_image_texture(&renderer, size, &[0, 0, 255, 255, 0, 0, 255, 255]);
@@ -742,6 +754,7 @@ fn a_matte_is_drawn_once_where_it_is_named_and_mask_and_matte_keep_their_cache_k
         }),
         is_matte,
         generator: None,
+        shapes: None,
         source_composition: None,
     };
     let frame = |time: i64, visual: Vec<ActiveClip<'static>>| FrameDesc {
@@ -803,17 +816,19 @@ fn a_matte_is_drawn_once_where_it_is_named_and_mask_and_matte_keep_their_cache_k
     // found whole in the result cache.
     renderer.set_result_cache_budget(1 << 20);
     let masks: &'static [ShapeMask] = Vec::leak(vec![ShapeMask {
-        shape: alpha2_model::MaskShape::Ellipse,
-        center: Animated::Constant {
-            value: Vec2::new(0.5, 0.5),
-        },
-        size: Animated::Constant {
-            value: Vec2::new(0.8, 0.8),
-        },
-        rotation_degrees: Animated::Constant { value: 0.0 },
+        shape: alpha2_model::ShapeGeometry::Ellipse(alpha2_model::EllipseGeometry {
+            center: alpha2_model::AnimatedPoint::Constant {
+                value: Vec2::new(0.5, 0.5),
+            },
+            size: Animated::Constant {
+                value: Vec2::new(0.8, 0.8),
+            },
+            rotation_degrees: Animated::Constant { value: 0.0 },
+        }),
         feather: Animated::Constant { value: 0.0 },
         invert: false,
         mode: alpha2_model::MaskMode::default(),
+        fill_rule: alpha2_model::FillRule::Nonzero,
     }]);
     let masked = |time| {
         let mut target = clip("a", 0, Some("m"), false);

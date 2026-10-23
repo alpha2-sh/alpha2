@@ -22,6 +22,12 @@ impl Vec2 {
     fn is_finite(self) -> bool {
         self.x.is_finite() && self.y.is_finite()
     }
+
+    /// Whether both components are zero (either sign).
+    #[must_use]
+    pub fn is_zero(&self) -> bool {
+        self.x == 0.0 && self.y == 0.0
+    }
 }
 
 /// A value that is either constant or controlled by sorted keyframes.
@@ -41,6 +47,89 @@ pub enum Animated<T> {
         /// Strictly ascending keyframes. The evaluator clamps outside the sequence.
         keyframes: Vec<Keyframe<T>>,
     },
+}
+
+/// A position that can move along curves between its keyframes.
+///
+/// Its JSON is that of an `Animated<Vec2>`, plus optional spatial tangents on
+/// each keyframe: with them, the value travels along the cubic Bezier from
+/// one keyframe's value through its `out_tangent` and the next keyframe's
+/// `in_tangent`, at the speed its timing curve sets along the curve's
+/// length. Without them it moves in a straight line, as an `Animated<Vec2>`
+/// does.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum AnimatedPoint {
+    /// A value without animation.
+    Constant {
+        /// Value used at every timestamp.
+        value: Vec2,
+    },
+    /// Values evaluated from their keyframe sequence.
+    Keyframes {
+        /// Strictly ascending keyframes. The evaluator clamps outside the sequence.
+        keyframes: Vec<PointKeyframe>,
+    },
+}
+
+impl Default for AnimatedPoint {
+    fn default() -> Self {
+        Self::Constant {
+            value: Vec2::default(),
+        }
+    }
+}
+
+impl From<Animated<Vec2>> for AnimatedPoint {
+    fn from(animation: Animated<Vec2>) -> Self {
+        match animation {
+            Animated::Constant { value } => Self::Constant { value },
+            Animated::Keyframes { keyframes } => Self::Keyframes {
+                keyframes: keyframes
+                    .into_iter()
+                    .map(|keyframe| PointKeyframe {
+                        time: keyframe.time,
+                        value: keyframe.value,
+                        interpolation: keyframe.interpolation,
+                        out_tangent: Vec2::default(),
+                        in_tangent: Vec2::default(),
+                    })
+                    .collect(),
+            },
+        }
+    }
+}
+
+impl AnimatedPoint {
+    /// Whether the value changes over time.
+    #[must_use]
+    pub const fn is_animated(&self) -> bool {
+        matches!(self, Self::Keyframes { .. })
+    }
+}
+
+/// One keyframe of an [`AnimatedPoint`].
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct PointKeyframe {
+    /// Timestamp of this value, as a [`Keyframe`]'s.
+    pub time: alpha2_time::MediaTime,
+    /// Value at `time`.
+    pub value: Vec2,
+    /// Interpolation from this keyframe to its successor: how fast the value
+    /// travels along the way there.
+    pub interpolation: Interpolation,
+    /// The start of the way to the next keyframe's value, relative to this
+    /// value: the curve's first control point.
+    #[serde(default, skip_serializing_if = "Vec2::is_zero")]
+    pub out_tangent: Vec2,
+    /// The end of the way here from the previous keyframe's value, relative
+    /// to this value: that curve's second control point.
+    #[serde(default, skip_serializing_if = "Vec2::is_zero")]
+    pub in_tangent: Vec2,
 }
 
 /// One timestamped control value.
@@ -129,8 +218,9 @@ impl Interpolation {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct VisualProperties {
-    /// Animated normalized canvas translation.
-    pub position: Animated<Vec2>,
+    /// Animated normalized canvas translation, along spatial curves where its
+    /// keyframes have tangents.
+    pub position: AnimatedPoint,
     /// Unanimated normalized point within the source rectangle.
     pub anchor: Vec2,
     /// Animated per-axis scale.
@@ -144,7 +234,7 @@ pub struct VisualProperties {
 impl Default for VisualProperties {
     fn default() -> Self {
         Self {
-            position: Animated::Constant {
+            position: AnimatedPoint::Constant {
                 value: Vec2::new(0.5, 0.5),
             },
             anchor: Vec2::new(0.5, 0.5),
@@ -160,7 +250,7 @@ impl Default for VisualProperties {
 impl VisualProperties {
     pub(crate) fn validate(&self) -> bool {
         self.anchor.is_finite()
-            && valid_vec2_animation(&self.position)
+            && valid_point_animation(&self.position)
             && valid_vec2_animation(&self.scale)
             && valid_scalar_animation(&self.rotation_degrees, false)
             && valid_scalar_animation(&self.opacity, true)
@@ -173,6 +263,23 @@ fn valid_vec2_animation(animation: &Animated<Vec2>) -> bool {
         Animated::Keyframes { keyframes } => {
             valid_keyframes(keyframes)
                 && keyframes.iter().all(|keyframe| keyframe.value.is_finite())
+        }
+    }
+}
+
+/// Valid keyframes (or a constant) whose values and tangents are finite.
+pub(crate) fn valid_point_animation(animation: &AnimatedPoint) -> bool {
+    match animation {
+        AnimatedPoint::Constant { value } => value.is_finite(),
+        AnimatedPoint::Keyframes { keyframes } => {
+            !keyframes.is_empty()
+                && keyframes.windows(2).all(|pair| pair[0].time < pair[1].time)
+                && keyframes.iter().all(|keyframe| {
+                    keyframe.interpolation.is_valid()
+                        && keyframe.value.is_finite()
+                        && keyframe.out_tangent.is_finite()
+                        && keyframe.in_tangent.is_finite()
+                })
         }
     }
 }
@@ -192,17 +299,6 @@ fn valid_scalar_animation(animation: &Animated<f32>, unit_interval: bool) -> boo
 /// Valid keyframes (or a constant) whose every finite value passes `check`.
 pub(crate) fn valid_scalar_values(animation: &Animated<f32>, check: impl Fn(f32) -> bool) -> bool {
     let valid = |value: f32| value.is_finite() && check(value);
-    match animation {
-        Animated::Constant { value } => valid(*value),
-        Animated::Keyframes { keyframes } => {
-            valid_keyframes(keyframes) && keyframes.iter().all(|keyframe| valid(keyframe.value))
-        }
-    }
-}
-
-/// [`valid_scalar_values`] for two-dimensional values.
-pub(crate) fn valid_vec2_values(animation: &Animated<Vec2>, check: impl Fn(Vec2) -> bool) -> bool {
-    let valid = |value: Vec2| value.is_finite() && check(value);
     match animation {
         Animated::Constant { value } => valid(*value),
         Animated::Keyframes { keyframes } => {

@@ -31,6 +31,7 @@ mod graph_submit;
 pub mod hdr;
 mod loop_bound;
 mod masking;
+mod paint_wgsl;
 mod pipeline;
 mod pool;
 mod quad;
@@ -49,6 +50,7 @@ mod target;
 #[cfg(test)]
 mod tests;
 mod uniform;
+mod vector;
 mod yuv;
 
 /// Shared ownership of the renderer's pools and the textures they recycle.
@@ -86,8 +88,8 @@ pub use error::{
     GPU_WORK_DROPPED_MESSAGE, ReadbackFailure, RenderError,
 };
 pub use generator::{
-    FILL_PAINT_PARAMS, GENERATOR_EFFECT_ID, GENERATOR_SHAPES, MAX_GENERATOR_STOPS, PAINT_KINDS,
-    PAINT_SPREADS, PaintParams, STROKE_PAINT_PARAMS, generator_definition,
+    FILL_PAINT_PARAMS, GENERATOR_EFFECT_ID, MAX_GENERATOR_STOPS, PAINT_KINDS, PAINT_SPREADS,
+    PaintParams, generator_definition,
 };
 pub use gpu_errors::GpuErrorReports;
 pub use graph::{
@@ -96,8 +98,9 @@ pub use graph::{
 pub use graph_plan::RenderPlan;
 pub use graph_submit::FrameSubmitTimings;
 pub use masking::{
-    MASK_MODES, MAX_SHAPE_MASKS, SHAPE_MASK_EFFECT_ID, SHAPE_MASK_PARAMS, ShapeMaskParams,
-    TRACK_MATTE_EFFECT_ID, shape_mask_definition, track_matte_definition,
+    MASK_COMBINE_EFFECT_IDS, MASK_COMBINE_NAMES, MASK_MODES, MAX_SHAPE_MASKS, MaskCombineNames,
+    TRACK_MATTE_EFFECT_ID, mask_combine_definition, mask_combine_definitions,
+    track_matte_definition,
 };
 pub use pipeline::{PipelineCacheStats, WarmupReport};
 pub use pool::{ReadbackBufferPoolStats, TexturePoolStats, UploadTexture, UploadTexturePoolStats};

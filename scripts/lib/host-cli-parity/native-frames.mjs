@@ -21,6 +21,8 @@ import {
   orientationProjectPath,
   PINNED_RATE_ARGUMENTS,
   root,
+  shapesAssets,
+  shapesProjectPath,
 } from "./fixtures.mjs";
 import { run } from "./processes.mjs";
 
@@ -47,6 +49,26 @@ export async function nativeFrames(scratch, cliOutput) {
       "--no-audio",
     ],
     { ALPHA2_EXPORT_FRAMES_Y4M: complexFrames },
+  );
+  const shapesFrames = join(scratch, "shapes.y4m");
+  await run(
+    executable,
+    [
+      "export",
+      "--project",
+      shapesProjectPath,
+      ...Object.entries(shapesAssets).flatMap(([id, path]) => [
+        "--asset",
+        `${id}=${path}`,
+      ]),
+      "--out",
+      join(scratch, "shapes.mp4"),
+      "--video-codec",
+      "mpeg4-part2",
+      ...PINNED_RATE_ARGUMENTS,
+      "--no-audio",
+    ],
+    { ALPHA2_EXPORT_FRAMES_Y4M: shapesFrames },
   );
   const effectsFrames = join(scratch, "effects.y4m");
   await run(
@@ -221,6 +243,7 @@ export async function nativeFrames(scratch, cliOutput) {
   return {
     nativeFrame,
     complexFrames,
+    shapesFrames,
     effectsFrames,
     hdrFrames,
     orientationFrames,

@@ -58,13 +58,14 @@ if (packageNotices !== workspaceNotices) {
 // over what the pinned toolchain builds, so another compiler release does not fail here.
 const wasmBudgets = {
   // Includes the text host's Unicode tables (about 90 KB) and its color glyph painting and PNG
-  // decoding (about 170 KB). Rust 1.99.0 builds 5,940,977 bytes.
-  "alpha2_wasm_bg.wasm": 6_238_026,
+  // decoding (about 170 KB), and the shapes content tree with its vector geometry and stroker
+  // (about 540 KB, most of it deserializing the tree). Rust 1.99.0 builds 6,779,566 bytes.
+  "alpha2_wasm_bg.wasm": 7_118_545,
   // Includes the band-limited resampling converter. Rust 1.99.0 builds 113,964 bytes.
   "alpha2_audio_worklet.wasm": 119_662,
   // Loaded only for SVG, animated image, Lottie, OpenEXR or image sequence sources. Rust 1.99.0
-  // builds 3,549,335 bytes.
-  "alpha2_extensions_bg.wasm": 3_726_802,
+  // builds 3,669,424 bytes.
+  "alpha2_extensions_bg.wasm": 3_852_896,
 };
 // Every target feature a packaged module may declare, with the first Chrome, Firefox and Safari
 // that run it (webassembly.org/features.json), so a toolchain default turning on a newer feature

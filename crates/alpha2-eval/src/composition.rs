@@ -19,13 +19,15 @@
 
 use alpha2_media::SourceId;
 use alpha2_model::{
-    Animated, ClipBlendMode, ClipEffect, Composition, CompositionId, CompositionReads, EffectValue,
-    Generator, Keyframe, MAX_COMPOSITION_DEPTH, MAX_INLINED_NODES, MaskShape, MatteMode, MediaKind,
-    MediaSource, NodeId, NodeOp, Paint, ShapeMask, VisualProperties,
+    Animated, AnimatedPoint, ClipBlendMode, ClipEffect, Composition, CompositionId,
+    CompositionReads, EffectValue, Generator, Keyframe, MAX_COMPOSITION_DEPTH, MAX_INLINED_NODES,
+    MatteMode, MediaKind, MediaSource, NodeId, NodeOp, Paint, ShapeMask, VisualProperties,
 };
 use alpha2_time::MediaTime;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+
+use crate::ShapesPlan;
 
 /// Most bytes the compiled composition plans of one project hold together,
 /// as [`Step`]s estimate them: each step, its node path, and the heap its
@@ -102,7 +104,15 @@ pub enum StepOp {
     },
     /// A picture the engine draws: a generator node, or a media node naming
     /// a generated source.
-    Generator(Generator),
+    Generator {
+        /// What it draws.
+        generator: Generator,
+        /// The picture's time at composition time zero: a media node's
+        /// start, zero for a generator node. Only shapes animate with it.
+        start: MediaTime,
+        /// A shapes generator's tree, its fixed parts evaluated.
+        shapes: Option<Arc<ShapesPlan>>,
+    },
     /// A registered effect.
     Effect {
         /// The processed image.
@@ -492,10 +502,10 @@ impl<'a> Planner<'a, '_> {
                         source_id: source_id.clone(),
                         start: *start,
                     },
-                    StepOp::Generator,
+                    |generator| generator_step(generator, *start),
                 )
             }
-            NodeOp::Generator { generator } => StepOp::Generator(generator.clone()),
+            NodeOp::Generator { generator } => generator_step(generator.clone(), MediaTime::ZERO),
             NodeOp::Effect {
                 input,
                 inputs,
@@ -673,7 +683,7 @@ fn step_bytes(step: &Step) -> u64 {
     let heap = match &step.op {
         StepOp::Clip | StepOp::Matte { .. } => 0,
         StepOp::Media { source_id, .. } => source_id.as_str().len(),
-        StepOp::Generator(generator) => generator_bytes(generator),
+        StepOp::Generator { generator, .. } => generator_bytes(generator),
         StepOp::Effect { effect, inputs, .. } => {
             effect_bytes(effect)
                 + inputs
@@ -719,40 +729,157 @@ fn effect_bytes(effect: &ClipEffect) -> usize {
 }
 
 fn transform_bytes(transform: &VisualProperties) -> usize {
-    keyframe_bytes(&transform.position)
+    point_bytes(&transform.position)
         + keyframe_bytes(&transform.scale)
         + keyframe_bytes(&transform.rotation_degrees)
         + keyframe_bytes(&transform.opacity)
 }
 
 fn mask_bytes(mask: &ShapeMask) -> usize {
-    let corner = match &mask.shape {
-        MaskShape::Rectangle { corner_radius } => keyframe_bytes(corner_radius),
-        MaskShape::Ellipse => 0,
-    };
-    size_of::<ShapeMask>()
-        + keyframe_bytes(&mask.center)
-        + keyframe_bytes(&mask.size)
-        + keyframe_bytes(&mask.rotation_degrees)
-        + keyframe_bytes(&mask.feather)
-        + corner
+    size_of::<ShapeMask>() + geometry_bytes(&mask.shape) + keyframe_bytes(&mask.feather)
 }
 
-fn generator_bytes(generator: &Generator) -> usize {
-    let paint = |paint: &Paint| match paint {
+fn point_bytes(point: &AnimatedPoint) -> usize {
+    match point {
+        AnimatedPoint::Constant { .. } => 0,
+        AnimatedPoint::Keyframes { keyframes } => {
+            keyframes.len() * size_of::<alpha2_model::PointKeyframe>()
+        }
+    }
+}
+
+fn path_bytes(path: &Animated<alpha2_model::Path>) -> usize {
+    let one = |path: &alpha2_model::Path| {
+        path.subpaths.len() * size_of::<alpha2_model::Subpath>()
+            + path.vertex_count() * size_of::<alpha2_model::PathVertex>()
+    };
+    match path {
+        Animated::Constant { value } => one(value),
+        Animated::Keyframes { keyframes } => keyframes
+            .iter()
+            .map(|keyframe| size_of::<Keyframe<alpha2_model::Path>>() + one(&keyframe.value))
+            .sum(),
+    }
+}
+
+fn geometry_bytes(geometry: &alpha2_model::ShapeGeometry) -> usize {
+    use alpha2_model::ShapeGeometry;
+    match geometry {
+        ShapeGeometry::Rectangle(rectangle) => {
+            point_bytes(&rectangle.center)
+                + keyframe_bytes(&rectangle.size)
+                + keyframe_bytes(&rectangle.corner_radius)
+                + keyframe_bytes(&rectangle.rotation_degrees)
+        }
+        ShapeGeometry::Ellipse(ellipse) => {
+            point_bytes(&ellipse.center)
+                + keyframe_bytes(&ellipse.size)
+                + keyframe_bytes(&ellipse.rotation_degrees)
+        }
+        ShapeGeometry::Polystar(star) => {
+            point_bytes(&star.center)
+                + keyframe_bytes(&star.points)
+                + keyframe_bytes(&star.outer_radius)
+                + keyframe_bytes(&star.inner_radius)
+                + keyframe_bytes(&star.outer_roundness)
+                + keyframe_bytes(&star.inner_roundness)
+                + keyframe_bytes(&star.rotation_degrees)
+        }
+        ShapeGeometry::Path(path) => path_bytes(&path.path),
+    }
+}
+
+fn paint_bytes(paint: &Paint) -> usize {
+    match paint {
         Paint::Solid { .. } => 0,
         Paint::LinearGradient { stops, .. }
         | Paint::RadialGradient { stops, .. }
         | Paint::ConicGradient { stops, .. } => {
             stops.len() * size_of::<alpha2_model::GradientStop>()
         }
+    }
+}
+
+fn animated_paint_bytes(paint: &Animated<Paint>) -> usize {
+    match paint {
+        Animated::Constant { value } => paint_bytes(value),
+        Animated::Keyframes { keyframes } => keyframes
+            .iter()
+            .map(|keyframe| size_of::<Keyframe<Paint>>() + paint_bytes(&keyframe.value))
+            .sum(),
+    }
+}
+
+/// What a content tree holds: each item, its keyframes, vertices, and
+/// stops. Its plan holds about as much again.
+fn shape_items_bytes(items: &[alpha2_model::ShapeItem]) -> usize {
+    use alpha2_model::{ShapeGeometry, ShapeItem};
+    items
+        .iter()
+        .map(|item| {
+            size_of::<ShapeItem>()
+                + match item {
+                    ShapeItem::Group { items, transform } => {
+                        shape_items_bytes(items)
+                            + keyframe_bytes(&transform.anchor)
+                            + point_bytes(&transform.position)
+                            + keyframe_bytes(&transform.scale)
+                            + keyframe_bytes(&transform.rotation_degrees)
+                            + keyframe_bytes(&transform.opacity)
+                    }
+                    ShapeItem::Rectangle(geometry) => {
+                        geometry_bytes(&ShapeGeometry::Rectangle(geometry.clone()))
+                    }
+                    ShapeItem::Ellipse(geometry) => {
+                        geometry_bytes(&ShapeGeometry::Ellipse(geometry.clone()))
+                    }
+                    ShapeItem::Polystar(geometry) => {
+                        geometry_bytes(&ShapeGeometry::Polystar(geometry.clone()))
+                    }
+                    ShapeItem::Path(geometry) => path_bytes(&geometry.path),
+                    ShapeItem::Fill { paint, opacity, .. } => {
+                        animated_paint_bytes(paint) + keyframe_bytes(opacity)
+                    }
+                    ShapeItem::Stroke(stroke) => {
+                        animated_paint_bytes(&stroke.paint)
+                            + keyframe_bytes(&stroke.width)
+                            + keyframe_bytes(&stroke.opacity)
+                            + stroke.dash.as_ref().map_or(0, |dash| {
+                                dash.pattern
+                                    .iter()
+                                    .map(|entry| size_of::<Animated<f32>>() + keyframe_bytes(entry))
+                                    .sum::<usize>()
+                                    + keyframe_bytes(&dash.offset)
+                            })
+                    }
+                    ShapeItem::Trim(trim) => {
+                        keyframe_bytes(&trim.start)
+                            + keyframe_bytes(&trim.end)
+                            + keyframe_bytes(&trim.offset)
+                    }
+                }
+        })
+        .sum()
+}
+
+/// A generator step: a shapes generator with its plan.
+fn generator_step(generator: Generator, start: MediaTime) -> StepOp {
+    let shapes = match &generator {
+        Generator::Shapes { items } => Some(Arc::new(ShapesPlan::new(items))),
+        _ => None,
     };
+    StepOp::Generator {
+        generator,
+        start,
+        shapes,
+    }
+}
+
+fn generator_bytes(generator: &Generator) -> usize {
     match generator {
-        Generator::Fill { paint: fill } => paint(fill),
-        Generator::Shape { fill, stroke, .. } => {
-            fill.as_ref().map_or(0, paint)
-                + stroke.as_ref().map_or(0, |stroke| paint(&stroke.paint))
-        }
+        Generator::Fill { paint } => paint_bytes(paint),
+        // Twice: the items, and their plan.
+        Generator::Shapes { items } => 2 * shape_items_bytes(items),
         Generator::Text { text, style } => {
             text.len() + style.font_family.as_ref().map_or(0, String::len)
         }

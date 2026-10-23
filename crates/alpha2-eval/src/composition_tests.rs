@@ -268,7 +268,7 @@ fn frame_needs_follow_what_the_output_draws() {
         "out",
     ));
     let plan = plan(&project).expect("complete");
-    assert!(matches!(plan.steps[0].op, StepOp::Generator(_)));
+    assert!(matches!(plan.steps[0].op, StepOp::Generator { .. }));
     assert!(!plan.uses_clip());
     let index = ActiveIndex::build(&project).expect("indexes");
     let needs = frame_needs(&project, &index, MediaTime(1_250)).expect("needs");

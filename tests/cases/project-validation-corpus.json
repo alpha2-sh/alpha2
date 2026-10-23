@@ -6455,45 +6455,47 @@
                   {
                     "shape": {
                       "type": "rectangle",
+                      "center": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
+                      "size": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
                       "corner_radius": { "mode": "constant", "value": 0.05 }
-                    },
-                    "center": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
-                    },
-                    "size": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
                     }
                   },
                   {
-                    "shape": { "type": "ellipse" },
-                    "center": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
+                    "shape": {
+                      "type": "ellipse",
+                      "center": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
+                      "size": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
+                      "rotation_degrees": {
+                        "mode": "keyframes",
+                        "keyframes": [
+                          {
+                            "time": 0,
+                            "value": 0,
+                            "interpolation": { "type": "linear" }
+                          },
+                          {
+                            "time": 120000,
+                            "value": 90,
+                            "interpolation": { "type": "hold" }
+                          }
+                        ]
+                      }
                     },
-                    "size": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
-                    },
-                    "mode": "subtract",
-                    "invert": true,
                     "feather": { "mode": "constant", "value": 0.02 },
-                    "rotation_degrees": {
-                      "mode": "keyframes",
-                      "keyframes": [
-                        {
-                          "time": 0,
-                          "value": 0,
-                          "interpolation": { "type": "linear" }
-                        },
-                        {
-                          "time": 120000,
-                          "value": 90,
-                          "interpolation": { "type": "hold" }
-                        }
-                      ]
-                    }
+                    "invert": true,
+                    "mode": "subtract"
                   }
                 ]
               },
@@ -6562,127 +6564,127 @@
                   {
                     "shape": {
                       "type": "rectangle",
+                      "center": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
+                      "size": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
                       "corner_radius": { "mode": "constant", "value": 0.05 }
-                    },
-                    "center": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
-                    },
-                    "size": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
                     }
                   },
                   {
                     "shape": {
                       "type": "rectangle",
+                      "center": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
+                      "size": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
                       "corner_radius": { "mode": "constant", "value": 0.05 }
-                    },
-                    "center": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
-                    },
-                    "size": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
                     }
                   },
                   {
                     "shape": {
                       "type": "rectangle",
+                      "center": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
+                      "size": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
                       "corner_radius": { "mode": "constant", "value": 0.05 }
-                    },
-                    "center": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
-                    },
-                    "size": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
                     }
                   },
                   {
                     "shape": {
                       "type": "rectangle",
+                      "center": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
+                      "size": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
                       "corner_radius": { "mode": "constant", "value": 0.05 }
-                    },
-                    "center": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
-                    },
-                    "size": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
                     }
                   },
                   {
                     "shape": {
                       "type": "rectangle",
+                      "center": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
+                      "size": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
                       "corner_radius": { "mode": "constant", "value": 0.05 }
-                    },
-                    "center": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
-                    },
-                    "size": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
                     }
                   },
                   {
                     "shape": {
                       "type": "rectangle",
+                      "center": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
+                      "size": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
                       "corner_radius": { "mode": "constant", "value": 0.05 }
-                    },
-                    "center": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
-                    },
-                    "size": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
                     }
                   },
                   {
                     "shape": {
                       "type": "rectangle",
+                      "center": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
+                      "size": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
                       "corner_radius": { "mode": "constant", "value": 0.05 }
-                    },
-                    "center": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
-                    },
-                    "size": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
                     }
                   },
                   {
                     "shape": {
                       "type": "rectangle",
+                      "center": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
+                      "size": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
                       "corner_radius": { "mode": "constant", "value": 0.05 }
-                    },
-                    "center": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
-                    },
-                    "size": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
                     }
                   },
                   {
                     "shape": {
                       "type": "rectangle",
+                      "center": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
+                      "size": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
                       "corner_radius": { "mode": "constant", "value": 0.05 }
-                    },
-                    "center": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
-                    },
-                    "size": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
                     }
                   }
                 ]
@@ -6718,8 +6720,10 @@
     "name": "mask-negative-size",
     "valid": false,
     "rejected_by": "model",
-    "problems": ["clip c1 has an invalid mask"],
-    "error": "clip c1 has an invalid mask",
+    "problems": [
+      "clip c1 has an invalid shape: masks[0].shape.size has a value out of range"
+    ],
+    "error": "clip c1 has an invalid shape: masks[0].shape.size has a value out of range",
     "project": {
       "schema_version": 1,
       "id": "p1",
@@ -6752,15 +6756,15 @@
                   {
                     "shape": {
                       "type": "rectangle",
+                      "center": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
+                      "size": {
+                        "mode": "constant",
+                        "value": { "x": -0.1, "y": 0.5 }
+                      },
                       "corner_radius": { "mode": "constant", "value": 0.05 }
-                    },
-                    "center": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
-                    },
-                    "size": {
-                      "mode": "constant",
-                      "value": { "x": -0.1, "y": 0.5 }
                     }
                   }
                 ]
@@ -6796,8 +6800,10 @@
     "name": "mask-negative-feather",
     "valid": false,
     "rejected_by": "model",
-    "problems": ["clip c1 has an invalid mask"],
-    "error": "clip c1 has an invalid mask",
+    "problems": [
+      "clip c1 has an invalid shape: masks[0].feather has a value out of range"
+    ],
+    "error": "clip c1 has an invalid shape: masks[0].feather has a value out of range",
     "project": {
       "schema_version": 1,
       "id": "p1",
@@ -6830,15 +6836,15 @@
                   {
                     "shape": {
                       "type": "rectangle",
+                      "center": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
+                      "size": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
                       "corner_radius": { "mode": "constant", "value": 0.05 }
-                    },
-                    "center": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
-                    },
-                    "size": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
                     },
                     "feather": { "mode": "constant", "value": -0.01 }
                   }
@@ -6929,15 +6935,15 @@
                   {
                     "shape": {
                       "type": "rectangle",
+                      "center": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
+                      "size": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
                       "corner_radius": { "mode": "constant", "value": 0.05 }
-                    },
-                    "center": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
-                    },
-                    "size": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
                     }
                   }
                 ]
@@ -6986,15 +6992,15 @@
                   {
                     "shape": {
                       "type": "ellipse",
+                      "center": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
+                      "size": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
                       "corner_radius": { "mode": "constant", "value": 0.1 }
-                    },
-                    "center": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
-                    },
-                    "size": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
                     }
                   }
                 ]
@@ -7063,15 +7069,15 @@
                   {
                     "shape": {
                       "type": "rectangle",
+                      "center": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
+                      "size": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
                       "corner_radius": { "mode": "constant", "value": 0.05 }
-                    },
-                    "center": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
-                    },
-                    "size": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
                     },
                     "mode": "xor"
                   }
@@ -7757,7 +7763,7 @@
     }
   },
   {
-    "name": "generated-shape-ok",
+    "name": "generated-shapes-ok",
     "valid": true,
     "project": {
       "schema_version": 1,
@@ -7778,57 +7784,69 @@
           "id": "g1",
           "kind": "generated",
           "generator": {
-            "type": "shape",
-            "shape": { "type": "rectangle", "corner_radius": 0.1 },
-            "center": { "x": 0.5, "y": 0.5 },
-            "size": { "x": 0.6, "y": 0.3 },
-            "rotation_degrees": 12,
-            "stroke": {
-              "width": 0.02,
-              "paint": {
-                "type": "conic_gradient",
-                "center": { "x": 0.5, "y": 0.5 },
-                "angle_degrees": 45,
-                "stops": [
-                  {
-                    "offset": 0,
-                    "color": {
-                      "red": 0.0,
-                      "green": 0.5,
-                      "blue": 0.2,
-                      "alpha": 1
-                    }
-                  },
-                  {
-                    "offset": 0.3333,
-                    "color": {
-                      "red": 0.3333333333333333,
-                      "green": 0.5,
-                      "blue": 0.2,
-                      "alpha": 1
-                    }
-                  },
-                  {
-                    "offset": 0.6667,
-                    "color": {
-                      "red": 0.6666666666666666,
-                      "green": 0.5,
-                      "blue": 0.2,
-                      "alpha": 1
-                    }
-                  },
-                  {
-                    "offset": 1.0,
-                    "color": {
-                      "red": 1.0,
-                      "green": 0.5,
-                      "blue": 0.2,
-                      "alpha": 1
-                    }
+            "type": "shapes",
+            "items": [
+              {
+                "type": "rectangle",
+                "center": {
+                  "mode": "constant",
+                  "value": { "x": 0.5, "y": 0.5 }
+                },
+                "size": { "mode": "constant", "value": { "x": 0.6, "y": 0.3 } },
+                "corner_radius": { "mode": "constant", "value": 0.1 },
+                "rotation_degrees": { "mode": "constant", "value": 12 }
+              },
+              {
+                "type": "stroke",
+                "width": { "mode": "constant", "value": 0.02 },
+                "paint": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "conic_gradient",
+                    "center": { "x": 0.5, "y": 0.5 },
+                    "angle_degrees": 45,
+                    "stops": [
+                      {
+                        "offset": 0,
+                        "color": {
+                          "red": 0.0,
+                          "green": 0.5,
+                          "blue": 0.2,
+                          "alpha": 1
+                        }
+                      },
+                      {
+                        "offset": 0.3333,
+                        "color": {
+                          "red": 0.3333333333333333,
+                          "green": 0.5,
+                          "blue": 0.2,
+                          "alpha": 1
+                        }
+                      },
+                      {
+                        "offset": 0.6667,
+                        "color": {
+                          "red": 0.6666666666666666,
+                          "green": 0.5,
+                          "blue": 0.2,
+                          "alpha": 1
+                        }
+                      },
+                      {
+                        "offset": 1.0,
+                        "color": {
+                          "red": 1.0,
+                          "green": 0.5,
+                          "blue": 0.2,
+                          "alpha": 1
+                        }
+                      }
+                    ]
                   }
-                ]
+                }
               }
-            }
+            ]
           }
         }
       ],
@@ -7873,7 +7891,7 @@
     }
   },
   {
-    "name": "generated-radial-solid-ok",
+    "name": "generated-shapes-radial-solid-ok",
     "valid": true,
     "project": {
       "schema_version": 1,
@@ -7894,33 +7912,60 @@
           "id": "g1",
           "kind": "generated",
           "generator": {
-            "type": "shape",
-            "shape": { "type": "ellipse" },
-            "center": { "x": 0.3, "y": 0.6 },
-            "size": { "x": 0.2, "y": 0.2 },
-            "fill": {
-              "type": "radial_gradient",
-              "center": { "x": 0.3, "y": 0.6 },
-              "radius": 0.1,
-              "stops": [
-                {
-                  "offset": 0,
-                  "color": { "red": 0.0, "green": 0.5, "blue": 0.2, "alpha": 1 }
+            "type": "shapes",
+            "items": [
+              {
+                "type": "ellipse",
+                "center": {
+                  "mode": "constant",
+                  "value": { "x": 0.3, "y": 0.6 }
                 },
-                {
-                  "offset": 1.0,
-                  "color": { "red": 1.0, "green": 0.5, "blue": 0.2, "alpha": 1 }
+                "size": { "mode": "constant", "value": { "x": 0.2, "y": 0.2 } }
+              },
+              {
+                "type": "stroke",
+                "width": { "mode": "constant", "value": 0.01 },
+                "paint": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "solid",
+                    "color": { "red": 1, "green": 1, "blue": 1, "alpha": 0.5 }
+                  }
                 }
-              ],
-              "spread": "repeat"
-            },
-            "stroke": {
-              "width": 0.01,
-              "paint": {
-                "type": "solid",
-                "color": { "red": 1, "green": 1, "blue": 1, "alpha": 0.5 }
+              },
+              {
+                "type": "fill",
+                "paint": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "radial_gradient",
+                    "center": { "x": 0.3, "y": 0.6 },
+                    "radius": 0.1,
+                    "stops": [
+                      {
+                        "offset": 0,
+                        "color": {
+                          "red": 0.0,
+                          "green": 0.5,
+                          "blue": 0.2,
+                          "alpha": 1
+                        }
+                      },
+                      {
+                        "offset": 1.0,
+                        "color": {
+                          "red": 1.0,
+                          "green": 0.5,
+                          "blue": 0.2,
+                          "alpha": 1
+                        }
+                      }
+                    ],
+                    "spread": "repeat"
+                  }
+                }
               }
-            }
+            ]
           }
         }
       ],
@@ -8286,11 +8331,13 @@
     }
   },
   {
-    "name": "generated-shape-draws-nothing",
+    "name": "generated-shapes-path-keyframes-differ",
     "valid": false,
     "rejected_by": "model",
-    "problems": ["source g1 has an invalid generator"],
-    "error": "source g1 has an invalid generator",
+    "problems": [
+      "source g1 has an invalid shape: items[0].path has path keyframes that differ in structure"
+    ],
+    "error": "source g1 has an invalid shape: items[0].path has path keyframes that differ in structure",
     "project": {
       "schema_version": 1,
       "id": "p1",
@@ -8310,11 +8357,64 @@
           "id": "g1",
           "kind": "generated",
           "generator": {
-            "type": "shape",
-            "shape": { "type": "rectangle", "corner_radius": 0.1 },
-            "center": { "x": 0.5, "y": 0.5 },
-            "size": { "x": 0.6, "y": 0.3 },
-            "rotation_degrees": 12
+            "type": "shapes",
+            "items": [
+              {
+                "type": "path",
+                "path": {
+                  "mode": "keyframes",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "interpolation": { "type": "linear" },
+                      "value": {
+                        "subpaths": [
+                          {
+                            "closed": true,
+                            "vertices": [
+                              { "point": { "x": 0.2, "y": 0.0 } },
+                              { "point": { "x": 0.0618, "y": 0.1902 } },
+                              { "point": { "x": -0.1618, "y": 0.1176 } },
+                              { "point": { "x": -0.1618, "y": -0.1176 } },
+                              { "point": { "x": 0.0618, "y": -0.1902 } }
+                            ]
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "time": 60000,
+                      "interpolation": { "type": "linear" },
+                      "value": {
+                        "subpaths": [
+                          {
+                            "closed": true,
+                            "vertices": [
+                              { "point": { "x": 0.2, "y": 0.0 } },
+                              { "point": { "x": 0.1, "y": 0.1732 } },
+                              { "point": { "x": -0.1, "y": 0.1732 } },
+                              { "point": { "x": -0.2, "y": 0.0 } },
+                              { "point": { "x": -0.1, "y": -0.1732 } },
+                              { "point": { "x": 0.1, "y": -0.1732 } }
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "type": "fill",
+                "paint": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "solid",
+                    "color": { "red": 1, "green": 0, "blue": 0, "alpha": 1 }
+                  }
+                }
+              }
+            ]
           }
         }
       ],
@@ -8778,10 +8878,12 @@
     }
   },
   {
-    "name": "generated-ellipse-extra-field",
+    "name": "generated-shapes-ellipse-extra-field",
     "valid": false,
     "rejected_by": "schema",
-    "problems": ["project.sources[4].generator.shape has unknown field \"corner_radius\""],
+    "problems": [
+      "project.sources[4].generator.items[0] has unknown field \"corner_radius\""
+    ],
     "project": {
       "schema_version": 1,
       "id": "p1",
@@ -8801,57 +8903,69 @@
           "id": "g1",
           "kind": "generated",
           "generator": {
-            "type": "shape",
-            "shape": { "type": "ellipse", "corner_radius": 0.1 },
-            "center": { "x": 0.5, "y": 0.5 },
-            "size": { "x": 0.6, "y": 0.3 },
-            "rotation_degrees": 12,
-            "stroke": {
-              "width": 0.02,
-              "paint": {
-                "type": "conic_gradient",
-                "center": { "x": 0.5, "y": 0.5 },
-                "angle_degrees": 45,
-                "stops": [
-                  {
-                    "offset": 0,
-                    "color": {
-                      "red": 0.0,
-                      "green": 0.5,
-                      "blue": 0.2,
-                      "alpha": 1
-                    }
-                  },
-                  {
-                    "offset": 0.3333,
-                    "color": {
-                      "red": 0.3333333333333333,
-                      "green": 0.5,
-                      "blue": 0.2,
-                      "alpha": 1
-                    }
-                  },
-                  {
-                    "offset": 0.6667,
-                    "color": {
-                      "red": 0.6666666666666666,
-                      "green": 0.5,
-                      "blue": 0.2,
-                      "alpha": 1
-                    }
-                  },
-                  {
-                    "offset": 1.0,
-                    "color": {
-                      "red": 1.0,
-                      "green": 0.5,
-                      "blue": 0.2,
-                      "alpha": 1
-                    }
+            "type": "shapes",
+            "items": [
+              {
+                "type": "ellipse",
+                "center": {
+                  "mode": "constant",
+                  "value": { "x": 0.5, "y": 0.5 }
+                },
+                "size": { "mode": "constant", "value": { "x": 0.6, "y": 0.3 } },
+                "corner_radius": { "mode": "constant", "value": 0.1 },
+                "rotation_degrees": { "mode": "constant", "value": 12 }
+              },
+              {
+                "type": "stroke",
+                "width": { "mode": "constant", "value": 0.02 },
+                "paint": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "conic_gradient",
+                    "center": { "x": 0.5, "y": 0.5 },
+                    "angle_degrees": 45,
+                    "stops": [
+                      {
+                        "offset": 0,
+                        "color": {
+                          "red": 0.0,
+                          "green": 0.5,
+                          "blue": 0.2,
+                          "alpha": 1
+                        }
+                      },
+                      {
+                        "offset": 0.3333,
+                        "color": {
+                          "red": 0.3333333333333333,
+                          "green": 0.5,
+                          "blue": 0.2,
+                          "alpha": 1
+                        }
+                      },
+                      {
+                        "offset": 0.6667,
+                        "color": {
+                          "red": 0.6666666666666666,
+                          "green": 0.5,
+                          "blue": 0.2,
+                          "alpha": 1
+                        }
+                      },
+                      {
+                        "offset": 1.0,
+                        "color": {
+                          "red": 1.0,
+                          "green": 0.5,
+                          "blue": 0.2,
+                          "alpha": 1
+                        }
+                      }
+                    ]
                   }
-                ]
+                }
               }
-            }
+            ]
           }
         }
       ],
@@ -11711,14 +11825,16 @@
                 "input": "fill",
                 "masks": [
                   {
-                    "shape": { "type": "ellipse" },
-                    "center": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
-                    },
-                    "size": {
-                      "mode": "constant",
-                      "value": { "x": 0.5, "y": 0.5 }
+                    "shape": {
+                      "type": "ellipse",
+                      "center": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
+                      "size": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      }
                     }
                   }
                 ]
@@ -23266,6 +23382,1055 @@
           "output": "moved"
         }
       ]
+    }
+  },
+  {
+    "name": "generated-shapes-content-tree-ok",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "shapes",
+            "items": [
+              {
+                "type": "group",
+                "transform": {
+                  "position": {
+                    "mode": "keyframes",
+                    "keyframes": [
+                      {
+                        "time": 0,
+                        "interpolation": { "type": "linear" },
+                        "value": { "x": 0.3, "y": 0.5 },
+                        "out_tangent": { "x": 0.1, "y": -0.2 }
+                      },
+                      {
+                        "time": 120000,
+                        "interpolation": { "type": "hold" },
+                        "value": { "x": 0.7, "y": 0.5 },
+                        "in_tangent": { "x": -0.1, "y": -0.2 }
+                      }
+                    ]
+                  },
+                  "rotation_degrees": { "mode": "constant", "value": 15 },
+                  "opacity": { "mode": "constant", "value": 0.8 }
+                },
+                "items": [
+                  {
+                    "type": "path",
+                    "path": {
+                      "mode": "keyframes",
+                      "keyframes": [
+                        {
+                          "time": 0,
+                          "interpolation": { "type": "linear" },
+                          "value": {
+                            "subpaths": [
+                              {
+                                "closed": true,
+                                "vertices": [
+                                  { "point": { "x": 0.2, "y": 0.0 } },
+                                  { "point": { "x": 0.0618, "y": 0.1902 } },
+                                  { "point": { "x": -0.1618, "y": 0.1176 } },
+                                  { "point": { "x": -0.1618, "y": -0.1176 } },
+                                  { "point": { "x": 0.0618, "y": -0.1902 } }
+                                ]
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "time": 60000,
+                          "interpolation": { "type": "linear" },
+                          "value": {
+                            "subpaths": [
+                              {
+                                "closed": true,
+                                "vertices": [
+                                  { "point": { "x": 0.25, "y": 0.0 } },
+                                  { "point": { "x": 0.1118, "y": 0.1902 } },
+                                  { "point": { "x": -0.1118, "y": 0.1176 } },
+                                  { "point": { "x": -0.1118, "y": -0.1176 } },
+                                  { "point": { "x": 0.1118, "y": -0.1902 } }
+                                ]
+                              }
+                            ]
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "type": "polystar",
+                    "kind": "star",
+                    "center": {
+                      "mode": "constant",
+                      "value": { "x": 0, "y": 0 }
+                    },
+                    "points": { "mode": "constant", "value": 5 },
+                    "outer_radius": { "mode": "constant", "value": 0.1 },
+                    "inner_radius": { "mode": "constant", "value": 0.05 },
+                    "outer_roundness": { "mode": "constant", "value": 0.2 }
+                  },
+                  {
+                    "type": "trim",
+                    "start": { "mode": "constant", "value": 0 },
+                    "end": {
+                      "mode": "keyframes",
+                      "keyframes": [
+                        {
+                          "time": 0,
+                          "interpolation": { "type": "linear" },
+                          "value": 0.2
+                        },
+                        {
+                          "time": 60000,
+                          "interpolation": { "type": "linear" },
+                          "value": 1
+                        }
+                      ]
+                    },
+                    "offset": { "mode": "constant", "value": 0.25 },
+                    "mode": "individually"
+                  },
+                  {
+                    "type": "stroke",
+                    "width": { "mode": "constant", "value": 0.01 },
+                    "join": "round",
+                    "cap": "round",
+                    "miter_limit": 2,
+                    "paint": {
+                      "mode": "constant",
+                      "value": {
+                        "type": "solid",
+                        "color": { "red": 1, "green": 0, "blue": 0, "alpha": 1 }
+                      }
+                    },
+                    "dash": {
+                      "pattern": [
+                        { "mode": "constant", "value": 0.02 },
+                        { "mode": "constant", "value": 0.01 }
+                      ],
+                      "offset": { "mode": "constant", "value": 0.005 }
+                    }
+                  },
+                  {
+                    "type": "fill",
+                    "rule": "evenodd",
+                    "paint": {
+                      "mode": "keyframes",
+                      "keyframes": [
+                        {
+                          "time": 0,
+                          "interpolation": { "type": "linear" },
+                          "value": {
+                            "type": "solid",
+                            "color": {
+                              "red": 1,
+                              "green": 0,
+                              "blue": 0,
+                              "alpha": 1
+                            }
+                          }
+                        },
+                        {
+                          "time": 60000,
+                          "interpolation": { "type": "linear" },
+                          "value": {
+                            "type": "solid",
+                            "color": {
+                              "red": 0,
+                              "green": 0,
+                              "blue": 1,
+                              "alpha": 0.5
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "opacity": { "mode": "constant", "value": 0.9 }
+                  }
+                ]
+              },
+              {
+                "type": "rectangle",
+                "center": {
+                  "mode": "constant",
+                  "value": { "x": 0.5, "y": 0.5 }
+                },
+                "size": { "mode": "constant", "value": { "x": 0.4, "y": 0.3 } }
+              },
+              {
+                "type": "fill",
+                "paint": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "solid",
+                    "color": { "red": 1, "green": 0, "blue": 0, "alpha": 1 }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "generated-shapes-paint-keyframes-differ",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid shape: items[1].paint has paint keyframes that differ in kind or stops"
+    ],
+    "error": "source g1 has an invalid shape: items[1].paint has paint keyframes that differ in kind or stops",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "shapes",
+            "items": [
+              {
+                "type": "rectangle",
+                "center": {
+                  "mode": "constant",
+                  "value": { "x": 0.5, "y": 0.5 }
+                },
+                "size": { "mode": "constant", "value": { "x": 0.4, "y": 0.3 } }
+              },
+              {
+                "type": "fill",
+                "paint": {
+                  "mode": "keyframes",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "interpolation": { "type": "linear" },
+                      "value": {
+                        "type": "solid",
+                        "color": { "red": 1, "green": 0, "blue": 0, "alpha": 1 }
+                      }
+                    },
+                    {
+                      "time": 60000,
+                      "interpolation": { "type": "linear" },
+                      "value": {
+                        "type": "linear_gradient",
+                        "start": { "x": 0, "y": 0 },
+                        "end": { "x": 1, "y": 1 },
+                        "stops": [
+                          {
+                            "offset": 0,
+                            "color": {
+                              "red": 1,
+                              "green": 0,
+                              "blue": 0,
+                              "alpha": 1
+                            }
+                          },
+                          {
+                            "offset": 1,
+                            "color": {
+                              "red": 0,
+                              "green": 0,
+                              "blue": 1,
+                              "alpha": 0.5
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "generated-shapes-too-many-items",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid shape: items[1024] has more items than a shapes generator may hold"
+    ],
+    "error": "source g1 has an invalid shape: items[1024] has more items than a shapes generator may hold",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "shapes",
+            "items": [
+              {
+                "$repeat": 1025,
+                "item": {
+                  "type": "fill",
+                  "paint": {
+                    "mode": "constant",
+                    "value": {
+                      "type": "solid",
+                      "color": { "red": 1, "green": 0, "blue": 0, "alpha": 1 }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "generated-shapes-polystar-points-out-of-range",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid shape: items[0].points has a value out of range"
+    ],
+    "error": "source g1 has an invalid shape: items[0].points has a value out of range",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "shapes",
+            "items": [
+              {
+                "type": "polystar",
+                "kind": "polygon",
+                "center": {
+                  "mode": "constant",
+                  "value": { "x": 0.5, "y": 0.5 }
+                },
+                "points": { "mode": "constant", "value": 2 },
+                "outer_radius": { "mode": "constant", "value": 0.2 }
+              },
+              {
+                "type": "fill",
+                "paint": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "solid",
+                    "color": { "red": 1, "green": 0, "blue": 0, "alpha": 1 }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "generated-shapes-dash-all-zero",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid shape: items[1].dash.pattern has an invalid dash pattern"
+    ],
+    "error": "source g1 has an invalid shape: items[1].dash.pattern has an invalid dash pattern",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "shapes",
+            "items": [
+              {
+                "type": "rectangle",
+                "center": {
+                  "mode": "constant",
+                  "value": { "x": 0.5, "y": 0.5 }
+                },
+                "size": { "mode": "constant", "value": { "x": 0.4, "y": 0.3 } }
+              },
+              {
+                "type": "stroke",
+                "width": { "mode": "constant", "value": 0.01 },
+                "paint": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "solid",
+                    "color": { "red": 1, "green": 0, "blue": 0, "alpha": 1 }
+                  }
+                },
+                "dash": { "pattern": [{ "mode": "constant", "value": 0 }] }
+              }
+            ]
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "generated-shapes-unknown-item",
+    "valid": false,
+    "rejected_by": "schema",
+    "problems": [
+      "project.sources[4].generator.items[0].type must be one of \"group\", \"rectangle\", \"ellipse\", \"polystar\", \"path\", \"fill\", \"stroke\", \"trim\""
+    ],
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "shapes",
+            "items": [
+              {
+                "type": "repeater",
+                "copies": { "mode": "constant", "value": 3 }
+              }
+            ]
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "mask-old-geometry-beside-shape",
+    "valid": false,
+    "rejected_by": "schema",
+    "problems": [
+      "project.timeline.tracks[0].clips[0].masks[0].shape.center is required",
+      "project.timeline.tracks[0].clips[0].masks[0].shape.size is required",
+      "project.timeline.tracks[0].clips[0].masks[0] has unknown field \"center\"",
+      "project.timeline.tracks[0].clips[0].masks[0] has unknown field \"size\""
+    ],
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "masks": [
+                  {
+                    "shape": { "type": "ellipse" },
+                    "center": {
+                      "mode": "constant",
+                      "value": { "x": 0.5, "y": 0.5 }
+                    },
+                    "size": {
+                      "mode": "constant",
+                      "value": { "x": 0.5, "y": 0.5 }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "mask-path-evenodd-ok",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "masks": [
+                  {
+                    "shape": {
+                      "type": "path",
+                      "path": {
+                        "mode": "keyframes",
+                        "keyframes": [
+                          {
+                            "time": 0,
+                            "interpolation": { "type": "linear" },
+                            "value": {
+                              "subpaths": [
+                                {
+                                  "closed": true,
+                                  "vertices": [
+                                    { "point": { "x": 0.2, "y": 0.0 } },
+                                    { "point": { "x": 0.0, "y": 0.2 } },
+                                    { "point": { "x": -0.2, "y": 0.0 } },
+                                    { "point": { "x": -0.0, "y": -0.2 } }
+                                  ]
+                                },
+                                {
+                                  "closed": true,
+                                  "vertices": [
+                                    { "point": { "x": 0.3, "y": 0.0 } },
+                                    { "point": { "x": 0.1, "y": 0.2 } },
+                                    { "point": { "x": -0.1, "y": 0.0 } },
+                                    { "point": { "x": 0.1, "y": -0.2 } }
+                                  ]
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "time": 60000,
+                            "interpolation": { "type": "linear" },
+                            "value": {
+                              "subpaths": [
+                                {
+                                  "closed": true,
+                                  "vertices": [
+                                    { "point": { "x": 0.22, "y": 0.0 } },
+                                    { "point": { "x": 0.02, "y": 0.2 } },
+                                    { "point": { "x": -0.18, "y": 0.0 } },
+                                    { "point": { "x": 0.02, "y": -0.2 } }
+                                  ]
+                                },
+                                {
+                                  "closed": true,
+                                  "vertices": [
+                                    { "point": { "x": 0.32, "y": 0.0 } },
+                                    { "point": { "x": 0.12, "y": 0.2 } },
+                                    { "point": { "x": -0.08, "y": 0.0 } },
+                                    { "point": { "x": 0.12, "y": -0.2 } }
+                                  ]
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "fill_rule": "evenodd",
+                    "feather": { "mode": "constant", "value": 0.02 },
+                    "mode": "subtract"
+                  },
+                  {
+                    "shape": {
+                      "type": "polystar",
+                      "kind": "star",
+                      "center": {
+                        "mode": "constant",
+                        "value": { "x": 0.5, "y": 0.5 }
+                      },
+                      "points": { "mode": "constant", "value": 6 },
+                      "outer_radius": { "mode": "constant", "value": 0.3 },
+                      "inner_radius": { "mode": "constant", "value": 0.15 }
+                    },
+                    "invert": true
+                  }
+                ]
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "mask-path-keyframes-differ",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "clip c1 has an invalid shape: masks[0].shape.path has path keyframes that differ in structure"
+    ],
+    "error": "clip c1 has an invalid shape: masks[0].shape.path has path keyframes that differ in structure",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "masks": [
+                  {
+                    "shape": {
+                      "type": "path",
+                      "path": {
+                        "mode": "keyframes",
+                        "keyframes": [
+                          {
+                            "time": 0,
+                            "interpolation": { "type": "linear" },
+                            "value": {
+                              "subpaths": [
+                                {
+                                  "closed": true,
+                                  "vertices": [
+                                    { "point": { "x": 0.2, "y": 0.0 } },
+                                    { "point": { "x": 0.0, "y": 0.2 } },
+                                    { "point": { "x": -0.2, "y": 0.0 } },
+                                    { "point": { "x": -0.0, "y": -0.2 } }
+                                  ]
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "time": 60000,
+                            "interpolation": { "type": "linear" },
+                            "value": {
+                              "subpaths": [
+                                {
+                                  "closed": false,
+                                  "vertices": [
+                                    { "point": { "x": 0.2, "y": 0.0 } },
+                                    { "point": { "x": 0.0, "y": 0.2 } },
+                                    { "point": { "x": -0.2, "y": 0.0 } },
+                                    { "point": { "x": -0.0, "y": -0.2 } }
+                                  ]
+                                }
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
     }
   }
 ]

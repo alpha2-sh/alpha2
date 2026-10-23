@@ -42,6 +42,9 @@ pub struct Capabilities {
     /// `SwiftShader`, WARP), where a shader's cost is paid for every pixel it
     /// is run on whatever branches it skips.
     pub software_rasterizer: bool,
+    /// Whether `Rgba16Float` render targets blend in hardware, so pictures
+    /// can be composited in linear light by blending alone.
+    pub half_float_blendable: bool,
 }
 
 impl Capabilities {
@@ -68,16 +71,22 @@ impl Capabilities {
             driver: driver.into(),
             driver_info: driver_info.into(),
             software_rasterizer: false,
+            half_float_blendable: intermediate_format == IntermediateFormat::Rgba16Float,
         }
     }
 
     pub(crate) fn from_adapter(adapter: &wgpu::Adapter) -> Self {
         let info = adapter.get_info();
+        let half_float = adapter.get_texture_format_features(wgpu::TextureFormat::Rgba16Float);
         Self {
             tier: tier_for(&adapter.get_downlevel_capabilities()),
-            intermediate_format: intermediate_format_for(
-                adapter.get_texture_format_features(wgpu::TextureFormat::Rgba16Float),
-            ),
+            intermediate_format: intermediate_format_for(half_float),
+            half_float_blendable: half_float
+                .allowed_usages
+                .contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
+                && half_float
+                    .flags
+                    .contains(wgpu::TextureFormatFeatureFlags::BLENDABLE),
             adapter_name: info.name,
             max_texture_dimension_2d: adapter.limits().max_texture_dimension_2d,
             timestamp_queries: adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY),

@@ -2,6 +2,34 @@ use crate::{ClipId, CompositionId, EffectResourceId, NodeId, TrackId};
 use alpha2_media::SourceId;
 use std::fmt;
 
+/// What holds a shape a [`ModelError::InvalidShape`] names.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ShapeOwner {
+    /// A generated source's shapes generator.
+    Source(SourceId),
+    /// A clip's masks.
+    Clip(ClipId),
+    /// A composition node's shapes generator or masks.
+    Node {
+        /// The composition.
+        composition: CompositionId,
+        /// The node.
+        node: NodeId,
+    },
+}
+
+impl fmt::Display for ShapeOwner {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Source(source) => write!(formatter, "source {source}"),
+            Self::Clip(clip) => write!(formatter, "clip {clip}"),
+            Self::Node { composition, node } => {
+                write!(formatter, "composition {composition} node {node}")
+            }
+        }
+    }
+}
+
 /// A document invariant violation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -54,6 +82,18 @@ pub enum ModelError {
     InvalidGenerator {
         /// The source.
         source: SourceId,
+    },
+    /// A shapes generator's content tree, or a mask's outline, breaks a
+    /// limit, has a value out of range, or has keyframes that cannot
+    /// interpolate.
+    InvalidShape {
+        /// What holds the shape.
+        owner: ShapeOwner,
+        /// Where in it the problem lies, like `items[2].items[0].path` or
+        /// `masks[1].shape.size`.
+        at: String,
+        /// What is wrong there.
+        problem: crate::ShapeProblem,
     },
     /// An effect resource locator was empty.
     EmptyEffectResourceLocator {
@@ -457,6 +497,9 @@ impl fmt::Display for ModelError {
             }
             Self::InvalidGenerator { source } => {
                 write!(formatter, "source {source} has an invalid generator")
+            }
+            Self::InvalidShape { owner, at, problem } => {
+                write!(formatter, "{owner} has an invalid shape: {at} {problem}")
             }
             Self::ContradictoryColor { source } => write!(
                 formatter,

@@ -81,6 +81,10 @@
       "types": "./dist/text.d.ts",
       "import": "./dist/text.js"
     },
+    "./geometry": {
+      "types": "./dist/geometry.d.ts",
+      "import": "./dist/geometry.js"
+    },
     "./rate-control": {
       "types": "./dist/rate-control.d.ts",
       "import": "./dist/rate-control.js"

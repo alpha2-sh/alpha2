@@ -6,8 +6,8 @@
 #
 # Seeds are written, never committed: each target's corpus directory (fuzz/corpus/<target>, ignored
 # by git) starts from the test files it reads (tests/corpus/extensions, the project documents under
-# tests/cases/, tests/corpus/captions with LF and CRLF line ends); evaluate and audio_render start
-# empty. ALPHA2_FUZZ_SEEDS=<dir> adds <dir>/<target>/* to a target's seeds.
+# tests/cases/, tests/corpus/captions with LF and CRLF line ends); evaluate, audio_render, and
+# vector_raster start empty. ALPHA2_FUZZ_SEEDS=<dir> adds <dir>/<target>/* to a target's seeds.
 #
 # An input that takes longer than ALPHA2_FUZZ_TIMEOUT seconds (default 20) or more than
 # ALPHA2_FUZZ_RSS_MB megabytes (default 2560) is a finding, as a panic is. Findings land in
@@ -81,7 +81,7 @@ seed() {
         { printf %s "$format"; sed 's/$/\r/' "$file"; } >"$dir/crlf-$(basename "$file")"
       done
       ;;
-    evaluate | audio_render) ;;
+    evaluate | audio_render | vector_raster) ;;
     *) echo "unknown target $target" >&2; exit 2 ;;
   esac
   if [ -n "${ALPHA2_FUZZ_SEEDS:-}" ] && [ -d "$ALPHA2_FUZZ_SEEDS/$target" ]; then

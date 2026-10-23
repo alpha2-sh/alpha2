@@ -25,6 +25,7 @@ fn clip(id: &str, time: i64, visual: EvaluatedVisual, mode: ClipBlendMode) -> Ac
         matte: None,
         is_matte: false,
         generator: None,
+        shapes: None,
         source_composition: None,
     }
 }

@@ -13,6 +13,7 @@ mod curves;
 mod documents;
 mod provider_sources;
 mod scaling;
+mod shapes;
 mod shared_corpora;
 mod visuals;
 

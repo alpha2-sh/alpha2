@@ -545,14 +545,16 @@ fn validate_clip<'a>(
         });
     }
     let visual = track.kind == TrackKind::Video;
-    if clip.masks.len() > crate::MAX_CLIP_MASKS
-        || (!visual && !clip.masks.is_empty())
-        || !clip.masks.iter().all(crate::ShapeMask::is_valid)
-    {
+    if clip.masks.len() > crate::MAX_CLIP_MASKS || (!visual && !clip.masks.is_empty()) {
         return Err(ModelError::InvalidClipMask {
             clip: clip.id.clone(),
         });
     }
+    crate::mask::validate_masks(&clip.masks).map_err(|issue| ModelError::InvalidShape {
+        owner: crate::ShapeOwner::Clip(clip.id.clone()),
+        at: issue.at,
+        problem: issue.problem,
+    })?;
     if !visual && clip.matte.is_some() {
         return Err(ModelError::InvalidMatte {
             clip: clip.id.clone(),
@@ -960,6 +962,13 @@ fn validate_source_content(source: &MediaSource) -> Result<(), ModelError> {
         });
     }
     if source.kind == MediaKind::Generated {
+        if let Some(Err(Some(issue))) = source.generator.as_ref().map(Generator::validate) {
+            return Err(ModelError::InvalidShape {
+                owner: crate::ShapeOwner::Source(source.id.clone()),
+                at: issue.at,
+                problem: issue.problem,
+            });
+        }
         let valid = source.generator.as_ref().is_some_and(Generator::is_valid)
             && source.locator.is_empty()
             && source.color_metadata.is_none()

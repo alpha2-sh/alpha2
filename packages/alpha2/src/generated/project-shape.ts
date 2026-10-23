@@ -4,6 +4,31 @@
 /** The project schema's shape rules, without its documentation. */
 export const PROJECT_SHAPE: unknown = {
   $defs: {
+    AnimatedPoint: {
+      oneOf: [
+        {
+          additionalProperties: false,
+          properties: {
+            mode: { const: "constant", type: "string" },
+            value: { $ref: "#/$defs/Vec2" },
+          },
+          required: ["mode", "value"],
+          type: "object",
+        },
+        {
+          additionalProperties: false,
+          properties: {
+            keyframes: {
+              items: { $ref: "#/$defs/PointKeyframe" },
+              type: "array",
+            },
+            mode: { const: "keyframes", type: "string" },
+          },
+          required: ["mode", "keyframes"],
+          type: "object",
+        },
+      ],
+    },
     Animated_EffectValue: {
       oneOf: [
         {
@@ -20,6 +45,56 @@ export const PROJECT_SHAPE: unknown = {
           properties: {
             keyframes: {
               items: { $ref: "#/$defs/Keyframe_EffectValue" },
+              type: "array",
+            },
+            mode: { const: "keyframes", type: "string" },
+          },
+          required: ["mode", "keyframes"],
+          type: "object",
+        },
+      ],
+    },
+    Animated_Paint: {
+      oneOf: [
+        {
+          additionalProperties: false,
+          properties: {
+            mode: { const: "constant", type: "string" },
+            value: { $ref: "#/$defs/Paint" },
+          },
+          required: ["mode", "value"],
+          type: "object",
+        },
+        {
+          additionalProperties: false,
+          properties: {
+            keyframes: {
+              items: { $ref: "#/$defs/Keyframe_Paint" },
+              type: "array",
+            },
+            mode: { const: "keyframes", type: "string" },
+          },
+          required: ["mode", "keyframes"],
+          type: "object",
+        },
+      ],
+    },
+    Animated_Path: {
+      oneOf: [
+        {
+          additionalProperties: false,
+          properties: {
+            mode: { const: "constant", type: "string" },
+            value: { $ref: "#/$defs/Path" },
+          },
+          required: ["mode", "value"],
+          type: "object",
+        },
+        {
+          additionalProperties: false,
+          properties: {
+            keyframes: {
+              items: { $ref: "#/$defs/Keyframe_Path" },
               type: "array",
             },
             mode: { const: "keyframes", type: "string" },
@@ -353,6 +428,15 @@ export const PROJECT_SHAPE: unknown = {
       required: ["id", "op"],
       type: "object",
     },
+    Dash: {
+      additionalProperties: false,
+      properties: {
+        offset: { $ref: "#/$defs/Animated_float" },
+        pattern: { items: { $ref: "#/$defs/Animated_float" }, type: "array" },
+      },
+      required: ["pattern"],
+      type: "object",
+    },
     Ducking: {
       additionalProperties: false,
       properties: {
@@ -513,6 +597,12 @@ export const PROJECT_SHAPE: unknown = {
         { const: "equal_power", type: "string" },
       ],
     },
+    FillRule: {
+      oneOf: [
+        { const: "nonzero", type: "string" },
+        { const: "evenodd", type: "string" },
+      ],
+    },
     FrameRate: {
       additionalProperties: false,
       properties: {
@@ -532,25 +622,6 @@ export const PROJECT_SHAPE: unknown = {
       required: ["num", "den"],
       type: "object",
     },
-    GeneratedShape: {
-      oneOf: [
-        {
-          additionalProperties: false,
-          properties: {
-            corner_radius: { format: "float", type: "number" },
-            type: { const: "rectangle", type: "string" },
-          },
-          required: ["type"],
-          type: "object",
-        },
-        {
-          additionalProperties: false,
-          properties: { type: { const: "ellipse", type: "string" } },
-          required: ["type"],
-          type: "object",
-        },
-      ],
-    },
     Generator: {
       oneOf: [
         {
@@ -565,15 +636,10 @@ export const PROJECT_SHAPE: unknown = {
         {
           additionalProperties: false,
           properties: {
-            center: { $ref: "#/$defs/Vec2" },
-            fill: { anyOf: [{ $ref: "#/$defs/Paint" }, { type: "null" }] },
-            rotation_degrees: { format: "float", type: "number" },
-            shape: { $ref: "#/$defs/GeneratedShape" },
-            size: { $ref: "#/$defs/Vec2" },
-            stroke: { anyOf: [{ $ref: "#/$defs/Stroke" }, { type: "null" }] },
-            type: { const: "shape", type: "string" },
+            items: { items: { $ref: "#/$defs/ShapeItem" }, type: "array" },
+            type: { const: "shapes", type: "string" },
           },
-          required: ["type", "shape", "center", "size"],
+          required: ["type", "items"],
           type: "object",
         },
         {
@@ -641,6 +707,26 @@ export const PROJECT_SHAPE: unknown = {
       required: ["time", "value", "interpolation"],
       type: "object",
     },
+    Keyframe_Paint: {
+      additionalProperties: false,
+      properties: {
+        interpolation: { $ref: "#/$defs/Interpolation" },
+        time: { $ref: "#/$defs/MediaTime" },
+        value: { $ref: "#/$defs/Paint" },
+      },
+      required: ["time", "value", "interpolation"],
+      type: "object",
+    },
+    Keyframe_Path: {
+      additionalProperties: false,
+      properties: {
+        interpolation: { $ref: "#/$defs/Interpolation" },
+        time: { $ref: "#/$defs/MediaTime" },
+        value: { $ref: "#/$defs/Path" },
+      },
+      required: ["time", "value", "interpolation"],
+      type: "object",
+    },
     Keyframe_Vec2: {
       additionalProperties: false,
       properties: {
@@ -670,6 +756,20 @@ export const PROJECT_SHAPE: unknown = {
       required: ["threshold", "release_ms"],
       type: "object",
     },
+    LineCap: {
+      oneOf: [
+        { const: "butt", type: "string" },
+        { const: "round", type: "string" },
+        { const: "square", type: "string" },
+      ],
+    },
+    LineJoin: {
+      oneOf: [
+        { const: "miter", type: "string" },
+        { const: "round", type: "string" },
+        { const: "bevel", type: "string" },
+      ],
+    },
     LinearPrimaries: {
       oneOf: [
         { const: "bt709", type: "string" },
@@ -690,25 +790,6 @@ export const PROJECT_SHAPE: unknown = {
         { const: "add", type: "string" },
         { const: "subtract", type: "string" },
         { const: "intersect", type: "string" },
-      ],
-    },
-    MaskShape: {
-      oneOf: [
-        {
-          additionalProperties: false,
-          properties: {
-            corner_radius: { $ref: "#/$defs/Animated_float" },
-            type: { const: "rectangle", type: "string" },
-          },
-          required: ["type"],
-          type: "object",
-        },
-        {
-          additionalProperties: false,
-          properties: { type: { const: "ellipse", type: "string" } },
-          required: ["type"],
-          type: "object",
-        },
       ],
     },
     MasterAudio: {
@@ -987,6 +1068,42 @@ export const PROJECT_SHAPE: unknown = {
         },
       ],
     },
+    Path: {
+      additionalProperties: false,
+      properties: {
+        subpaths: { items: { $ref: "#/$defs/Subpath" }, type: "array" },
+      },
+      required: ["subpaths"],
+      type: "object",
+    },
+    PathVertex: {
+      additionalProperties: false,
+      properties: {
+        in_tangent: { $ref: "#/$defs/Vec2" },
+        out_tangent: { $ref: "#/$defs/Vec2" },
+        point: { $ref: "#/$defs/Vec2" },
+      },
+      required: ["point"],
+      type: "object",
+    },
+    PointKeyframe: {
+      additionalProperties: false,
+      properties: {
+        in_tangent: { $ref: "#/$defs/Vec2" },
+        interpolation: { $ref: "#/$defs/Interpolation" },
+        out_tangent: { $ref: "#/$defs/Vec2" },
+        time: { $ref: "#/$defs/MediaTime" },
+        value: { $ref: "#/$defs/Vec2" },
+      },
+      required: ["time", "value", "interpolation"],
+      type: "object",
+    },
+    PolystarKind: {
+      oneOf: [
+        { const: "star", type: "string" },
+        { const: "polygon", type: "string" },
+      ],
+    },
     ProjectId: { minLength: 1, type: "string" },
     ProjectSettings: {
       additionalProperties: false,
@@ -1089,18 +1206,179 @@ export const PROJECT_SHAPE: unknown = {
       required: ["red", "green", "blue", "alpha"],
       type: "object",
     },
+    ShapeGeometry: {
+      oneOf: [
+        {
+          additionalProperties: false,
+          properties: {
+            center: { $ref: "#/$defs/AnimatedPoint" },
+            corner_radius: { $ref: "#/$defs/Animated_float" },
+            rotation_degrees: { $ref: "#/$defs/Animated_float" },
+            size: { $ref: "#/$defs/Animated_Vec2" },
+            type: { const: "rectangle", type: "string" },
+          },
+          required: ["type", "center", "size"],
+          type: "object",
+        },
+        {
+          additionalProperties: false,
+          properties: {
+            center: { $ref: "#/$defs/AnimatedPoint" },
+            rotation_degrees: { $ref: "#/$defs/Animated_float" },
+            size: { $ref: "#/$defs/Animated_Vec2" },
+            type: { const: "ellipse", type: "string" },
+          },
+          required: ["type", "center", "size"],
+          type: "object",
+        },
+        {
+          additionalProperties: false,
+          properties: {
+            center: { $ref: "#/$defs/AnimatedPoint" },
+            inner_radius: { $ref: "#/$defs/Animated_float" },
+            inner_roundness: { $ref: "#/$defs/Animated_float" },
+            kind: { $ref: "#/$defs/PolystarKind" },
+            outer_radius: { $ref: "#/$defs/Animated_float" },
+            outer_roundness: { $ref: "#/$defs/Animated_float" },
+            points: { $ref: "#/$defs/Animated_float" },
+            rotation_degrees: { $ref: "#/$defs/Animated_float" },
+            type: { const: "polystar", type: "string" },
+          },
+          required: ["type", "kind", "center", "points", "outer_radius"],
+          type: "object",
+        },
+        {
+          additionalProperties: false,
+          properties: {
+            path: { $ref: "#/$defs/Animated_Path" },
+            type: { const: "path", type: "string" },
+          },
+          required: ["type", "path"],
+          type: "object",
+        },
+      ],
+    },
+    ShapeItem: {
+      oneOf: [
+        {
+          additionalProperties: false,
+          properties: {
+            items: { items: { $ref: "#/$defs/ShapeItem" }, type: "array" },
+            transform: { $ref: "#/$defs/ShapeTransform" },
+            type: { const: "group", type: "string" },
+          },
+          required: ["type", "items"],
+          type: "object",
+        },
+        {
+          additionalProperties: false,
+          properties: {
+            center: { $ref: "#/$defs/AnimatedPoint" },
+            corner_radius: { $ref: "#/$defs/Animated_float" },
+            rotation_degrees: { $ref: "#/$defs/Animated_float" },
+            size: { $ref: "#/$defs/Animated_Vec2" },
+            type: { const: "rectangle", type: "string" },
+          },
+          required: ["type", "center", "size"],
+          type: "object",
+        },
+        {
+          additionalProperties: false,
+          properties: {
+            center: { $ref: "#/$defs/AnimatedPoint" },
+            rotation_degrees: { $ref: "#/$defs/Animated_float" },
+            size: { $ref: "#/$defs/Animated_Vec2" },
+            type: { const: "ellipse", type: "string" },
+          },
+          required: ["type", "center", "size"],
+          type: "object",
+        },
+        {
+          additionalProperties: false,
+          properties: {
+            center: { $ref: "#/$defs/AnimatedPoint" },
+            inner_radius: { $ref: "#/$defs/Animated_float" },
+            inner_roundness: { $ref: "#/$defs/Animated_float" },
+            kind: { $ref: "#/$defs/PolystarKind" },
+            outer_radius: { $ref: "#/$defs/Animated_float" },
+            outer_roundness: { $ref: "#/$defs/Animated_float" },
+            points: { $ref: "#/$defs/Animated_float" },
+            rotation_degrees: { $ref: "#/$defs/Animated_float" },
+            type: { const: "polystar", type: "string" },
+          },
+          required: ["type", "kind", "center", "points", "outer_radius"],
+          type: "object",
+        },
+        {
+          additionalProperties: false,
+          properties: {
+            path: { $ref: "#/$defs/Animated_Path" },
+            type: { const: "path", type: "string" },
+          },
+          required: ["type", "path"],
+          type: "object",
+        },
+        {
+          additionalProperties: false,
+          properties: {
+            opacity: { $ref: "#/$defs/Animated_float" },
+            paint: { $ref: "#/$defs/Animated_Paint" },
+            rule: { $ref: "#/$defs/FillRule" },
+            type: { const: "fill", type: "string" },
+          },
+          required: ["type", "paint"],
+          type: "object",
+        },
+        {
+          additionalProperties: false,
+          properties: {
+            cap: { $ref: "#/$defs/LineCap" },
+            dash: { anyOf: [{ $ref: "#/$defs/Dash" }, { type: "null" }] },
+            join: { $ref: "#/$defs/LineJoin" },
+            miter_limit: { format: "float", type: "number" },
+            opacity: { $ref: "#/$defs/Animated_float" },
+            paint: { $ref: "#/$defs/Animated_Paint" },
+            type: { const: "stroke", type: "string" },
+            width: { $ref: "#/$defs/Animated_float" },
+          },
+          required: ["type", "paint", "width"],
+          type: "object",
+        },
+        {
+          additionalProperties: false,
+          properties: {
+            end: { $ref: "#/$defs/Animated_float" },
+            mode: { $ref: "#/$defs/TrimMode" },
+            offset: { $ref: "#/$defs/Animated_float" },
+            start: { $ref: "#/$defs/Animated_float" },
+            type: { const: "trim", type: "string" },
+          },
+          required: ["type", "start", "end"],
+          type: "object",
+        },
+      ],
+    },
     ShapeMask: {
       additionalProperties: false,
       properties: {
-        center: { $ref: "#/$defs/Animated_Vec2" },
         feather: { $ref: "#/$defs/Animated_float" },
+        fill_rule: { $ref: "#/$defs/FillRule" },
         invert: { type: "boolean" },
         mode: { $ref: "#/$defs/MaskMode" },
-        rotation_degrees: { $ref: "#/$defs/Animated_float" },
-        shape: { $ref: "#/$defs/MaskShape" },
-        size: { $ref: "#/$defs/Animated_Vec2" },
+        shape: { $ref: "#/$defs/ShapeGeometry" },
       },
-      required: ["shape", "center", "size"],
+      required: ["shape"],
+      type: "object",
+    },
+    ShapeTransform: {
+      additionalProperties: false,
+      properties: {
+        anchor: { $ref: "#/$defs/Animated_Vec2" },
+        opacity: { $ref: "#/$defs/Animated_float" },
+        position: { $ref: "#/$defs/AnimatedPoint" },
+        rotation_degrees: { $ref: "#/$defs/Animated_float" },
+        scale: { $ref: "#/$defs/Animated_Vec2" },
+      },
       type: "object",
     },
     SourceId: { minLength: 1, type: "string" },
@@ -1123,13 +1401,13 @@ export const PROJECT_SHAPE: unknown = {
       },
       type: "object",
     },
-    Stroke: {
+    Subpath: {
       additionalProperties: false,
       properties: {
-        paint: { $ref: "#/$defs/Paint" },
-        width: { format: "float", type: "number" },
+        closed: { type: "boolean" },
+        vertices: { items: { $ref: "#/$defs/PathVertex" }, type: "array" },
       },
-      required: ["width", "paint"],
+      required: ["vertices"],
       type: "object",
     },
     TextAlign: {
@@ -1290,6 +1568,12 @@ export const PROJECT_SHAPE: unknown = {
         { const: "hlg", type: "string" },
       ],
     },
+    TrimMode: {
+      oneOf: [
+        { const: "together", type: "string" },
+        { const: "individually", type: "string" },
+      ],
+    },
     Vec2: {
       additionalProperties: false,
       properties: {
@@ -1326,7 +1610,7 @@ export const PROJECT_SHAPE: unknown = {
       properties: {
         anchor: { $ref: "#/$defs/Vec2" },
         opacity: { $ref: "#/$defs/Animated_float" },
-        position: { $ref: "#/$defs/Animated_Vec2" },
+        position: { $ref: "#/$defs/AnimatedPoint" },
         rotation_degrees: { $ref: "#/$defs/Animated_float" },
         scale: { $ref: "#/$defs/Animated_Vec2" },
       },

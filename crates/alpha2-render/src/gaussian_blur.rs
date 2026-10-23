@@ -106,7 +106,42 @@ impl<'a> RenderGraph<'a> {
         sigma: f32,
         runtime: EffectRuntime,
     ) -> Result<RenderNodeId, GraphError> {
-        let sigma_pixels = sigma * self.size.height as f32;
+        self.add_gaussian_cascade(source, sigma * self.size.height as f32, runtime)
+    }
+
+    /// Adds a Gaussian blur of `source` whose standard deviation is
+    /// `sigma_pixels` of the graph's pixels on both axes, drawn as the
+    /// built-in blur draws: narrow one-axis passes, within the renderer's
+    /// filter-sample budget. A mask's feather softens its coverage with it.
+    /// A deviation of zero or less returns `source` itself.
+    ///
+    /// # Errors
+    /// Returns [`GraphError::InvalidDependency`] unless `source` is earlier.
+    #[allow(clippy::cast_precision_loss)]
+    pub fn add_gaussian_pixels(
+        &mut self,
+        source: RenderNodeId,
+        sigma_pixels: f32,
+        runtime: EffectRuntime,
+    ) -> Result<RenderNodeId, GraphError> {
+        if source.graph != self.id || source.index >= self.nodes.len() {
+            return Err(GraphError::InvalidDependency);
+        }
+        if sigma_pixels.is_nan() || sigma_pixels <= 0.0 || !sigma_pixels.is_finite() {
+            return Ok(source);
+        }
+        self.add_gaussian_cascade(source, sigma_pixels, runtime)
+    }
+
+    /// The pass cascades of a Gaussian of `sigma_pixels`; one identity pass
+    /// per axis at zero.
+    #[allow(clippy::cast_precision_loss)]
+    fn add_gaussian_cascade(
+        &mut self,
+        source: RenderNodeId,
+        sigma_pixels: f32,
+        runtime: EffectRuntime,
+    ) -> Result<RenderNodeId, GraphError> {
         let mut node = source;
         for (axis, extent) in [(0, self.size.width), (1, self.size.height)] {
             let mut blurred = 0.0_f32;

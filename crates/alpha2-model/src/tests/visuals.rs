@@ -3,23 +3,28 @@
 use super::*;
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn masks_and_mattes_are_validated() {
-    use crate::{Animated, MaskMode, MaskShape, Matte, MatteMode, ShapeMask, Vec2};
+    use crate::{
+        Animated, AnimatedPoint, FillRule, MaskMode, Matte, MatteMode, RectangleGeometry,
+        ShapeGeometry, ShapeMask, ShapeProblem, Vec2,
+    };
 
     let mask = |feather: f32| ShapeMask {
-        shape: MaskShape::Rectangle {
+        shape: ShapeGeometry::Rectangle(RectangleGeometry {
+            center: AnimatedPoint::Constant {
+                value: Vec2::new(0.5, 0.5),
+            },
+            size: Animated::Constant {
+                value: Vec2::new(0.5, 0.5),
+            },
             corner_radius: Animated::Constant { value: 0.1 },
-        },
-        center: Animated::Constant {
-            value: Vec2::new(0.5, 0.5),
-        },
-        size: Animated::Constant {
-            value: Vec2::new(0.5, 0.5),
-        },
-        rotation_degrees: Animated::Constant { value: 30.0 },
+            rotation_degrees: Animated::Constant { value: 30.0 },
+        }),
         feather: Animated::Constant { value: feather },
         invert: false,
         mode: MaskMode::Add,
+        fill_rule: FillRule::Nonzero,
     };
     let mut masked = project();
     masked.timeline.tracks[0].clips[0].masks = vec![mask(0.1); crate::MAX_CLIP_MASKS];
@@ -29,10 +34,23 @@ fn masks_and_mattes_are_validated() {
         masked.validate(),
         Err(crate::ModelError::InvalidClipMask { .. })
     ));
-    masked.timeline.tracks[0].clips[0].masks = vec![mask(-0.1)];
+    masked.timeline.tracks[0].clips[0].masks = vec![mask(0.1), mask(-0.1)];
+    assert_eq!(
+        masked.validate().map_err(|error| error.to_string()),
+        Err("clip clip-a has an invalid shape: masks[1].feather has a value out of range".into())
+    );
+    let mut negative = mask(0.1);
+    let ShapeGeometry::Rectangle(rectangle) = &mut negative.shape else {
+        unreachable!()
+    };
+    rectangle.size = Animated::Constant {
+        value: Vec2::new(-0.5, 0.5),
+    };
+    masked.timeline.tracks[0].clips[0].masks = vec![negative];
     assert!(matches!(
         masked.validate(),
-        Err(crate::ModelError::InvalidClipMask { .. })
+        Err(crate::ModelError::InvalidShape { at, problem: ShapeProblem::OutOfRange, .. })
+            if at == "masks[0].shape.size"
     ));
 
     // A second visual track whose clip is the first clip's matte.
@@ -70,17 +88,31 @@ fn masks_and_mattes_are_validated() {
     let wire: crate::Clip = serde_json::from_str(
         r#"{"id":"c","source_id":"s","timeline_range":{"start":0,"end":1},
             "source_range":{"start":0,"end":1},
-            "masks":[{"shape":{"type":"ellipse"},
+            "masks":[{"shape":{"type":"ellipse",
                       "center":{"mode":"constant","value":{"x":0.5,"y":0.5}},
-                      "size":{"mode":"constant","value":{"x":1,"y":1}}}],
+                      "size":{"mode":"constant","value":{"x":1,"y":1}}}}],
             "matte":{"source":"m","mode":"alpha_inverted"}}"#,
     )
     .expect("mask and matte JSON");
-    assert_eq!(wire.masks[0].shape, MaskShape::Ellipse);
+    assert!(matches!(wire.masks[0].shape, ShapeGeometry::Ellipse(_)));
     assert_eq!(wire.masks[0].mode, MaskMode::Add);
+    assert_eq!(wire.masks[0].fill_rule, FillRule::Nonzero);
+    // An ellipse has no corner radius, and the geometry no longer sits beside the shape.
     assert!(
-        serde_json::from_str::<crate::MaskShape>(r#"{"type":"ellipse","corner_radius":1}"#)
-            .is_err()
+        serde_json::from_str::<ShapeGeometry>(
+            r#"{"type":"ellipse","corner_radius":{"mode":"constant","value":1},
+                "center":{"mode":"constant","value":{"x":0.5,"y":0.5}},
+                "size":{"mode":"constant","value":{"x":1,"y":1}}}"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<ShapeMask>(
+            r#"{"shape":{"type":"ellipse"},
+                "center":{"mode":"constant","value":{"x":0.5,"y":0.5}},
+                "size":{"mode":"constant","value":{"x":1,"y":1}}}"#
+        )
+        .is_err()
     );
 }
 
@@ -93,21 +125,18 @@ fn invalid_generator(project: &crate::Project) -> bool {
 
 /// A white-stroked rounded rectangle with no fill.
 fn ring() -> crate::Generator {
-    use crate::{GeneratedShape, Generator, Paint, Rgba, Stroke, Vec2};
-
-    Generator::Shape {
-        shape: GeneratedShape::Rectangle { corner_radius: 0.1 },
-        center: Vec2::new(0.5, 0.5),
-        size: Vec2::new(0.5, 0.25),
-        rotation_degrees: 10.0,
-        fill: None,
-        stroke: Some(Stroke {
-            width: 0.02,
-            paint: Paint::Solid {
-                color: Rgba::new(1.0, 1.0, 1.0, 1.0),
-            },
-        }),
-    }
+    serde_json::from_str(
+        r#"{"type":"shapes","items":[
+            {"type":"rectangle",
+             "center":{"mode":"constant","value":{"x":0.5,"y":0.5}},
+             "size":{"mode":"constant","value":{"x":0.5,"y":0.25}},
+             "corner_radius":{"mode":"constant","value":0.1},
+             "rotation_degrees":{"mode":"constant","value":10}},
+            {"type":"stroke","width":{"mode":"constant","value":0.02},
+             "paint":{"mode":"constant","value":{"type":"solid",
+                "color":{"red":1,"green":1,"blue":1,"alpha":1}}}}]}"#,
+    )
+    .expect("shapes JSON")
 }
 
 #[test]
@@ -171,25 +200,23 @@ fn generated_sources_are_validated() {
     ] {
         assert!(invalid_generator(&generated(Generator::Fill { paint })));
     }
-    // A shape with neither fill nor stroke draws nothing.
-    let Generator::Shape {
-        shape,
-        center,
-        size,
-        rotation_degrees,
-        ..
-    } = ring()
-    else {
+    // A shapes generator's problem is reported where it lies.
+    let crate::Generator::Shapes { mut items } = ring() else {
         unreachable!()
     };
-    assert!(invalid_generator(&generated(Generator::Shape {
-        shape,
-        center,
-        size,
-        rotation_degrees,
-        fill: None,
-        stroke: None,
-    })));
+    let crate::ShapeItem::Stroke(stroke) = &mut items[1] else {
+        unreachable!()
+    };
+    stroke.miter_limit = 0.5;
+    assert_eq!(
+        generated(Generator::Shapes { items })
+            .validate()
+            .map_err(|error| error.to_string()),
+        Err(
+            "source generated has an invalid shape: items[1].miter_limit has a value out of range"
+                .into()
+        )
+    );
 }
 
 #[test]

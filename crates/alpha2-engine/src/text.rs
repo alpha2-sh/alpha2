@@ -349,7 +349,7 @@ pub(crate) fn frame_texts<'f>(
                 .chain(&clip.source_composition)
                 .flat_map(|composition| &composition.plan().steps)
                 .filter_map(|step| match &step.op {
-                    StepOp::Generator(generator) => Some(generator),
+                    StepOp::Generator { generator, .. } => Some(generator),
                     _ => None,
                 });
             clip.generator.into_iter().chain(steps)

@@ -1,13 +1,14 @@
 //! What building one frame's render graph allocates.
 //!
-//! A frame of eight shape masks, generated sources, and a chain of four
-//! effects compiles into a graph whose effect identities and parameter names
-//! the engine and the renderer already hold: the built-in passes' names are
-//! static, a project's effect is named by the identity it is registered
-//! under, and its parameter names are borrowed from the project. What the
-//! graph still allocates is its node lists, one parameter list per pass, and
-//! the frame's own bookkeeping. Submitting the graph is the renderer's and
-//! the driver's, and is not counted.
+//! A frame of a generated source and a chain of four effects compiles into a
+//! graph whose effect identities and parameter names the engine and the
+//! renderer already hold: the built-in passes' names are static, a project's
+//! effect is named by the identity it is registered under, and its parameter
+//! names are borrowed from the project. What the graph still allocates is its
+//! node lists, one parameter list per pass, and the frame's own bookkeeping.
+//! A frame that draws shapes and shape masks also builds a vector scene for
+//! each, within a budget of its own. Submitting the graph is the renderer's
+//! and the driver's, and is not counted.
 
 // The counting allocator is the only unsafe code, and it only forwards.
 #![allow(unsafe_code)]
@@ -92,16 +93,20 @@ impl FrameProvider for NoSources {
 /// Three tracks over one generated gradient and one generated shape: the
 /// gradient under eight shape masks, the stroked shape alone, and the
 /// gradient through a composition of four effects, the last a blur the
-/// graph draws as several passes.
-fn project() -> Project {
+/// graph draws as several passes. Without `vectors`, only the last: no
+/// vector scene is drawn.
+fn project(vectors: bool) -> Project {
     let constant = |value: &str| format!(r#"{{"mode":"constant","value":{value}}}"#);
     let mut masks = String::new();
     for index in 0..8_u8 {
         let offset = f32::from(index) / 16.0;
-        let shape = if index % 2 == 0 {
-            r#"{"type":"ellipse"}"#
+        let (kind, radius) = if index % 2 == 0 {
+            ("ellipse", String::new())
         } else {
-            r#"{"type":"rectangle","corner_radius":{"mode":"constant","value":0.02}}"#
+            (
+                "rectangle",
+                format!(r#","corner_radius":{}"#, constant("0.02")),
+            )
         };
         let mode = ["add", "subtract", "intersect"][usize::from(index % 3)];
         if index > 0 {
@@ -109,7 +114,7 @@ fn project() -> Project {
         }
         write!(
             masks,
-            r#"{{"shape":{shape},"center":{},"size":{},"rotation_degrees":{},"feather":{},"mode":"{mode}"}}"#,
+            r#"{{"shape":{{"type":"{kind}","center":{},"size":{},"rotation_degrees":{}{radius}}},"feather":{},"mode":"{mode}"}}"#,
             constant(&format!(r#"{{"x":{},"y":0.5}}"#, 0.25 + offset)),
             constant(r#"{"x":0.4,"y":0.3}"#),
             constant(&format!("{}", f32::from(index) * 5.0)),
@@ -166,31 +171,48 @@ fn project() -> Project {
         r#"{{"schema_version":1,"id":"frame-graph","name":"Frame graph","settings":{{"width":64,"height":36,"frame_rate":{{"num":24,"den":1}},"sample_rate":48000}},
 "sources":[
  {{"id":"wash","kind":"generated","generator":{{"type":"fill","paint":{{"type":"linear_gradient","start":{{"x":0,"y":0}},"end":{{"x":1,"y":1}},"stops":[{stops}]}}}}}},
- {{"id":"badge","kind":"generated","generator":{{"type":"shape","shape":{{"type":"rectangle","corner_radius":0.05}},"center":{{"x":0.5,"y":0.5}},"size":{{"x":0.4,"y":0.4}},"fill":{{"type":"radial_gradient","center":{{"x":0.5,"y":0.5}},"radius":0.5,"stops":[{stops}]}},"stroke":{{"width":0.01,"paint":{{"type":"solid","color":{{"red":1,"green":1,"blue":1,"alpha":1}}}}}}}}}}
+ {{"id":"badge","kind":"generated","generator":{{"type":"shapes","items":[{{"type":"rectangle","center":{center},"size":{size},"corner_radius":{radius}}},{{"type":"stroke","width":{width},"paint":{{"mode":"constant","value":{{"type":"solid","color":{{"red":1,"green":1,"blue":1,"alpha":1}}}}}}}},{{"type":"fill","paint":{{"mode":"constant","value":{{"type":"radial_gradient","center":{{"x":0.5,"y":0.5}},"radius":0.5,"stops":[{stops}]}}}}}}]}}}}
 ],
 "compositions":[{{"id":"look","nodes":[{{"id":"clip","op":{{"type":"clip"}}}},{look}],"output":"e3"}}],
-"timeline":{{"tracks":[
- {{"id":"masked","name":"Masked","kind":"video","clips":[{{"id":"masked","source_id":"wash",{range},"masks":[{masks}]}}]}},
- {{"id":"shape","name":"Shape","kind":"video","clips":[{{"id":"shape","source_id":"badge",{range}}}]}},
+"timeline":{{"tracks":[{vector_tracks}
  {{"id":"looked","name":"Looked","kind":"video","clips":[{{"id":"looked","source_id":"wash",{range},"composition":{{"id":"look"}}}}]}}
-]}}}}"#
+]}}}}"#,
+        center = constant(r#"{"x":0.5,"y":0.5}"#),
+        size = constant(r#"{"x":0.4,"y":0.4}"#),
+        radius = constant("0.05"),
+        width = constant("0.01"),
+        vector_tracks = if vectors {
+            format!(
+                r#"
+ {{"id":"masked","name":"Masked","kind":"video","clips":[{{"id":"masked","source_id":"wash",{range},"masks":[{masks}]}}]}},
+ {{"id":"shape","name":"Shape","kind":"video","clips":[{{"id":"shape","source_id":"badge",{range}}}]}},"#
+            )
+        } else {
+            String::new()
+        },
     ))
     .expect("valid project")
 }
 
-/// Allocations building the graph of one frame of eight masks, three
-/// generated pictures, and four effects may make: the node, key, stability,
-/// and intent lists the graph grows, one parameter list per pass, and the
-/// frame's clip, transition, layer, and source-work lists.
+/// Allocations building the graph of one frame of a generated picture and
+/// four effects may make: the node, key, stability, and intent lists the
+/// graph grows, one parameter list per pass, and the frame's clip,
+/// transition, layer, and source-work lists. Drawing vector scenes adds
+/// nothing to a frame that has none.
 const FRAME_GRAPH: u64 = 27;
 
-#[test]
-fn building_a_frames_graph_allocates_its_lists_not_its_names() {
+/// What a frame that also draws a shapes generator and eight shape masks
+/// may allocate: each scene's operations, paths, and paints (a mask's
+/// outline is one scene, the shapes another), the named inputs of the pass
+/// combining the masks, and the parameter lists of the feather blurs.
+const VECTOR_FRAME_GRAPH: u64 = 240;
+
+fn measure(vectors: bool) -> Vec<u64> {
     let gpu = pollster::block_on(GpuContext::request_high_performance())
         .expect("these budgets need a GPU adapter");
     let mut renderer = Renderer::new(gpu);
     pollster::block_on(renderer.register_builtins()).expect("built-ins");
-    let project = project();
+    let project = project(vectors);
     let index = ActiveIndex::build(&project).expect("valid project");
     let frame = evaluate(&project, &index, MediaTime::from_ticks(60_000)).expect("evaluation");
     let size = RenderSize::new(64, 36).expect("size");
@@ -206,9 +228,27 @@ fn building_a_frames_graph_allocates_its_lists_not_its_names() {
         assert!(graph.is_some(), "every picture is generated");
         counts.push(count);
     }
-    println!("build_frame_graph masks=8 generated=3 effects=4: allocations per frame {counts:?}");
+    counts
+}
+
+#[test]
+fn building_a_frames_graph_allocates_its_lists_not_its_names() {
+    let counts = measure(false);
+    println!("build_frame_graph generated=1 effects=4: allocations per frame {counts:?}");
     assert!(
         counts.iter().all(|&count| count <= FRAME_GRAPH),
         "building a frame's graph allocated {counts:?}, budget {FRAME_GRAPH}"
+    );
+}
+
+#[test]
+fn building_a_frame_of_shapes_and_masks_allocates_within_its_budget() {
+    let counts = measure(true);
+    println!(
+        "build_frame_graph masks=8 shapes=1 generated=3 effects=4: allocations per frame {counts:?}"
+    );
+    assert!(
+        counts.iter().all(|&count| count <= VECTOR_FRAME_GRAPH),
+        "building a frame's graph allocated {counts:?}, budget {VECTOR_FRAME_GRAPH}"
     );
 }

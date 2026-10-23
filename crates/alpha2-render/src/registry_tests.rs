@@ -93,7 +93,7 @@ fn a_call_chain_that_inlines_exponentially_is_refused_at_registration() {
         );
     }
     // Every built-in, the generator's two gradient loops among them, still registers.
-    let mut definitions = crate::builtins::internal_effect_definitions().to_vec();
+    let mut definitions = crate::builtins::internal_effect_definitions();
     definitions.extend(crate::builtin_effect_definitions());
     definitions.extend(crate::builtin_transition_definitions());
     for definition in definitions {

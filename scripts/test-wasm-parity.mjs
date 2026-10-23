@@ -188,3 +188,74 @@ for (const fixture of lintCorpus) {
   );
 }
 console.log(`verified ${lintCorpus.length} lint cases through the wasm engine`);
+
+// Vector shapes: the browser module rasterizes and strokes the parity scenes to the same coverage
+// and outline bits, and builds the same scenes, as the native tests pin.
+const vectorGolden = JSON.parse(
+  await readFile(join(root, "tests", "golden", "vector_coverage.json"), "utf8"),
+);
+assert.deepEqual(JSON.parse(wasm.vectorParityHashes()), vectorGolden);
+console.log(
+  `verified ${vectorGolden.coverage.length} coverage and ${vectorGolden.trees.length} scene hashes are identical in wasm and natively`,
+);
+
+// Shape geometry: the editor's queries answer in wasm what they answer natively, through the
+// typed wrapper too.
+const geometryGolden = JSON.parse(
+  await readFile(
+    join(root, "tests", "golden", "geometry_queries.json"),
+    "utf8",
+  ),
+);
+assert.deepEqual(JSON.parse(wasm.geometryParityAnswers()), geometryGolden);
+const { pathLength, trimPath, hitTest } = await import(
+  pathToFileURL(join(packageRoot, "dist", "geometry.js")).href
+);
+const curve = {
+  subpaths: [
+    {
+      closed: false,
+      vertices: [
+        { point: { x: 0.1, y: 0.8 }, out_tangent: { x: 0.2, y: -0.6 } },
+        { point: { x: 0.9, y: 0.2 }, in_tangent: { x: -0.3, y: 0.1 } },
+      ],
+    },
+  ],
+};
+const size = { width: 320, height: 180 };
+assert.deepEqual(
+  pathLength(wasm, curve, size),
+  JSON.parse(geometryGolden.pathLength),
+);
+assert.deepEqual(
+  trimPath(wasm, curve, size, 0.25, 0.75, 0.1),
+  JSON.parse(geometryGolden.trimPath),
+);
+const square = {
+  subpaths: [
+    {
+      closed: true,
+      vertices: [
+        { point: { x: 0.25, y: 0.25 } },
+        { point: { x: 0.75, y: 0.25 } },
+        { point: { x: 0.75, y: 0.75 } },
+        { point: { x: 0.25, y: 0.75 } },
+      ],
+    },
+  ],
+};
+const filled = [
+  { type: "path", path: { mode: "constant", value: square } },
+  {
+    type: "fill",
+    paint: {
+      mode: "constant",
+      value: { type: "solid", color: { red: 1, green: 0, blue: 0, alpha: 1 } },
+    },
+  },
+];
+assert.equal(hitTest(wasm, filled, 0, size, { x: 0.5, y: 0.5 }), "items[1]");
+assert.equal(hitTest(wasm, filled, 0, size, { x: 0.1, y: 0.5 }), undefined);
+console.log(
+  `verified ${Object.keys(geometryGolden).length} geometry queries answer the same in wasm and natively`,
+);

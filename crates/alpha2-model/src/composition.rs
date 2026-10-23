@@ -921,6 +921,22 @@ fn reference_cycle_member<'a>(
     None
 }
 
+/// A node's shape problem as the model reports it.
+fn shape_error(
+    composition: &Composition,
+    node: &CompositionNode,
+    issue: crate::ShapeIssue,
+) -> crate::ModelError {
+    crate::ModelError::InvalidShape {
+        owner: crate::ShapeOwner::Node {
+            composition: composition.id.clone(),
+            node: node.id.clone(),
+        },
+        at: issue.at,
+        problem: issue.problem,
+    }
+}
+
 fn validate_node(
     composition: &Composition,
     node: &CompositionNode,
@@ -937,6 +953,7 @@ fn validate_node(
     let unit = |animation: &Animated<f32>| {
         crate::animation::valid_scalar_values(animation, |value| (0.0..=1.0).contains(&value))
     };
+    let shape_error = |issue| shape_error(composition, node, issue);
     if node.bypass && !node.op.has_inputs() {
         return Err(invalid());
     }
@@ -961,7 +978,11 @@ fn validate_node(
             }
             start.ticks() >= 0
         }
-        NodeOp::Generator { generator } => generator.is_valid(),
+        NodeOp::Generator { generator } => match generator.validate() {
+            Ok(()) => true,
+            Err(Some(issue)) => return Err(shape_error(issue)),
+            Err(None) => false,
+        },
         NodeOp::Effect { effect, inputs, .. } => {
             effect.is_valid()
                 && inputs.len() <= MAX_EFFECT_INPUTS
@@ -977,7 +998,8 @@ fn validate_node(
             layers.len() <= MAX_MERGE_LAYERS && layers.iter().all(|layer| unit(&layer.opacity))
         }
         NodeOp::ShapeMask { masks, .. } => {
-            masks.len() <= crate::MAX_CLIP_MASKS && masks.iter().all(ShapeMask::is_valid)
+            crate::mask::validate_masks(masks).map_err(shape_error)?;
+            masks.len() <= crate::MAX_CLIP_MASKS
         }
         NodeOp::Group {
             composition: target,

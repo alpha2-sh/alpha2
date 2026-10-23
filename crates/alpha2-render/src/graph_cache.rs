@@ -114,6 +114,16 @@ pub(crate) fn composite_cache_key(
     RenderCacheKey(hash.finish())
 }
 
+/// A vector node's key: its scene's, which covers everything it draws and
+/// the canvas it is drawn on, and the graph's size.
+pub(crate) fn vector_cache_key(size: RenderSize, scene: u128) -> RenderCacheKey {
+    let mut hash = StableHash::new();
+    hash.bytes(b"vector");
+    hash.size(size);
+    hash.u128(scene);
+    RenderCacheKey(hash.finish())
+}
+
 /// A node's key as the result cache holds it: its structural key and what
 /// the renderer adds to every pass it draws. Quality controls, effect
 /// definitions, and effect resources are not in it; changing them clears the

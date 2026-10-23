@@ -25,6 +25,7 @@ include = [
 wgpu-interop = ["alpha2-gpu/wgpu-interop"]
 
 [dependencies]
+alpha2-geometry.workspace = true
 alpha2-gpu.workspace = true
 alpha2-media.workspace = true
 alpha2-shaders.workspace = true
@@ -36,6 +37,7 @@ web-time = "1.1.0"
 serde_json.workspace = true
 
 [dev-dependencies]
+alpha2-model.workspace = true
 # Tests acquire devices one at a time (`alpha2_gpu::serialize_acquisition`).
 alpha2-gpu = { workspace = true, features = ["serial-acquisition"] }
 alpha2-golden-support.workspace = true

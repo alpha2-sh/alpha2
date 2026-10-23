@@ -9,11 +9,13 @@ mod frame;
 mod index;
 mod interval_tree;
 mod retime;
+mod shapes;
 #[cfg(test)]
 mod tests;
 
 pub use animation::{
-    EffectParamValue, sample_effect_param, sample_scalar, sample_vec2, sample_visual,
+    EffectParamValue, sample_effect_param, sample_paint, sample_path, sample_point, sample_scalar,
+    sample_vec2, sample_visual,
 };
 pub use audio::{
     ActiveAudioClip, AudioSpan, AudioSpanDesc, AudioSpanScratch, evaluate_audio, evaluate_audio_in,
@@ -37,3 +39,4 @@ pub(crate) use interval_tree::{
 };
 pub use retime::picture_source_time;
 pub(crate) use retime::{Mirror, map_source_time};
+pub use shapes::{ShapesPlan, evaluate_geometry, evaluate_item, evaluate_items};

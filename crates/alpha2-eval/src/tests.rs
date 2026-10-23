@@ -1,7 +1,7 @@
 use alpha2_media::{IdError, SourceId};
 use alpha2_model::{
-    Animated, Clip, ClipId, Interpolation, Keyframe, MediaKind, MediaSource, Project, ProjectId,
-    ProjectSettings, Timeline, Track, TrackId, TrackKind, Vec2,
+    Animated, AnimatedPoint, Clip, ClipId, Interpolation, Keyframe, MediaKind, MediaSource,
+    Project, ProjectId, ProjectSettings, Timeline, Track, TrackId, TrackKind, Vec2,
 };
 use alpha2_time::{FrameRate, MediaTime, TimeRange};
 use std::collections::BTreeMap;
@@ -143,10 +143,10 @@ fn visual_at(project: &Project, time: i64) -> EvaluatedVisual {
 fn visual_animation_interpolates_numerically_including_rotation() {
     let mut project = project();
     let visual = &mut project.timeline.tracks[0].clips[0].visual;
-    visual.position = keyframes([
+    visual.position = AnimatedPoint::from(keyframes([
         (100, Vec2::new(0.0, 0.0), Interpolation::Linear),
         (200, Vec2::new(1.0, 1.0), Interpolation::Hold),
-    ]);
+    ]));
     // Two turns, not the shortest path: 0 -> 720 is 360 halfway.
     visual.rotation_degrees = keyframes([
         (100, 0.0, Interpolation::Linear),
@@ -191,10 +191,10 @@ fn an_overshooting_curve_keeps_opacity_in_its_domain_only() {
     let mut project = project();
     let visual = &mut project.timeline.tracks[0].clips[0].visual;
     visual.opacity = keyframes([(100, 0.0, back), (200, 1.0, Interpolation::Hold)]);
-    visual.position = keyframes([
+    visual.position = AnimatedPoint::from(keyframes([
         (100, Vec2::new(0.0, 0.0), back),
         (200, Vec2::new(1.0, 1.0), Interpolation::Hold),
-    ]);
+    ]));
     let evaluated = visual_at(&project, 170);
     assert!(evaluated.position.x > 1.0, "position keeps the overshoot");
     assert!(

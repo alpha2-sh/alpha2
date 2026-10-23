@@ -22,6 +22,7 @@ mod provider;
 mod resource;
 #[cfg(feature = "schema")]
 mod schema;
+mod shapes;
 mod source;
 #[cfg(test)]
 pub(crate) mod tests;
@@ -29,7 +30,9 @@ mod text;
 mod time_map;
 mod timeline;
 
-pub use animation::{Animated, Interpolation, Keyframe, Vec2, VisualProperties};
+pub use animation::{
+    Animated, AnimatedPoint, Interpolation, Keyframe, PointKeyframe, Vec2, VisualProperties,
+};
 pub use audio::{
     AUDIO_EFFECT_STATE_MARGIN_MS, AudioEffect, AudioProperties, Ducking, EQ_FREQUENCY_RANGE_HZ,
     EQ_Q_RANGE, EqBand, EqBandKind, FadeShape, Limiter, MAX_AUDIO_DELAY_MS, MAX_AUDIO_EFFECTS,
@@ -50,14 +53,12 @@ pub use composition::{
 };
 pub use easing::{CubicBezier, Easing};
 pub use effect::{ClipBlendMode, ClipEffect, EffectValue};
-pub use error::{ModelError, ProjectLoadError};
+pub use error::{ModelError, ProjectLoadError, ShapeOwner};
 pub use fingerprint::{AudioStreamShape, MediaFingerprint, StreamTopology, VideoStreamShape};
-pub use generator::{
-    GeneratedShape, Generator, GradientStop, MAX_GRADIENT_STOPS, Paint, Rgba, Spread, Stroke,
-};
+pub use generator::{Generator, GradientStop, MAX_GRADIENT_STOPS, Paint, Rgba, Spread};
 pub use ids::{ClipId, CompositionId, EffectResourceId, NodeId, ProjectId, TrackId};
-pub use lint::{LintEdge, LintIssue, LintOwner};
-pub use mask::{MAX_CLIP_MASKS, MaskMode, MaskShape, Matte, MatteMode, ShapeMask};
+pub use lint::{LintEdge, LintIssue, LintOwner, ShapeLintOwner};
+pub use mask::{MAX_CLIP_MASKS, MaskMode, Matte, MatteMode, ShapeMask};
 pub use project::{
     BlendSpace, CURRENT_SCHEMA_VERSION, ColorPipeline, HDR_PEAK_NITS_RANGE, HdrSources,
     MAX_CANVAS_DIMENSION, MAX_CANVAS_PIXELS, MAX_CLIPS, MAX_CLIPS_PER_TRACK,
@@ -71,6 +72,13 @@ pub use provider::{
 pub use resource::{EffectResource, EffectResourceKind};
 #[cfg(feature = "schema")]
 pub use schema::{project_json_schema, project_limits_json};
+pub use shapes::{
+    Dash, EllipseGeometry, FillRule, LineCap, LineJoin, MAX_DASH_ENTRIES, MAX_PATH_SUBPATHS,
+    MAX_PATH_VERTICES, MAX_POLYSTAR_POINTS, MAX_SHAPE_DEPTH, MAX_SHAPE_ITEMS, MIN_POLYSTAR_POINTS,
+    Path, PathGeometry, PathVertex, PolystarGeometry, PolystarKind, RectangleGeometry,
+    ShapeGeometry, ShapeIssue, ShapeItem, ShapeProblem, ShapeTransform, StrokeItem, Subpath,
+    TrimItem, TrimMode, validate_shape_items,
+};
 pub use source::{MediaKind, MediaSource};
 pub use text::{
     LINE_HEIGHT_RANGE, MAX_FONT_FAMILY_BYTES, MAX_TEXT_CONTENT_BYTES, MAX_TEXT_GENERATOR_FONT_SIZE,

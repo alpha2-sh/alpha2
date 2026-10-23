@@ -28,6 +28,7 @@ wgpu-interop = ["alpha2-render/wgpu-interop"]
 libm = "0.2.16"
 alpha2-audio.workspace = true
 alpha2-eval.workspace = true
+alpha2-geometry.workspace = true
 alpha2-gpu.workspace = true
 alpha2-media.workspace = true
 alpha2-model.workspace = true

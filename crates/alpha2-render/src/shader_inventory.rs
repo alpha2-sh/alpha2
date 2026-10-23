@@ -43,7 +43,9 @@ pub fn builtin_wgsl_modules() -> Vec<(String, String)> {
     ]
     .map(|(label, source)| (label.to_owned(), source.to_owned()))
     .to_vec();
-    let mut definitions = crate::builtins::internal_effect_definitions().to_vec();
+    // The vector pass: tiles, layers, and the linear-light encode in one module.
+    modules.push(("vector".to_owned(), crate::vector::vector_wgsl()));
+    let mut definitions = crate::builtins::internal_effect_definitions();
     definitions.extend(crate::builtin_effect_definitions());
     definitions.extend(crate::builtin_transition_definitions());
     modules.extend(

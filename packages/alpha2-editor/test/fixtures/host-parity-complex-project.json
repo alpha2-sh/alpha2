@@ -31,14 +31,24 @@
       "id": "badge",
       "kind": "generated",
       "generator": {
-        "type": "shape",
-        "shape": { "type": "ellipse" },
-        "center": { "x": 0.5, "y": 0.5 },
-        "size": { "x": 0.4, "y": 0.4 },
-        "fill": {
-          "type": "solid",
-          "color": { "red": 1, "green": 0.9, "blue": 0.2, "alpha": 0.8 }
-        }
+        "type": "shapes",
+        "items": [
+          {
+            "type": "ellipse",
+            "center": { "mode": "constant", "value": { "x": 0.5, "y": 0.5 } },
+            "size": { "mode": "constant", "value": { "x": 0.4, "y": 0.4 } }
+          },
+          {
+            "type": "fill",
+            "paint": {
+              "mode": "constant",
+              "value": {
+                "type": "solid",
+                "color": { "red": 1, "green": 0.9, "blue": 0.2, "alpha": 0.8 }
+              }
+            }
+          }
+        ]
       }
     }
   ],
@@ -253,9 +263,17 @@
             },
             "masks": [
               {
-                "shape": { "type": "ellipse" },
-                "center": { "mode": "constant", "value": { "x": 0.5, "y": 0.5 } },
-                "size": { "mode": "constant", "value": { "x": 0.8, "y": 0.7 } },
+                "shape": {
+                  "type": "ellipse",
+                  "center": {
+                    "mode": "constant",
+                    "value": { "x": 0.5, "y": 0.5 }
+                  },
+                  "size": {
+                    "mode": "constant",
+                    "value": { "x": 0.8, "y": 0.7 }
+                  }
+                },
                 "feather": { "mode": "constant", "value": 0.05 }
               }
             ]

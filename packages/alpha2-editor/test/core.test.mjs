@@ -1503,9 +1503,11 @@ test("a gesture step on a 10,000-clip document costs a small part of validating 
 
 test("masks a command or gesture gives a clip of a frozen document are named, and undo returns the names", () => {
   const mask = {
-    shape: { type: "rectangle" },
-    center: { mode: "constant", value: { x: 0.5, y: 0.5 } },
-    size: { mode: "constant", value: { x: 0.5, y: 0.5 } },
+    shape: {
+      type: "rectangle",
+      center: { mode: "constant", value: { x: 0.5, y: 0.5 } },
+      size: { mode: "constant", value: { x: 0.5, y: 0.5 } },
+    },
   };
   const e = createEditor({ document: simple() });
   const ids = () => e.document.metadata.instanceIds["c/masks"];

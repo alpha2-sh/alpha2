@@ -24,9 +24,8 @@ use crate::loop_bound::{MAX_LOOP_ITERATIONS, find_keyword, is_identifier_byte, m
 
 /// Function bodies one invocation may run, counted as the module docs say.
 ///
-/// The built-in with the most is the shape generator (4,116: its gradient
-/// loop mixes two stop colors an iteration, for the fill and for the
-/// stroke), so this leaves it nearly twice the room. A chain of functions
+/// The built-in with the most is the directional transition (4,105), so
+/// this leaves it nearly twice the room. A chain of functions
 /// that each call the one before twice passes at depth 12 (8,192 bodies) and
 /// is refused from depth 13.
 pub(crate) const MAX_INVOCATION_CALLS: u64 = 8192;
@@ -328,7 +327,7 @@ mod tests {
 
     #[test]
     fn every_built_in_fits_with_room() {
-        let mut definitions = crate::builtins::internal_effect_definitions().to_vec();
+        let mut definitions = crate::builtins::internal_effect_definitions();
         definitions.extend(crate::builtin_effect_definitions());
         definitions.extend(crate::builtin_transition_definitions());
         let (most, id) = definitions
@@ -342,7 +341,7 @@ mod tests {
             .expect("built-ins");
         assert_eq!(
             (most, id.as_str()),
-            (4116, "alpha2.internal.generator"),
+            (4105, "alpha2.transition.directional"),
             "the costliest built-in, which MAX_INVOCATION_CALLS documents"
         );
         assert!(most + most / 2 <= MAX_INVOCATION_CALLS);

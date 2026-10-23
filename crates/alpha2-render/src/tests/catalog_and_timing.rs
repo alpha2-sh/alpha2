@@ -116,10 +116,9 @@ fn complete_builtin_catalog_compiles_and_survives_host_cleanup() {
         renderer.project_effect_id("alpha2.internal.gaussian-blur-pass", 1),
         None
     );
-    assert!(renderer.is_effect_registered(&crate::EffectId::from_static(
-        crate::SHAPE_MASK_EFFECT_ID,
-        1
-    )));
+    for id in crate::MASK_COMBINE_EFFECT_IDS {
+        assert!(renderer.is_effect_registered(&crate::EffectId::from_static(id, 1)));
+    }
     renderer.clear_effects();
     for definition in crate::builtin_effect_definitions()
         .into_iter()

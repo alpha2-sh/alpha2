@@ -1,6 +1,8 @@
 //! Sources the engine draws itself: fills, gradients, shapes, and text.
 
-use crate::{MAX_TEXT_CONTENT_BYTES, MAX_TEXT_GENERATOR_FONT_SIZE, TextStyle, Vec2};
+use crate::{
+    MAX_TEXT_CONTENT_BYTES, MAX_TEXT_GENERATOR_FONT_SIZE, ShapeIssue, ShapeItem, TextStyle, Vec2,
+};
 use serde::{Deserialize, Serialize};
 
 /// Most stops in one gradient.
@@ -47,8 +49,8 @@ impl Rgba {
 /// fills the frame at scale 1. Positions are in its normalized space, `(0, 0)`
 /// top-left to `(1, 1)` bottom-right; lengths (radii, stroke widths) are
 /// fractions of its shorter side, so the picture is the same at any render
-/// resolution. It does not change over time: a clip animates it with its
-/// transform, effects, and masks.
+/// resolution. A fill or text does not change over time (a clip animates it
+/// with its transform, effects, and masks); shapes may.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -58,23 +60,13 @@ pub enum Generator {
         /// What covers the picture.
         paint: Paint,
     },
-    /// One shape on a transparent picture, filled, stroked, or both.
-    Shape {
-        /// The shape's outline.
-        shape: GeneratedShape,
-        /// Centre of the shape.
-        center: Vec2,
-        /// Full width and height of the shape, before rotation. Non-negative.
-        size: Vec2,
-        /// Clockwise rotation about the centre, in degrees.
-        #[serde(default)]
-        rotation_degrees: f32,
-        /// Paint inside the outline.
-        #[serde(default)]
-        fill: Option<Paint>,
-        /// Paint along the outline, drawn over the fill.
-        #[serde(default)]
-        stroke: Option<Stroke>,
+    /// Shapes drawn from an ordered content tree, as an After Effects shape
+    /// layer or a Lottie shape layer draws them. Unlike the other
+    /// generators, its picture changes over time: every value in the tree
+    /// may be keyframed, in the picture's time.
+    Shapes {
+        /// The content tree, front first. See [`ShapeItem`].
+        items: Vec<ShapeItem>,
     },
     /// Text on a transparent picture, laid out and placed by its style as a
     /// caption track's cues are: its size and wrapping width fractions of
@@ -89,59 +81,6 @@ pub enum Generator {
         #[serde(default)]
         style: TextStyle,
     },
-}
-
-/// The outline of a [`Generator::Shape`].
-#[derive(Copy, Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(tag = "type", rename_all = "snake_case", from = "GeneratedShapeWire")]
-pub enum GeneratedShape {
-    /// A rectangle, optionally with rounded corners.
-    Rectangle {
-        /// Corner radius, as a fraction of the picture's shorter side.
-        /// Non-negative; a radius past half the rectangle is capped.
-        corner_radius: f32,
-    },
-    /// The ellipse inscribed in the size.
-    Ellipse,
-}
-
-/// The wire form of [`GeneratedShape`]: an empty struct variant rejects
-/// extra fields where serde's unit variant would ignore them.
-#[derive(Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[cfg_attr(feature = "schema", schemars(rename = "GeneratedShape"))]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum GeneratedShapeWire {
-    /// A rectangle, optionally with rounded corners.
-    Rectangle {
-        /// Corner radius, as a fraction of the picture's shorter side.
-        /// Non-negative; a radius past half the rectangle is capped.
-        #[serde(default)]
-        corner_radius: f32,
-    },
-    /// The ellipse inscribed in the size.
-    Ellipse {},
-}
-
-impl From<GeneratedShapeWire> for GeneratedShape {
-    fn from(wire: GeneratedShapeWire) -> Self {
-        match wire {
-            GeneratedShapeWire::Rectangle { corner_radius } => Self::Rectangle { corner_radius },
-            GeneratedShapeWire::Ellipse {} => Self::Ellipse,
-        }
-    }
-}
-
-/// A shape's outline paint. The stroke is centred on the outline.
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
-pub struct Stroke {
-    /// Full width, as a fraction of the picture's shorter side. Positive.
-    pub width: f32,
-    /// What covers the stroke.
-    pub paint: Paint,
 }
 
 /// A color or gradient.
@@ -225,45 +164,32 @@ impl Generator {
     /// Whether every field is in range, as a project needs it to be.
     #[must_use]
     pub fn is_valid(&self) -> bool {
-        match self {
+        self.validate().is_ok()
+    }
+
+    /// Checks every field. A shapes generator's problem names where in its
+    /// tree it lies; another generator's is `None`.
+    ///
+    /// # Errors
+    /// Returns the first problem, if any.
+    pub fn validate(&self) -> Result<(), Option<ShapeIssue>> {
+        let valid = match self {
             Self::Fill { paint } => paint.is_valid(),
-            Self::Shape {
-                shape,
-                center,
-                size,
-                rotation_degrees,
-                fill,
-                stroke,
-            } => {
-                let shape_is_valid = match *shape {
-                    GeneratedShape::Rectangle { corner_radius } => {
-                        corner_radius.is_finite() && corner_radius >= 0.0
-                    }
-                    GeneratedShape::Ellipse => true,
-                };
-                shape_is_valid
-                    && finite(*center)
-                    && finite(*size)
-                    && size.x >= 0.0
-                    && size.y >= 0.0
-                    && rotation_degrees.is_finite()
-                    && (fill.is_some() || stroke.is_some())
-                    && fill.as_ref().is_none_or(Paint::is_valid)
-                    && stroke.as_ref().is_none_or(|stroke| {
-                        stroke.width.is_finite() && stroke.width > 0.0 && stroke.paint.is_valid()
-                    })
+            Self::Shapes { items } => {
+                return crate::shapes::validate_shape_items(items).map_err(Some);
             }
             Self::Text { text, style } => {
                 !text.is_empty()
                     && text.len() <= MAX_TEXT_CONTENT_BYTES
                     && style.is_valid(MAX_TEXT_GENERATOR_FONT_SIZE)
             }
-        }
+        };
+        valid.then_some(()).ok_or(None)
     }
 }
 
 impl Paint {
-    fn is_valid(&self) -> bool {
+    pub(crate) fn is_valid(&self) -> bool {
         match self {
             Self::Solid { color } => color.is_valid(),
             Self::LinearGradient {

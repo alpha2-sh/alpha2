@@ -107,6 +107,14 @@ pub(crate) struct UniformSlice {
     size: NonZeroU64,
 }
 
+impl UniformSlice {
+    /// Where the slice starts in its arena: a multiple of the device's
+    /// uniform offset alignment.
+    pub(crate) const fn offset(self) -> u64 {
+        self.offset
+    }
+}
+
 impl UniformBufferPool {
     pub(crate) fn new(alignment: u64, retirement: Shared<Retirement>) -> Self {
         Self {
@@ -340,6 +348,16 @@ impl UniformArenaLease {
             offset,
             size: NonZeroU64::new(size).expect("uniform binding is non-empty"),
         }
+    }
+
+    /// The arena's first `size` bytes as a binding whose offset a pass
+    /// sets dynamically, to each slice's [`UniformSlice::offset`].
+    pub(crate) fn dynamic_binding(&self, size: NonZeroU64) -> wgpu::BindingResource<'_> {
+        wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+            buffer: self.buffer.as_ref().expect("live uniform arena"),
+            offset: 0,
+            size: Some(size),
+        })
     }
 
     pub(crate) fn binding(&self, slice: UniformSlice) -> wgpu::BindingResource<'_> {

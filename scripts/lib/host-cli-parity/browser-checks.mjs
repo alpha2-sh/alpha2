@@ -14,6 +14,7 @@ export async function browserChecks(
   {
     nativeFrame,
     complexFrames,
+    shapesFrames,
     effectsFrames,
     hdrFrames,
     orientationFrames,
@@ -69,6 +70,32 @@ export async function browserChecks(
   );
   console.log(
     "verified wasm/native parity on every frame of the complex project",
+  );
+  // Shapes: coverage is the same bits on both sides; paint and compositing are the GPU's, held to
+  // the complex project's bounds.
+  const shapes = await browserParity(chrome, nativeFrame, "/shapes", {
+    "/native.y4m": shapesFrames,
+  });
+  console.log(`shapes project parity metrics: ${JSON.stringify(shapes)}`);
+  assert.equal(shapes.frames, 36, "every frame of the shapes project");
+  const shapesPeak = peakExcess({
+    max: Math.max(shapes.y.max, shapes.u.max, shapes.v.max),
+    outliers: shapes.outliers,
+  });
+  assert.equal(shapesPeak, null, `shapes project: ${shapesPeak}`);
+  for (const plane of ["y", "u", "v"]) {
+    assert.ok(
+      shapes[plane].mean <= 0.25,
+      `shapes ${plane} mean code error ${shapes[plane].mean} exceeds 0.25`,
+    );
+  }
+  const shapeSamples = shapes.histogram.reduce((sum, count) => sum + count, 0);
+  assert.ok(
+    shapes.histogram[2] + shapes.histogram[3] <= shapeSamples / 1_000,
+    `shapes: more than 1 in 1000 samples are over a code apart: ${JSON.stringify(shapes.histogram)}`,
+  );
+  console.log(
+    "verified wasm/native parity on every frame of the shapes project",
   );
   const effects = await browserParity(chrome, nativeFrame, "/effects", {
     "/native.y4m": effectsFrames,

@@ -213,9 +213,9 @@ fn every_change_rendering_makes_is_refused_and_named() {
         (
             "a mask",
             Box::new(|value| {
-                clip(value)["masks"] = json!([{"shape": {"type": "ellipse"},
+                clip(value)["masks"] = json!([{"shape": {"type": "ellipse",
                     "center": {"mode": "constant", "value": {"x": 0.5, "y": 0.5}},
-                    "size": {"mode": "constant", "value": {"x": 0.8, "y": 0.7}},
+                    "size": {"mode": "constant", "value": {"x": 0.8, "y": 0.7}}},
                     "feather": {"mode": "constant", "value": 0.05}}]);
             }),
             whole,

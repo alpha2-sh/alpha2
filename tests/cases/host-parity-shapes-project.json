@@ -1,0 +1,612 @@
+{
+  "schema_version": 1,
+  "id": "host-parity-shapes",
+  "name": "Host parity: shapes generators, trims, dashes, compound paths, spatial motion, and path masks",
+  "settings": {
+    "width": 96,
+    "height": 64,
+    "frame_rate": { "num": 24, "den": 1 },
+    "sample_rate": 48000
+  },
+  "sources": [
+    { "id": "still", "kind": "image", "locator": "fixture://still" },
+    {
+      "id": "shapes",
+      "kind": "generated",
+      "generator": {
+        "type": "shapes",
+        "items": [
+          {
+            "type": "group",
+            "transform": {
+              "position": {
+                "mode": "keyframes",
+                "keyframes": [
+                  {
+                    "time": 0,
+                    "value": { "x": 0.25, "y": 0.6 },
+                    "interpolation": {
+                      "type": "cubic_bezier",
+                      "x1": 0.4,
+                      "y1": 0.0,
+                      "x2": 0.2,
+                      "y2": 1.0
+                    },
+                    "out_tangent": { "x": 0.1, "y": -0.4 }
+                  },
+                  {
+                    "time": 180000,
+                    "value": { "x": 0.75, "y": 0.5 },
+                    "interpolation": { "type": "hold" },
+                    "in_tangent": { "x": -0.1, "y": -0.3 }
+                  }
+                ]
+              },
+              "rotation_degrees": {
+                "mode": "keyframes",
+                "keyframes": [
+                  { "time": 0, "value": 0, "interpolation": { "type": "linear" } },
+                  { "time": 180000, "value": 120, "interpolation": { "type": "hold" } }
+                ]
+              },
+              "scale": { "mode": "constant", "value": { "x": 1.2, "y": 0.8 } },
+              "opacity": { "mode": "constant", "value": 0.85 }
+            },
+            "items": [
+              {
+                "type": "polystar",
+                "kind": "star",
+                "center": { "mode": "constant", "value": { "x": 0, "y": 0 } },
+                "points": { "mode": "constant", "value": 5 },
+                "outer_radius": {
+                  "mode": "keyframes",
+                  "keyframes": [
+                    { "time": 0, "value": 0.18, "interpolation": { "type": "linear" } },
+                    { "time": 180000, "value": 0.24, "interpolation": { "type": "hold" } }
+                  ]
+                },
+                "inner_radius": { "mode": "constant", "value": 0.08 },
+                "outer_roundness": { "mode": "constant", "value": 0.25 }
+              },
+              {
+                "type": "trim",
+                "start": { "mode": "constant", "value": 0 },
+                "end": {
+                  "mode": "keyframes",
+                  "keyframes": [
+                    { "time": 0, "value": 0.3, "interpolation": { "type": "linear" } },
+                    { "time": 150000, "value": 1.0, "interpolation": { "type": "hold" } }
+                  ]
+                },
+                "offset": {
+                  "mode": "keyframes",
+                  "keyframes": [
+                    { "time": 0, "value": 0, "interpolation": { "type": "linear" } },
+                    { "time": 180000, "value": 0.5, "interpolation": { "type": "hold" } }
+                  ]
+                }
+              },
+              {
+                "type": "stroke",
+                "width": { "mode": "constant", "value": 0.02 },
+                "join": "round",
+                "cap": "round",
+                "paint": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "solid",
+                    "color": { "red": 1, "green": 1, "blue": 1, "alpha": 1 }
+                  }
+                },
+                "dash": {
+                  "pattern": [
+                    { "mode": "constant", "value": 0.05 },
+                    { "mode": "constant", "value": 0.025 }
+                  ],
+                  "offset": {
+                    "mode": "keyframes",
+                    "keyframes": [
+                      { "time": 0, "value": 0, "interpolation": { "type": "linear" } },
+                      { "time": 180000, "value": 0.2, "interpolation": { "type": "hold" } }
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "fill",
+                "paint": {
+                  "mode": "keyframes",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "value": {
+                        "type": "radial_gradient",
+                        "center": { "x": 0.0, "y": 0.0 },
+                        "radius": 0.2,
+                        "stops": [
+                          {
+                            "offset": 0.0,
+                            "color": { "red": 1, "green": 0.8, "blue": 0.2, "alpha": 1 }
+                          },
+                          {
+                            "offset": 1.0,
+                            "color": { "red": 0.9, "green": 0.2, "blue": 0.3, "alpha": 0.8 }
+                          }
+                        ]
+                      },
+                      "interpolation": { "type": "linear" }
+                    },
+                    {
+                      "time": 180000,
+                      "value": {
+                        "type": "radial_gradient",
+                        "center": { "x": 0.05, "y": 0.0 },
+                        "radius": 0.3,
+                        "stops": [
+                          {
+                            "offset": 0.0,
+                            "color": { "red": 0.2, "green": 0.8, "blue": 1, "alpha": 1 }
+                          },
+                          {
+                            "offset": 1.0,
+                            "color": { "red": 0.3, "green": 0.1, "blue": 0.9, "alpha": 0.6 }
+                          }
+                        ]
+                      },
+                      "interpolation": { "type": "hold" }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "type": "group",
+            "transform": { "position": { "mode": "constant", "value": { "x": 0.72, "y": 0.35 } } },
+            "items": [
+              {
+                "type": "path",
+                "path": {
+                  "mode": "keyframes",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "value": {
+                        "subpaths": [
+                          {
+                            "closed": true,
+                            "vertices": [
+                              {
+                                "point": { "x": 0.0, "y": -0.2 },
+                                "out_tangent": { "x": 0.1, "y": 0.0 },
+                                "in_tangent": { "x": -0.1, "y": 0.0 }
+                              },
+                              {
+                                "point": { "x": 0.2, "y": 0.05 },
+                                "in_tangent": { "x": 0.0, "y": -0.1 },
+                                "out_tangent": { "x": 0.0, "y": 0.1 }
+                              },
+                              {
+                                "point": { "x": -0.05, "y": 0.2 },
+                                "in_tangent": { "x": 0.12, "y": 0.0 },
+                                "out_tangent": { "x": -0.12, "y": 0.0 }
+                              },
+                              {
+                                "point": { "x": -0.2, "y": 0.0 },
+                                "in_tangent": { "x": 0.0, "y": 0.1 },
+                                "out_tangent": { "x": 0.0, "y": -0.1 }
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      "interpolation": { "type": "linear" }
+                    },
+                    {
+                      "time": 180000,
+                      "value": {
+                        "subpaths": [
+                          {
+                            "closed": true,
+                            "vertices": [
+                              {
+                                "point": { "x": 0.05, "y": -0.25 },
+                                "out_tangent": { "x": 0.15, "y": 0.05 },
+                                "in_tangent": { "x": -0.05, "y": -0.05 }
+                              },
+                              {
+                                "point": { "x": 0.25, "y": 0.0 },
+                                "in_tangent": { "x": 0.05, "y": -0.15 },
+                                "out_tangent": { "x": -0.02, "y": 0.12 }
+                              },
+                              {
+                                "point": { "x": 0.0, "y": 0.25 },
+                                "in_tangent": { "x": 0.2, "y": 0.0 },
+                                "out_tangent": { "x": -0.1, "y": 0.0 }
+                              },
+                              {
+                                "point": { "x": -0.15, "y": 0.05 },
+                                "in_tangent": { "x": 0.0, "y": 0.15 },
+                                "out_tangent": { "x": 0.05, "y": -0.2 }
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      "interpolation": { "type": "hold" }
+                    }
+                  ]
+                }
+              },
+              {
+                "type": "ellipse",
+                "center": { "mode": "constant", "value": { "x": 0.03, "y": 0.0 } },
+                "size": {
+                  "mode": "keyframes",
+                  "keyframes": [
+                    {
+                      "time": 0,
+                      "value": { "x": 0.12, "y": 0.1 },
+                      "interpolation": { "type": "linear" }
+                    },
+                    {
+                      "time": 180000,
+                      "value": { "x": 0.2, "y": 0.16 },
+                      "interpolation": { "type": "hold" }
+                    }
+                  ]
+                }
+              },
+              {
+                "type": "stroke",
+                "width": { "mode": "constant", "value": 0.012 },
+                "join": "miter",
+                "miter_limit": 3,
+                "paint": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "conic_gradient",
+                    "center": { "x": 0.0, "y": 0.0 },
+                    "angle_degrees": 30,
+                    "stops": [
+                      { "offset": 0.0, "color": { "red": 1, "green": 1, "blue": 0, "alpha": 1 } },
+                      { "offset": 0.5, "color": { "red": 0, "green": 1, "blue": 1, "alpha": 1 } },
+                      { "offset": 1.0, "color": { "red": 1, "green": 1, "blue": 0, "alpha": 1 } }
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "fill",
+                "rule": "evenodd",
+                "paint": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "linear_gradient",
+                    "start": { "x": -0.2, "y": -0.2 },
+                    "end": { "x": 0.2, "y": 0.2 },
+                    "stops": [
+                      {
+                        "offset": 0.0,
+                        "color": { "red": 0.2, "green": 0.9, "blue": 0.4, "alpha": 1 }
+                      },
+                      {
+                        "offset": 1.0,
+                        "color": { "red": 0.1, "green": 0.3, "blue": 0.9, "alpha": 1 }
+                      }
+                    ],
+                    "spread": "reflect"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "rectangle",
+            "center": { "mode": "constant", "value": { "x": 0.5, "y": 0.85 } },
+            "size": {
+              "mode": "keyframes",
+              "keyframes": [
+                {
+                  "time": 0,
+                  "value": { "x": 0.1, "y": 0.06 },
+                  "interpolation": { "type": "linear" }
+                },
+                {
+                  "time": 180000,
+                  "value": { "x": 0.9, "y": 0.06 },
+                  "interpolation": { "type": "hold" }
+                }
+              ]
+            },
+            "corner_radius": { "mode": "constant", "value": 0.02 }
+          },
+          {
+            "type": "fill",
+            "paint": {
+              "mode": "keyframes",
+              "keyframes": [
+                {
+                  "time": 0,
+                  "value": {
+                    "type": "solid",
+                    "color": { "red": 0.9, "green": 0.9, "blue": 0.9, "alpha": 1 }
+                  },
+                  "interpolation": { "type": "linear" }
+                },
+                {
+                  "time": 180000,
+                  "value": {
+                    "type": "solid",
+                    "color": { "red": 0.9, "green": 0.3, "blue": 0.1, "alpha": 0.7 }
+                  },
+                  "interpolation": { "type": "hold" }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "wash",
+      "kind": "generated",
+      "generator": {
+        "type": "fill",
+        "paint": {
+          "type": "linear_gradient",
+          "start": { "x": 0, "y": 0 },
+          "end": { "x": 1, "y": 1 },
+          "stops": [
+            { "offset": 0.0, "color": { "red": 0.1, "green": 0.1, "blue": 0.3, "alpha": 1 } },
+            { "offset": 1.0, "color": { "red": 0.3, "green": 0.1, "blue": 0.2, "alpha": 1 } }
+          ]
+        }
+      }
+    }
+  ],
+  "compositions": [
+    {
+      "id": "echo",
+      "nodes": [
+        { "id": "clip", "op": { "type": "clip" } },
+        { "id": "late", "op": { "type": "media", "source_id": "shapes", "start": 60000 } },
+        {
+          "id": "spark",
+          "op": {
+            "type": "generator",
+            "generator": {
+              "type": "shapes",
+              "items": [
+                {
+                  "type": "polystar",
+                  "kind": "polygon",
+                  "center": {
+                    "mode": "keyframes",
+                    "keyframes": [
+                      {
+                        "time": 0,
+                        "value": { "x": 0.2, "y": 0.2 },
+                        "interpolation": { "type": "linear" }
+                      },
+                      {
+                        "time": 180000,
+                        "value": { "x": 0.8, "y": 0.3 },
+                        "interpolation": { "type": "hold" }
+                      }
+                    ]
+                  },
+                  "points": { "mode": "constant", "value": 6 },
+                  "outer_radius": { "mode": "constant", "value": 0.1 },
+                  "rotation_degrees": {
+                    "mode": "keyframes",
+                    "keyframes": [
+                      { "time": 0, "value": 0, "interpolation": { "type": "linear" } },
+                      { "time": 180000, "value": 60, "interpolation": { "type": "hold" } }
+                    ]
+                  }
+                },
+                {
+                  "type": "fill",
+                  "paint": {
+                    "mode": "constant",
+                    "value": {
+                      "type": "solid",
+                      "color": { "red": 1, "green": 0.6, "blue": 0.1, "alpha": 0.9 }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "id": "merge",
+          "op": {
+            "type": "merge",
+            "layers": [
+              { "input": "clip" },
+              { "input": "late", "opacity": { "mode": "constant", "value": 0.5 } },
+              { "input": "spark" }
+            ]
+          }
+        }
+      ],
+      "output": "merge"
+    }
+  ],
+  "timeline": {
+    "tracks": [
+      {
+        "id": "base",
+        "name": "Base",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "wash-clip",
+            "source_id": "wash",
+            "timeline_range": { "start": 0, "end": 180000 },
+            "source_range": { "start": 0, "end": 180000 }
+          }
+        ]
+      },
+      {
+        "id": "masked",
+        "name": "Masked",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "still-clip",
+            "source_id": "still",
+            "timeline_range": { "start": 0, "end": 180000 },
+            "source_range": { "start": 0, "end": 180000 },
+            "visual": {
+              "position": {
+                "mode": "keyframes",
+                "keyframes": [
+                  {
+                    "time": 0,
+                    "value": { "x": 0.45, "y": 0.5 },
+                    "interpolation": { "type": "linear" },
+                    "out_tangent": { "x": 0.05, "y": 0.2 }
+                  },
+                  {
+                    "time": 180000,
+                    "value": { "x": 0.55, "y": 0.5 },
+                    "interpolation": { "type": "hold" },
+                    "in_tangent": { "x": -0.05, "y": 0.2 }
+                  }
+                ]
+              },
+              "anchor": { "x": 0.5, "y": 0.5 },
+              "scale": { "mode": "constant", "value": { "x": 0.9, "y": 0.9 } },
+              "rotation_degrees": { "mode": "constant", "value": 0 },
+              "opacity": { "mode": "constant", "value": 1 }
+            },
+            "masks": [
+              {
+                "shape": {
+                  "type": "path",
+                  "path": {
+                    "mode": "constant",
+                    "value": {
+                      "subpaths": [
+                        {
+                          "closed": true,
+                          "vertices": [
+                            { "point": { "x": 0.92, "y": 0.5 } },
+                            { "point": { "x": 0.9057, "y": 0.6087 } },
+                            { "point": { "x": 0.8637, "y": 0.71 } },
+                            { "point": { "x": 0.797, "y": 0.797 } },
+                            { "point": { "x": 0.71, "y": 0.8637 } },
+                            { "point": { "x": 0.6087, "y": 0.9057 } },
+                            { "point": { "x": 0.5, "y": 0.92 } },
+                            { "point": { "x": 0.3913, "y": 0.9057 } },
+                            { "point": { "x": 0.29, "y": 0.8637 } },
+                            { "point": { "x": 0.203, "y": 0.797 } },
+                            { "point": { "x": 0.1363, "y": 0.71 } },
+                            { "point": { "x": 0.0943, "y": 0.6087 } },
+                            { "point": { "x": 0.08, "y": 0.5 } },
+                            { "point": { "x": 0.0943, "y": 0.3913 } },
+                            { "point": { "x": 0.1363, "y": 0.29 } },
+                            { "point": { "x": 0.203, "y": 0.203 } },
+                            { "point": { "x": 0.29, "y": 0.1363 } },
+                            { "point": { "x": 0.3913, "y": 0.0943 } },
+                            { "point": { "x": 0.5, "y": 0.08 } },
+                            { "point": { "x": 0.6087, "y": 0.0943 } },
+                            { "point": { "x": 0.71, "y": 0.1363 } },
+                            { "point": { "x": 0.797, "y": 0.203 } },
+                            { "point": { "x": 0.8637, "y": 0.29 } },
+                            { "point": { "x": 0.9057, "y": 0.3913 } }
+                          ]
+                        },
+                        {
+                          "closed": true,
+                          "vertices": [
+                            { "point": { "x": 0.74, "y": 0.5 } },
+                            { "point": { "x": 0.7325, "y": 0.5569 } },
+                            { "point": { "x": 0.7105, "y": 0.61 } },
+                            { "point": { "x": 0.6756, "y": 0.6556 } },
+                            { "point": { "x": 0.63, "y": 0.6905 } },
+                            { "point": { "x": 0.5769, "y": 0.7125 } },
+                            { "point": { "x": 0.52, "y": 0.72 } },
+                            { "point": { "x": 0.4631, "y": 0.7125 } },
+                            { "point": { "x": 0.41, "y": 0.6905 } },
+                            { "point": { "x": 0.3644, "y": 0.6556 } },
+                            { "point": { "x": 0.3295, "y": 0.61 } },
+                            { "point": { "x": 0.3075, "y": 0.5569 } },
+                            { "point": { "x": 0.3, "y": 0.5 } },
+                            { "point": { "x": 0.3075, "y": 0.4431 } },
+                            { "point": { "x": 0.3295, "y": 0.39 } },
+                            { "point": { "x": 0.3644, "y": 0.3444 } },
+                            { "point": { "x": 0.41, "y": 0.3095 } },
+                            { "point": { "x": 0.4631, "y": 0.2875 } },
+                            { "point": { "x": 0.52, "y": 0.28 } },
+                            { "point": { "x": 0.5769, "y": 0.2875 } },
+                            { "point": { "x": 0.63, "y": 0.3095 } },
+                            { "point": { "x": 0.6756, "y": 0.3444 } },
+                            { "point": { "x": 0.7105, "y": 0.39 } },
+                            { "point": { "x": 0.7325, "y": 0.4431 } }
+                          ]
+                        }
+                      ]
+                    }
+                  }
+                },
+                "fill_rule": "evenodd",
+                "feather": {
+                  "mode": "keyframes",
+                  "keyframes": [
+                    { "time": 0, "value": 0.0, "interpolation": { "type": "linear" } },
+                    { "time": 180000, "value": 0.05, "interpolation": { "type": "hold" } }
+                  ]
+                }
+              },
+              {
+                "shape": {
+                  "type": "polystar",
+                  "kind": "star",
+                  "center": { "mode": "constant", "value": { "x": 0.5, "y": 0.5 } },
+                  "points": { "mode": "constant", "value": 4 },
+                  "outer_radius": { "mode": "constant", "value": 0.2 },
+                  "inner_radius": { "mode": "constant", "value": 0.08 },
+                  "rotation_degrees": {
+                    "mode": "keyframes",
+                    "keyframes": [
+                      { "time": 0, "value": 0, "interpolation": { "type": "linear" } },
+                      { "time": 180000, "value": 90, "interpolation": { "type": "hold" } }
+                    ]
+                  }
+                },
+                "mode": "subtract"
+              },
+              {
+                "shape": {
+                  "type": "rectangle",
+                  "center": { "mode": "constant", "value": { "x": 0.5, "y": 0.5 } },
+                  "size": { "mode": "constant", "value": { "x": 0.9, "y": 0.9 } }
+                },
+                "mode": "intersect",
+                "invert": false
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": "top",
+        "name": "Top",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "shapes-clip",
+            "source_id": "shapes",
+            "timeline_range": { "start": 0, "end": 180000 },
+            "source_range": { "start": 0, "end": 180000 },
+            "composition": { "id": "echo" }
+          }
+        ]
+      }
+    ]
+  }
+}

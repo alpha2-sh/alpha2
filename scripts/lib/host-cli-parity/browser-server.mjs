@@ -25,6 +25,8 @@ export async function browserParity(
     "/sink": sinkPage,
     "/complex": () =>
       complexPage("/tests/cases/host-parity-complex-project.json"),
+    "/shapes": () =>
+      complexPage("/tests/cases/host-parity-shapes-project.json"),
     "/effects": () =>
       complexPage("/tests/cases/host-parity-effects-project.json"),
     "/hdr": hdrPage,

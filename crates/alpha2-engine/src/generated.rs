@@ -1,60 +1,26 @@
-//! Generated sources as parameters of the renderer's generator pass.
+//! Fill sources as parameters of the renderer's generator pass.
 
-use alpha2_model::{GeneratedShape, Generator, GradientStop, Paint, Rgba, Spread, Vec2};
+use alpha2_model::{Generator, GradientStop, Paint, Rgba, Spread, Vec2};
 use alpha2_render::{
     EffectParams, FILL_PAINT_PARAMS, MAX_GENERATOR_STOPS, PaintParams, ParamValue,
-    STROKE_PAINT_PARAMS,
 };
 
 // Every stop a valid project holds reaches the pass.
 const _: () = assert!(alpha2_model::MAX_GRADIENT_STOPS <= MAX_GENERATOR_STOPS);
 
-/// Parameters one generator sets at most: its shape's six and each paint's
-/// seven plus a color per stop.
-const MAX_GENERATOR_PARAMS: usize = 6 + 2 * (7 + MAX_GENERATOR_STOPS);
+/// Parameters one generator sets at most: its paint's seven plus a color per
+/// stop.
+const MAX_GENERATOR_PARAMS: usize = 7 + MAX_GENERATOR_STOPS;
 
 /// The generator pass's parameters for `generator`. Every name is static, so
 /// the list holding them is all this allocates.
 pub(crate) fn generator_params(generator: &Generator) -> EffectParams<'static> {
     let params = EffectParams::with_capacity(MAX_GENERATOR_PARAMS);
     match generator {
-        Generator::Fill { paint } => with_paint(
-            params.with("shape", ParamValue::Enum(0)),
-            &FILL_PAINT_PARAMS,
-            paint,
-        ),
-        Generator::Shape {
-            shape,
-            center,
-            size,
-            rotation_degrees,
-            fill,
-            stroke,
-        } => {
-            let (kind, radius) = match *shape {
-                GeneratedShape::Rectangle { corner_radius } => (1, corner_radius),
-                GeneratedShape::Ellipse => (2, 0.0),
-            };
-            let mut params = params
-                .with("shape", ParamValue::Enum(kind))
-                .with("center", vec2(*center))
-                .with("size", vec2(*size))
-                .with("rotation", ParamValue::Float(rotation_degrees.to_radians()))
-                .with("radius", ParamValue::Float(radius));
-            if let Some(fill) = fill {
-                params = with_paint(params, &FILL_PAINT_PARAMS, fill);
-            }
-            if let Some(stroke) = stroke {
-                params = with_paint(
-                    params.with("stroke_width", ParamValue::Float(stroke.width)),
-                    &STROKE_PAINT_PARAMS,
-                    &stroke.paint,
-                );
-            }
-            params
-        }
-        // Text is drawn from its prepared texture (`frame::PlacedText`), never by the pass.
-        Generator::Text { .. } => params,
+        Generator::Fill { paint } => with_paint(params, &FILL_PAINT_PARAMS, paint),
+        // Shapes are drawn by the vector pass (`frame::shapes_node`) and text from its prepared
+        // texture (`frame::PlacedText`), never by this one.
+        Generator::Shapes { .. } | Generator::Text { .. } => params,
     }
 }
 

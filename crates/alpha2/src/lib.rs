@@ -22,6 +22,8 @@
 pub use alpha2_audio as audio;
 /// Playback, evaluation, and export orchestration.
 pub use alpha2_engine as engine;
+/// Deterministic vector geometry and coverage for shapes.
+pub use alpha2_geometry as geometry;
 /// GPU adapter and device capability boundary.
 pub use alpha2_gpu as gpu;
 /// Host-independent media vocabulary and decode/encode contracts.

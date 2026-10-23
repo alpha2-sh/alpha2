@@ -28,6 +28,7 @@ impl ActiveIndex {
     /// # Errors
     ///
     /// Returns [`EvalError::InvalidProject`] when the model is invalid.
+    #[allow(clippy::too_many_lines)]
     pub fn build(project: &Project) -> Result<Self, EvalError> {
         project.validate().map_err(EvalError::InvalidProject)?;
         let mut entries = Vec::new();
@@ -40,6 +41,7 @@ impl ActiveIndex {
             .iter()
             .map(|source| (&source.id, source))
             .collect::<std::collections::HashMap<_, _>>();
+        let shapes = shape_plans(project);
         for (track_order, track) in project.timeline.tracks.iter().enumerate() {
             for (clip_order, clip) in track.clips.iter().enumerate() {
                 // Validation guarantees the source exists.
@@ -81,6 +83,7 @@ impl ActiveIndex {
                     audio: clip.audio.clone(),
                     source_is_audible,
                     generator,
+                    shapes: shapes.get(&clip.source_id).cloned(),
                     source_composition,
                     track_order,
                     clip_order,
@@ -338,4 +341,21 @@ fn deepest_overlap(entries: &[IndexedClip]) -> usize {
         deepest = deepest.max(depth);
     }
     deepest
+}
+
+/// Each shapes source's tree, planned once however many clips show it.
+fn shape_plans(
+    project: &Project,
+) -> std::collections::HashMap<&SourceId, std::sync::Arc<crate::ShapesPlan>> {
+    project
+        .sources
+        .iter()
+        .filter_map(|source| match &source.generator {
+            Some(alpha2_model::Generator::Shapes { items }) => Some((
+                &source.id,
+                std::sync::Arc::new(crate::ShapesPlan::new(items)),
+            )),
+            _ => None,
+        })
+        .collect()
 }

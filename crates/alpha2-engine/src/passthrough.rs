@@ -299,8 +299,10 @@ fn shows_source_untouched(clip: &Clip, source: &alpha2_model::MediaSource) -> Re
             clip.id
         ));
     }
-    let visual_identity = constant(&clip.visual.position) == Some(Vec2::new(0.5, 0.5))
-        && clip.visual.anchor == Vec2::new(0.5, 0.5)
+    let visual_identity = matches!(
+        clip.visual.position,
+        alpha2_model::AnimatedPoint::Constant { value } if value == Vec2::new(0.5, 0.5)
+    ) && clip.visual.anchor == Vec2::new(0.5, 0.5)
         && constant(&clip.visual.scale) == Some(Vec2::new(1.0, 1.0))
         && constant(&clip.visual.rotation_degrees) == Some(0.0)
         && constant(&clip.visual.opacity) == Some(1.0);

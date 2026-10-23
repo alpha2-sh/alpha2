@@ -83,28 +83,45 @@ export function encodeGenerator(generator) {
     default: {
       const stroked = generator.stroke.enabled;
       const filled = generator.fill || !stroked;
-      return {
-        type: "shape",
-        shape:
-          generator.kind === "rectangle"
-            ? {
-                type: "rectangle",
-                corner_radius: Math.max(0, generator.cornerRadius),
-              }
-            : { type: "ellipse" },
-        center,
-        size: {
+      const constant = (value) => ({ mode: "constant", value });
+      const geometry = {
+        type: generator.kind === "rectangle" ? "rectangle" : "ellipse",
+        center: constant(center),
+        size: constant({
           x: Math.max(0, generator.size.x),
           y: Math.max(0, generator.size.y),
-        },
-        rotation_degrees: generator.rotation,
-        fill: filled ? { type: "solid", color: rgba(first) } : null,
-        stroke: stroked
-          ? {
-              width: Math.max(0.001, generator.stroke.width),
-              paint: { type: "solid", color: rgba(generator.stroke.color) },
-            }
-          : null,
+        }),
+        ...(generator.kind === "rectangle"
+          ? { corner_radius: constant(Math.max(0, generator.cornerRadius)) }
+          : {}),
+        rotation_degrees: constant(generator.rotation),
+      };
+      // The stroke is listed first, so it is drawn over the fill.
+      return {
+        type: "shapes",
+        items: [
+          geometry,
+          ...(stroked
+            ? [
+                {
+                  type: "stroke",
+                  width: constant(Math.max(0.001, generator.stroke.width)),
+                  paint: constant({
+                    type: "solid",
+                    color: rgba(generator.stroke.color),
+                  }),
+                },
+              ]
+            : []),
+          ...(filled
+            ? [
+                {
+                  type: "fill",
+                  paint: constant({ type: "solid", color: rgba(first) }),
+                },
+              ]
+            : []),
+        ],
       };
     }
   }

@@ -61,6 +61,16 @@ export const complexAssets = {
   still: join(root, "tests", "corpus", "parity-image.png"),
 };
 
+// Shapes generators (animated paths, trims, dashes, compound fills, group layers, spatial
+// motion), a shapes generator node and a media node reading one later, and path masks.
+export const shapesProjectPath = join(
+  root,
+  "tests",
+  "cases",
+  "host-parity-shapes-project.json",
+);
+export const shapesAssets = { still: complexAssets.still };
+
 // Every built-in effect and transition. The page fails a project that leaves a catalog entry out,
 // so a new body is compared as soon as it ships.
 export const effectsProjectPath = join(

@@ -19,6 +19,7 @@ pub fn evaluate<'a>(
     time: MediaTime,
 ) -> Result<FrameDesc<'a>, EvalError> {
     ensure_index_matches(project, index)?;
+    let aspect = f64::from(project.settings.width) / f64::from(project.settings.height.max(1));
     // No instant has more clips active than the index's deepest overlap.
     let mut active = Vec::with_capacity(index.max_active);
     if let Some(root) = index.root {
@@ -62,7 +63,7 @@ pub fn evaluate<'a>(
     let mut audio = Vec::with_capacity(audio_count);
     let frame_mirror = crate::Mirror::frame(project.settings.frame_rate);
     for entry in active {
-        let item = active_clip(entry, frame_mirror, time)?;
+        let item = active_clip(entry, frame_mirror, time, aspect)?;
         match entry.track_kind {
             TrackKind::Video => visual.push(item),
             TrackKind::Audio => audio.push(item),
@@ -107,6 +108,7 @@ fn active_clip(
     entry: &crate::IndexedClip,
     frame_mirror: crate::Mirror,
     time: MediaTime,
+    aspect: f64,
 ) -> Result<ActiveClip<'_>, EvalError> {
     let source_time = map_source_time(
         entry.timeline_range,
@@ -123,7 +125,8 @@ fn active_clip(
         source_id: &entry.source_id,
         track_id: &entry.track_id,
         source_time,
-        visual: (entry.track_kind == TrackKind::Video).then(|| sample_visual(&entry.visual, time)),
+        visual: (entry.track_kind == TrackKind::Video)
+            .then(|| sample_visual(&entry.visual, time, aspect)),
         composition: active_composition(entry, time)?,
         blend_mode: entry.blend_mode,
         cache: entry.cache,
@@ -131,6 +134,7 @@ fn active_clip(
         matte: entry.matte.as_ref(),
         is_matte: entry.is_matte,
         generator: entry.generator.as_ref(),
+        shapes: entry.shapes.as_deref(),
         source_composition: active_source_composition(entry, source_time)?,
     })
 }

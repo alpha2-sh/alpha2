@@ -28,7 +28,7 @@ async function main() {
   // Reported last, so the skip is the final line of the run's output.
   if (chrome === null)
     reportSkippedBrowser(
-      "browser parity (golden, complex, effects, HDR, extensions, orientation, sink); only the native checks ran",
+      "browser parity (golden, complex, shapes, effects, HDR, extensions, orientation, sink); only the native checks ran",
     );
 }
 

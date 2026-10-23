@@ -21,9 +21,10 @@ fn generated_sources_render_without_host_frames() {
                   { "offset": 0, "color": { "red": 0, "green": 0, "blue": 0, "alpha": 1 } },
                   { "offset": 1, "color": { "red": 1, "green": 1, "blue": 1, "alpha": 1 } }
                 ] } } },
-            { "id": "badge", "kind": "generated", "generator": { "type": "shape",
-                "shape": { "type": "ellipse" }, "center": { "x": 0.5, "y": 0.5 }, "size": { "x": 0.5, "y": 1 },
-                "fill": { "type": "solid", "color": { "red": 1, "green": 0, "blue": 0, "alpha": 1 } } } }
+            { "id": "badge", "kind": "generated", "generator": { "type": "shapes", "items": [
+                { "type": "ellipse", "center": { "mode": "constant", "value": { "x": 0.5, "y": 0.5 } },
+                  "size": { "mode": "constant", "value": { "x": 0.5, "y": 1 } } },
+                { "type": "fill", "paint": { "mode": "constant", "value": { "type": "solid", "color": { "red": 1, "green": 0, "blue": 0, "alpha": 1 } } } } ] } }
           ],
           "timeline": { "tracks": [
             { "id": "t1", "name": "Back", "kind": "video", "clips": [
@@ -346,9 +347,10 @@ fn matte_caption_projects() -> [(&'static str, crate::EngineProject, bool); 5] {
     let sources = r#"
         { "id": "white", "kind": "generated", "generator": { "type": "fill", "paint": {
             "type": "solid", "color": { "red": 1, "green": 1, "blue": 1, "alpha": 1 } } } },
-        { "id": "dot", "kind": "generated", "generator": { "type": "shape",
-            "shape": { "type": "rectangle" }, "center": { "x": 0.05, "y": 0.05 }, "size": { "x": 0.05, "y": 0.05 },
-            "fill": { "type": "solid", "color": { "red": 0, "green": 1, "blue": 0, "alpha": 1 } } } },"#;
+        { "id": "dot", "kind": "generated", "generator": { "type": "shapes", "items": [
+                { "type": "rectangle", "center": { "mode": "constant", "value": { "x": 0.05, "y": 0.05 } },
+                  "size": { "mode": "constant", "value": { "x": 0.05, "y": 0.05 } } },
+                { "type": "fill", "paint": { "mode": "constant", "value": { "type": "solid", "color": { "red": 0, "green": 1, "blue": 0, "alpha": 1 } } } } ] } },"#;
     let matte_track = r#"
         { "id": "mattes", "name": "Mattes", "kind": "video", "clips": [
           { "id": "m", "source_id": "white", "timeline_range": { "start": 0, "end": 360000 },

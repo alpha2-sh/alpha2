@@ -75,6 +75,7 @@ impl Renderer {
         let mut seen = HashSet::<EffectId>::new();
         let mut needs_composite = false;
         let mut composite_layers = Vec::<usize>::new();
+        let mut vector_spaces = Vec::<crate::BlendSpace>::new();
         for graph in graphs {
             let plan = graph
                 .compile()
@@ -92,6 +93,12 @@ impl Renderer {
                         needs_composite = true;
                         composite_layers.push(layers.len());
                     }
+                    RenderNode::Vector { .. } => {
+                        let space = graph.blend_space.unwrap_or(self.blend_space);
+                        if !vector_spaces.contains(&space) {
+                            vector_spaces.push(space);
+                        }
+                    }
                     RenderNode::Source(_) => {}
                 }
             }
@@ -100,9 +107,12 @@ impl Renderer {
         for layers in composite_layers {
             self.warm_composite(layers);
         }
+        for space in &vector_spaces {
+            self.warm_vector(*space);
+        }
         Ok(WarmupReport {
             runtime_effects: effects.len(),
-            builtins: usize::from(needs_composite),
+            builtins: usize::from(needs_composite) + usize::from(!vector_spaces.is_empty()),
         })
     }
 
@@ -292,6 +302,24 @@ impl Renderer {
                     encoded_render_passes = encoded_render_passes.saturating_add(1);
                     Some(RenderedTexture::pooled(graph.size, format, target))
                 }
+                RenderNode::Vector { scene } => {
+                    let target = self.textures.acquire(
+                        self.gpu.device(),
+                        graph.size,
+                        format,
+                        "alpha2 graph vector target",
+                    );
+                    encoded_render_passes =
+                        encoded_render_passes.saturating_add(self.encode_vector(
+                            encoder,
+                            scene,
+                            graph.size,
+                            graph.blend_space.unwrap_or(self.blend_space),
+                            target.view(),
+                            &mut uniforms,
+                        )?);
+                    Some(RenderedTexture::pooled(graph.size, format, target))
+                }
                 RenderNode::Composite { layers, background } => {
                     let views = layers
                         .iter()
@@ -428,6 +456,22 @@ fn graph_uniform_capacity(
                     capacity = aligned_uniform_end(
                         capacity,
                         float_uniform_bytes(BATCH_UNIFORM_FLOATS),
+                        alignment,
+                    );
+                }
+            }
+            RenderNode::Vector { scene } => {
+                // A slice per fill and per layer, and one for the encode pass.
+                let slices = scene
+                    .ops
+                    .iter()
+                    .filter(|op| !matches!(op, alpha2_geometry::VectorOp::PushLayer { .. }))
+                    .count()
+                    + 1;
+                for _ in 0..slices {
+                    capacity = aligned_uniform_end(
+                        capacity,
+                        crate::vector::VECTOR_UNIFORM_BYTES,
                         alignment,
                     );
                 }

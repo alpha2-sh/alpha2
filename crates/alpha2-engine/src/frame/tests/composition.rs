@@ -27,8 +27,10 @@ fn renderer() -> Renderer {
         },
         alpha2_render::generator_definition(),
         alpha2_render::track_matte_definition(),
-        alpha2_render::shape_mask_definition(),
-    ] {
+    ]
+    .into_iter()
+    .chain(alpha2_render::mask_combine_definitions())
+    {
         pollster::block_on(renderer.register_effect(definition)).expect("effect compiles");
     }
     renderer
@@ -67,9 +69,10 @@ fn project_with(
             {{ "id": "white", "kind": "generated", "generator": {white} }},
             {{ "id": "red", "kind": "generated", "generator": {red} }},
             {{ "id": "blue", "kind": "generated", "generator": {blue} }},
-            {{ "id": "left", "kind": "generated", "generator": {{ "type": "shape",
-                "shape": {{ "type": "rectangle" }}, "center": {{ "x": 0.25, "y": 0.5 }}, "size": {{ "x": 0.5, "y": 1 }},
-                "fill": {{ "type": "solid", "color": {{ "red": 1, "green": 1, "blue": 1, "alpha": 1 }} }} }} }},
+            {{ "id": "left", "kind": "generated", "generator": {{ "type": "shapes", "items": [
+                {{ "type": "rectangle", "center": {{ "mode": "constant", "value": {{ "x": 0.25, "y": 0.5 }} }},
+                  "size": {{ "mode": "constant", "value": {{ "x": 0.5, "y": 1 }} }} }},
+                {{ "type": "fill", "paint": {{ "mode": "constant", "value": {{ "type": "solid", "color": {{ "red": 1, "green": 1, "blue": 1, "alpha": 1 }} }} }} }} ] }} }},
             {{ "id": "video", "kind": "video", "locator": "asset://video" }} {sources}
           ],
           "compositions": [ {{ "id": "g", "nodes": [{nodes}] {output} }} {compositions} ],

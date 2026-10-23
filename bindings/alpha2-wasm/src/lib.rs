@@ -30,6 +30,8 @@ mod effect;
 mod error;
 #[cfg(any(target_arch = "wasm32", test))]
 mod frame_store;
+#[cfg(any(target_arch = "wasm32", test))]
+mod geometry;
 #[cfg(target_arch = "wasm32")]
 mod interop;
 #[cfg(target_arch = "wasm32")]

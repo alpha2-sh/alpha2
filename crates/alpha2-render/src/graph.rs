@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::graph_cache::{
     composite_cache_key, effect_cache_key_with_resources, named_inputs_key, transient_source_key,
+    vector_cache_key,
 };
 use crate::{
     BlendMode, Color, EffectId, EffectParams, EffectResources, EffectRuntime, LayerTransform,
@@ -39,6 +40,8 @@ pub enum RenderNodeKind {
     Generator,
     /// Ordered layer composition.
     Composite,
+    /// A vector scene: fills drawn from tile coverage.
+    Vector,
 }
 
 /// Named images one effect node samples besides its source, by the names its
@@ -155,6 +158,9 @@ pub(crate) enum RenderNode<'a> {
         layers: Vec<GraphLayer>,
         background: Option<Color>,
     },
+    Vector {
+        scene: std::sync::Arc<alpha2_geometry::VectorScene>,
+    },
 }
 
 /// Deterministic 128-bit key for a source or rendered graph result.
@@ -261,6 +267,12 @@ impl<'a> RenderGraph<'a> {
             output: None,
             blend_space: None,
         }
+    }
+
+    /// The size every rendered node of this graph has.
+    #[must_use]
+    pub const fn size(&self) -> RenderSize {
+        self.size
     }
 
     /// Blends this graph's composites in `space` rather than in the
@@ -427,6 +439,21 @@ impl<'a> RenderGraph<'a> {
             key,
             true,
         )
+    }
+
+    /// Adds a vector scene: its fills drawn from tile coverage at the
+    /// graph's size, over transparency (see [`alpha2_geometry::VectorScene`]).
+    /// Its key is the scene's, so an unchanged scene is a cache hit; its
+    /// picture is premultiplied and sRGB-encoded, as every node's.
+    ///
+    /// The scene's coordinates are this graph's pixels: one built for
+    /// another size draws at that size's coordinates.
+    pub fn add_vector(
+        &mut self,
+        scene: std::sync::Arc<alpha2_geometry::VectorScene>,
+    ) -> RenderNodeId {
+        let key = vector_cache_key(self.size, scene.key);
+        self.push(RenderNode::Vector { scene }, key, true)
     }
 
     /// Adds a registered two-input transition node.
@@ -668,6 +695,7 @@ impl RenderNodeKind {
             Self::Transition => "transition",
             Self::Generator => "generator",
             Self::Composite => "composite",
+            Self::Vector => "vector",
         }
     }
 }
@@ -680,12 +708,13 @@ impl RenderNode<'_> {
             Self::Transition { .. } => RenderNodeKind::Transition,
             Self::Generator { .. } => RenderNodeKind::Generator,
             Self::Composite { .. } => RenderNodeKind::Composite,
+            Self::Vector { .. } => RenderNodeKind::Vector,
         }
     }
 
     pub(crate) fn dependencies(&self) -> Vec<RenderNodeId> {
         match self {
-            Self::Source(_) | Self::Generator { .. } => Vec::new(),
+            Self::Source(_) | Self::Generator { .. } | Self::Vector { .. } => Vec::new(),
             Self::Effect { source, inputs, .. } => std::iter::once(*source)
                 .chain(inputs.iter().map(|(_, input)| input))
                 .collect(),

@@ -828,3 +828,68 @@ report({
 });
 `;
 }
+
+// Shapes through the vector pass: an animated shapes source whose fill rule leaves a hole and
+// whose square moves with its source time, and a path mask, read back as export luma. The pass's
+// shader compiles and draws on the backend, coverage and all.
+export function shapes(webgl) {
+  return `
+${webgl ? 'Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });' : 'if (!navigator.gpu) throw new Error("this browser offers no WebGPU");'}
+const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+await init();
+const engine = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(64, 48));
+const constant = (value) => ({ mode: "constant", value });
+const white = { type: "solid", color: { red: 1, green: 1, blue: 1, alpha: 1 } };
+const square = (x0, y0, x1, y1) => ({ closed: true, vertices: [
+  { point: { x: x0, y: y0 } }, { point: { x: x1, y: y0 } }, { point: { x: x1, y: y1 } }, { point: { x: x0, y: y1 } } ] });
+const ring = { subpaths: [square(0.0, 0.0, 0.5, 1.0), square(0.125, 0.25, 0.375, 0.75)] };
+const shapes = { type: "shapes", items: [
+  { type: "rectangle",
+    center: { mode: "keyframes", keyframes: [
+      { time: 0, value: { x: 0.625, y: 0.25 }, interpolation: { type: "linear" } },
+      { time: 120000, value: { x: 0.875, y: 0.25 }, interpolation: { type: "hold" } } ] },
+    size: constant({ x: 0.125, y: 0.25 }) },
+  { type: "fill", paint: constant(white) },
+  { type: "path", path: constant(ring) },
+  { type: "fill", rule: "evenodd", paint: constant(white) },
+] };
+engine.loadProject(JSON.stringify({
+  schema_version: 1, id: "shapes", name: "Shapes",
+  settings: { width: 64, height: 48, frame_rate: { num: 30, den: 1 }, sample_rate: 48000 },
+  sources: [
+    { id: "shapes", kind: "generated", generator: shapes },
+    { id: "white", kind: "generated", generator: { type: "fill", paint: white } },
+  ],
+  timeline: { tracks: [
+    { id: "masked", name: "Masked", kind: "video", clips: [{ id: "m", source_id: "white",
+      timeline_range: { start: 0, end: 240000 }, source_range: { start: 0, end: 240000 },
+      masks: [{ shape: { type: "path", path: constant({ subpaths: [square(0.5, 0.5, 1.0, 1.0)] }) },
+        feather: constant(0.02) }] }] },
+    { id: "shapes", name: "Shapes", kind: "video", clips: [{ id: "s", source_id: "shapes",
+      timeline_range: { start: 0, end: 240000 }, source_range: { start: 0, end: 240000 } }] },
+  ] },
+}));
+const draw = async (time) => {
+  const ticket = engine.beginExportAt(BigInt(time), "h264");
+  const rendered = ticket.kind === "rendered" ? await ticket.readback : ticket;
+  if (rendered.kind !== "rendered") throw new Error("the frame did not render: " + rendered.kind);
+  const [{ offset, stride }] = rendered.layout;
+  return (x, y) => rendered.pixels[offset + y * stride + x];
+};
+const first = await draw(0);
+const later = await draw(120000);
+const luma = {
+  ring: first(4, 24), hole: first(16, 24), masked: first(56, 40), unmasked: first(56, 8),
+  squareThen: first(40, 12), squareLater: later(40, 12), squareMoved: later(56, 12),
+};
+const gpu = JSON.parse(engine.diagnostics()).gpu;
+const uncaptured = gpu.events.filter((event) => event.event === "uncaptured-error");
+report({
+  ok: luma.ring > 200 && luma.hole < 40 && luma.masked > 200 && luma.unmasked < 40
+    && luma.squareThen > 200 && luma.squareLater < 40 && luma.squareMoved > 200
+    && uncaptured.length === 0 && !engine.deviceLost,
+  luma,
+  ...(uncaptured.length ? { uncaptured } : {}),
+});
+`;
+}

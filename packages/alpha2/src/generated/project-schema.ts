@@ -56,6 +56,9 @@ export const MAX_COMPOSITION_NODES = 256;
 /** Mirrors `alpha2_model::MAX_COMPRESSOR_RATIO`. */
 export const MAX_COMPRESSOR_RATIO = 100;
 
+/** Mirrors `alpha2_model::MAX_DASH_ENTRIES`. */
+export const MAX_DASH_ENTRIES = 16;
+
 /** Mirrors `alpha2_model::MAX_EFFECT_INPUTS`. */
 export const MAX_EFFECT_INPUTS = 8;
 
@@ -107,6 +110,15 @@ export const MAX_LOTTIE_DOCUMENT_BYTES = 16777216;
 /** Mirrors `alpha2_model::MAX_MERGE_LAYERS`. */
 export const MAX_MERGE_LAYERS = 32;
 
+/** Mirrors `alpha2_model::MAX_PATH_SUBPATHS`. */
+export const MAX_PATH_SUBPATHS = 256;
+
+/** Mirrors `alpha2_model::MAX_PATH_VERTICES`. */
+export const MAX_PATH_VERTICES = 4096;
+
+/** Mirrors `alpha2_model::MAX_POLYSTAR_POINTS`. */
+export const MAX_POLYSTAR_POINTS = 100;
+
 /** Mirrors `alpha2_model::MAX_PROJECT_JSON_BYTES`. */
 export const MAX_PROJECT_JSON_BYTES = 67108864;
 
@@ -118,6 +130,12 @@ export const MAX_SAMPLE_RATE = 96000;
 
 /** Mirrors `alpha2_model::MAX_SEQUENCE_FRAMES`. */
 export const MAX_SEQUENCE_FRAMES = 100000;
+
+/** Mirrors `alpha2_model::MAX_SHAPE_DEPTH`. */
+export const MAX_SHAPE_DEPTH = 32;
+
+/** Mirrors `alpha2_model::MAX_SHAPE_ITEMS`. */
+export const MAX_SHAPE_ITEMS = 1024;
 
 /** Mirrors `alpha2_model::MAX_SVG_DOCUMENT_BYTES`. */
 export const MAX_SVG_DOCUMENT_BYTES = 33554432;
@@ -154,6 +172,9 @@ export const MIN_LEVEL_DB = -96;
 
 /** Mirrors `alpha2_model::MIN_LINE_HEIGHT`. */
 export const MIN_LINE_HEIGHT = 0.5;
+
+/** Mirrors `alpha2_model::MIN_POLYSTAR_POINTS`. */
+export const MIN_POLYSTAR_POINTS = 3;
 
 /** Mirrors `alpha2_model::MIN_SAMPLE_RATE`. */
 export const MIN_SAMPLE_RATE = 8000;
@@ -236,8 +257,21 @@ export const FADE_SHAPE_VALUES: readonly FadeShape[] = [
   "equal_power",
 ];
 
+/** Every {@link FillRule}, in the model's order. */
+export const FILL_RULE_VALUES: readonly FillRule[] = ["nonzero", "evenodd"];
+
 /** Every {@link HdrSources}, in the model's order. */
 export const HDR_SOURCES_VALUES: readonly HdrSources[] = ["tone_map", "reject"];
+
+/** Every {@link LineCap}, in the model's order. */
+export const LINE_CAP_VALUES: readonly LineCap[] = ["butt", "round", "square"];
+
+/** Every {@link LineJoin}, in the model's order. */
+export const LINE_JOIN_VALUES: readonly LineJoin[] = [
+  "miter",
+  "round",
+  "bevel",
+];
 
 /** Every {@link LinearPrimaries}, in the model's order. */
 export const LINEAR_PRIMARIES_VALUES: readonly LinearPrimaries[] = [
@@ -282,6 +316,12 @@ export const MISSING_FRAMES_VALUES: readonly MissingFrames[] = [
   "blank",
 ];
 
+/** Every {@link PolystarKind}, in the model's order. */
+export const POLYSTAR_KIND_VALUES: readonly PolystarKind[] = [
+  "star",
+  "polygon",
+];
+
 /** Every {@link Spread}, in the model's order. */
 export const SPREAD_VALUES: readonly Spread[] = ["pad", "repeat", "reflect"];
 
@@ -305,6 +345,12 @@ export const TRANSFER_FUNCTION_VALUES: readonly TransferFunction[] = [
   "srgb",
   "pq",
   "hlg",
+];
+
+/** Every {@link TrimMode}, in the model's order. */
+export const TRIM_MODE_VALUES: readonly TrimMode[] = [
+  "together",
+  "individually",
 ];
 
 /**
@@ -377,6 +423,38 @@ export type Animated<T> =
        * Strictly ascending keyframes. The evaluator clamps outside the sequence.
        */
       readonly keyframes: readonly Keyframe<T>[];
+      /**
+       * Values evaluated from their keyframe sequence.
+       */
+      readonly mode: "keyframes";
+    };
+
+/**
+ * A position that can move along curves between its keyframes.
+ *
+ * Its JSON is that of an `Animated<Vec2>`, plus optional spatial tangents on
+ * each keyframe: with them, the value travels along the cubic Bezier from
+ * one keyframe's value through its `out_tangent` and the next keyframe's
+ * `in_tangent`, at the speed its timing curve sets along the curve's
+ * length. Without them it moves in a straight line, as an `Animated<Vec2>`
+ * does.
+ */
+export type AnimatedPoint =
+  | {
+      /**
+       * A value without animation.
+       */
+      readonly mode: "constant";
+      /**
+       * Value used at every timestamp.
+       */
+      readonly value: Vec2;
+    }
+  | {
+      /**
+       * Strictly ascending keyframes. The evaluator clamps outside the sequence.
+       */
+      readonly keyframes: readonly PointKeyframe[];
       /**
        * Values evaluated from their keyframe sequence.
        */
@@ -897,6 +975,24 @@ export interface CompositionNode {
 }
 
 /**
+ * A dash pattern.
+ */
+export interface Dash {
+  /**
+   * How far into the pattern the stroke starts.
+   *
+   * @defaultValue `{"mode":"constant","value":0}`
+   */
+  readonly offset?: Animated<number>;
+  /**
+   * Alternating dash and gap lengths, as fractions of the shorter side:
+   * one to `MAX_DASH_ENTRIES` non-negative entries, not all zero. An
+   * odd count repeats once more to pair up.
+   */
+  readonly pattern: readonly Animated<number>[];
+}
+
+/**
  * Sidechain ducking authored on the track that is attenuated.
  */
 export interface Ducking {
@@ -1077,6 +1173,11 @@ export type EqBandKind = "peaking" | "low_pass" | "high_pass";
 export type FadeShape = "linear" | "equal_power";
 
 /**
+ * Which regions of a path are inside it.
+ */
+export type FillRule = "nonzero" | "evenodd";
+
+/**
  * A positive rational frame rate in reduced form, at most one frame per tick
  * (120 000 frames per second).
  */
@@ -1092,38 +1193,14 @@ export interface FrameRate {
 }
 
 /**
- * The outline of a `Generator::Shape`.
- */
-export type GeneratedShape =
-  | {
-      /**
-       * Corner radius, as a fraction of the picture's shorter side.
-       * Non-negative; a radius past half the rectangle is capped.
-       *
-       * @defaultValue `0`
-       */
-      readonly corner_radius?: number;
-      /**
-       * A rectangle, optionally with rounded corners.
-       */
-      readonly type: "rectangle";
-    }
-  | {
-      /**
-       * The ellipse inscribed in the size.
-       */
-      readonly type: "ellipse";
-    };
-
-/**
  * The picture of a generated source.
  *
  * A generated picture has the canvas's size and aspect, like a source that
  * fills the frame at scale 1. Positions are in its normalized space, `(0, 0)`
  * top-left to `(1, 1)` bottom-right; lengths (radii, stroke widths) are
  * fractions of its shorter side, so the picture is the same at any render
- * resolution. It does not change over time: a clip animates it with its
- * transform, effects, and masks.
+ * resolution. A fill or text does not change over time (a clip animates it
+ * with its transform, effects, and masks); shapes may.
  */
 export type Generator =
   | {
@@ -1138,39 +1215,16 @@ export type Generator =
     }
   | {
       /**
-       * Centre of the shape.
+       * The content tree, front first. See `ShapeItem`.
        */
-      readonly center: Vec2;
+      readonly items: readonly ShapeItem[];
       /**
-       * Paint inside the outline.
-       *
-       * @defaultValue `null`
+       * Shapes drawn from an ordered content tree, as an After Effects shape
+       * layer or a Lottie shape layer draws them. Unlike the other
+       * generators, its picture changes over time: every value in the tree
+       * may be keyframed, in the picture's time.
        */
-      readonly fill?: Paint | null;
-      /**
-       * Clockwise rotation about the centre, in degrees.
-       *
-       * @defaultValue `0`
-       */
-      readonly rotation_degrees?: number;
-      /**
-       * The shape's outline.
-       */
-      readonly shape: GeneratedShape;
-      /**
-       * Full width and height of the shape, before rotation. Non-negative.
-       */
-      readonly size: Vec2;
-      /**
-       * Paint along the outline, drawn over the fill.
-       *
-       * @defaultValue `null`
-       */
-      readonly stroke?: Stroke | null;
-      /**
-       * One shape on a transparent picture, filled, stroked, or both.
-       */
-      readonly type: "shape";
+      readonly type: "shapes";
     }
   | {
       /**
@@ -1288,6 +1342,16 @@ export interface Limiter {
 }
 
 /**
+ * How an open stroke ends.
+ */
+export type LineCap = "butt" | "round" | "square";
+
+/**
+ * How stroke segments meet at a vertex.
+ */
+export type LineJoin = "miter" | "round" | "bevel";
+
+/**
  * Named RGB primaries linear-light media may be in, each with its own white
  * point.
  */
@@ -1306,30 +1370,6 @@ export type LoopMode = "repeat" | "ping_pong";
  * clip whose only mask subtracts is visible outside the shape.
  */
 export type MaskMode = "add" | "subtract" | "intersect";
-
-/**
- * The outline of a `ShapeMask`.
- */
-export type MaskShape =
-  | {
-      /**
-       * Corner radius, as a fraction of the shorter side of source
-       * space. Non-negative; a radius past half the rectangle is capped.
-       *
-       * @defaultValue `{"mode":"constant","value":0}`
-       */
-      readonly corner_radius?: Animated<number>;
-      /**
-       * A rectangle, optionally with rounded corners.
-       */
-      readonly type: "rectangle";
-    }
-  | {
-      /**
-       * The ellipse inscribed in the size.
-       */
-      readonly type: "ellipse";
-    };
 
 /**
  * Project-wide master bus settings.
@@ -1816,6 +1856,75 @@ export type Paint =
     };
 
 /**
+ * One or more subpaths.
+ */
+export interface Path {
+  /**
+   * The subpaths, at most `MAX_PATH_SUBPATHS`, with at most
+   * `MAX_PATH_VERTICES` vertices among them.
+   */
+  readonly subpaths: readonly Subpath[];
+}
+
+/**
+ * A path vertex and its tangents. The segment from vertex `a` to vertex
+ * `b` is the cubic Bezier through `a.point`, `a.point + a.out_tangent`,
+ * `b.point + b.in_tangent`, and `b.point`; zero tangents make it straight.
+ */
+export interface PathVertex {
+  /**
+   * The control point of the segment ending here, relative to `point`.
+   *
+   * @defaultValue `{"x":0,"y":0}`
+   */
+  readonly in_tangent?: Vec2;
+  /**
+   * The control point of the segment starting here, relative to `point`.
+   *
+   * @defaultValue `{"x":0,"y":0}`
+   */
+  readonly out_tangent?: Vec2;
+  /**
+   * Where the vertex lies.
+   */
+  readonly point: Vec2;
+}
+
+/**
+ * One keyframe of an `AnimatedPoint`.
+ */
+export interface PointKeyframe {
+  /**
+   * The end of the way here from the previous keyframe's value, relative
+   * to this value: that curve's second control point.
+   */
+  readonly in_tangent?: Vec2;
+  /**
+   * Interpolation from this keyframe to its successor: how fast the value
+   * travels along the way there.
+   */
+  readonly interpolation: Interpolation;
+  /**
+   * The start of the way to the next keyframe's value, relative to this
+   * value: the curve's first control point.
+   */
+  readonly out_tangent?: Vec2;
+  /**
+   * Timestamp of this value, as a `Keyframe`'s.
+   */
+  readonly time: MediaTime;
+  /**
+   * Value at `time`.
+   */
+  readonly value: Vec2;
+}
+
+/**
+ * What kind of figure a polystar is.
+ */
+export type PolystarKind = "star" | "polygon";
+
+/**
  * A stable project identifier.
  */
 export type ProjectId = string;
@@ -1992,26 +2101,375 @@ export interface Rgba {
 }
 
 /**
+ * A geometry alone, as a mask's outline is.
+ */
+export type ShapeGeometry =
+  | {
+      /**
+       * Centre.
+       */
+      readonly center: AnimatedPoint;
+      /**
+       * Corner radius, as a fraction of the shorter side. Non-negative; a
+       * radius past half the rectangle is capped.
+       *
+       * @defaultValue `{"mode":"constant","value":0}`
+       */
+      readonly corner_radius?: Animated<number>;
+      /**
+       * Clockwise rotation about the centre, in degrees.
+       *
+       * @defaultValue `{"mode":"constant","value":0}`
+       */
+      readonly rotation_degrees?: Animated<number>;
+      /**
+       * Full width and height, before rotation. Non-negative.
+       */
+      readonly size: Animated<Vec2>;
+      /**
+       * A rectangle, optionally with rounded corners.
+       */
+      readonly type: "rectangle";
+    }
+  | {
+      /**
+       * Centre.
+       */
+      readonly center: AnimatedPoint;
+      /**
+       * Clockwise rotation about the centre, in degrees.
+       *
+       * @defaultValue `{"mode":"constant","value":0}`
+       */
+      readonly rotation_degrees?: Animated<number>;
+      /**
+       * Full width and height, before rotation. Non-negative.
+       */
+      readonly size: Animated<Vec2>;
+      /**
+       * An ellipse.
+       */
+      readonly type: "ellipse";
+    }
+  | {
+      /**
+       * Centre.
+       */
+      readonly center: AnimatedPoint;
+      /**
+       * A star's distance of its inner corners from the centre. Non-negative.
+       *
+       * @defaultValue `{"mode":"constant","value":0}`
+       */
+      readonly inner_radius?: Animated<number>;
+      /**
+       * How round a star's inner corners are, in `0..=1`.
+       *
+       * @defaultValue `{"mode":"constant","value":0}`
+       */
+      readonly inner_roundness?: Animated<number>;
+      /**
+       * A polygon or a star.
+       */
+      readonly kind: PolystarKind;
+      /**
+       * Distance of the points from the centre, as a fraction of the shorter
+       * side. Non-negative.
+       */
+      readonly outer_radius: Animated<number>;
+      /**
+       * How round the outer corners are: 0 sharp, 1 a smooth curve through
+       * them. In `0..=1`.
+       *
+       * @defaultValue `{"mode":"constant","value":0}`
+       */
+      readonly outer_roundness?: Animated<number>;
+      /**
+       * Number of points (corners of a polygon, tips of a star), from
+       * `MIN_POLYSTAR_POINTS` to `MAX_POLYSTAR_POINTS`. A fraction is
+       * dropped when drawn, as Lottie drops it, so an animated count changes
+       * the figure one whole point at a time.
+       */
+      readonly points: Animated<number>;
+      /**
+       * Clockwise rotation about the centre, in degrees.
+       *
+       * @defaultValue `{"mode":"constant","value":0}`
+       */
+      readonly rotation_degrees?: Animated<number>;
+      /**
+       * A regular polygon or star.
+       */
+      readonly type: "polystar";
+    }
+  | {
+      /**
+       * The path.
+       */
+      readonly path: Animated<Path>;
+      /**
+       * A Bezier path.
+       */
+      readonly type: "path";
+    };
+
+/**
+ * One entry of a shapes generator's content tree.
+ *
+ * A group is read front to back. Geometry accumulates in its group; a fill
+ * or a stroke paints the geometry listed before it in the same group,
+ * nested groups before it included; a trim cuts that geometry and replaces
+ * it. A paint listed earlier is drawn on top of one listed later, as in
+ * After Effects and Lottie.
+ */
+export type ShapeItem =
+  | {
+      /**
+       * The group's items, front first.
+       */
+      readonly items: readonly ShapeItem[];
+      /**
+       * Where the group lies, and how opaque it is.
+       */
+      readonly transform?: ShapeTransform;
+      /**
+       * Items drawn together, through one transform and opacity. Their
+       * geometry also counts as the enclosing group's, for the paints and
+       * trims after the group.
+       */
+      readonly type: "group";
+    }
+  | {
+      /**
+       * Centre.
+       */
+      readonly center: AnimatedPoint;
+      /**
+       * Corner radius, as a fraction of the shorter side. Non-negative; a
+       * radius past half the rectangle is capped.
+       *
+       * @defaultValue `{"mode":"constant","value":0}`
+       */
+      readonly corner_radius?: Animated<number>;
+      /**
+       * Clockwise rotation about the centre, in degrees.
+       *
+       * @defaultValue `{"mode":"constant","value":0}`
+       */
+      readonly rotation_degrees?: Animated<number>;
+      /**
+       * Full width and height, before rotation. Non-negative.
+       */
+      readonly size: Animated<Vec2>;
+      /**
+       * A rectangle, optionally with rounded corners.
+       */
+      readonly type: "rectangle";
+    }
+  | {
+      /**
+       * Centre.
+       */
+      readonly center: AnimatedPoint;
+      /**
+       * Clockwise rotation about the centre, in degrees.
+       *
+       * @defaultValue `{"mode":"constant","value":0}`
+       */
+      readonly rotation_degrees?: Animated<number>;
+      /**
+       * Full width and height, before rotation. Non-negative.
+       */
+      readonly size: Animated<Vec2>;
+      /**
+       * An ellipse.
+       */
+      readonly type: "ellipse";
+    }
+  | {
+      /**
+       * Centre.
+       */
+      readonly center: AnimatedPoint;
+      /**
+       * A star's distance of its inner corners from the centre. Non-negative.
+       *
+       * @defaultValue `{"mode":"constant","value":0}`
+       */
+      readonly inner_radius?: Animated<number>;
+      /**
+       * How round a star's inner corners are, in `0..=1`.
+       *
+       * @defaultValue `{"mode":"constant","value":0}`
+       */
+      readonly inner_roundness?: Animated<number>;
+      /**
+       * A polygon or a star.
+       */
+      readonly kind: PolystarKind;
+      /**
+       * Distance of the points from the centre, as a fraction of the shorter
+       * side. Non-negative.
+       */
+      readonly outer_radius: Animated<number>;
+      /**
+       * How round the outer corners are: 0 sharp, 1 a smooth curve through
+       * them. In `0..=1`.
+       *
+       * @defaultValue `{"mode":"constant","value":0}`
+       */
+      readonly outer_roundness?: Animated<number>;
+      /**
+       * Number of points (corners of a polygon, tips of a star), from
+       * `MIN_POLYSTAR_POINTS` to `MAX_POLYSTAR_POINTS`. A fraction is
+       * dropped when drawn, as Lottie drops it, so an animated count changes
+       * the figure one whole point at a time.
+       */
+      readonly points: Animated<number>;
+      /**
+       * Clockwise rotation about the centre, in degrees.
+       *
+       * @defaultValue `{"mode":"constant","value":0}`
+       */
+      readonly rotation_degrees?: Animated<number>;
+      /**
+       * A regular polygon or star.
+       */
+      readonly type: "polystar";
+    }
+  | {
+      /**
+       * The path.
+       */
+      readonly path: Animated<Path>;
+      /**
+       * A Bezier path.
+       */
+      readonly type: "path";
+    }
+  | {
+      /**
+       * Opacity in `0..=1`.
+       *
+       * @defaultValue `{"mode":"constant","value":1}`
+       */
+      readonly opacity?: Animated<number>;
+      /**
+       * What covers it.
+       */
+      readonly paint: Animated<Paint>;
+      /**
+       * Which regions of the compound path are inside.
+       *
+       * @defaultValue `"nonzero"`
+       */
+      readonly rule?: FillRule;
+      /**
+       * Paints the inside of the geometry listed before it in its group, all
+       * of it as one compound path under `rule`. An open path is closed for
+       * it.
+       */
+      readonly type: "fill";
+    }
+  | {
+      /**
+       * How open ends look.
+       *
+       * @defaultValue `"butt"`
+       */
+      readonly cap?: LineCap;
+      /**
+       * Dashes, or a solid stroke when absent.
+       *
+       * @defaultValue `null`
+       */
+      readonly dash?: Dash | null;
+      /**
+       * How segments meet.
+       *
+       * @defaultValue `"miter"`
+       */
+      readonly join?: LineJoin;
+      /**
+       * Longest a miter join reaches, as a multiple of half the width, before
+       * it is beveled. At least 1.
+       *
+       * @defaultValue `4`
+       */
+      readonly miter_limit?: number;
+      /**
+       * Opacity in `0..=1`.
+       *
+       * @defaultValue `{"mode":"constant","value":1}`
+       */
+      readonly opacity?: Animated<number>;
+      /**
+       * What covers the stroke.
+       */
+      readonly paint: Animated<Paint>;
+      /**
+       * Strokes the geometry listed before it in its group.
+       */
+      readonly type: "stroke";
+      /**
+       * Full width, as a fraction of the shorter side. Non-negative; zero
+       * draws nothing.
+       */
+      readonly width: Animated<number>;
+    }
+  | {
+      /**
+       * Where it ends, in `0..=1`. Nothing is kept unless it is after
+       * `start`.
+       */
+      readonly end: Animated<number>;
+      /**
+       * Whether the span is of all the geometry together or of each part.
+       *
+       * @defaultValue `"together"`
+       */
+      readonly mode?: TrimMode;
+      /**
+       * Turns the span is shifted by; it wraps around a closed path.
+       *
+       * @defaultValue `{"mode":"constant","value":0}`
+       */
+      readonly offset?: Animated<number>;
+      /**
+       * Where the kept span starts, as a fraction of the length, in `0..=1`.
+       */
+      readonly start: Animated<number>;
+      /**
+       * Keeps part of the geometry listed before it in its group, by length.
+       */
+      readonly type: "trim";
+    };
+
+/**
  * A shape that limits where a clip is visible.
  *
  * Geometry is in the clip's source space, before its transform, so the mask
  * moves with the clip: `(0, 0)` is the source's top-left corner and `(1, 1)`
- * its bottom-right. Distances (`feather`, a rectangle's `corner_radius`) are
- * fractions of that space's shorter side, so a mask covers the same part of
- * the picture at any render resolution.
+ * its bottom-right. Distances (`feather`, a rectangle's `corner_radius`, a
+ * polystar's radii) are fractions of that space's shorter side, so a mask
+ * covers the same part of the picture at any render resolution.
  */
 export interface ShapeMask {
   /**
-   * Centre of the shape.
-   */
-  readonly center: Animated<Vec2>;
-  /**
-   * Width of the soft edge, centred on the outline. Non-negative; zero is
-   * a one-pixel antialiased edge.
+   * How soft the edge is. Non-negative; zero is the outline's
+   * antialiased edge. The coverage is blurred by a Gaussian of standard
+   * deviation `0.3125 * feather`, which spreads its 10 to 90 percent ramp
+   * over `0.8 * feather` across the outline.
    *
    * @defaultValue `{"mode":"constant","value":0}`
    */
   readonly feather?: Animated<number>;
+  /**
+   * Which regions of the outline are inside it.
+   *
+   * @defaultValue `"nonzero"`
+   */
+  readonly fill_rule?: FillRule;
   /**
    * Whether the mask keeps the outside of the shape instead of its inside.
    *
@@ -2025,19 +2483,49 @@ export interface ShapeMask {
    */
   readonly mode?: MaskMode;
   /**
-   * Clockwise rotation about the centre, in degrees.
+   * The shape's outline, as a shapes generator's geometry.
+   */
+  readonly shape: ShapeGeometry;
+}
+
+/**
+ * A group's placement: in pixel space, translate by `position`, rotate,
+ * scale, and translate by minus `anchor`, so `anchor` lands on `position`.
+ * The default leaves its items where they are.
+ */
+export interface ShapeTransform {
+  /**
+   * The point of the items that is placed at `position`.
+   *
+   * @defaultValue `{"mode":"constant","value":{"x":0,"y":0}}`
+   */
+  readonly anchor?: Animated<Vec2>;
+  /**
+   * Opacity of the group as a whole, in `0..=1`: overlapping items are
+   * composited first and faded together.
+   *
+   * @defaultValue `{"mode":"constant","value":1}`
+   */
+  readonly opacity?: Animated<number>;
+  /**
+   * Where `anchor` is placed.
+   *
+   * @defaultValue `{"mode":"constant","value":{"x":0,"y":0}}`
+   */
+  readonly position?: AnimatedPoint;
+  /**
+   * Clockwise rotation, in degrees.
    *
    * @defaultValue `{"mode":"constant","value":0}`
    */
   readonly rotation_degrees?: Animated<number>;
   /**
-   * The shape's outline.
+   * Per-axis scale; 1 leaves the items unscaled. Stroke widths scale with
+   * it.
+   *
+   * @defaultValue `{"mode":"constant","value":{"x":1,"y":1}}`
    */
-  readonly shape: MaskShape;
-  /**
-   * Full width and height of the shape, before rotation. Non-negative.
-   */
-  readonly size: Animated<Vec2>;
+  readonly scale?: Animated<Vec2>;
 }
 
 /**
@@ -2065,17 +2553,19 @@ export interface StreamTopology {
 }
 
 /**
- * A shape's outline paint. The stroke is centred on the outline.
+ * A run of vertices joined by cubic Bezier segments.
  */
-export interface Stroke {
+export interface Subpath {
   /**
-   * What covers the stroke.
+   * Whether a segment joins the last vertex back to the first.
+   *
+   * @defaultValue `false`
    */
-  readonly paint: Paint;
+  readonly closed?: boolean;
   /**
-   * Full width, as a fraction of the picture's shorter side. Positive.
+   * The vertices, in order.
    */
-  readonly width: number;
+  readonly vertices: readonly PathVertex[];
 }
 
 /**
@@ -2375,6 +2865,11 @@ export type TrackKind = "video" | "audio" | "caption";
 export type TransferFunction = "bt709" | "srgb" | "pq" | "hlg";
 
 /**
+ * What a trim measures.
+ */
+export type TrimMode = "together" | "individually";
+
+/**
  * A two-dimensional value in normalized output coordinates.
  */
 export interface Vec2 {
@@ -2425,9 +2920,10 @@ export interface VisualProperties {
    */
   readonly opacity: Animated<number>;
   /**
-   * Animated normalized canvas translation.
+   * Animated normalized canvas translation, along spatial curves where its
+   * keyframes have tangents.
    */
-  readonly position: Animated<Vec2>;
+  readonly position: AnimatedPoint;
   /**
    * Animated clockwise rotation in degrees.
    */

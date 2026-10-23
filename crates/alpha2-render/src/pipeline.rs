@@ -28,6 +28,7 @@ pub(crate) struct PipelineCache {
     pub(crate) yuv: OnceLock<CachedYuvPipeline>,
     pub(crate) yuv16: OnceLock<CachedYuvPipeline>,
     pub(crate) yuv_repack: OnceLock<CachedYuvRepackPipeline>,
+    pub(crate) vector: OnceLock<crate::vector::CachedVectorPipeline>,
 }
 
 #[derive(Debug)]
@@ -97,5 +98,9 @@ impl PipelineCache {
             + usize::from(self.readback_pack.get().is_some())
             + usize::from(self.yuv_readback.get().is_some())
             + usize::from(self.yuv_repack.get().is_some())
+            + self
+                .vector
+                .get()
+                .map_or(0, crate::vector::CachedVectorPipeline::pipeline_count)
     }
 }

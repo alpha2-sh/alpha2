@@ -1163,5 +1163,108 @@
         "source": "v1"
       }
     ]
+  },
+  {
+    "name": "shapes-paints-without-geometry-and-an-empty-subpath",
+    "project": {
+      "schema_version": 1,
+      "id": "lint",
+      "name": "Lint",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "generated",
+          "generator": {
+            "type": "shapes",
+            "items": [
+              {
+                "type": "fill",
+                "paint": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "solid",
+                    "color": { "red": 1, "green": 0, "blue": 0, "alpha": 1 }
+                  }
+                }
+              },
+              {
+                "type": "path",
+                "path": {
+                  "mode": "constant",
+                  "value": {
+                    "subpaths": [
+                      {
+                        "vertices": [
+                          { "point": { "x": 0, "y": 0 } },
+                          { "point": { "x": 1, "y": 0 } }
+                        ]
+                      },
+                      { "vertices": [] }
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "group",
+                "items": [
+                  {
+                    "type": "stroke",
+                    "width": { "mode": "constant", "value": 0.01 },
+                    "paint": {
+                      "mode": "constant",
+                      "value": {
+                        "type": "solid",
+                        "color": { "red": 1, "green": 1, "blue": 1, "alpha": 1 }
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "s1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "issues": [
+      {
+        "kind": "paint_without_geometry",
+        "owner": { "type": "source", "source": "s1" },
+        "at": "items[0]"
+      },
+      {
+        "kind": "empty_subpath",
+        "owner": { "type": "source", "source": "s1" },
+        "at": "items[1].path.subpaths[1]"
+      },
+      {
+        "kind": "paint_without_geometry",
+        "owner": { "type": "source", "source": "s1" },
+        "at": "items[2].items[0]"
+      }
+    ]
   }
 ]

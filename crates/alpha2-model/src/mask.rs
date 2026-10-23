@@ -1,6 +1,6 @@
 //! Shape masks and track mattes: what limits where a clip is visible.
 
-use crate::{Animated, ClipId, Vec2};
+use crate::{Animated, ClipId, FillRule, ShapeGeometry, ShapeIssue, ShapeProblem};
 use serde::{Deserialize, Serialize};
 
 /// Most shape masks on one clip.
@@ -10,24 +10,19 @@ pub const MAX_CLIP_MASKS: usize = 8;
 ///
 /// Geometry is in the clip's source space, before its transform, so the mask
 /// moves with the clip: `(0, 0)` is the source's top-left corner and `(1, 1)`
-/// its bottom-right. Distances (`feather`, a rectangle's `corner_radius`) are
-/// fractions of that space's shorter side, so a mask covers the same part of
-/// the picture at any render resolution.
+/// its bottom-right. Distances (`feather`, a rectangle's `corner_radius`, a
+/// polystar's radii) are fractions of that space's shorter side, so a mask
+/// covers the same part of the picture at any render resolution.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct ShapeMask {
-    /// The shape's outline.
-    pub shape: MaskShape,
-    /// Centre of the shape.
-    pub center: Animated<Vec2>,
-    /// Full width and height of the shape, before rotation. Non-negative.
-    pub size: Animated<Vec2>,
-    /// Clockwise rotation about the centre, in degrees.
-    #[serde(default = "zero")]
-    pub rotation_degrees: Animated<f32>,
-    /// Width of the soft edge, centred on the outline. Non-negative; zero is
-    /// a one-pixel antialiased edge.
+    /// The shape's outline, as a shapes generator's geometry.
+    pub shape: ShapeGeometry,
+    /// How soft the edge is. Non-negative; zero is the outline's
+    /// antialiased edge. The coverage is blurred by a Gaussian of standard
+    /// deviation `0.3125 * feather`, which spreads its 10 to 90 percent ramp
+    /// over `0.8 * feather` across the outline.
     #[serde(default = "zero")]
     pub feather: Animated<f32>,
     /// Whether the mask keeps the outside of the shape instead of its inside.
@@ -36,52 +31,13 @@ pub struct ShapeMask {
     /// How this mask combines with the ones before it.
     #[serde(default)]
     pub mode: MaskMode,
+    /// Which regions of the outline are inside it.
+    #[serde(default)]
+    pub fill_rule: FillRule,
 }
 
 fn zero() -> Animated<f32> {
     Animated::Constant { value: 0.0 }
-}
-
-/// The outline of a [`ShapeMask`].
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(tag = "type", rename_all = "snake_case", from = "MaskShapeWire")]
-pub enum MaskShape {
-    /// A rectangle, optionally with rounded corners.
-    Rectangle {
-        /// Corner radius, as a fraction of the shorter side of source
-        /// space. Non-negative; a radius past half the rectangle is capped.
-        corner_radius: Animated<f32>,
-    },
-    /// The ellipse inscribed in the size.
-    Ellipse,
-}
-
-/// The wire form of [`MaskShape`]: an empty struct variant rejects extra
-/// fields where serde's unit variant would ignore them.
-#[derive(Deserialize)]
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[cfg_attr(feature = "schema", schemars(rename = "MaskShape"))]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum MaskShapeWire {
-    /// A rectangle, optionally with rounded corners.
-    Rectangle {
-        /// Corner radius, as a fraction of the shorter side of source
-        /// space. Non-negative; a radius past half the rectangle is capped.
-        #[serde(default = "zero")]
-        corner_radius: Animated<f32>,
-    },
-    /// The ellipse inscribed in the size.
-    Ellipse {},
-}
-
-impl From<MaskShapeWire> for MaskShape {
-    fn from(wire: MaskShapeWire) -> Self {
-        match wire {
-            MaskShapeWire::Rectangle { corner_radius } => Self::Rectangle { corner_radius },
-            MaskShapeWire::Ellipse {} => Self::Ellipse,
-        }
-    }
 }
 
 /// How a mask combines with the coverage of the masks before it.
@@ -132,21 +88,24 @@ pub enum MatteMode {
 }
 
 impl ShapeMask {
-    pub(crate) fn is_valid(&self) -> bool {
-        let non_negative = |animation: &Animated<f32>| {
-            crate::animation::valid_scalar_values(animation, |value| value >= 0.0)
-        };
-        let sizes = crate::animation::valid_vec2_values(&self.size, |value| {
-            value.x >= 0.0 && value.y >= 0.0
-        });
-        let shape = match &self.shape {
-            MaskShape::Rectangle { corner_radius } => non_negative(corner_radius),
-            MaskShape::Ellipse => true,
-        };
-        shape
-            && sizes
-            && crate::animation::valid_vec2_values(&self.center, |_| true)
-            && crate::animation::valid_scalar_values(&self.rotation_degrees, |_| true)
-            && non_negative(&self.feather)
+    /// Checks the outline and feather; `at` names the mask in the issue.
+    pub(crate) fn validate(&self, at: &str) -> Result<(), ShapeIssue> {
+        self.shape.validate(&format!("{at}.shape"))?;
+        if crate::animation::valid_scalar_values(&self.feather, |value| value >= 0.0) {
+            Ok(())
+        } else {
+            Err(ShapeIssue {
+                at: format!("{at}.feather"),
+                problem: ShapeProblem::OutOfRange,
+            })
+        }
     }
+}
+
+/// Checks each of `masks`, naming the first problem by its index.
+pub(crate) fn validate_masks(masks: &[ShapeMask]) -> Result<(), ShapeIssue> {
+    for (index, mask) in masks.iter().enumerate() {
+        mask.validate(&format!("masks[{index}]"))?;
+    }
+    Ok(())
 }

@@ -46,7 +46,14 @@ import {
   MAX_INLINED_NODES,
   MAX_MERGE_LAYERS,
   MAX_CLIP_MASKS,
+  MAX_DASH_ENTRIES,
   MAX_GRADIENT_STOPS,
+  MAX_PATH_SUBPATHS,
+  MAX_PATH_VERTICES,
+  MAX_POLYSTAR_POINTS,
+  MAX_SHAPE_DEPTH,
+  MAX_SHAPE_ITEMS,
+  MIN_POLYSTAR_POINTS,
   MAX_CLIPS,
   MAX_CLIPS_PER_TRACK,
   MAX_AUDIO_DELAY_MS,
@@ -413,7 +420,10 @@ function catalogOf(
     } else if (source.composition != null) {
       problems.push(`source ${sourceId} is not a valid composition source`);
     } else if (source.kind === "generated") {
-      if (
+      const issue = generatorShapeIssue(source.generator);
+      if (issue) {
+        problems.push(shapeProblem(`source ${sourceId}`, issue));
+      } else if (
         !validGenerator(source.generator) ||
         text(source.locator).length > 0 ||
         source.color_metadata != null ||
@@ -637,8 +647,11 @@ function clipProblems(
   }
   for (const problem of audioProblems(clipId, clip.audio))
     problems.push(problem);
-  if (!validMasks(clip.masks, trackKind)) {
+  if (!validMaskCount(clip.masks, trackKind)) {
     problems.push(`clip ${clipId} has an invalid mask`);
+  } else {
+    const issue = masksIssue(clip.masks);
+    if (issue) problems.push(shapeProblem(`clip ${clipId}`, issue));
   }
   if (clip.matte != null && trackKind !== "video") {
     problems.push(`clip ${clipId} has an invalid matte`);
@@ -1811,7 +1824,7 @@ function validVisual(visual: unknown): boolean {
   return (
     isRecord(visual) &&
     validVec2(visual.anchor) &&
-    validVec2Animation(visual.position) &&
+    validPointAnimation(visual.position) &&
     validVec2Animation(visual.scale) &&
     visual.rotation_degrees !== undefined &&
     validScalarAnimation(visual.rotation_degrees) &&
@@ -2362,14 +2375,17 @@ function positive(value: unknown): boolean {
 }
 
 /**
- * A fill, or a shape with a fill or a stroke, whose paints are valid: colors in `0..=1`, gradients
- * of two to {@link MAX_GRADIENT_STOPS} ordered stops, a linear gradient's ends distinct, a radial
- * radius and a stroke width positive. Or text: non-empty, at most {@link MAX_TEXT_CONTENT_BYTES}
- * bytes, in a valid style whose font size is at most {@link MAX_TEXT_GENERATOR_FONT_SIZE}.
+ * A fill whose paint is valid: colors in `0..=1`, gradients of two to {@link MAX_GRADIENT_STOPS}
+ * ordered stops, a linear gradient's ends distinct, a radial radius positive. Or shapes whose
+ * content tree is valid ({@link shapeItemsIssue}). Or text: non-empty, at most
+ * {@link MAX_TEXT_CONTENT_BYTES} bytes, in a valid style whose font size is at most
+ * {@link MAX_TEXT_GENERATOR_FONT_SIZE}.
  */
 function validGenerator(generator: unknown): boolean {
   if (!isRecord(generator)) return false;
   if (generator.type === "fill") return validPaint(generator.paint);
+  if (generator.type === "shapes")
+    return shapeItemsIssue(generator.items) === undefined;
   if (generator.type === "text")
     return (
       typeof generator.text === "string" &&
@@ -2378,26 +2394,400 @@ function validGenerator(generator: unknown): boolean {
         MAX_TEXT_CONTENT_BYTES &&
       validTextStyle(generator.style ?? {}, MAX_TEXT_GENERATOR_FONT_SIZE)
     );
-  if (generator.type !== "shape") return false;
-  const shape = isRecord(generator.shape) ? generator.shape : {};
-  const radius = shape.corner_radius ?? 0;
-  const size = generator.size;
-  const stroke = generator.stroke;
-  return (
-    (shape.type !== "rectangle" || (finiteNumber(radius) && radius >= 0)) &&
-    validVec2(generator.center) &&
-    validVec2(size) &&
-    (size as Vec2).x >= 0 &&
-    (size as Vec2).y >= 0 &&
-    finiteNumber(generator.rotation_degrees ?? 0) &&
-    (generator.fill != null || stroke != null) &&
-    (generator.fill == null || validPaint(generator.fill)) &&
-    (stroke == null ||
-      (isRecord(stroke) &&
-        finiteNumber(stroke.width) &&
-        stroke.width > 0 &&
-        validPaint(stroke.paint)))
+  return false;
+}
+
+/** Where in a content tree or mask outline a problem lies, worded as the engine words it. */
+interface ShapeIssue {
+  readonly at: string;
+  readonly problem: string;
+}
+
+/** Mirrors `ShapeProblem`'s wording. */
+const SHAPE_PROBLEM = {
+  tooManyItems: "has more items than a shapes generator may hold",
+  tooDeep: "nests groups too deeply",
+  pathTooLarge: "has more subpaths or vertices than a path may hold",
+  invalidDash: "has an invalid dash pattern",
+  invalidKeyframes: "has invalid keyframes",
+  outOfRange: "has a value out of range",
+  pathKeyframesDiffer: "has path keyframes that differ in structure",
+  paintKeyframesDiffer: "has paint keyframes that differ in kind or stops",
+} as const;
+
+/** A generator's shape problem, if it is a shapes generator with one. */
+function generatorShapeIssue(generator: unknown): ShapeIssue | undefined {
+  return isRecord(generator) && generator.type === "shapes"
+    ? shapeItemsIssue(generator.items)
+    : undefined;
+}
+
+/** `issue` as a problem of `owner` (`source s`, `clip c`, `node n of composition g`). */
+function shapeProblem(owner: string, issue: ShapeIssue): string {
+  return `${owner} has an invalid shape: ${issue.at} ${issue.problem}`;
+}
+
+/**
+ * Mirrors `validate_shape_items`: the first problem of a content tree in document order. Its
+ * limits ({@link MAX_SHAPE_ITEMS} items over every group, groups {@link MAX_SHAPE_DEPTH}
+ * deep), every value's range, and keyframed paths and paints alike in structure.
+ */
+function shapeItemsIssue(items: unknown): ShapeIssue | undefined {
+  const counted = { count: 0 };
+  return shapeGroupIssue(items, "items", 1, counted);
+}
+
+function shapeGroupIssue(
+  items: unknown,
+  at: string,
+  depth: number,
+  counted: { count: number },
+): ShapeIssue | undefined {
+  if (depth > MAX_SHAPE_DEPTH) return { at, problem: SHAPE_PROBLEM.tooDeep };
+  const list = Array.isArray(items) ? (items as readonly unknown[]) : [];
+  for (const [index, item] of list.entries()) {
+    const here = `${at}[${index}]`;
+    counted.count += 1;
+    if (counted.count > MAX_SHAPE_ITEMS) {
+      return { at: here, problem: SHAPE_PROBLEM.tooManyItems };
+    }
+    const issue = shapeItemIssue(item, here, depth, counted);
+    if (issue) return issue;
+  }
+  return undefined;
+}
+
+function shapeItemIssue(
+  item: unknown,
+  at: string,
+  depth: number,
+  counted: { count: number },
+): ShapeIssue | undefined {
+  if (!isRecord(item)) return { at, problem: SHAPE_PROBLEM.outOfRange };
+  switch (item.type) {
+    case "group":
+      return (
+        shapeTransformIssue(item.transform, `${at}.transform`) ??
+        shapeGroupIssue(item.items, `${at}.items`, depth + 1, counted)
+      );
+    case "rectangle":
+    case "ellipse":
+    case "polystar":
+    case "path":
+      return shapeGeometryIssue(item, at);
+    case "fill":
+      return (
+        animatedPaintIssue(item.paint, `${at}.paint`) ??
+        shapeScalarIssue(item.opacity, `${at}.opacity`, unitValue)
+      );
+    case "stroke":
+      return strokeIssue(item, at);
+    case "trim":
+      return (
+        shapeScalarIssue(item.start, `${at}.start`, unitValue) ??
+        shapeScalarIssue(item.end, `${at}.end`, unitValue) ??
+        shapeScalarIssue(item.offset, `${at}.offset`, anyValue)
+      );
+    default:
+      return { at, problem: SHAPE_PROBLEM.outOfRange };
+  }
+}
+
+const unitValue = (value: number): boolean => value >= 0 && value <= 1;
+const nonNegativeValue = (value: number): boolean => value >= 0;
+const anyValue = (): boolean => true;
+
+/**
+ * An animated scalar's problem: keyframes empty, out of order, or with an unusable curve, then any
+ * value not finite or failing `check`. A missing value takes its default, which is valid.
+ */
+function shapeScalarIssue(
+  animation: unknown,
+  at: string,
+  check: (value: number) => boolean,
+): ShapeIssue | undefined {
+  if (animation === undefined) return undefined;
+  const values = animationValues<unknown>(animation);
+  if (values === undefined) {
+    return { at, problem: SHAPE_PROBLEM.invalidKeyframes };
+  }
+  return values.every((value) => finiteNumber(value) && check(value))
+    ? undefined
+    : { at, problem: SHAPE_PROBLEM.outOfRange };
+}
+
+function shapeVec2Issue(
+  animation: unknown,
+  at: string,
+  check: (value: Vec2) => boolean,
+): ShapeIssue | undefined {
+  if (animation === undefined) return undefined;
+  const values = animationValues<unknown>(animation);
+  if (values === undefined) {
+    return { at, problem: SHAPE_PROBLEM.invalidKeyframes };
+  }
+  return values.every((value) => validVec2(value) && check(value as Vec2))
+    ? undefined
+    : { at, problem: SHAPE_PROBLEM.outOfRange };
+}
+
+/** Mirrors `valid_point_animation`: keyframes as any animation's, values and tangents finite. */
+function validPointAnimation(animation: unknown): boolean {
+  return shapePointIssue(animation, "") === undefined;
+}
+
+function shapePointIssue(
+  animation: unknown,
+  at: string,
+): ShapeIssue | undefined {
+  if (animation === undefined) return undefined;
+  const values = animationValues<unknown>(animation);
+  if (values === undefined) {
+    return { at, problem: SHAPE_PROBLEM.invalidKeyframes };
+  }
+  const keyframes =
+    isRecord(animation) && Array.isArray(animation.keyframes)
+      ? (animation.keyframes as readonly unknown[])
+      : [];
+  const tangents = keyframes.every(
+    (keyframe) =>
+      isRecord(keyframe) &&
+      (keyframe.in_tangent === undefined || validVec2(keyframe.in_tangent)) &&
+      (keyframe.out_tangent === undefined || validVec2(keyframe.out_tangent)),
   );
+  return tangents && values.every(validVec2)
+    ? undefined
+    : { at, problem: SHAPE_PROBLEM.outOfRange };
+}
+
+const nonNegativeSize = (value: Vec2): boolean => value.x >= 0 && value.y >= 0;
+
+/** Mirrors `ShapeGeometry::validate`: a mask's outline, or a content tree's geometry item. */
+function shapeGeometryIssue(
+  geometry: Record<string, unknown>,
+  at: string,
+): ShapeIssue | undefined {
+  switch (geometry.type) {
+    case "rectangle":
+      return (
+        shapePointIssue(geometry.center, `${at}.center`) ??
+        shapeVec2Issue(geometry.size, `${at}.size`, nonNegativeSize) ??
+        shapeScalarIssue(
+          geometry.corner_radius,
+          `${at}.corner_radius`,
+          nonNegativeValue,
+        ) ??
+        shapeScalarIssue(
+          geometry.rotation_degrees,
+          `${at}.rotation_degrees`,
+          anyValue,
+        )
+      );
+    case "ellipse":
+      return (
+        shapePointIssue(geometry.center, `${at}.center`) ??
+        shapeVec2Issue(geometry.size, `${at}.size`, nonNegativeSize) ??
+        shapeScalarIssue(
+          geometry.rotation_degrees,
+          `${at}.rotation_degrees`,
+          anyValue,
+        )
+      );
+    case "polystar":
+      return (
+        shapePointIssue(geometry.center, `${at}.center`) ??
+        shapeScalarIssue(
+          geometry.points,
+          `${at}.points`,
+          (points) =>
+            points >= MIN_POLYSTAR_POINTS && points <= MAX_POLYSTAR_POINTS,
+        ) ??
+        shapeScalarIssue(
+          geometry.outer_radius,
+          `${at}.outer_radius`,
+          nonNegativeValue,
+        ) ??
+        shapeScalarIssue(
+          geometry.inner_radius,
+          `${at}.inner_radius`,
+          nonNegativeValue,
+        ) ??
+        shapeScalarIssue(
+          geometry.outer_roundness,
+          `${at}.outer_roundness`,
+          unitValue,
+        ) ??
+        shapeScalarIssue(
+          geometry.inner_roundness,
+          `${at}.inner_roundness`,
+          unitValue,
+        ) ??
+        shapeScalarIssue(
+          geometry.rotation_degrees,
+          `${at}.rotation_degrees`,
+          anyValue,
+        )
+      );
+    case "path":
+      return animatedPathIssue(geometry.path, `${at}.path`);
+    default:
+      return { at, problem: SHAPE_PROBLEM.outOfRange };
+  }
+}
+
+function shapeTransformIssue(
+  transform: unknown,
+  at: string,
+): ShapeIssue | undefined {
+  if (!isRecord(transform)) return undefined;
+  return (
+    shapeVec2Issue(transform.anchor, `${at}.anchor`, () => true) ??
+    shapePointIssue(transform.position, `${at}.position`) ??
+    shapeVec2Issue(transform.scale, `${at}.scale`, () => true) ??
+    shapeScalarIssue(
+      transform.rotation_degrees,
+      `${at}.rotation_degrees`,
+      anyValue,
+    ) ??
+    shapeScalarIssue(transform.opacity, `${at}.opacity`, unitValue)
+  );
+}
+
+function strokeIssue(
+  stroke: Record<string, unknown>,
+  at: string,
+): ShapeIssue | undefined {
+  const issue =
+    animatedPaintIssue(stroke.paint, `${at}.paint`) ??
+    shapeScalarIssue(stroke.width, `${at}.width`, nonNegativeValue) ??
+    shapeScalarIssue(stroke.opacity, `${at}.opacity`, unitValue);
+  if (issue) return issue;
+  const miter = stroke.miter_limit ?? 4;
+  if (!finiteNumber(miter) || miter < 1) {
+    return { at: `${at}.miter_limit`, problem: SHAPE_PROBLEM.outOfRange };
+  }
+  if (stroke.dash == null) return undefined;
+  const dash = isRecord(stroke.dash) ? stroke.dash : {};
+  const pattern = Array.isArray(dash.pattern)
+    ? (dash.pattern as readonly unknown[])
+    : [];
+  const patternAt = `${at}.dash.pattern`;
+  if (pattern.length === 0 || pattern.length > MAX_DASH_ENTRIES) {
+    return { at: patternAt, problem: SHAPE_PROBLEM.invalidDash };
+  }
+  for (const [index, entry] of pattern.entries()) {
+    const entryIssue = shapeScalarIssue(
+      entry,
+      `${patternAt}[${index}]`,
+      nonNegativeValue,
+    );
+    if (entryIssue) return entryIssue;
+  }
+  // Some entry positive at some keyframe: the pattern has a length to repeat over.
+  const positive = pattern.some((entry) =>
+    (animationValues<number>(entry) ?? []).some((value) => value > 0),
+  );
+  if (!positive) return { at: patternAt, problem: SHAPE_PROBLEM.invalidDash };
+  return shapeScalarIssue(dash.offset, `${at}.dash.offset`, anyValue);
+}
+
+/** A path's subpaths and vertex counts within the limits, every point and tangent finite. */
+function pathIssue(path: unknown, at: string): ShapeIssue | undefined {
+  const subpaths =
+    isRecord(path) && Array.isArray(path.subpaths)
+      ? (path.subpaths as readonly unknown[])
+      : [];
+  let vertices = 0;
+  for (const subpath of subpaths) {
+    if (isRecord(subpath) && Array.isArray(subpath.vertices)) {
+      vertices += subpath.vertices.length;
+    }
+  }
+  if (subpaths.length > MAX_PATH_SUBPATHS || vertices > MAX_PATH_VERTICES) {
+    return { at, problem: SHAPE_PROBLEM.pathTooLarge };
+  }
+  const finite = subpaths.every(
+    (subpath) =>
+      isRecord(subpath) &&
+      Array.isArray(subpath.vertices) &&
+      (subpath.vertices as readonly unknown[]).every(
+        (vertex) =>
+          isRecord(vertex) &&
+          validVec2(vertex.point) &&
+          (vertex.in_tangent === undefined || validVec2(vertex.in_tangent)) &&
+          (vertex.out_tangent === undefined || validVec2(vertex.out_tangent)),
+      ),
+  );
+  return finite ? undefined : { at, problem: SHAPE_PROBLEM.outOfRange };
+}
+
+/** What two path keyframes must share: each subpath's closing and vertex count. */
+function pathStructure(path: unknown): string {
+  const subpaths =
+    isRecord(path) && Array.isArray(path.subpaths)
+      ? (path.subpaths as readonly unknown[])
+      : [];
+  return subpaths
+    .map((subpath) => {
+      const record = isRecord(subpath) ? subpath : {};
+      const count = Array.isArray(record.vertices) ? record.vertices.length : 0;
+      return `${record.closed === true}:${count}`;
+    })
+    .join(",");
+}
+
+function animatedPathIssue(
+  animation: unknown,
+  at: string,
+): ShapeIssue | undefined {
+  if (isRecord(animation) && animation.mode === "constant") {
+    return pathIssue(animation.value, at);
+  }
+  const values = animationValues<unknown>(animation);
+  if (values === undefined) {
+    return { at, problem: SHAPE_PROBLEM.invalidKeyframes };
+  }
+  for (const value of values) {
+    const issue = pathIssue(value, at);
+    if (issue) return issue;
+  }
+  const first = pathStructure(values[0]);
+  return values.every((value) => pathStructure(value) === first)
+    ? undefined
+    : { at, problem: SHAPE_PROBLEM.pathKeyframesDiffer };
+}
+
+/** What two paint keyframes must share: kind, stop count, and a gradient's spread. */
+function paintStructure(paint: unknown): string {
+  const record = isRecord(paint) ? paint : {};
+  const stops = Array.isArray(record.stops) ? record.stops.length : 1;
+  const spread =
+    record.type === "linear_gradient" || record.type === "radial_gradient"
+      ? text(record.spread ?? "pad")
+      : "";
+  return `${text(record.type)}:${stops}:${spread}`;
+}
+
+function animatedPaintIssue(
+  animation: unknown,
+  at: string,
+): ShapeIssue | undefined {
+  if (isRecord(animation) && animation.mode === "constant") {
+    return validPaint(animation.value)
+      ? undefined
+      : { at, problem: SHAPE_PROBLEM.outOfRange };
+  }
+  const values = animationValues<unknown>(animation);
+  if (values === undefined) {
+    return { at, problem: SHAPE_PROBLEM.invalidKeyframes };
+  }
+  if (!values.every(validPaint)) {
+    return { at, problem: SHAPE_PROBLEM.outOfRange };
+  }
+  const first = paintStructure(values[0]);
+  return values.every((value) => paintStructure(value) === first)
+    ? undefined
+    : { at, problem: SHAPE_PROBLEM.paintKeyframesDiffer };
 }
 
 function validPaint(paint: unknown): boolean {
@@ -2796,9 +3186,17 @@ function compositionProblems(
         }
         break;
       }
-      case "generator":
-        if (!validGenerator(op.generator)) invalid();
+      case "generator": {
+        const issue = generatorShapeIssue(op.generator);
+        if (issue) {
+          problems.push(
+            shapeProblem(`node ${nodeId} of composition ${id}`, issue),
+          );
+        } else if (!validGenerator(op.generator)) {
+          invalid();
+        }
         break;
+      }
       case "effect":
         if (!validClipEffect(op.effect) || !validEffectInputs(op.inputs)) {
           invalid();
@@ -2822,9 +3220,17 @@ function compositionProblems(
         }
         break;
       }
-      case "shape_mask":
-        if (!validMasks(op.masks, "video")) invalid();
+      case "shape_mask": {
+        const issue = masksIssue(op.masks);
+        if (issue) {
+          problems.push(
+            shapeProblem(`node ${nodeId} of composition ${id}`, issue),
+          );
+        } else if (!validMaskCount(op.masks, "video")) {
+          invalid();
+        }
         break;
+      }
       case "group": {
         const target = compositions.get(text(op.composition));
         if (!target) {
@@ -2905,33 +3311,31 @@ function compositionProblems(
   return problems;
 }
 
-/**
- * At most {@link MAX_CLIP_MASKS} masks, on visual clips only, each with valid
- * keyframes and a non-negative size, feather, and corner radius.
- */
-function validMasks(masks: unknown, trackKind: unknown): boolean {
+/** At most {@link MAX_CLIP_MASKS} masks, and on visual clips only. */
+function validMaskCount(masks: unknown, trackKind: unknown): boolean {
   if (masks === undefined) return true;
   if (!Array.isArray(masks)) return false;
   if (masks.length === 0) return true;
-  if (trackKind !== "video" || masks.length > MAX_CLIP_MASKS) return false;
-  const nonNegative = (animation: unknown): boolean =>
-    validScalarAnimation(animation ?? { mode: "constant", value: 0 }, 0);
-  return masks.every((mask: unknown) => {
-    if (!isRecord(mask)) return false;
-    const sizes = animationValues<unknown>(mask.size);
-    const shape = isRecord(mask.shape) ? mask.shape : {};
-    return (
-      sizes !== undefined &&
-      sizes.every(
-        (size) =>
-          validVec2(size) && (size as Vec2).x >= 0 && (size as Vec2).y >= 0,
-      ) &&
-      validVec2Animation(mask.center) &&
-      validScalarAnimation(mask.rotation_degrees) &&
-      nonNegative(mask.feather) &&
-      (shape.type !== "rectangle" || nonNegative(shape.corner_radius))
-    );
-  });
+  return trackKind === "video" && masks.length <= MAX_CLIP_MASKS;
+}
+
+/**
+ * Mirrors `validate_masks`: the first mask's problem, its outline checked as geometry is and its
+ * feather non-negative.
+ */
+function masksIssue(masks: unknown): ShapeIssue | undefined {
+  if (!Array.isArray(masks)) return undefined;
+  for (const [index, mask] of (masks as readonly unknown[]).entries()) {
+    const at = `masks[${index}]`;
+    if (!isRecord(mask)) return { at, problem: SHAPE_PROBLEM.outOfRange };
+    const outline = isRecord(mask.shape) ? mask.shape : {};
+    const issue = shapeGeometryIssue(outline, `${at}.shape`);
+    if (issue) return issue;
+    if (mask.feather !== undefined && !validScalarAnimation(mask.feather, 0)) {
+      return { at: `${at}.feather`, problem: SHAPE_PROBLEM.outOfRange };
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -3025,6 +3429,15 @@ export type LintOwner =
     }
   | { readonly type: "cue"; readonly track: string; readonly index: number };
 
+/** The shapes generator a shape {@link LintIssue} is about. */
+export type ShapeLintOwner =
+  | { readonly type: "source"; readonly source: string }
+  | {
+      readonly type: "node";
+      readonly composition: string;
+      readonly node: string;
+    };
+
 /**
  * Something in a valid project that is probably not meant. Every check is conservative: a reported
  * issue is certain.
@@ -3063,7 +3476,21 @@ export type LintIssue =
    */
   | { readonly kind: "unused_source"; readonly source: string }
   /** A high-dynamic-range source in a project whose color pipeline refuses HDR. */
-  | { readonly kind: "hdr_source"; readonly source: string };
+  | { readonly kind: "hdr_source"; readonly source: string }
+  /** A path's subpath without vertices, which draws nothing. */
+  | {
+      readonly kind: "empty_subpath";
+      readonly owner: ShapeLintOwner;
+      /** Such as `items[0].path.subpaths[1]`. */
+      readonly at: string;
+    }
+  /** A fill or stroke with no geometry before it in its group, which paints nothing. */
+  | {
+      readonly kind: "paint_without_geometry";
+      readonly owner: ShapeLintOwner;
+      /** Such as `items[1].items[0]`. */
+      readonly at: string;
+    };
 
 /** The part of `alpha2/wasm` {@link lintProject} uses. */
 export interface LintBinding {
@@ -3072,8 +3499,8 @@ export interface LintBinding {
 
 /**
  * A valid project's non-fatal diagnostics, computed by the engine's own
- * `Project::lint`, in a fixed order: sources, then each track's clips,
- * transitions, and cues.
+ * `Project::lint`, in a fixed order: sources, then shapes generators (sources',
+ * then composition nodes'), then each track's clips, transitions, and cues.
  *
  * Diagnostics never block a load or an export; they flag what is probably a
  * mistake in a project the engine accepts.
