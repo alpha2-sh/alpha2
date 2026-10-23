@@ -54,10 +54,14 @@ if (bindgenVersion !== WASM_BINDGEN_VERSION) {
   );
   process.exit(1);
 }
-const wasmOpt = join(workspace, "node_modules/.bin/wasm-opt");
+// Binaryen's own node script rather than the `.bin` shim, which Windows cannot exec.
+const wasmOpt = join(workspace, "node_modules/binaryen/bin/wasm-opt");
+const runWasmOpt = (args) => run(process.execPath, [wasmOpt, ...args]);
 let binaryenVersion;
 try {
-  binaryenVersion = output(wasmOpt, ["--version"]).split(/\s+/)[2];
+  binaryenVersion = output(process.execPath, [wasmOpt, "--version"]).split(
+    /\s+/,
+  )[2];
 } catch {
   console.error("pinned wasm-opt is required; run npm ci");
   process.exit(1);
@@ -69,7 +73,7 @@ if (binaryenVersion !== BINARYEN_VERSION) {
   process.exit(1);
 }
 // The size budgets in scripts/check-npm-package.mjs are measured on the pinned Rust release.
-run(join(workspace, "scripts/lib/check-rust-toolchain.sh"), [], {
+run("sh", [join(workspace, "scripts/lib/check-rust-toolchain.sh")], {
   stdio: ["ignore", "ignore", "inherit"],
 });
 
@@ -108,7 +112,7 @@ for (const module of modules) {
   const artifact = join(cargoOut, `${module.artifact}.wasm`);
   const { name, bindgen } = module;
   if (bindgen === null) {
-    run(wasmOpt, ["-O3", artifact, "-o", join(out, `${name}.wasm`)]);
+    runWasmOpt(["-O3", artifact, "-o", join(out, `${name}.wasm`)]);
     continue;
   }
   run("wasm-bindgen", [
@@ -123,7 +127,7 @@ for (const module of modules) {
   ]);
   const wasm = join(out, `${name}_bg.wasm`);
   const optimized = join(out, `${name}_bg.opt.wasm`);
-  run(wasmOpt, ["-O3", wasm, "-o", optimized]);
+  runWasmOpt(["-O3", wasm, "-o", optimized]);
   renameSync(optimized, wasm);
 }
 
