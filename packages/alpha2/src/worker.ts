@@ -540,6 +540,7 @@ class WasmRenderWorkerHost implements RenderWorkerHost {
       missingSources: string[];
       missingFrames: WasmMissingFrame[];
       repeated: boolean;
+      unchanged: boolean;
     };
     if (result.missingSources.length === 0) this.#retirePendingUploads();
     return {
@@ -551,6 +552,7 @@ class WasmRenderWorkerHost implements RenderWorkerHost {
       missingSources: result.missingSources,
       missingFrames: result.missingFrames.map(missingFrame),
       repeated: result.repeated,
+      unchanged: result.unchanged,
     };
   }
 

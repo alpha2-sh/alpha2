@@ -152,6 +152,9 @@ pub(crate) struct WebPlaybackResult {
     /// time other than the timeline's.
     pub(crate) missing_frames: Vec<WebMissingFrame>,
     pub(crate) repeated: bool,
+    /// The frame equals the one presented last, so nothing was rendered or
+    /// presented: the canvas still shows it.
+    pub(crate) unchanged: bool,
 }
 
 #[derive(serde::Serialize)]

@@ -361,19 +361,19 @@ test(
       };
       engine.loadProject({ effect_resources: [] });
       engine.setCaptionFonts([font]);
-      assert.equal(await engine.render(0, { context }), true);
+      assert.equal((await engine.render(0, { context })).rendered, true);
       assert.equal(renderer.uploads.length, 1);
       const drawn = covered(renderer.uploads[0].pixels);
       assert.ok(drawn > 50, `the text is drawn: ${drawn} pixels`);
 
       // Without the font the text is left out, as natively.
       engine.setCaptionFonts([]);
-      assert.equal(await engine.render(0, { context }), true);
+      assert.equal((await engine.render(0, { context })).rendered, true);
       assert.equal(renderer.uploads.length, 2, "drawn again");
       assert.equal(covered(renderer.uploads[1].pixels), 0);
 
       engine.setCaptionFonts([font]);
-      assert.equal(await engine.render(0, { context }), true);
+      assert.equal((await engine.render(0, { context })).rendered, true);
       assert.equal(renderer.uploads.length, 3);
       assert.deepEqual(renderer.uploads[2].pixels, renderer.uploads[0].pixels);
       // The SVG's content names its fonts; unchanged fonts are the same content.

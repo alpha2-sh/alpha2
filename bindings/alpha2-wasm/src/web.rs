@@ -2584,6 +2584,41 @@ impl WebEffectRegistry {
         self.player.reset();
     }
 
+    /// Renders preview frames at `scale` times the project's size from now
+    /// on (the preview quality profile's resolution scale; 0.5 until set, 1
+    /// renders at the project's resolution). Drops the held frame, so the
+    /// next `renderAt` presents. Size the surface to `previewSize` after it.
+    ///
+    /// # Errors
+    /// Rejects a scale that is not finite, above 0 and at most 8.
+    #[wasm_bindgen(js_name = setPreviewScale)]
+    pub fn set_preview_scale(&mut self, scale: f32) -> Result<(), JsValue> {
+        let player = Player::new(QualityProfile::preview().with_resolution_scale(scale))
+            .map_err(|error| typed_error(&error))?
+            .with_missing_frame_policy(self.player.missing_frame_policy())
+            .with_prefetch_frames(self.player.prefetch_frames());
+        self.player = player;
+        Ok(())
+    }
+
+    /// The loaded project's render size at the preview scale, `[width,
+    /// height]`: the size `renderAt` renders and the surface should have.
+    ///
+    /// # Errors
+    /// Fails when no project is loaded.
+    #[wasm_bindgen(getter, js_name = previewSize)]
+    pub fn preview_size(&self) -> Result<Vec<u32>, JsValue> {
+        let project = self
+            .project
+            .as_ref()
+            .ok_or_else(|| invalid_state("no project is loaded"))?;
+        let size = self
+            .player
+            .render_size(project)
+            .map_err(|error| typed_error(&error))?;
+        Ok(vec![size.width, size.height])
+    }
+
     /// Exact clip/source/timestamp requests from the same immutable snapshot
     /// used by `renderAt`. Hosts must keep separate decoder cursors for distinct
     /// clip IDs. Tick values are strings so JavaScript can preserve i64.
@@ -2664,9 +2699,11 @@ impl WebEffectRegistry {
     /// Evaluates and presents one project frame on the worker-owned canvas.
     ///
     /// Returns JSON `{ requestedTimeTicks, presentedTimeTicks, missingSources,
-    /// missingFrames, repeated }`: `presentedTimeTicks` is `null` until a frame
-    /// has been presented, and `missingFrames` names the exact source time
-    /// each missing source was needed at.
+    /// missingFrames, repeated, unchanged }`: `presentedTimeTicks` is `null`
+    /// until a frame has been presented, and `missingFrames` names the exact
+    /// source time each missing source was needed at. `unchanged` says the
+    /// frame equals the one presented last (see `Player::render_at`): nothing
+    /// was rendered or presented, and the canvas still shows it.
     #[wasm_bindgen(js_name = renderAt)]
     pub fn render_at(&mut self, time_ticks: i64) -> Result<String, JsValue> {
         let project = self
@@ -2701,8 +2738,9 @@ impl WebEffectRegistry {
                 .collect(),
             missing_frames,
             repeated: playback.repeated,
+            unchanged: playback.unchanged,
         };
-        if let Some(texture) = playback.texture {
+        if let Some(texture) = playback.texture.filter(|_| !playback.unchanged) {
             present_texture(
                 self.surface.as_ref(),
                 self.surface_config.as_ref(),

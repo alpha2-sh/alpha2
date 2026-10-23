@@ -14,6 +14,8 @@ export class Engine {
     this.renders = [];
     this.catalog = null;
     this.lastDiagnostics = null;
+    this.previewScale = 0.5;
+    this.passTiming = false;
     globalThis.stubEngine.engines.push(this);
   }
   async start() {
@@ -27,7 +29,25 @@ export class Engine {
     this.project = project;
     this.loads.push(project);
   }
-  resize() {}
+  resize(width, height) {
+    this.canvas.width = width;
+    this.canvas.height = height;
+  }
+  setPreviewScale(scale) {
+    this.previewScale = scale;
+    return this.previewSize;
+  }
+  get previewSize() {
+    if (!this.project) return null;
+    const { width, height } = this.project.settings;
+    return [
+      Math.round(width * this.previewScale),
+      Math.round(height * this.previewScale),
+    ];
+  }
+  setPassTiming(enabled) {
+    this.passTiming = enabled;
+  }
   invalidate() {
     this.generation += 1;
   }
@@ -39,9 +59,11 @@ export class Engine {
   async render(seconds) {
     // A test may hold a render in flight (`stubEngine.render`), as a slow GPU frame would.
     await globalThis.stubEngine.render?.(this, seconds);
-    this.renders.push({ seconds, project: this.project });
-    if (this.canvas.drawn !== undefined) this.canvas.drawn += 1;
-    return true;
+    // A test may say a frame equals the one shown (`stubEngine.unchanged`): nothing is drawn.
+    const unchanged = globalThis.stubEngine.unchanged?.(this, seconds) === true;
+    this.renders.push({ seconds, project: this.project, unchanged });
+    if (!unchanged && this.canvas.drawn !== undefined) this.canvas.drawn += 1;
+    return { rendered: true, unchanged };
   }
   audible() {
     return false;

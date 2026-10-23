@@ -19,9 +19,23 @@ export function installEditorWorker(scope) {
     bitmapOutput = false,
     currentProject = null,
     revision = -1,
+    // The renderer's diagnostics snapshot last posted: a seek reply carries a new one only.
+    sentDiagnostics = null,
     tail = Promise.resolve();
   const assets = new Map(),
     library = { get: (id) => assets.get(id) };
+  const hasContent = (project) =>
+    project?.timeline.tracks.some(
+      (track) =>
+        (track.clips?.length ?? 0) + (track.captions?.cues.length ?? 0),
+    ) ?? false;
+  // The canvas is the size frames render at, the document's size times the preview scale; with
+  // nothing loaded it stays as it is.
+  const sizeCanvas = () => {
+    const size = hasContent(currentProject) ? engine.previewSize : null;
+    if (size) engine.resize(size[0], size[1]);
+    return size;
+  };
   const context = () => ({
     width: engine.project.settings.width,
     height: engine.project.settings.height,
@@ -65,6 +79,7 @@ export function installEditorWorker(scope) {
             request.runtimeAssets,
           );
           audio = new AudioWindowSupplier(library);
+          engine.backend = "worker";
           await engine.start();
         } else {
           if (!engine || request.sessionId !== sessionId)
@@ -80,55 +95,61 @@ export function installEditorWorker(scope) {
               assets.set(asset.id, asset);
             if (request.fonts) engine.setCaptionFonts(request.fonts);
             currentProject = request.project;
-            if (
-              currentProject.timeline.tracks.some(
-                (track) =>
-                  (track.clips?.length ?? 0) +
-                  (track.captions?.cues.length ?? 0),
-              )
-            )
-              engine.loadProject(request.project);
-            engine.resize(
-              request.project.settings.width,
-              request.project.settings.height,
-            );
+            if (hasContent(currentProject)) engine.loadProject(request.project);
+            const renderSize = sizeCanvas();
+            // Sources are fitted in document space; the render scales them.
             pixels.setOutputSize(
               request.project.settings.width,
               request.project.settings.height,
             );
             audio.configure(engine.audioEngine, request.project);
             revision = request.revision;
+            scope.postMessage({ ...response, ok: true, value: { renderSize } });
+            return;
           } else if (type === "seek") {
             const generation = engine.generation;
-            const rendered =
-              arrived !== epoch ||
-              !currentProject?.timeline.tracks.some(
-                (track) =>
-                  (track.clips?.length ?? 0) +
-                  (track.captions?.cues.length ?? 0),
-              )
-                ? false
+            const { rendered, unchanged } =
+              arrived !== epoch || !hasContent(currentProject)
+                ? { rendered: false, unchanged: false }
                 : await engine.render(request.tick / 120000, {
                     generation,
                     context: context(),
                   });
+            // An unchanged frame was not presented: the surface it was copied to still shows it.
             const bitmap =
-              rendered && bitmapOutput
+              rendered && !unchanged && bitmapOutput
                 ? engine.canvas.transferToImageBitmap()
                 : null;
+            const engineDiagnostics =
+              engine.lastDiagnostics !== sentDiagnostics
+                ? engine.lastDiagnostics
+                : null;
+            sentDiagnostics = engine.lastDiagnostics;
             scope.postMessage(
               {
                 ...response,
                 ok: true,
                 value: {
                   rendered,
+                  unchanged,
                   diagnostics: pixels.diagnostics,
+                  ...(engineDiagnostics ? { engineDiagnostics } : {}),
                   ...(bitmap ? { bitmap } : {}),
                 },
               },
               bitmap ? [bitmap] : [],
             );
             return;
+          } else if (type === "set-preview-scale") {
+            engine.setPreviewScale(request.scale);
+            const renderSize = sizeCanvas();
+            scope.postMessage({ ...response, ok: true, value: { renderSize } });
+            return;
+          } else if (type === "set-tracing") {
+            if (request.passTiming !== undefined)
+              engine.setPassTiming(request.passTiming);
+            if (request.traceUploads !== undefined)
+              engine.traceUploads = request.traceUploads;
           } else if (type === "audio-mix") {
             await audio.supply(request.startSample, request.frames);
             const planes = mixBlock(
@@ -271,6 +292,14 @@ export function createWorkerPreview(
     async seek(tick) {
       await ready;
       return call("seek", { tick });
+    },
+    async setPreviewScale(scale) {
+      await ready;
+      return call("set-preview-scale", { scale });
+    },
+    async setTracing(options) {
+      await ready;
+      return call("set-tracing", options);
     },
     async mix(startSample, frames) {
       await ready;

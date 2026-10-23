@@ -63,6 +63,7 @@ import {
   stillResidency,
   wasmMemoryBound,
 } from "./memory.mjs";
+import { previewFullResolution, previewUnchangedFrame } from "./preview.mjs";
 import {
   browserVideoConversion,
   presentationCacheColor,
@@ -137,6 +138,8 @@ export const cases = {
   "wasm-feature-probe": wasmFeatureProbe,
   "sha256-blob-yields": sha256BlobYields,
   "webgpu-unconfigured-surface": webgpuUnconfiguredSurface,
+  "preview-unchanged-frame": previewUnchangedFrame,
+  "preview-full-resolution": previewFullResolution,
 };
 
 // Cases that import a VideoFrame into WebGPU, which some browsers cannot do.

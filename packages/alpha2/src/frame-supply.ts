@@ -314,6 +314,11 @@ export interface PlaybackResult {
   readonly presentedTimeTicks: number | null;
   readonly missingSources: readonly string[];
   readonly repeated: boolean;
+  /**
+   * The frame equals the one presented last, so the engine neither rendered nor presented it: the
+   * canvas still shows it, and a host copying the canvas elsewhere need not copy it again.
+   */
+  readonly unchanged: boolean;
 }
 
 /**

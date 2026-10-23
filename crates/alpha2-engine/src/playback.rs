@@ -71,7 +71,8 @@ impl PlaybackPolicy {
 /// What the clock asks for at one moment.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct ClockStep {
-    /// The timeline time to show, in ticks.
+    /// The start of the frame to show, in ticks: a timeline at a frame rate
+    /// shows each frame over its whole interval, as export renders it.
     pub tick: i64,
     /// Whether sound should be playing.
     pub audible: bool,
@@ -146,13 +147,13 @@ impl PlaybackClock {
         let audible = self.policy.audible(self.rate);
         match self.policy {
             PlaybackPolicy::DropVideoKeepAudio | PlaybackPolicy::SilentScrub => {
-                let tick = if audible {
+                let time = if audible {
                     self.follow_audio(now_ms, heard)
                 } else {
                     self.wall_tick(now_ms)
                 };
                 ClockStep {
-                    tick,
+                    tick: self.frame_start_at(time),
                     audible,
                     wait_for_frame: false,
                 }
@@ -221,6 +222,14 @@ impl PlaybackClock {
         self.origin_tick.saturating_add(advanced)
     }
 
+    /// The start of the frame containing `tick`, in either direction.
+    fn frame_start_at(&self, tick: i64) -> i64 {
+        self.frame_rate
+            .frame_at_or_before(alpha2_time::MediaTime(tick.max(0)))
+            .and_then(|frame| self.frame_rate.frame_start(frame))
+            .map_or(0, alpha2_time::MediaTime::ticks)
+    }
+
     fn frame_tick(&self) -> i64 {
         self.frame_rate
             .frame_start(self.frame)
@@ -246,19 +255,21 @@ mod tests {
     #[test]
     fn keeping_audio_follows_it_and_falls_back_to_the_wall_clock_when_it_stalls() {
         let mut clock = PlaybackClock::new(PlaybackPolicy::DropVideoKeepAudio, rate(), 1.0, 0, 0.0);
+        // One frame at 25 fps is 4,800 ticks: the clock asks for the frame the audio is in.
         let step = clock.step(10.0, Some(1_200), false);
         assert_eq!(
             (step.tick, step.audible, step.wait_for_frame),
-            (1_200, true, false)
+            (0, true, false)
         );
         // The audio stands still past the stall: the picture continues on the wall clock from
         // there.
         clock.step(100.0, Some(1_200), true);
         let stalled = clock.step(400.0, Some(1_200), true);
-        assert_eq!(stalled.tick, 1_200);
+        assert_eq!(stalled.tick, 0);
+        // 1,200 + 12,000 ticks is inside frame 2.
         let later = clock.step(500.0, Some(1_200), true);
-        assert_eq!(later.tick, 1_200 + 12_000);
-        assert_eq!(clock.step(510.0, Some(50_000), true).tick, 50_000);
+        assert_eq!(later.tick, 2 * 4_800);
+        assert_eq!(clock.step(510.0, Some(50_000), true).tick, 10 * 4_800);
         // At any rate other than 1x it is silent and on the wall clock.
         let mut fast = PlaybackClock::new(PlaybackPolicy::DropVideoKeepAudio, rate(), 2.0, 0, 0.0);
         let step = fast.step(1_000.0, Some(7), true);
@@ -274,13 +285,14 @@ mod tests {
             PlaybackClock::new(PlaybackPolicy::DropVideoKeepAudio, ntsc, 1.0, 8_008, 0.0);
         assert_eq!(clock.step(5.0, Some(8_007), false).tick, 8_008);
         assert_eq!(clock.step(10.0, Some(8_007), true).tick, 8_008);
-        assert_eq!(clock.step(20.0, Some(9_000), true).tick, 9_000);
+        assert_eq!(clock.step(20.0, Some(9_000), true).tick, 8_008);
         // A stall continues on the wall clock from where it stood, never before the start.
         let mut stalled =
             PlaybackClock::new(PlaybackPolicy::DropVideoKeepAudio, ntsc, 1.0, 8_008, 0.0);
         stalled.step(1.0, Some(8_007), false);
         assert_eq!(stalled.step(300.0, Some(8_007), true).tick, 8_008);
-        assert_eq!(stalled.step(400.0, Some(8_007), true).tick, 8_008 + 12_000);
+        // 8,008 + 12,000 ticks is inside frame 4, which starts at 16,016.
+        assert_eq!(stalled.step(400.0, Some(8_007), true).tick, 16_016);
     }
 
     #[test]
@@ -372,7 +384,8 @@ mod tests {
     fn the_wall_clock_holds_at_its_start_until_its_start_time() {
         let mut clock = PlaybackClock::new(PlaybackPolicy::SilentScrub, rate(), 1.0, 0, 1_000.0);
         assert_eq!(clock.step(992.0, None, false).tick, 0);
-        assert_eq!(clock.step(1_500.0, None, true).tick, 60_000);
+        // 60,000 ticks is inside frame 12.
+        assert_eq!(clock.step(1_500.0, None, true).tick, 12 * 4_800);
         let mut silent = PlaybackClock::new(
             PlaybackPolicy::DropVideoKeepAudio,
             rate(),
@@ -387,6 +400,41 @@ mod tests {
     fn scrubbing_is_silent_and_follows_the_wall_clock_backwards_too() {
         let mut clock = PlaybackClock::new(PlaybackPolicy::SilentScrub, rate(), -1.0, 120_000, 0.0);
         let step = clock.step(500.0, Some(0), true);
-        assert_eq!((step.tick, step.audible), (60_000, false));
+        assert_eq!((step.tick, step.audible), (12 * 4_800, false));
+    }
+
+    #[test]
+    fn audio_positions_inside_one_frame_ask_for_that_frame_once() {
+        let mut clock = PlaybackClock::new(PlaybackPolicy::DropVideoKeepAudio, rate(), 1.0, 0, 0.0);
+        // Three display refreshes inside frame 1 (4,800..9,600) ask for the same tick.
+        let ticks: Vec<i64> = [(16.0, 4_800), (32.0, 6_400), (48.0, 9_599)]
+            .into_iter()
+            .map(|(now, heard)| clock.step(now, Some(heard), true).tick)
+            .collect();
+        assert_eq!(ticks, [4_800; 3]);
+        // Crossing the boundary asks for the next frame's start.
+        assert_eq!(clock.step(64.0, Some(9_600), true).tick, 9_600);
+    }
+
+    #[test]
+    fn the_wall_clock_after_an_audio_stall_is_quantized_too() {
+        let mut clock = PlaybackClock::new(PlaybackPolicy::DropVideoKeepAudio, rate(), 1.0, 0, 0.0);
+        clock.step(0.0, Some(100), false);
+        // Stalled past `AUDIO_STALL_MS`: the wall clock continues from 100 ticks.
+        assert_eq!(clock.step(300.0, Some(100), true).tick, 0);
+        // 30 ms later is 3,700 ticks, still frame 0; 40 ms later is 4,900, frame 1.
+        assert_eq!(clock.step(330.0, Some(100), true).tick, 0);
+        assert_eq!(clock.step(340.0, Some(100), true).tick, 4_800);
+    }
+
+    #[test]
+    fn reverse_play_asks_for_the_frame_containing_the_time() {
+        // From inside frame 25 (120,000..124,800) backwards: 10 ms back is 121,000, then 30 ms
+        // more is frame 24.
+        let mut clock = PlaybackClock::new(PlaybackPolicy::SilentScrub, rate(), -1.0, 122_200, 0.0);
+        assert_eq!(clock.step(10.0, None, true).tick, 120_000);
+        assert_eq!(clock.step(40.0, None, true).tick, 115_200);
+        // Past the start it holds frame 0.
+        assert_eq!(clock.step(10_000.0, None, true).tick, 0);
     }
 }

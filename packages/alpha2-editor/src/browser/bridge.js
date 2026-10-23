@@ -262,7 +262,9 @@ export function createBrowserBridge(options) {
     audio = true,
     onError = () => {},
     assetDecisions,
+    previewScale: initialPreviewScale = 0.5,
   } = options;
+  let previewScale = checkedPreviewScale(initialPreviewScale);
   // A test's stand-in for origin storage, kept out of the public options.
   const proxyStore =
     /** @type {{ proxyStore?: ProxyStore }} */ (options).proxyStore ??
@@ -526,6 +528,14 @@ export function createBrowserBridge(options) {
     workerFonts = null,
     refreshFrame = 0,
     monitorVolume = 1,
+    // Tracing the drawing renderer applies, kept for every renderer a binding makes.
+    passTiming = false,
+    traceUploads = false,
+    // The worker's last renderer diagnostics snapshot, and counters since `bindPreview`: playback
+    // refreshes that asked for no frame, and frames copied to the bound canvas.
+    workerDiagnostics = null,
+    skippedRequests = 0,
+    bitmapTransfers = 0,
     playGeneration = 0,
     sessionGeneration = editor.generation;
   /**
@@ -916,14 +926,11 @@ export function createBrowserBridge(options) {
         reportRefusedFonts(refused, "preview");
       }
       engine.loadProject(compiled.project);
-      engine.resize(
-        compiled.project.settings.width,
-        compiled.project.settings.height,
-      );
-      if (boundCanvas.width !== compiled.project.settings.width)
-        boundCanvas.width = compiled.project.settings.width;
-      if (boundCanvas.height !== compiled.project.settings.height)
-        boundCanvas.height = compiled.project.settings.height;
+      // Frames render at the document's size times the preview scale, and the surfaces are that
+      // size: the engine rounds it.
+      let renderSize = engine.previewSize;
+      engine.resize(renderSize[0], renderSize[1]);
+      // Sources are fitted in document space; the render scales them.
       sources.setOutputSize(
         compiled.project.settings.width,
         compiled.project.settings.height,
@@ -969,7 +976,7 @@ export function createBrowserBridge(options) {
         workerSent = new Map();
         workerFonts = null;
         try {
-          await workerPreview.replaceProject(
+          const reply = await workerPreview.replaceProject(
             compiled.project,
             ++loadRevision,
             workerAssets,
@@ -978,11 +985,13 @@ export function createBrowserBridge(options) {
           );
           workerSent = new Map(used);
           workerFonts = allFonts;
+          if (reply?.renderSize) renderSize = reply.renderSize;
         } catch (error) {
           // The main renderer has just loaded the same project.
           await abandonWorker(error);
         }
       }
+      sizeBoundCanvas(renderSize);
       renderKey = key;
     }
     if (settled && audioKey !== key) {
@@ -1216,10 +1225,15 @@ export function createBrowserBridge(options) {
     if (workerPreview) {
       try {
         const result = await workerPreview.seek(at);
-        if (result.bitmap)
+        if (result.engineDiagnostics)
+          workerDiagnostics = result.engineDiagnostics;
+        // An unchanged frame comes without a bitmap: the canvas still shows it.
+        if (result.bitmap) {
           boundCanvas
             .getContext("bitmaprenderer")
             .transferFromImageBitmap(result.bitmap);
+          bitmapTransfers += 1;
+        }
         return result.rendered;
       } catch (error) {
         if (error?.code === "INCOMPLETE_COMPOSITION") throw error;
@@ -1227,15 +1241,34 @@ export function createBrowserBridge(options) {
         await abandonWorker(error);
       }
     }
-    const rendered = await engine.render(at / 120000, {
+    const { rendered, unchanged } = await engine.render(at / 120000, {
       generation: engine.generation,
       context: context(project, library),
     });
-    if (rendered && copySurface)
+    // An unchanged frame was not presented: the bound canvas still shows the last copy.
+    if (rendered && !unchanged && copySurface) {
       boundCanvas
         .getContext("bitmaprenderer")
         .transferFromImageBitmap(engine.canvas.transferToImageBitmap());
+      bitmapTransfers += 1;
+    }
     return rendered;
+  }
+  /** Gives the bound canvas the size frames render at, which `size` is, unless it has it. */
+  function sizeBoundCanvas(size) {
+    if (!boundCanvas || !size) return;
+    if (boundCanvas.width !== size[0]) boundCanvas.width = size[0];
+    if (boundCanvas.height !== size[1]) boundCanvas.height = size[1];
+  }
+  /** Applies the bridge's tracing to the renderers drawing now. */
+  function applyTracing() {
+    if (engine) {
+      engine.traceUploads = traceUploads;
+      engine.setPassTiming?.(passTiming);
+    }
+    void workerPreview
+      ?.setTracing({ passTiming, traceUploads })
+      .catch(() => {});
   }
   /**
    * Gives up the preview worker after `error`, whether it failed to start, to load a project or to
@@ -1378,7 +1411,7 @@ export function createBrowserBridge(options) {
       tick,
       performance.now(),
     ));
-    // For a policy that waits for frames: the tick last asked for, and whether it has been shown.
+    // The tick last asked for, and for a policy that waits for frames, whether it has been shown.
     let requested = null,
       presented = false;
     const step = (now) => {
@@ -1411,15 +1444,15 @@ export function createBrowserBridge(options) {
           .catch(onError);
         return;
       }
-      // A waiting policy asks for each frame once and moves on only after it is shown; the others
-      // ask for the newest time and let late frames go.
-      const due = waits ? requested !== tick : true;
-      if (due && !renderScheduled) {
+      // The clock asks for frame starts, so every policy asks for each frame once however often
+      // the display refreshes; a waiting policy also moves on only after it is shown, and the
+      // others let late frames go.
+      const due = requested !== tick;
+      if (!due) skippedRequests += 1;
+      else if (!renderScheduled) {
         renderScheduled = true;
-        if (waits) {
-          requested = tick;
-          presented = false;
-        }
+        requested = tick;
+        if (waits) presented = false;
         const at = tick;
         void enqueue(() =>
           generation !== playGeneration ? false : renderAt(at, project),
@@ -1457,12 +1490,14 @@ export function createBrowserBridge(options) {
       extensionsWasmUrl: runtimeAssets.extensionsWasmUrl,
     });
     const { Engine } = await import("./runtime/engine.js");
+    // Until a project loads and gives the render size (see `loaded`).
     canvas.width = editor.document.project.settings.width;
     canvas.height = editor.document.project.settings.height;
     boundCanvas = canvas;
     copySurface = false;
     await workerPreview?.dispose();
     workerPreview = null;
+    workerDiagnostics = null;
     const useWorker =
       features.worker.available && typeof canvas.getContext === "function";
     engine = new Engine(
@@ -1477,6 +1512,7 @@ export function createBrowserBridge(options) {
     supplier = new AudioWindowSupplier(library);
     try {
       await engine.start();
+      engine.setPreviewScale(previewScale);
       capabilities = capabilityReport(engine.capabilityReport());
       // The surface already shows copied frames (its context is a bitmap renderer's).
       if (useWorker && workerGivenUp) copySurface = true;
@@ -1498,10 +1534,12 @@ export function createBrowserBridge(options) {
         // A worker that cannot start leaves the surface to the main renderer.
         try {
           await workerPreview.ready;
+          await workerPreview.setPreviewScale(previewScale);
         } catch (error) {
           await abandonWorker(error);
         }
       }
+      if (passTiming || traceUploads) applyTracing();
       if (disposed || token !== binding) {
         await engine.dispose();
         engine = null;
@@ -1559,11 +1597,38 @@ export function createBrowserBridge(options) {
     if (!recoveryPending || !boundCanvas || disposed) return false;
     return recoverPreview();
   }
+  /**
+   * Renders the preview at `scale` times the document's size from now on, sizing the surfaces to
+   * it, and draws the current frame again. Resolves once that frame is drawn.
+   */
+  async function setPreviewScale(scale) {
+    const next = checkedPreviewScale(scale);
+    if (next === previewScale) return;
+    previewScale = next;
+    await enqueue(async () => {
+      if (!engine || disposed) return;
+      engine.setPreviewScale(previewScale);
+      let size = renderKey === null ? null : engine.previewSize;
+      if (size) engine.resize(size[0], size[1]);
+      if (workerPreview) {
+        try {
+          const reply = await workerPreview.setPreviewScale(previewScale);
+          if (reply?.renderSize) size = reply.renderSize;
+        } catch (error) {
+          await abandonWorker(error);
+        }
+      }
+      sizeBoundCanvas(size);
+      await renderAt(tick, await loaded());
+    });
+  }
   async function bindPreview(canvas) {
     const token = ++binding;
     await enqueue(async () => {
       recoveryPending = false;
       workerGivenUp = false;
+      skippedRequests = 0;
+      bitmapTransfers = 0;
       if (!(await buildPreview(canvas, token))) return;
       // The surface is bound; a failing first frame is reported like any later one.
       try {
@@ -2496,10 +2561,32 @@ export function createBrowserBridge(options) {
       return monitorVolume;
     },
     setTraceUploads(value) {
-      if (engine) engine.traceUploads = value;
+      traceUploads = value === true;
+      applyTracing();
     },
+    setPassTiming(enabled) {
+      passTiming = enabled === true;
+      applyTracing();
+    },
+    get previewScale() {
+      return previewScale;
+    },
+    setPreviewScale,
     get diagnostics() {
-      return engine?.lastDiagnostics ?? null;
+      // The renderer that draws: in worker mode the main-thread one does not.
+      const snapshot = workerPreview
+        ? workerDiagnostics
+        : (engine?.lastDiagnostics ?? null);
+      if (!snapshot) return null;
+      return {
+        ...snapshot,
+        host: {
+          ...snapshot.host,
+          skippedRequests,
+          bitmapTransfers,
+          previewScale,
+        },
+      };
     },
     get tick() {
       return tick;
@@ -2537,6 +2624,20 @@ export function createBrowserBridge(options) {
         sourceView(editor.draft, id, originalOf(editor.draft, id))) ||
       library.get(id),
   };
+}
+
+/**
+ * `scale` as a preview resolution scale: finite, above 0 and at most 8, as the engine's quality
+ * profile takes it.
+ */
+function checkedPreviewScale(scale) {
+  if (typeof scale !== "number" || !(scale > 0 && scale <= 8))
+    throw new EditorError(
+      "invalid_preview_scale",
+      "The preview scale must be a number above 0 and at most 8",
+      "preview",
+    );
+  return scale;
 }
 
 /**

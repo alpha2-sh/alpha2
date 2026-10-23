@@ -55,6 +55,11 @@ export interface PresentedFrame {
   readonly missingFrames: readonly MissingFrame[];
   /** Whether the previous picture was shown again instead of a new one. */
   readonly repeated: boolean;
+  /**
+   * Whether the frame equals the one on screen, so nothing was rendered or presented: the canvas
+   * still shows it.
+   */
+  readonly unchanged: boolean;
 }
 
 /** The worker-side renderer an {@link Alpha2Player} drives. */

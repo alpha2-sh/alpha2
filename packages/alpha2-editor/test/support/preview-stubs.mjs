@@ -81,3 +81,50 @@ export function failingWorker(fail, code = "worker_error") {
   };
   return worker;
 }
+
+/**
+ * A worker running the editor's preview protocol that succeeds at everything: it records each
+ * request (`requests`), answers a seek with `seek(request)` (default: a drawn frame with a bitmap)
+ * and a load or a scale change with the render size at `scale`, as the engine rounds it.
+ */
+export function workingWorker({ seek } = {}) {
+  let project = null,
+    scale = 0.5;
+  const renderSize = () =>
+    project && [
+      Math.round(project.settings.width * scale),
+      Math.round(project.settings.height * scale),
+    ];
+  const worker = {
+    requests: [],
+    terminated: false,
+    onmessage: null,
+    onerror: null,
+    postMessage(message) {
+      worker.requests.push(message);
+      if (message.type === "replace-project") project = message.project;
+      if (message.type === "set-preview-scale") scale = message.scale;
+      const value =
+        message.type === "seek"
+          ? (seek?.(message) ?? { rendered: true, bitmap: { close() {} } })
+          : message.type === "replace-project" ||
+              message.type === "set-preview-scale"
+            ? { renderSize: renderSize() }
+            : undefined;
+      queueMicrotask(() =>
+        worker.onmessage?.({
+          data: {
+            sessionId: message.sessionId,
+            requestId: message.requestId,
+            ok: true,
+            value,
+          },
+        }),
+      );
+    },
+    terminate() {
+      worker.terminated = true;
+    },
+  };
+  return worker;
+}

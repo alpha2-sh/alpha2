@@ -1,6 +1,6 @@
 use alpha2_eval::FrameNeed;
 use alpha2_media::SourceId;
-use alpha2_render::{RenderedTexture, Renderer};
+use alpha2_render::{CacheEligibility, RenderCacheKey, RenderSize, RenderedTexture, Renderer};
 use alpha2_time::MediaTime;
 
 use crate::schedule::frame_times;
@@ -23,7 +23,15 @@ pub struct PlaybackFrame<'a> {
     pub missing_sources: Vec<SourceId>,
     /// Whether the texture is the previous successful frame.
     pub repeated: bool,
+    /// Whether the frame's output equals the one last returned, so nothing
+    /// was rendered: a host that presented that texture need not present it
+    /// again.
+    pub unchanged: bool,
 }
+
+/// What the texture a player last returned shows: the size, the frame
+/// graph's cache key and the renderer's content epoch it was rendered at.
+type ShownKey = (RenderSize, RenderCacheKey, u64);
 
 /// Stateful real-time runner.
 ///
@@ -36,6 +44,8 @@ pub struct Player {
     prefetch_frames: u32,
     missing_frame_policy: MissingFramePolicy,
     last_frame: Option<(MediaTime, RenderedTexture)>,
+    /// What `last_frame` shows, when its key names everything it depends on.
+    shown: Option<ShownKey>,
 }
 
 impl Default for Player {
@@ -45,6 +55,7 @@ impl Default for Player {
             prefetch_frames: 2,
             missing_frame_policy: MissingFramePolicy::HoldPrevious,
             last_frame: None,
+            shown: None,
         }
     }
 }
@@ -84,6 +95,12 @@ impl Player {
             frames
         };
         self
+    }
+
+    /// How many future frame boundaries prefetch requests include.
+    #[must_use]
+    pub const fn prefetch_frames(&self) -> u32 {
+        self.prefetch_frames
     }
 
     /// Returns the active quality profile.
@@ -147,6 +164,12 @@ impl Player {
     /// frame, `texture` is absent and the host can display its own loading
     /// state.
     ///
+    /// A frame whose output equals the texture last returned (the same render
+    /// size, frame-graph cache key and renderer content epoch, with every
+    /// source keyed) is not rendered: that texture is returned again with
+    /// `unchanged = true`, and no GPU work is encoded. A frame drawn from a
+    /// source without a stable key always renders.
+    ///
     /// # Errors
     /// Returns timeline evaluation, quality, or rendering failures, and
     /// [`EngineError::UnregisteredEffect`] naming an effect the frame draws
@@ -166,11 +189,28 @@ impl Player {
             self.quality.max_filter_samples,
             self.quality.motion_blur_subframes,
         );
-        let attempt = renderer.render_frame(size, &frame, frames)?;
-        if let Some(texture) = attempt.texture {
-            self.last_frame = Some((time, texture));
+        let built = renderer.build_frame_graph(size, &frame, frames)?;
+        if let Some(graph) = built.graph {
+            let key = match graph.output().map(|output| graph.cache_eligibility(output)) {
+                Some(Ok(CacheEligibility::Eligible)) => Some(
+                    renderer
+                        .graph_cache_key(&graph)
+                        .map_err(alpha2_render::GraphError::into_render_error)?,
+                ),
+                _ => None,
+            };
+            let unchanged = self.last_frame.is_some()
+                && key.is_some_and(|key| self.shown == Some((size, key, renderer.content_epoch())));
+            if !unchanged {
+                let texture = renderer.render_graph(&graph, &built.pending)?;
+                self.last_frame = Some((time, texture));
+                // Read after the render, which may itself have cleared the result cache.
+                self.shown = key.map(|key| (size, key, renderer.content_epoch()));
+            }
             let (presented_time, texture) =
-                self.last_frame.as_ref().ok_or(EngineError::OutOfRange)?;
+                self.last_frame.as_mut().ok_or(EngineError::OutOfRange)?;
+            // The held texture is this frame's too.
+            *presented_time = time;
             renderer.record_frame_outcome(true, false);
             return Ok(PlaybackFrame {
                 requested_time: time,
@@ -178,8 +218,11 @@ impl Player {
                 texture: Some(texture),
                 missing_sources: Vec::new(),
                 repeated: false,
+                unchanged,
             });
         }
+        // A hold is not this frame: the next complete one is presented, whatever its key.
+        self.shown = None;
 
         let (presented_time, texture) = match self.missing_frame_policy {
             MissingFramePolicy::HoldPrevious => self
@@ -195,14 +238,16 @@ impl Player {
             requested_time: time,
             presented_time,
             texture,
-            missing_sources: attempt.report.missing_sources,
+            missing_sources: built.report.missing_sources,
             repeated: texture.is_some(),
+            unchanged: false,
         })
     }
 
     /// Drops the held frame, for example after a seek or project swap.
     pub fn reset(&mut self) {
         self.last_frame = None;
+        self.shown = None;
     }
 }
 

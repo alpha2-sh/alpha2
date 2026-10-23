@@ -28,6 +28,9 @@ export class Engine {
   #lastDiagnosticsAt = 0;
   #fps = [];
   #effectResources = new Map();
+  /** Frames the player drew, and frames it found equal to the one shown; cumulative. */
+  #renders = 0;
+  #unchanged = 0;
   /** What `supply` uploaded for the export frame the engine has not rendered yet. */
   #exportUploads = [];
 
@@ -38,6 +41,8 @@ export class Engine {
     this.library = library;
     this.kind = "wasm";
     this.traceUploads = false;
+    /** Which preview draws with this renderer, as its diagnostics report it. */
+    this.backend = "main-thread";
     this.lastDiagnostics = null;
     this.lastRenderMs = 0;
     this.onDiagnostics = null;
@@ -80,6 +85,32 @@ export class Engine {
     this.#registry.setResultCacheBudget(
       RESULT_CACHE_FRAMES * this.canvas.width * this.canvas.height * 8,
     );
+  }
+
+  /**
+   * Turns per-pass GPU and CPU timing on or off; the passes then appear in `lastDiagnostics`.
+   * Off by default: timing is profiling cost, not rendering work.
+   */
+  setPassTiming(enabled) {
+    this.#registry?.setPassTiming(enabled);
+  }
+
+  /**
+   * Sets the preview resolution scale (the engine's `QualityProfile` resolution scale; 1 renders
+   * at the document's size) and returns the loaded project's render size as `[width, height]`, or
+   * null with no project loaded. Throws for a scale the engine refuses.
+   */
+  setPreviewScale(scale) {
+    if (!this.#registry) throw new Error("the renderer is not initialized");
+    this.#registry.setPreviewScale(scale);
+    this.#revision += 1;
+    return this.previewSize;
+  }
+
+  /** The loaded project's render size at the preview scale, `[width, height]`, or null. */
+  get previewSize() {
+    if (!this.#registry || !this.#project) return null;
+    return Array.from(this.#registry.previewSize);
   }
 
   /** The renderer's part of the capability report: GPU, color, and playback. */
@@ -280,7 +311,9 @@ export class Engine {
 
   /**
    * Requests one frame. Concurrent requests collapse to the most recent one so that scrubbing never
-   * queues a backlog of stale frames.
+   * queues a backlog of stale frames. Resolves `{ rendered, unchanged }`: `rendered` is false when
+   * the request was superseded, and `unchanged` says the frame equals the one already shown, so
+   * nothing was drawn or presented and the surface still shows it.
    */
   render(seconds, { generation = null, context } = {}) {
     if (!this.#registry)
@@ -326,7 +359,7 @@ export class Engine {
     const isCurrent = () =>
       revision === this.#revision &&
       (generation === null || generation === this.#generation);
-    if (!isCurrent()) return false;
+    if (!isCurrent()) return { rendered: false, unchanged: false };
     await this.sources.release(context.liveSourceIds);
     const started = performance.now();
     const playback = await this.#supply.render(
@@ -342,10 +375,13 @@ export class Engine {
         isCurrent,
       },
     );
-    if (!playback) return false;
+    if (!playback) return { rendered: false, unchanged: false };
+    const unchanged = playback.unchanged === true;
+    if (unchanged) this.#unchanged += 1;
+    else this.#renders += 1;
     this.lastRenderMs = performance.now() - started;
     this.#sampleDiagnostics();
-    return true;
+    return { rendered: true, unchanged };
   }
 
   #sampleDiagnostics() {
@@ -364,6 +400,10 @@ export class Engine {
       fps: Number(this.fps.toFixed(1)),
       renderMs: Number(this.lastRenderMs.toFixed(2)),
       uploadedFrames: this.#registry.uploadedFrameCount,
+      renders: this.#renders,
+      unchanged: this.#unchanged,
+      renderSize: [this.canvas.width, this.canvas.height],
+      backend: this.backend,
     };
     this.lastDiagnostics = diagnostics;
     this.onDiagnostics?.(diagnostics);

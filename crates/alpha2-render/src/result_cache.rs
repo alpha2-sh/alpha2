@@ -103,6 +103,9 @@ struct Entry {
 pub(crate) struct ResultCache {
     entries: HashMap<u128, Entry>,
     clock: u64,
+    /// Clears for any reason, whether or not anything was kept: each is an
+    /// event that changes pixels without changing graph keys.
+    clears: u64,
     stats: ResultCacheStats,
 }
 
@@ -122,6 +125,10 @@ impl ResultCache {
 
     pub(crate) const fn stats(&self) -> ResultCacheStats {
         self.stats
+    }
+
+    pub(crate) const fn clears(&self) -> u64 {
+        self.clears
     }
 
     pub(crate) fn set_budget(&mut self, budget_bytes: u64) {
@@ -175,6 +182,7 @@ impl ResultCache {
     }
 
     pub(crate) fn clear(&mut self, reason: CacheInvalidation) {
+        self.clears += 1;
         if !self.entries.is_empty() {
             self.stats.invalidations[reason as usize] += 1;
         }

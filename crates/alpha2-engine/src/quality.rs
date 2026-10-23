@@ -66,6 +66,14 @@ impl QualityProfile {
         }
     }
 
+    /// This profile with `scale` as its multiplier for project dimensions;
+    /// [`Self::validate`] checks it.
+    #[must_use]
+    pub const fn with_resolution_scale(mut self, scale: f32) -> Self {
+        self.resolution_scale = scale;
+        self
+    }
+
     /// Checks that all controls are finite and within runtime-safe bounds.
     ///
     /// # Errors
@@ -200,6 +208,45 @@ mod tests {
             }
             .validate(),
             Err(EngineError::InvalidQualityProfile)
+        );
+    }
+
+    #[test]
+    fn a_preview_scale_sizes_the_render_and_is_validated() {
+        let settings = |width, height| {
+            ProjectSettings::new(
+                width,
+                height,
+                FrameRate::new(30, 1).expect("valid rate"),
+                48_000,
+            )
+            .expect("valid settings")
+        };
+        let size = |scale: f32, width, height| {
+            QualityProfile::preview()
+                .with_resolution_scale(scale)
+                .render_size(&settings(width, height))
+                .map(|size| (size.width, size.height))
+        };
+        assert_eq!(size(0.5, 1280, 720), Ok((640, 360)));
+        assert_eq!(size(1.0, 1280, 720), Ok((1280, 720)));
+        // An odd document rounds to the nearest pixel.
+        assert_eq!(size(0.5, 1281, 721), Ok((641, 361)));
+        assert_eq!(size(0.25, 1282, 722), Ok((321, 181)));
+        for scale in [0.0, -1.0, 8.5, f32::NAN, f32::INFINITY] {
+            assert_eq!(
+                QualityProfile::preview()
+                    .with_resolution_scale(scale)
+                    .validate(),
+                Err(EngineError::InvalidQualityProfile),
+                "{scale}"
+            );
+        }
+        assert_eq!(
+            QualityProfile::preview()
+                .with_resolution_scale(QualityProfile::MAX_RESOLUTION_SCALE)
+                .validate(),
+            Ok(())
         );
     }
 }

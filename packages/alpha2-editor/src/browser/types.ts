@@ -183,6 +183,13 @@ export interface BrowserBridgeOptions {
    * module, loaded on first use.
    */
   readonly assetDecisions?: AssetBinding;
+  /**
+   * The preview resolution scale, default 0.5: frames render at the document's size times it
+   * (rounded as the engine rounds), above 0 and at most 8. At 1 the preview renders at the
+   * document's resolution, and text and effects match export pixel for pixel. See
+   * `BrowserBridge.setPreviewScale`.
+   */
+  readonly previewScale?: number;
 }
 /** Options of `BrowserBridge.startExport`. */
 export interface BrowserExportOptions {
@@ -340,9 +347,41 @@ export interface BrowserBridge {
   setMonitorVolume(value: number): void;
   /** The monitor volume `setMonitorVolume` last set; 1 until then. */
   readonly monitorVolume: number;
-  /** Logs every source upload of the preview engine to the console, for debugging. */
+  /**
+   * Logs every source upload of the renderer that draws the preview (the worker's in worker mode)
+   * to the console, for debugging. Kept for later bindings.
+   */
   setTraceUploads(value: boolean): void;
-  /** The preview engine's latest diagnostics sample (taken at most every 250 ms), or `null`. */
+  /**
+   * Turns per-pass GPU and CPU timing of the renderer that draws the preview on or off; the
+   * passes then appear in `diagnostics`. Off by default, since timing is profiling cost. Kept for
+   * later bindings.
+   */
+  setPassTiming(enabled: boolean): void;
+  /** The preview resolution scale (see `BrowserBridgeOptions.previewScale`). */
+  readonly previewScale: number;
+  /**
+   * Renders the preview at `scale` times the document's size from now on, and draws the current
+   * frame again; resolves once it is drawn. The bound canvas's backing store is always the size
+   * frames render at, not the document's: a host sizes the canvas on the page with CSS (as
+   * `EditorPreview` does). Rejects with `invalid_preview_scale` for a scale that is not above 0 and at
+   * most 8.
+   */
+  setPreviewScale(scale: number): Promise<void>;
+  /**
+   * The latest diagnostics sample of the renderer that draws the preview (taken at most every
+   * 250 ms; in worker mode the worker's), or `null`. Its `host` block holds, with the renderer's
+   * timing:
+   * - `renders`: frames the player drew;
+   * - `unchanged`: frames found equal to the one shown, so neither drawn nor presented;
+   * - `skippedRequests`: playback refreshes that asked for no frame, the one shown being the
+   *   frame the clock asked for;
+   * - `bitmapTransfers`: frames copied to the bound canvas from another surface;
+   * - `renderSize`: `[width, height]` frames render at;
+   * - `previewScale`, and `backend` (`worker` or `main-thread`).
+   * Counters are cumulative (`renders` and `unchanged` per renderer, the others since
+   * `bindPreview`): subtract two samples for a rate.
+   */
   readonly diagnostics: Readonly<Record<string, unknown>> | null;
   /** The engine's built-in effects and transitions; `null` until a preview is bound. */
   readonly catalog: BuiltinEffectCatalog | null;
@@ -602,16 +641,37 @@ export interface WorkerPreview {
     assets?: readonly RuntimeAsset[],
     fonts?: readonly RuntimeFont[] | null,
     keep?: readonly string[],
-  ): Promise<void>;
+  ): Promise<{
+    /** `[width, height]` frames render at, which the worker's canvas now is; `null` when empty. */
+    renderSize: readonly [number, number] | null;
+  }>;
   /**
    * Renders the frame at `tick`. `rendered` is `false` for an empty project or a render
-   * cancelled meanwhile. `bitmap` is present only with `bitmapOutput`, and the caller owns it.
+   * cancelled meanwhile. `unchanged` says the frame equals the one already shown, so nothing was
+   * drawn or presented and no `bitmap` comes: the surface it was copied to still shows it.
+   * `bitmap` is present only with `bitmapOutput`, and the caller owns it. `diagnostics` are the
+   * source decoders'; `engineDiagnostics` is the renderer's diagnostics sample, present when it
+   * is newer than the one the last reply carried.
    */
   seek(tick: number): Promise<{
     rendered: boolean;
+    unchanged: boolean;
     bitmap?: ImageBitmap;
     diagnostics: Readonly<Record<string, number>>;
+    engineDiagnostics?: Readonly<Record<string, unknown>>;
   }>;
+  /**
+   * Sets the preview resolution scale (see `BrowserBridgeOptions.previewScale`) and sizes the
+   * worker's canvas to it.
+   */
+  setPreviewScale(scale: number): Promise<{
+    renderSize: readonly [number, number] | null;
+  }>;
+  /** Turns per-pass timing and upload logging of the worker's renderer on or off. */
+  setTracing(options: {
+    passTiming?: boolean;
+    traceUploads?: boolean;
+  }): Promise<void>;
   /** Mixes `frames` project-rate samples from `startSample`, one array per channel. */
   mix(startSample: number, frames: number): Promise<Float32Array[]>;
   /** Drops the render in flight; its `seek` resolves with `rendered: false`. */

@@ -252,14 +252,14 @@ test(
     const project = { effect_resources: [] };
     engine.loadProject(project);
     assert.equal(
-      await engine.render(0, { context: context(ids, kinds) }),
+      (await engine.render(0, { context: context(ids, kinds) })).rendered,
       true,
     );
     assert.deepEqual(renderer.uploads, ["logo", "video@0", "relinked"]);
     // Moving a clip reloads the project; no media changed, so nothing is uploaded again.
     engine.loadProject(project);
     assert.equal(
-      await engine.render(0, { context: context(ids, kinds) }),
+      (await engine.render(0, { context: context(ids, kinds) })).rendered,
       true,
     );
     assert.deepEqual(renderer.uploads, ["logo", "video@0", "relinked"]);
@@ -269,7 +269,7 @@ test(
     library.set("relinked", { id: "relinked" });
     engine.loadProject(project);
     assert.equal(
-      await engine.render(0, { context: context(ids, kinds) }),
+      (await engine.render(0, { context: context(ids, kinds) })).rendered,
       true,
     );
     assert.deepEqual(renderer.uploads, [

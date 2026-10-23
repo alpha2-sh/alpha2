@@ -26,6 +26,7 @@ mod effects_and_transitions;
 mod export_steps;
 mod layers;
 mod missing_sources;
+mod player;
 mod shapes;
 mod submissions;
 mod timing;

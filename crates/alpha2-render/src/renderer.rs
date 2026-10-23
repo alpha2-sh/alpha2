@@ -790,6 +790,20 @@ impl Renderer {
         self.lock_result_cache().stats()
     }
 
+    /// A counter that changes whenever this renderer may draw a graph with
+    /// an unchanged [`Self::graph_cache_key`] differently: on every event
+    /// that clears the result cache (effects, effect resources, quality
+    /// controls, an explicit clear) whether or not it held anything, and on
+    /// every GPU error reported for earlier work. Equal keys under an equal
+    /// epoch name equal pixels, so a player can keep showing a frame instead
+    /// of drawing it again.
+    #[must_use]
+    pub fn content_epoch(&self) -> u64 {
+        self.lock_result_cache()
+            .clears()
+            .wrapping_add(self.gpu_errors.count())
+    }
+
     pub(crate) fn clear_result_cache_for(&self, reason: crate::CacheInvalidation) {
         self.lock_result_cache().clear(reason);
     }

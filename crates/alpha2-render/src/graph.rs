@@ -569,6 +569,12 @@ impl<'a> RenderGraph<'a> {
         Ok(())
     }
 
+    /// The selected graph result, if one was selected.
+    #[must_use]
+    pub const fn output(&self) -> Option<RenderNodeId> {
+        self.output
+    }
+
     /// Returns the number of nodes in insertion order.
     #[must_use]
     pub fn node_count(&self) -> usize {

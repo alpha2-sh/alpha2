@@ -1,6 +1,10 @@
 // The bridge's preview and playback, run in Node against a recording renderer (support/): what is
 // drawn where, what is reported, and how a failed preview worker hands over to the main thread.
-import { FakeCanvas, failingWorker } from "./support/preview-stubs.mjs";
+import {
+  FakeCanvas,
+  failingWorker,
+  workingWorker,
+} from "./support/preview-stubs.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
@@ -79,7 +83,7 @@ function addColor(editor) {
   return trackId;
 }
 
-async function session({ workerFactory, document } = {}) {
+async function session({ workerFactory, document, previewScale } = {}) {
   const reported = [];
   const editor = createEditor({
     document: document ?? createEmptyDocument({ width: 64, height: 36 }),
@@ -90,6 +94,7 @@ async function session({ workerFactory, document } = {}) {
     assetDecisions: await engineWasm(),
     runtimeAssets: workerFactory ? { workerFactory } : {},
     onError: (error) => reported.push(error),
+    ...(previewScale === undefined ? {} : { previewScale }),
   });
   return { editor, bridge, reported };
 }
@@ -573,6 +578,228 @@ test(
       globalThis.stubEngine.clock = null;
     }
     assert.deepEqual(reported, []);
+    await bridge.dispose();
+    editor.dispose();
+  },
+);
+
+test(
+  "a non-waiting policy asks for each frame once however often the display refreshes",
+  { skip },
+  async () => {
+    const { editor, bridge, reported } = await session();
+    addColor(editor);
+    await bridge.bindPreview(new FakeCanvas(64, 36));
+    await bridge.seek(0);
+    const engine = latestEngine();
+    engine.lastDiagnostics = { host: {} };
+    const from = engine.renders.length;
+    // Three display refreshes per 30 fps frame, as a 90 Hz display gives: the clock asks for the
+    // same frame start three times.
+    let steps = 0;
+    globalThis.stubEngine.clock = (policy, frameRate, rate, tick) => ({
+      step: () => ({
+        tick: tick + Math.floor(steps++ / 3) * 4000,
+        waitForFrame: false,
+        free() {},
+      }),
+      free() {},
+    });
+    try {
+      await bridge.play(1);
+      await settle(150);
+      bridge.pause();
+    } finally {
+      globalThis.stubEngine.clock = null;
+    }
+    const ticks = engine.renders
+      .slice(from)
+      .map((r) => Math.round(r.seconds * 120000));
+    assert.ok(ticks.length >= 3, `rendered ${ticks}`);
+    assert.deepEqual(
+      ticks,
+      [...new Set(ticks)],
+      `each frame is asked for once: ${ticks}`,
+    );
+    assert.ok(
+      bridge.diagnostics.host.skippedRequests >= ticks.length,
+      `skipped ${bridge.diagnostics.host.skippedRequests} of ${steps}`,
+    );
+    assert.deepEqual(reported, []);
+    await bridge.dispose();
+    editor.dispose();
+  },
+);
+
+test(
+  "in worker mode the diagnostics are the worker renderer's, and tracing reaches it",
+  { skip },
+  async () => {
+    let worker;
+    let seeks = 0;
+    const { editor, bridge, reported } = await session({
+      workerFactory: () =>
+        (worker = workingWorker({
+          // The renderer's sample comes with the first reply only, as a 4 Hz sample does.
+          seek: () => ({
+            rendered: true,
+            unchanged: false,
+            bitmap: { close() {} },
+            ...(seeks++ === 0
+              ? {
+                  engineDiagnostics: {
+                    host: { renders: 1, backend: "worker" },
+                  },
+                }
+              : {}),
+          }),
+        })),
+    });
+    addColor(editor);
+    const canvas = new FakeCanvas(64, 36);
+    await bridge.bindPreview(canvas);
+    assert.equal(await bridge.seek(4000), true);
+    assert.equal(bridge.previewBackend, "worker");
+    // The main-thread renderer draws nothing in worker mode; its sample is not the one reported.
+    latestEngine().lastDiagnostics = { host: { renders: 99 } };
+    const { host } = bridge.diagnostics;
+    assert.equal(host.renders, 1);
+    assert.equal(host.backend, "worker");
+    assert.equal(host.previewScale, 0.5);
+    assert.equal(host.bitmapTransfers, canvas.transferred);
+    assert.ok(host.bitmapTransfers >= 2);
+    bridge.setPassTiming(true);
+    bridge.setTraceUploads(true);
+    await settle(5);
+    const tracing = worker.requests.filter((r) => r.type === "set-tracing");
+    assert.deepEqual(
+      tracing.map(({ passTiming, traceUploads }) => [passTiming, traceUploads]),
+      [
+        [true, false],
+        [true, true],
+      ],
+    );
+    assert.equal(latestEngine().passTiming, true, "and the fallback renderer");
+    assert.deepEqual(reported, []);
+    await bridge.dispose();
+    editor.dispose();
+  },
+);
+
+test(
+  "an unchanged frame is not copied to the bound canvas",
+  { skip },
+  async () => {
+    // From a worker: no bitmap comes.
+    {
+      const { editor, bridge } = await session({
+        workerFactory: () =>
+          workingWorker({
+            seek: ({ tick }) =>
+              tick === 0
+                ? { rendered: true, unchanged: false, bitmap: { close() {} } }
+                : { rendered: true, unchanged: true },
+          }),
+      });
+      addColor(editor);
+      const canvas = new FakeCanvas(64, 36);
+      await bridge.bindPreview(canvas);
+      assert.equal(await bridge.seek(0), true);
+      const copied = canvas.transferred;
+      assert.equal(await bridge.seek(4000), true);
+      assert.equal(canvas.transferred, copied);
+      await bridge.dispose();
+      editor.dispose();
+    }
+    // From the main-thread renderer drawing off screen: its surface is not copied.
+    const { editor, bridge } = await session({
+      workerFactory: () => failingWorker("seek"),
+    });
+    addColor(editor);
+    const canvas = new FakeCanvas(64, 36);
+    await bridge.bindPreview(canvas);
+    assert.equal(await bridge.seek(0), true);
+    assert.equal(bridge.previewBackend, "main-thread");
+    const copied = canvas.transferred;
+    globalThis.stubEngine.unchanged = () => true;
+    try {
+      assert.equal(await bridge.seek(4000), true);
+    } finally {
+      globalThis.stubEngine.unchanged = null;
+    }
+    assert.equal(canvas.transferred, copied);
+    assert.equal(await bridge.seek(8000), true);
+    assert.equal(canvas.transferred, copied + 1, "a changed frame is");
+    await bridge.dispose();
+    editor.dispose();
+  },
+);
+
+test(
+  "the bound canvas is the size frames render at, which the preview scale sets",
+  { skip },
+  async () => {
+    for (const [previewScale, size] of [
+      [undefined, [32, 18]],
+      [1, [64, 36]],
+      [0.25, [16, 9]],
+    ]) {
+      const { editor, bridge } = await session({ previewScale });
+      addColor(editor);
+      const canvas = new FakeCanvas(1, 1);
+      await bridge.bindPreview(canvas);
+      assert.deepEqual([canvas.width, canvas.height], size, `${previewScale}`);
+      await bridge.dispose();
+      editor.dispose();
+    }
+    const { editor, bridge } = await session();
+    addColor(editor);
+    const canvas = new FakeCanvas(1, 1);
+    await bridge.bindPreview(canvas);
+    await bridge.seek(4000);
+    const engine = latestEngine();
+    const drawn = engine.renders.length;
+    await bridge.setPreviewScale(1);
+    assert.equal(bridge.previewScale, 1);
+    assert.deepEqual([canvas.width, canvas.height], [64, 36]);
+    assert.equal(engine.renders.length, drawn + 1, "the frame is drawn again");
+    assert.equal(Math.round(engine.renders.at(-1).seconds * 120000), 4000);
+    await assert.rejects(bridge.setPreviewScale(0), {
+      code: "invalid_preview_scale",
+    });
+    await assert.rejects(bridge.setPreviewScale(Number.NaN), {
+      code: "invalid_preview_scale",
+    });
+    assert.throws(() => createBrowserBridge({ editor, previewScale: 9 }), {
+      code: "invalid_preview_scale",
+    });
+    await bridge.dispose();
+    editor.dispose();
+  },
+);
+
+test(
+  "in worker mode the bound canvas takes the render size the worker reports",
+  { skip },
+  async () => {
+    let worker;
+    const { editor, bridge } = await session({
+      workerFactory: () => (worker = workingWorker()),
+      previewScale: 1,
+    });
+    addColor(editor);
+    const canvas = new FakeCanvas(1, 1);
+    await bridge.bindPreview(canvas);
+    assert.deepEqual([canvas.width, canvas.height], [64, 36]);
+    assert.deepEqual(
+      worker.requests
+        .filter((r) => r.type === "set-preview-scale")
+        .map((r) => r.scale),
+      [1],
+    );
+    await bridge.setPreviewScale(0.5);
+    assert.deepEqual([canvas.width, canvas.height], [32, 18]);
+    assert.equal(worker.requests.at(-1).type, "seek", "and draws again");
     await bridge.dispose();
     editor.dispose();
   },

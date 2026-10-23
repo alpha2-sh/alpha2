@@ -98,3 +98,44 @@ test("a seek sent after a project replacement renders the new project, however l
   await preview.dispose();
   await installed.dispose();
 });
+
+test("a seek reply carries a new renderer diagnostics sample only, and no bitmap for an unchanged frame", async () => {
+  const { scope, worker } = channel();
+  const installed = installEditorWorker(scope);
+  const preview = createWorkerPreview(worker, { bitmapOutput: true });
+  await preview.ready;
+  const [engine] = globalThis.stubEngine.engines.slice(-1);
+  const loaded = await preview.replaceProject(project("first"), 1);
+  // The canvas is the size frames render at: half the 16x16 document by default.
+  assert.deepEqual(loaded.renderSize, [8, 8]);
+  assert.deepEqual([engine.canvas.width, engine.canvas.height], [8, 8]);
+  engine.lastDiagnostics = { host: { renders: 1 } };
+  const first = await preview.seek(0);
+  assert.deepEqual(first.engineDiagnostics, { host: { renders: 1 } });
+  assert.equal(first.unchanged, false);
+  assert.ok(first.bitmap, "a drawn frame comes as a bitmap");
+  const second = await preview.seek(4000);
+  assert.equal(
+    second.engineDiagnostics,
+    undefined,
+    "the same sample is not sent again",
+  );
+  globalThis.stubEngine.unchanged = () => true;
+  try {
+    const same = await preview.seek(8000);
+    assert.deepEqual([same.rendered, same.unchanged], [true, true]);
+    assert.equal(same.bitmap, undefined);
+  } finally {
+    globalThis.stubEngine.unchanged = null;
+  }
+  const scaled = await preview.setPreviewScale(1);
+  assert.deepEqual(scaled.renderSize, [16, 16]);
+  assert.deepEqual([engine.canvas.width, engine.canvas.height], [16, 16]);
+  await preview.setTracing({ passTiming: true, traceUploads: true });
+  assert.equal(engine.passTiming, true);
+  assert.equal(engine.traceUploads, true);
+  await preview.setTracing({ passTiming: false });
+  assert.deepEqual([engine.passTiming, engine.traceUploads], [false, true]);
+  await preview.dispose();
+  await installed.dispose();
+});

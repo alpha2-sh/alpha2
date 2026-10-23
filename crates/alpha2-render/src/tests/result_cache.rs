@@ -258,6 +258,53 @@ fn what_keys_leave_out_clears_the_cache() {
     );
 }
 
+/// The content epoch changes on every event that clears the cache, whether
+/// or not it holds anything, and on nothing else: a player compares it to
+/// know a shown frame's key still names its pixels.
+#[test]
+fn the_content_epoch_moves_on_every_clear_even_of_an_empty_cache() {
+    let _lock = gpu_test_lock();
+    let (mut renderer, tint) = renderer_with_tint();
+    let texture = rgba_texture(&renderer, [200, 100, 50, 255]);
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    // The cache is off and empty throughout.
+    let epoch = renderer.content_epoch();
+    let quality = renderer.quality_controls();
+    renderer.set_quality_controls(quality.max_filter_samples, quality.motion_blur_subframes);
+    run(&renderer, &graph(&view, true, &tint, 0.5, 1.0).graph);
+    assert_eq!(
+        renderer.content_epoch(),
+        epoch,
+        "a render and unchanged quality do not move it"
+    );
+    let mut epoch = epoch;
+    let mut moved = |renderer: &Renderer, what: &str| {
+        let now = renderer.content_epoch();
+        assert_ne!(now, epoch, "{what}");
+        epoch = now;
+    };
+    renderer.set_quality_controls(quality.max_filter_samples / 2, 1);
+    moved(&renderer, "quality");
+    let lut = crate::Lut3dData {
+        edge_length: 2,
+        domain_min: [0.0; 3],
+        domain_max: [1.0; 3],
+        values: (0..8)
+            .map(|index| {
+                let axis = |bit: u32| f32::from(u8::from(index & (1 << bit) != 0));
+                [axis(0), axis(1), axis(2)]
+            })
+            .collect(),
+    };
+    renderer.register_lut3d("look", &lut).expect("lut");
+    moved(&renderer, "an effect resource");
+    assert!(renderer.unregister_effect(&tint));
+    moved(&renderer, "an effect");
+    renderer.clear_result_cache();
+    moved(&renderer, "an explicit clear");
+    assert_eq!(renderer.result_cache_stats().invalidations, [0; 5]);
+}
+
 #[test]
 fn a_failed_encode_keeps_nothing() {
     let _lock = gpu_test_lock();

@@ -151,6 +151,7 @@ const EDITOR_FAILURE_CODES: Readonly<Record<string, ExportFailureCode>> =
     invalid_frame_rate: "INVALID_INPUT",
     invalid_metadata: "INVALID_INPUT",
     invalid_policy: "INVALID_INPUT",
+    invalid_preview_scale: "INVALID_INPUT",
     invalid_project: "INVALID_INPUT",
     invalid_projection: "INVALID_INPUT",
     invalid_rate: "INVALID_INPUT",

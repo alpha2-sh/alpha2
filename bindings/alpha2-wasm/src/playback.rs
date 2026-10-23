@@ -26,7 +26,7 @@ pub struct WebClockStep {
 
 #[wasm_bindgen(js_class = ClockStep)]
 impl WebClockStep {
-    /// The timeline time to show, in ticks.
+    /// The start of the frame to show, in ticks.
     #[wasm_bindgen(getter)]
     #[must_use]
     pub fn tick(&self) -> f64 {

@@ -634,3 +634,52 @@ fn a_text_measure_bounds_the_pixels_a_frame_draws_of_it() {
         );
     }
 }
+
+/// A text slide's frame names everything it draws: a player can keep showing it, as a kept
+/// result can be found again.
+#[test]
+fn a_frame_of_text_and_captions_has_a_complete_cache_key() {
+    let _lock = gpu_test_lock();
+    let mut renderer = Renderer::new(gpu());
+    pollster::block_on(renderer.register_effect(alpha2_render::generator_definition()))
+        .expect("the generator compiles");
+    let project = text_project(
+        &format!(
+            r#"{{ "id": "title", "kind": "generated", "generator": {{ "type": "text", "text": "Title",
+                "style": {TEXT_STYLE} }} }},"#
+        ),
+        "",
+        &format!(
+            r#", {{ "id": "titles", "name": "Titles", "kind": "video", "clips": [
+                {{ "id": "t", "source_id": "title", "timeline_range": {{ "start": 0, "end": 240000 }},
+                  "source_range": {{ "start": 0, "end": 240000 }} }} ] }},
+              {{ "id": "subs", "name": "Subtitles", "kind": "caption", "captions": {{
+                "style": {TEXT_STYLE},
+                "cues": [ {{ "timeline_range": {{ "start": 0, "end": 240000 }}, "text": "Caption" }} ] }} }}"#
+        ),
+    );
+    let mut texts = crate::TextTextures::new();
+    texts
+        .add_font(
+            "Alpha2 Fixture",
+            std::fs::read("../../tests/fonts/Alpha2Fixture.ttf").expect("fixture font"),
+            0,
+        )
+        .expect("font");
+    let size = RenderSize::new(160, 90).expect("size");
+    let time = MediaTime::from_ticks(120_000);
+    texts
+        .prepare_at(&renderer, &project, time, size)
+        .expect("text");
+    let frame = project.evaluate(time).expect("frame");
+    let frames = CaptionFrames(&texts);
+    let built = renderer
+        .build_frame_graph(size, &frame, &frames)
+        .expect("a graph");
+    let graph = built.graph.expect("complete");
+    let output = graph.output().expect("an output");
+    assert_eq!(
+        graph.cache_eligibility(output),
+        Ok(alpha2_render::CacheEligibility::Eligible)
+    );
+}
