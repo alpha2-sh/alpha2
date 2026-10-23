@@ -504,12 +504,36 @@ fn decoder_has_hardware_config(decoder: &AVCodecRef<'_>) -> bool {
     }
 }
 
+/// Test builds only: the encoders `ALPHA2_TEST_SKIP_ENCODERS` (names, comma separated) hides
+/// from this run, as though the runtime registered none of them. The valgrind run sets it for
+/// `libsvtav1`, whose own code reads memory it never wrote; no production build reads it.
+#[cfg(test)]
+pub(crate) fn test_skips_encoder(name: &std::ffi::CStr) -> bool {
+    static SKIPPED: LazyLock<Vec<String>> = LazyLock::new(|| {
+        std::env::var("ALPHA2_TEST_SKIP_ENCODERS")
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+            .collect()
+    });
+    let name = name.to_string_lossy();
+    SKIPPED.iter().any(|skipped| *skipped == name)
+}
+
+#[cfg(not(test))]
+const fn test_skips_encoder(_name: &std::ffi::CStr) -> bool {
+    false
+}
+
 /// Every way to run each encoder registered for `codec`, GPU ones first.
 pub(crate) fn registered_video_encoders(codec: NativeVideoCodec) -> Vec<VideoEncoderCandidate> {
     let hybrid_hardware = hybrid_encoders_use_hardware();
     let mut candidates = AVCodec::iterate()
         .filter(|encoder| {
             encoder.id == codec.codec_id()
+                && !test_skips_encoder(encoder.name())
                 && AVCodec::find_encoder_by_name(encoder.name())
                     .is_some_and(|found| found.as_ptr() == encoder.as_ptr())
         })

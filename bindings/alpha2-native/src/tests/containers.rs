@@ -13,6 +13,12 @@ fn pinned() -> bool {
         .is_none()
 }
 
+/// Whether this run hides the encoder `name` (`ALPHA2_TEST_SKIP_ENCODERS`, as the valgrind run
+/// hides `libsvtav1`): a check of it is left out.
+fn skipped(name: &str) -> bool {
+    crate::capabilities::test_skips_encoder(&std::ffi::CString::new(name).expect("name"))
+}
+
 #[test]
 fn the_pinned_sdk_registers_software_vp9_av1_and_opus() {
     crate::require_pinned_ffmpeg_for_tests();
@@ -24,6 +30,9 @@ fn the_pinned_sdk_registers_software_vp9_av1_and_opus() {
         (NativeVideoCodec::Vp9, "libvpx-vp9"),
         (NativeVideoCodec::Av1, "libsvtav1"),
     ] {
+        if skipped(name) {
+            continue;
+        }
         let entry = capabilities
             .video
             .iter()
@@ -514,7 +523,7 @@ fn software_vp9_and_av1_open_at_every_mechanism() {
     #[cfg(all(target_os = "windows", feature = "hwencode"))]
     crate::hwencode::encode_no_rate_control_frames();
     let probes = probe_video_encoders(640, 360);
-    for name in SOFTWARE_MODERN {
+    for name in SOFTWARE_MODERN.into_iter().filter(|name| !skipped(name)) {
         let probe = probes
             .iter()
             .find(|probe| probe.encoder_name == name)
@@ -586,6 +595,9 @@ fn software_vp9_and_av1_are_byte_reproducible() {
         return;
     }
     for (name, threads) in [("libvpx-vp9", 1), ("libvpx-vp9", 8), ("libsvtav1", 1)] {
+        if skipped(name) {
+            continue;
+        }
         let first = encode_ten(name, threads);
         assert!(!first.is_empty(), "{name}");
         assert_eq!(

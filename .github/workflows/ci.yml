@@ -269,6 +269,9 @@ jobs:
         env:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: valgrind --error-exitcode=9 --quiet
           ALPHA2_TEST_DECODE_WORK_LIMIT_MS: "600000"
+          # SVT-AV1 (linked into the pinned SDK's libavcodec) reads memory it allocated and never
+          # wrote, in its own encode and rate-control threads; the other jobs still test it.
+          ALPHA2_TEST_SKIP_ENCODERS: libsvtav1
         run: cargo test -p alpha2-ffmpeg-bridge -p alpha2-native --features alpha2-ffmpeg-bridge/hwdevice --lib --bins --tests --no-fail-fast
       - name: GPU timeout configuration under ThreadSanitizer
         run: bash scripts/test-gpu-timeout-race.sh
