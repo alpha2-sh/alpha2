@@ -112,7 +112,7 @@ export function containerFromExtension(
 export function defaultVideoCodec(
   container: ExportContainer,
 ): BrowserVideoCodec {
-  return browserVideoCodec(containerPolicy(container).video[0]!);
+  return browserVideoCodec(containerPolicy(container).video[0]);
 }
 
 /** The audio codecs `container` offers, in the order a browser tries them. */
@@ -148,13 +148,13 @@ export function resolveEngineExportFormat(request: {
   readonly audioCodec?: string;
 }): EngineExportFormat {
   const policy = resolveContainer(request.container, request.extension);
-  const video = request.videoCodec ?? policy.video[0]!;
+  const video = request.videoCodec ?? policy.video[0];
   if (!(policy.video as readonly string[]).includes(video))
     throw new ExportFormatError(
       "video-codec-not-offered",
       `${policy.id} does not offer video codec ${video}; it offers ${policy.video.join(", ")}`,
     );
-  const audio = request.audioCodec ?? policy.audio[0]!;
+  const audio = request.audioCodec ?? policy.audio[0];
   if (!(policy.audio as readonly string[]).includes(audio))
     throw new ExportFormatError(
       "audio-codec-not-offered",

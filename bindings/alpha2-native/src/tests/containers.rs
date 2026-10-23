@@ -508,6 +508,11 @@ fn software_vp9_and_av1_open_at_every_mechanism() {
     if !pinned() {
         return;
     }
+    // The probe opens FFmpeg's Vulkan devices for its hardware encoders.
+    let _device = vulkan_device_lock();
+    // The D3D12VA rows walk the DX12 adapters; this binary encodes no frame for them.
+    #[cfg(all(target_os = "windows", feature = "hwencode"))]
+    crate::hwencode::encode_no_rate_control_frames();
     let probes = probe_video_encoders(640, 360);
     for name in SOFTWARE_MODERN {
         let probe = probes
