@@ -169,7 +169,13 @@ test("a host that hangs is killed and reported, and the run goes on", () => {
   assert.ok(seconds < 45, `${seconds} s`);
   assert.match(cancel ?? "", /^FAIL a cancel at frame 10/, run.stdout);
   assert.match(cancel, /did not finish within 2 s.*frames 10\/100/s);
-  assert.match(run.stdout, /a SIGTERM mid-export cancels it/);
+  // Windows has no SIGTERM to send a host, so the harness skips that check there.
+  assert.match(
+    run.stdout,
+    process.platform === "win32"
+      ? /^skipped: a SIGTERM mid-export/m
+      : /a SIGTERM mid-export cancels it/,
+  );
 });
 
 test("a host that never answers its capabilities is killed and reported", () => {

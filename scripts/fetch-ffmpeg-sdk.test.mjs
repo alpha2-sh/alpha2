@@ -100,13 +100,16 @@ function printedPath(text) {
     : path;
 }
 
-function run(command, args, options) {
+function run(command, args, { onStderr, ...options } = {}) {
   return new Promise((done) => {
     const child = spawn(command, args, options);
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => (stdout += chunk));
-    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+      onStderr?.(stderr);
+    });
     child.on("close", (status, signal) =>
       done({ status, signal, stdout, stderr }),
     );
@@ -213,7 +216,8 @@ const pathKey =
   Object.keys(process.env).find((key) => key.toUpperCase() === "PATH") ??
   "PATH";
 
-function fetchSdk(dir, target, env = {}) {
+/** `onStderr`, when given, sees the fetch's stderr so far each time more arrives. */
+function fetchSdk(dir, target, env = {}, onStderr = undefined) {
   return script(join(dir, "scripts/fetch-ffmpeg-sdk.sh"), [target], {
     env: {
       ...process.env,
@@ -221,6 +225,7 @@ function fetchSdk(dir, target, env = {}) {
       ALPHA2_FFMPEG_CACHE: join(dir, "cache"),
       ...env,
     },
+    onStderr,
   });
 }
 
@@ -588,10 +593,17 @@ test("a fetch waits for the lock's owner, and takes over a lock whose owner is g
     const owner = await lockOwner();
     writeFileSync(join(lock, "pid"), `${owner.pid}\n`);
     let finished = false;
-    const waiting = fetchSdk(dir, "linux-x64").then((result) => {
+    let sawWaiting;
+    const waitingSaid = new Promise((done) => (sawWaiting = done));
+    const waiting = fetchSdk(dir, "linux-x64", {}, (stderr) => {
+      if (/waiting for another fetch/.test(stderr)) sawWaiting();
+    }).then((result) => {
       finished = true;
       return result;
     });
+    // The owner lives until the fetch has reached the lock: a slow machine can take longer than any
+    // fixed delay to get there, and would find the owner already gone.
+    await Promise.race([waitingSaid, waiting]);
     await delay(1500);
     assert.equal(finished, false, "the fetch went ahead of the lock's owner");
     owner.kill();
