@@ -121,7 +121,8 @@ test("a page check opens Chrome unless the run names Safari or Firefox", () => {
 /**
  * A scripted WebDriver driver, run as `node <script> <port> <log> <mode>`, logging each request as
  * JSON lines. Modes: `report`, `never` (title stays "pending"), `refuse` (no session), `exit`
- * (dies before answering), `hang` (title requests never answered).
+ * (dies before answering), `hang` (title requests never answered), `stall` (logs to stdout and
+ * never answers the session request).
  */
 const fakeDriver = `
 import { appendFileSync } from "node:fs";
@@ -148,6 +149,7 @@ createServer((request, response) => {
     if (request.method === "POST" && request.url === "/session") {
       if (mode === "refuse")
         return reply(response, 500, { error: "session not created", message: "remote automation is off" });
+      if (mode === "stall") return process.stdout.write("launching the browser\\n");
       return reply(response, 200, { sessionId: "s1", capabilities: {} });
     }
     if (request.url.endsWith("/execute/sync")) {
@@ -268,6 +270,20 @@ test("a session the browser refuses fails with its reason and what to do", async
     outcome.error,
     /fake did not start a WebDriver session \(POST \/session: session not created: remote automation is off\); enable the fake/,
   );
+  assert.equal(outcome.driverRunning, false);
+});
+
+test("a session that never starts fails at its timeout with what the driver logged", async () => {
+  const outcome = await withFakeDriver("stall", (browser) =>
+    runWebDriverPage(browser, "http://127.0.0.1:8123/case", {
+      sessionTimeoutMs: 1_000,
+    }),
+  );
+  assert.match(
+    outcome.error,
+    /fake did not start a WebDriver session \(POST \/session got no answer within 1 s: launching the browser\); enable the fake/,
+  );
+  assert.ok(outcome.seconds < 10, `${outcome.seconds} s`);
   assert.equal(outcome.driverRunning, false);
 });
 

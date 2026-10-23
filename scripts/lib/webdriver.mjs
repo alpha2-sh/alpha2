@@ -11,8 +11,13 @@ import { stopChrome } from "./chrome-cdp.mjs";
 
 /** How long one WebDriver request may wait for its answer unless the page has less time left. */
 const REQUEST_TIMEOUT_MS = 30_000;
-/** How long a driver has to start answering, and a session to start its browser. */
+/** How long a driver has to start answering. */
 const START_TIMEOUT_MS = 60_000;
+/**
+ * How long a session has to start its browser. A first Firefox launch on a fresh CI machine has
+ * taken over 60 s.
+ */
+const SESSION_TIMEOUT_MS = 180_000;
 
 /**
  * What each WebDriver browser runs: the driver's executable name, the variable that names it
@@ -112,32 +117,37 @@ function onPath(file, { env, platform, exists }) {
  * @param {string} url The page to open.
  * @param {object} [options]
  * @param {number} [options.timeoutMs] How long the page has to report, 30 s by default.
+ * @param {number} [options.sessionTimeoutMs] How long the session has to start its browser, 180 s
+ *   by default.
  * @returns {Promise<string>} The URI-encoded JSON title the page set.
  */
 export async function runWebDriverPage(
   browser,
   url,
-  { timeoutMs = 30_000 } = {},
+  { timeoutMs = 30_000, sessionTimeoutMs = SESSION_TIMEOUT_MS } = {},
 ) {
   const target = new URL(url);
   if (target.hostname === "127.0.0.1") target.hostname = "localhost";
   const port = await freePort();
   // Its own process group on POSIX, so ending it ends the browser it started too.
   const child = spawn(browser.driver, browser.driverArguments(port), {
-    stdio: ["ignore", "ignore", "pipe"],
+    stdio: ["ignore", "pipe", "pipe"],
     detached: process.platform !== "win32",
     windowsHide: true,
   });
+  // geckodriver logs to stdout, safaridriver to stderr: keep the tail of both.
   let output = "";
-  child.stderr.setEncoding("utf8");
-  child.stderr.on("data", (chunk) => {
-    output = (output + chunk).slice(-2_000);
-  });
+  for (const stream of [child.stdout, child.stderr]) {
+    stream.setEncoding("utf8");
+    stream.on("data", (chunk) => {
+      output = (output + chunk).slice(-2_000);
+    });
+  }
   const driver = new Driver(`http://127.0.0.1:${port}`, child, () => output);
   let session = null;
   try {
     await driver.ready(START_TIMEOUT_MS);
-    session = await driver.newSession(browser);
+    session = await driver.newSession(browser, sessionTimeoutMs);
     const deadline = Date.now() + timeoutMs;
     const remaining = () => Math.max(1, deadline - Date.now());
     // Safari cancels a waited navigation when its page-load timeout runs out, and these pages may load
@@ -259,20 +269,20 @@ class Driver {
   }
 
   /** Opens a session of `browser` and returns its id. */
-  async newSession(browser) {
+  async newSession(browser, timeoutMs) {
     try {
       const value = await this.command(
         "POST",
         "/session",
         { capabilities: { alwaysMatch: browser.capabilities } },
-        START_TIMEOUT_MS,
+        timeoutMs,
       );
       if (typeof value?.sessionId !== "string")
         throw new Error(`no session id in ${JSON.stringify(value)}`);
       return value.sessionId;
     } catch (error) {
       throw new Error(
-        `${browser.name} did not start a WebDriver session (${error.message}); ${browser.sessionHint}`,
+        `${browser.name} did not start a WebDriver session (${error.message}${this.#said()}); ${browser.sessionHint}`,
         { cause: error },
       );
     }
