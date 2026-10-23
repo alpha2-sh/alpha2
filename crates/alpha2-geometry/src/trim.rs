@@ -163,6 +163,12 @@ fn transformed(segment: PathSeg, affine: Affine) -> PathSeg {
     affine * segment
 }
 
+/// The shortest piece of a segment a cut keeps, in measured pixels. A span
+/// that ends on a segment boundary can reach past it by rounding; the
+/// sliver that leaves has no usable tangent, and stroking it puts NaN in
+/// the outline.
+const MIN_PIECE_LENGTH: f64 = 1e-6;
+
 /// The part of `subpath` between `from` and `to` (lengths along it, in the
 /// measured space), as an open subpath in its own space.
 fn cut(subpath: &Subpath, lengths: &[f64], measure: Affine, from: f64, to: f64) -> Subpath {
@@ -171,7 +177,7 @@ fn cut(subpath: &Subpath, lengths: &[f64], measure: Affine, from: f64, to: f64) 
     for (segment, &length) in subpath.segments.iter().zip(lengths) {
         let (start, end) = (run, run + length);
         run = end;
-        if end <= from || start >= to || length <= 0.0 {
+        if to.min(end) - from.max(start) < MIN_PIECE_LENGTH {
             continue;
         }
         let measured = transformed(*segment, measure);

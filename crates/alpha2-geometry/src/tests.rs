@@ -252,6 +252,41 @@ fn trimming_individually_cuts_each_subpath_alone() {
 }
 
 #[test]
+fn a_span_ending_on_a_segment_boundary_leaves_no_sliver_to_stroke() {
+    // Two of the turned ellipse's four quarters sum to a hair under half its length, which
+    // once left a 3e-14 sliver of the third whose stroke put NaN in the outline.
+    let ellipse = shapes::ellipse(Point::new(256.0, 180.0), Vec2::new(256.0, 108.0), 30.0);
+    let kept = trim_together(
+        &measured(&ellipse),
+        TrimSpan {
+            start: 0.0,
+            end: 0.5,
+            offset: 0.0,
+        },
+    );
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].1.segments.len(), 2);
+    let mut piece = BezPath::new();
+    crate::trim::append(&mut piece, &kept[0].1);
+    let style = crate::StrokeStyle {
+        width: 5.4,
+        join: LineJoin::Bevel,
+        miter_limit: 4.0,
+        cap: LineCap::Square,
+        dash: Vec::new(),
+        dash_offset: 0.0,
+    };
+    let outline = crate::stroke_outline(&piece, &style, Affine::IDENTITY);
+    assert!(
+        outline
+            .elements()
+            .iter()
+            .all(|element| element.end_point().is_none_or(Point::is_finite)),
+        "{outline:?}"
+    );
+}
+
+#[test]
 fn spatial_motion_is_constant_speed_along_the_curve() {
     let (from, to) = (Point::new(0.0, 0.0), Point::new(100.0, 0.0));
     let (out_tangent, in_tangent) = (Vec2::new(0.0, -60.0), Vec2::new(0.0, -60.0));
@@ -487,9 +522,36 @@ fn polystar_kind_and_paths_build_without_panicking_at_the_limits() {
     }
 }
 
+/// Whether kurbo was built with its `std` feature, which a workspace build
+/// turns on through other crates: its math is then the platform's, not
+/// libm's.
+fn kurbo_has_std() -> bool {
+    // `BezPath::to_svg` exists only with `std`, and an inherent method wins
+    // over this trait's; without it, the trait's answers `()`.
+    #[allow(dead_code)]
+    trait WithoutStd {
+        fn to_svg(&self) {}
+    }
+    impl WithoutStd for BezPath {}
+    let svg: &dyn std::any::Any = &BezPath::new().to_svg();
+    svg.is::<String>()
+}
+
+/// Drops the hashes of float bits, which only libm's math pins.
+fn without_float_bits(golden: &mut serde_json::Value) {
+    for list in ["coverage", "trees"] {
+        for row in golden[list].as_array_mut().expect("rows") {
+            let row = row.as_object_mut().expect("a row");
+            row.remove("outline");
+            row.remove("key");
+        }
+    }
+}
+
 /// The pinned coverage and stroke-outline hashes of the parity scenes, which
 /// the browser module must give too (`npm run test:wasm-parity`). Run with
-/// `ALPHA2_UPDATE_GOLDENS=1` to re-pin after an intended change.
+/// `ALPHA2_UPDATE_GOLDENS=1 cargo test -p alpha2-geometry` to re-pin after
+/// an intended change. With kurbo's `std` math, only coverage is compared.
 #[test]
 fn coverage_and_outlines_match_the_pinned_hashes() {
     let path = concat!(
@@ -500,11 +562,19 @@ fn coverage_and_outlines_match_the_pinned_hashes() {
     let update =
         std::env::var_os("ALPHA2_UPDATE_GOLDENS").as_deref() == Some(std::ffi::OsStr::new("1"));
     if update {
+        assert!(
+            !kurbo_has_std(),
+            "kurbo has `std` here, so its outlines are not libm's: re-pin with `cargo test -p alpha2-geometry`"
+        );
         std::fs::write(path, &text).expect("write the golden");
         return;
     }
-    let actual: serde_json::Value = serde_json::from_str(&text).expect("JSON");
-    let pinned: serde_json::Value =
+    let mut actual: serde_json::Value = serde_json::from_str(&text).expect("JSON");
+    let mut pinned: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(path).expect("golden")).expect("JSON");
+    if kurbo_has_std() {
+        without_float_bits(&mut actual);
+        without_float_bits(&mut pinned);
+    }
     assert_eq!(actual, pinned);
 }

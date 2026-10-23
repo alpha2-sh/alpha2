@@ -21,8 +21,9 @@ include = [
 
 [dependencies]
 alpha2-model.workspace = true
-# libm, so trigonometry is the same code on every target. A host build that also links velato gets
-# kurbo's `std` math for its stroker; the shared coverage goldens pin that both agree.
+# libm, so trigonometry is the same code on every target. A build that also links peniko or
+# svgtypes gets kurbo's `std` math, whose last bits differ: the shared goldens pin coverage for
+# both, and outline bits and scene keys only for libm (`cargo test -p alpha2-geometry`, and wasm).
 kurbo = { version = "0.13.1", default-features = false, features = ["libm"] }
 libm = "0.2.16"
 
