@@ -505,7 +505,7 @@ test("an encoder whose flush puts nothing out fails the finish", async () => {
 
 test("a slow encoder that keeps putting frames out is not taken to be stalled", async () => {
   const file = swapFile();
-  // The whole export (12 × 30 ms) outlasts the timeout, while each output lands well inside it, even
+  // The whole export (12 x 30 ms) outlasts the timeout, while each output lands well inside it, even
   // on a loaded machine's coarse timers.
   const sink = streamSink(file, { video: true }, { stallTimeoutMs: 150 });
   await withEncoders({ delayMs: 30 }, () =>
