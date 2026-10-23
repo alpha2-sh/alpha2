@@ -35,7 +35,7 @@ fn check(plan: &CompositionPlan) {
     );
     for (index, step) in plan.steps.iter().enumerate() {
         let inputs = match &step.op {
-            StepOp::Clip | StepOp::Media { .. } | StepOp::Generator(_) => Vec::new(),
+            StepOp::Clip | StepOp::Media { .. } | StepOp::Generator { .. } => Vec::new(),
             StepOp::Effect { input, .. }
             | StepOp::Transform { input, .. }
             | StepOp::ShapeMask { input, .. } => vec![*input],

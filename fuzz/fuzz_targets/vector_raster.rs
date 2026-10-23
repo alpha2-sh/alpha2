@@ -48,7 +48,9 @@ fn path(reader: &mut Reader<'_>, scale: f64) -> BezPath {
             }
             1 => path.line_to(point),
             2 => {
-                let Some(end) = reader.point(scale) else { break };
+                let Some(end) = reader.point(scale) else {
+                    break;
+                };
                 path.quad_to(point, end);
             }
             3 => {
@@ -68,13 +70,20 @@ fn path(reader: &mut Reader<'_>, scale: f64) -> BezPath {
 fuzz_target!(|data: &[u8]| {
     let mut reader = Reader(data);
     let Some(flags) = reader.byte() else { return };
-    let rule = if flags & 1 == 1 { FillRule::Evenodd } else { FillRule::Nonzero };
+    let rule = if flags & 1 == 1 {
+        FillRule::Evenodd
+    } else {
+        FillRule::Nonzero
+    };
     let scale = [1.0, 10.0, 1.0e3, 1.0e6][usize::from((flags >> 1) & 3)];
     let clip = IRect::new(0, 0, 64, 48);
     let path = project_far(&path(&mut reader, scale), 64, 48);
     let mut scratch = RasterScratch::default();
     let coverage = rasterize(&path, rule, clip, &mut scratch);
-    assert_eq!(coverage.tiles.len(), (coverage.size.0 * coverage.size.1) as usize);
+    assert_eq!(
+        coverage.tiles.len(),
+        (coverage.size.0 * coverage.size.1) as usize
+    );
     for tile in &coverage.tiles {
         if let TileState::Partial(index) = tile {
             assert!((*index as usize) < coverage.partial.len());
