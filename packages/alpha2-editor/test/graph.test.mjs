@@ -918,3 +918,279 @@ test("a preset's composition sources get ids apart from the project's and from e
   assert.ok(sources[read.m1].startsWith("red"));
   assert.ok(sources[read.m2].startsWith("blue"));
 });
+
+const glow = { id: "test.add-glow", version: 1 };
+
+test("an effect's named inputs are graph inputs: listed in name order, connected, kept or removed", async () => {
+  const { inputKeys, inputOf, withInput, withoutEffectInput, acceptsInput } =
+    await import("../dist/index.js");
+  const op = {
+    type: "effect",
+    input: "clip",
+    inputs: { map: "noise", glow: null },
+    effect: glow,
+  };
+  assert.deepEqual(inputKeys(op), ["input", "inputs.glow", "inputs.map"]);
+  assert.equal(inputOf(op, "inputs.map"), "noise");
+  assert.equal(inputOf(op, "inputs.glow"), undefined);
+  assert.equal(inputOf(op, "inputs.mask"), undefined);
+  // Connecting a name the node has not got adds it; disconnecting keeps the slot.
+  const masked = withInput(op, "inputs.mask", "clip");
+  assert.deepEqual(masked.inputs, { map: "noise", glow: null, mask: "clip" });
+  assert.deepEqual(withInput(op, "inputs.map", null).inputs, {
+    map: null,
+    glow: null,
+  });
+  assert.equal(acceptsInput(op, "inputs.2map"), false);
+  assert.throws(() => withInput(op, "inputs.a-b", "clip"), /no input/);
+  assert.throws(
+    () =>
+      withInput(
+        { type: "transform", input: "clip", transform: {} },
+        "inputs.map",
+        "clip",
+      ),
+    /no input/,
+  );
+  // Removing the last named input leaves no `inputs`, as the engine writes it.
+  const plain = withoutEffectInput(withoutEffectInput(op, "glow"), "map");
+  assert.deepEqual(plain, { type: "effect", input: "clip", effect: glow });
+  assert.equal(withoutEffectInput(op, "absent"), op);
+});
+
+test("graph commands connect, disconnect, remove, group, and ungroup through named inputs", () => {
+  const e = createEditor({ document: document() });
+  const ok = (command) => {
+    const result = e.dispatch(command);
+    assert.equal(result.ok, true, result.error?.message);
+  };
+  ok({ type: "graph.create", clipId: "c" });
+  const id = "c-fx";
+  ok({
+    type: "graph.node.add",
+    compositionId: id,
+    node: { id: "still", op: { type: "media", source_id: "i" } },
+  });
+  ok({
+    type: "graph.node.add",
+    compositionId: id,
+    node: { id: "soft", op: { type: "effect", input: "still", effect: blur } },
+  });
+  ok({
+    type: "graph.node.add",
+    compositionId: id,
+    node: { id: "fx", op: { type: "effect", input: "clip", effect: glow } },
+  });
+  ok({
+    type: "graph.connect",
+    compositionId: id,
+    from: "soft",
+    to: "fx",
+    input: "inputs.glow",
+  });
+  ok({ type: "graph.output", compositionId: id, nodeId: "fx" });
+  assert.deepEqual(nodes(e).fx.op.inputs, { glow: "soft" });
+  const project = () => e.document.project;
+  const composition = () => project().compositions.find((c) => c.id === id);
+  assert.deepEqual(graphIssues(composition(), "clip", project()), []);
+  // A node read only through a named input means the clip's picture is no stack.
+  assert.equal(
+    effectStack(project(), e.query().clips.get("c").clip),
+    undefined,
+  );
+  const refused = e.dispatch({
+    type: "graph.connect",
+    compositionId: id,
+    from: "soft",
+    to: "fx",
+    input: "inputs.not-a-name",
+  });
+  assert.equal(refused.ok, false);
+
+  // Grouped, the blur and its image fold into a group the effect reads by name.
+  ok({
+    type: "graph.group",
+    compositionId: id,
+    ids: ["still", "soft"],
+    groupId: "glow-source",
+    definitionId: "glow-source-def",
+  });
+  assert.deepEqual(nodes(e).fx.op.inputs, { glow: "glow-source" });
+  ok({ type: "graph.ungroup", compositionId: id, nodeId: "glow-source" });
+  assert.deepEqual(nodes(e).fx.op.inputs, { glow: "glow-source-soft" });
+  assert.deepEqual(graphIssues(composition(), "clip", project()), []);
+
+  // The effect grouped alone takes its source and its named input as ports, in name order.
+  ok({
+    type: "graph.group",
+    compositionId: id,
+    ids: ["fx"],
+    groupId: "look",
+    definitionId: "look-def",
+  });
+  assert.deepEqual(nodes(e).look.op.inputs, ["clip", "glow-source-soft"]);
+  const definition = project().compositions.find((c) => c.id === "look-def");
+  const inner = Object.fromEntries(definition.nodes.map((n) => [n.id, n]));
+  assert.equal(inner.fx.op.input, "input-1");
+  assert.deepEqual(inner.fx.op.inputs, { glow: "input-2" });
+  ok({ type: "graph.ungroup", compositionId: id, nodeId: "look" });
+  assert.deepEqual(nodes(e)["look-fx"].op.inputs, { glow: "glow-source-soft" });
+
+  // Removing what a named input reads leaves it unconnected, which the output needs.
+  ok({
+    type: "graph.node.remove",
+    compositionId: id,
+    ids: ["glow-source-soft"],
+  });
+  assert.deepEqual(nodes(e)["look-fx"].op.inputs, { glow: null });
+  assert.deepEqual(graphIssues(composition(), "clip", project()), [
+    { kind: "missing_input", node: "look-fx", input: "inputs.glow" },
+  ]);
+  ok({
+    type: "graph.disconnect",
+    compositionId: id,
+    to: "look-fx",
+    input: "inputs.glow",
+  });
+  assert.deepEqual(nodes(e)["look-fx"].op.inputs, { glow: null });
+});
+
+test("an effect chain whose effect reads a named input is no stack, even of the clip", () => {
+  const e = createEditor({ document: document() });
+  e.dispatch({ type: "graph.create", clipId: "c" });
+  const result = e.dispatch({
+    type: "graph.node.add",
+    compositionId: "c-fx",
+    node: {
+      id: "fx",
+      op: {
+        type: "effect",
+        input: "clip",
+        inputs: { glow: "clip" },
+        effect: glow,
+      },
+    },
+  });
+  assert.equal(result.ok, true, result.error?.message);
+  e.dispatch({ type: "graph.output", compositionId: "c-fx", nodeId: "fx" });
+  const clip = e.query().clips.get("c").clip;
+  assert.equal(effectStack(e.document.project, clip), undefined);
+});
+
+test("multi-pass groups save as presets with the images and effects their passes read", async () => {
+  // Bloom (bright parts, blur, glow added back by name) and an image displacement (an image
+  // read as a named input): groups of ordinary nodes, saved and applied like any group.
+  const { graphPreset, presetShortfall, applyGraphPreset } =
+    await import("../dist/index.js");
+  const { validateProject } = await import("alpha2/project");
+  const constant = (value) => ({
+    mode: "constant",
+    value: { type: "float", value },
+  });
+  const bright = { id: "test.bright-pass", version: 1 };
+  const displace = { id: "test.displace", version: 1 };
+  const base = document().project;
+  const project = {
+    ...base,
+    compositions: [
+      {
+        id: "bloom",
+        inputs: ["Source"],
+        controls: [
+          { name: "threshold", node: "bright", param: "threshold" },
+          { name: "radius", node: "blur", param: "radius" },
+          { name: "intensity", node: "combine", param: "intensity" },
+        ],
+        nodes: [
+          { id: "source", op: { type: "group_input", index: 0 } },
+          {
+            id: "bright",
+            op: { type: "effect", input: "source", effect: bright },
+          },
+          { id: "blur", op: { type: "effect", input: "bright", effect: blur } },
+          {
+            id: "combine",
+            op: {
+              type: "effect",
+              input: "source",
+              inputs: { glow: "blur" },
+              effect: glow,
+            },
+          },
+        ],
+        output: "combine",
+      },
+      {
+        id: "warp",
+        inputs: ["Source"],
+        nodes: [
+          { id: "source", op: { type: "group_input", index: 0 } },
+          { id: "noise", op: { type: "media", source_id: "i" } },
+          {
+            id: "bloomed",
+            op: {
+              type: "group",
+              composition: "bloom",
+              inputs: ["source"],
+              controls: { intensity: constant(2) },
+            },
+          },
+          {
+            id: "warped",
+            op: {
+              type: "effect",
+              input: "bloomed",
+              inputs: { map: "noise" },
+              effect: displace,
+            },
+          },
+        ],
+        output: "warped",
+      },
+    ],
+  };
+  assert.deepEqual(validateProject(project), []);
+  const preset = graphPreset(project, "warp", "Bloom and warp");
+  assert.deepEqual(
+    preset.compositions.map((c) => c.id),
+    ["warp", "bloom"],
+  );
+  assert.deepEqual(
+    preset.requires.sources.map((s) => s.id),
+    ["i"],
+  );
+  assert.deepEqual(
+    preset.requires.effects
+      .map((effect) => `${effect.id}@${effect.version}`)
+      .sort(),
+    [
+      "alpha2.effect.gaussian-blur@1",
+      "test.add-glow@1",
+      "test.bright-pass@1",
+      "test.displace@1",
+    ],
+  );
+  // A file-backed image is the project's to have: a project without it falls short of it.
+  const bare = createDocument({ ...base, sources: [base.sources[0]] });
+  assert.deepEqual(presetShortfall(bare, preset, () => true).sources, ["i"]);
+  const e = createEditor({ document: createDocument(base) });
+  assert.deepEqual(
+    presetShortfall(e.document, preset, () => true),
+    {
+      sources: [],
+      resources: [],
+      effects: [],
+    },
+  );
+  const command = applyGraphPreset(e.document, preset, "c", {
+    groupId: "look",
+  });
+  const result = e.dispatch(command);
+  assert.equal(result.ok, true, result.error?.message);
+  const applied = e.document.project;
+  assert.deepEqual(validateProject(applied), []);
+  const own = applied.compositions.find(
+    (c) => c.id === e.query().clips.get("c").clip.composition.id,
+  );
+  assert.deepEqual(graphIssues(own, "clip", applied), []);
+});

@@ -22763,5 +22763,509 @@
         "tracks": []
       }
     }
+  },
+  {
+    "name": "effect-named-inputs-valid",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "g" }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "compositions": [
+        {
+          "id": "g",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            { "id": "image", "op": { "type": "media", "source_id": "i1" } },
+            {
+              "id": "fx",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "inputs": { "map": "image", "glow": null },
+                "effect": { "id": "test.add-glow", "version": 1 }
+              }
+            }
+          ],
+          "output": "fx"
+        }
+      ]
+    }
+  },
+  {
+    "name": "effect-named-input-dangling",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "input inputs.map of node fx in composition g names unknown node gone"
+    ],
+    "error": "input inputs.map of node fx in composition g names unknown node gone",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "g" }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "compositions": [
+        {
+          "id": "g",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            {
+              "id": "fx",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "inputs": { "map": "gone" },
+                "effect": { "id": "test.add-glow", "version": 1 }
+              }
+            }
+          ],
+          "output": "fx"
+        }
+      ]
+    }
+  },
+  {
+    "name": "effect-named-input-cycle",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["composition g has a cycle"],
+    "error": "node a of composition g depends on its own output",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "g" }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "compositions": [
+        {
+          "id": "g",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            {
+              "id": "a",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "inputs": { "map": "b" },
+                "effect": { "id": "test.add-glow", "version": 1 }
+              }
+            },
+            {
+              "id": "b",
+              "op": {
+                "type": "effect",
+                "input": "a",
+                "effect": { "id": "test.add-glow", "version": 1 }
+              }
+            }
+          ],
+          "output": "a"
+        }
+      ]
+    }
+  },
+  {
+    "name": "effect-named-input-bad-name",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["node fx of composition g has an invalid setting"],
+    "error": "node fx of composition g has an invalid setting",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "g" }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "compositions": [
+        {
+          "id": "g",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            {
+              "id": "fx",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "inputs": { "2map": "clip" },
+                "effect": { "id": "test.add-glow", "version": 1 }
+              }
+            }
+          ],
+          "output": "fx"
+        }
+      ]
+    }
+  },
+  {
+    "name": "effect-too-many-named-inputs",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": ["node fx of composition g has an invalid setting"],
+    "error": "node fx of composition g has an invalid setting",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "g" }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "compositions": [
+        {
+          "id": "g",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            {
+              "id": "fx",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "inputs": {
+                  "in0": "clip",
+                  "in1": "clip",
+                  "in2": "clip",
+                  "in3": "clip",
+                  "in4": "clip",
+                  "in5": "clip",
+                  "in6": "clip",
+                  "in7": "clip",
+                  "in8": "clip"
+                },
+                "effect": { "id": "test.add-glow", "version": 1 }
+              }
+            }
+          ],
+          "output": "fx"
+        }
+      ]
+    }
+  },
+  {
+    "name": "transform-with-inputs",
+    "valid": false,
+    "rejected_by": "schema",
+    "problems": [
+      "project.compositions[0].nodes[1].op has unknown field \"inputs\""
+    ],
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v1", "kind": "video", "locator": "a.mp4" },
+        { "id": "v2", "kind": "video", "locator": "b.mp4" },
+        { "id": "a1", "kind": "audio", "locator": "c.m4a" },
+        { "id": "i1", "kind": "image", "locator": "d.png" }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "g" }
+              },
+              {
+                "id": "c2",
+                "source_id": "v2",
+                "timeline_range": { "start": 120000, "end": 240000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "compositions": [
+        {
+          "id": "g",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            {
+              "id": "moved",
+              "op": {
+                "type": "transform",
+                "input": "clip",
+                "inputs": { "map": "clip" }
+              }
+            }
+          ],
+          "output": "moved"
+        }
+      ]
+    }
   }
 ]

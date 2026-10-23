@@ -2,7 +2,7 @@ use crate::{
     Color, EffectId, EffectParams, EffectResources, EffectRuntime, ParamValue, RenderSize,
 };
 
-use crate::graph::{GraphLayer, RenderCacheKey};
+use crate::graph::{EffectInputs, GraphLayer, RenderCacheKey};
 
 pub(crate) fn transient_source_key(graph: u32, index: usize) -> RenderCacheKey {
     let mut hash = StableHash::new();
@@ -60,6 +60,22 @@ pub(crate) fn effect_cache_key_with_resources(
     hash.u64(runtime.time.ticks().cast_unsigned());
     hash.f32(runtime.progress);
     hash.f32(runtime.ratio);
+    RenderCacheKey(hash.finish())
+}
+
+/// One key for an effect node's named inputs: each name and the key of the
+/// node it reads, in name order.
+pub(crate) fn named_inputs_key(
+    inputs: &EffectInputs<'_>,
+    keys: &[RenderCacheKey],
+) -> RenderCacheKey {
+    let mut hash = StableHash::new();
+    hash.bytes(b"named-inputs");
+    hash.u64(inputs.len() as u64);
+    for (name, node) in inputs.iter() {
+        hash.string(name);
+        hash.u128(keys[node.index()].value());
+    }
     RenderCacheKey(hash.finish())
 }
 

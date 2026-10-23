@@ -12,7 +12,7 @@ import {
   freeNodeId,
   groupNodes,
   ungroupNode,
-  inputKeys,
+  acceptsInput,
   correspondingCompositions,
   ownComposition,
   withEffectStack,
@@ -1266,7 +1266,7 @@ function reduce(
             ),
           };
         }
-        if (!inputKeys(op).includes(key as InputKey))
+        if (!acceptsInput(op, key as InputKey))
           fail(`No input ${String(key)} on node ${command.to}`, command.to);
         const connected = withInput(
           op,

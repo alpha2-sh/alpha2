@@ -728,7 +728,7 @@ fn export_tinted(host: &mut Host, effects: &Value, output: &Path) -> Result<Valu
 }
 
 fn tint(body: &str) -> Value {
-    json!({"id": "test.tint", "version": 1, "kind": "effect", "inputs": 1, "wgslBody": body})
+    json!({"id": "test.tint", "version": 1, "kind": "effect", "wgslBody": body})
 }
 
 const RED_ONLY: &str =
@@ -736,6 +736,98 @@ const RED_ONLY: &str =
 
 const GREEN_ONLY: &str =
     "fn effect(uv: vec2f, src: vec4f) -> vec4f { return vec4f(0.0, src.g, 0.0, src.a); }";
+
+/// Exports a still of `nodes` (composition `look`, output `output`) over a white generated clip,
+/// with the image asset as source `image` and `effects` as the request's definitions.
+fn export_look(
+    host: &mut Host,
+    nodes: &Value,
+    output: &str,
+    effects: &Value,
+    path: &Path,
+) -> Result<Value, HostError> {
+    let mut project = still_project([0.0, 0.0, 0.0], "auto");
+    project["sources"] = json!([
+        {"id": "image", "locator": "fixture://image", "kind": "image"},
+        {"id": "white", "kind": "generated", "generator": {"type": "fill", "paint": {"type": "solid",
+            "color": {"red": 1, "green": 1, "blue": 1, "alpha": 1}}}}
+    ]);
+    project["timeline"]["tracks"][0]["clips"][0]["source_id"] = json!("white");
+    project["compositions"] = json!([{"id": "look", "nodes": nodes, "output": output}]);
+    project["timeline"]["tracks"][0]["clips"][0]["composition"] = json!({"id": "look"});
+    let request = parse_request(
+        &json!({
+            "protocolVersion": 1,
+            "operation": "export",
+            "requestId": "look",
+            "project": project,
+            "assets": {"image": Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tests/corpus/parity-image.png")},
+            "effects": effects,
+            "startTicks": 0,
+            "endTicks": 3 * 4_000,
+            "frameRate": {"num": 30, "den": 1},
+            "includeAudio": false,
+            "videoCodec": "mpeg4-part2",
+            "output": path,
+        })
+        .to_string(),
+    )
+    .expect("request");
+    host.handle(request, &mut |_| Ok(()))
+}
+
+/// An image asset reaches an effect as a named input through a media node, decoded and
+/// converted as any media node's: white times the image draws what the image does through an
+/// effect that passes its source.
+#[test]
+fn an_export_draws_an_image_through_a_named_input() {
+    let _gpu = gpu_test_lock();
+    let directory = scratch_directory("named-input");
+    let bytes = |name: &str| sha256_hex(&directory.join(name));
+    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let effects = json!([
+        {"id": "test.multiply-map", "version": 1, "kind": "effect", "inputs": [{"name": "map"}],
+         "wgslBody": "fn effect(uv: vec2f, src: vec4f) -> vec4f { return src * sample_map(uv); }"},
+        {"id": "test.same", "version": 1, "kind": "effect",
+         "wgslBody": "fn effect(uv: vec2f, src: vec4f) -> vec4f { return src; }"}
+    ]);
+    export_look(
+        &mut host,
+        &json!([
+            {"id": "clip", "op": {"type": "clip"}},
+            {"id": "map", "op": {"type": "media", "source_id": "image"}},
+            {"id": "fx", "op": {"type": "effect", "input": "clip", "inputs": {"map": "map"},
+                "effect": {"id": "test.multiply-map", "version": 1}}}
+        ]),
+        "fx",
+        &effects,
+        &directory.join("named.mp4"),
+    )
+    .expect("an image through a named input exports");
+    export_look(
+        &mut host,
+        &json!([
+            {"id": "image", "op": {"type": "media", "source_id": "image"}},
+            {"id": "fx", "op": {"type": "effect", "input": "image",
+                "effect": {"id": "test.same", "version": 1}}}
+        ]),
+        "fx",
+        &effects,
+        &directory.join("direct.mp4"),
+    )
+    .expect("the image through an effect exports");
+    export_look(
+        &mut host,
+        &json!([{"id": "clip", "op": {"type": "clip"}}]),
+        "clip",
+        &effects,
+        &directory.join("white.mp4"),
+    )
+    .expect("the white clip exports");
+    assert_eq!(bytes("named.mp4"), bytes("direct.mp4"));
+    assert_ne!(bytes("named.mp4"), bytes("white.mp4"));
+}
 
 /// A resident host registers the runtime effect definitions each request
 /// carries, so a warm host renders what a fresh one does. Registered once per
@@ -804,6 +896,25 @@ fn each_export_renders_the_runtime_effects_its_own_request_defines() {
     )
     .expect("the fixed body registers");
     assert_eq!(bytes("fresh.mp4"), bytes("fixed.mp4"));
+
+    // A definition that differs only in its named inputs is another definition: this one
+    // declares an input the tinted node leaves out, so its frames fail.
+    let mut with_input = tint(GREEN_ONLY);
+    with_input["inputs"] = json!([{"name": "map"}]);
+    let error = export_tinted(
+        &mut warm,
+        &json!([with_input]),
+        &directory.join("input.mp4"),
+    )
+    .expect_err("a declared input the node leaves out");
+    assert_eq!(error.code, "EFFECT_ERROR", "{}", error.message);
+    export_tinted(
+        &mut warm,
+        &json!([tint(GREEN_ONLY)]),
+        &directory.join("again.mp4"),
+    )
+    .expect("the definition without the input registers again");
+    assert_eq!(bytes("fresh.mp4"), bytes("again.mp4"));
 
     let error = export_tinted(
         &mut warm,

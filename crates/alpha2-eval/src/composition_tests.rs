@@ -18,6 +18,7 @@ fn node(id: &str, op: NodeOp) -> CompositionNode {
 fn effect(input: &str) -> NodeOp {
     NodeOp::Effect {
         input: Some(node_id(input)),
+        inputs: BTreeMap::new(),
         effect: ClipEffect {
             id: "alpha2.effect.gaussian-blur".into(),
             version: 1,
@@ -433,7 +434,7 @@ fn a_group_compiles_to_the_steps_its_nodes_would_inline() {
         .steps
         .iter()
         .filter_map(|step| match &step.op {
-            StepOp::Effect { input, effect } => {
+            StepOp::Effect { input, effect, .. } => {
                 Some((*input, effect.params.get("radius").cloned()))
             }
             _ => None,
@@ -652,7 +653,12 @@ fn the_planner_stops_at_the_nesting_and_size_validation_allows() {
 
 /// An effect node `id` whose `amount` parameter has `keyframes` keyframes.
 fn keyframed_effect(id: &str, input: &str, keyframes: usize) -> CompositionNode {
-    let NodeOp::Effect { input, mut effect } = effect(input) else {
+    let NodeOp::Effect {
+        input,
+        inputs,
+        mut effect,
+    } = effect(input)
+    else {
         unreachable!("effect() is an effect node");
     };
     effect.params.insert(
@@ -667,7 +673,14 @@ fn keyframed_effect(id: &str, input: &str, keyframes: usize) -> CompositionNode 
                 .collect(),
         },
     );
-    node(id, NodeOp::Effect { input, effect })
+    node(
+        id,
+        NodeOp::Effect {
+            input,
+            inputs,
+            effect,
+        },
+    )
 }
 
 /// A composition `id` that draws composition `drawn` through `uses` group
@@ -1061,6 +1074,7 @@ fn an_unconnected_input_inside_a_group_is_named_by_its_path() {
     let mut soften = soften();
     soften.nodes[1].op = NodeOp::Effect {
         input: None,
+        inputs: BTreeMap::new(),
         effect: ClipEffect {
             id: "alpha2.effect.gaussian-blur".into(),
             version: 1,
@@ -1148,4 +1162,144 @@ fn reads_and_effects_of_a_shared_composition_are_counted_per_clip_and_walked_onc
             .collect::<Vec<_>>(),
         ["alpha2.effect.gaussian-blur"]
     );
+}
+
+/// An effect node reading `input` and, by name, `inputs`.
+fn effect_with_inputs(input: &str, inputs: &[(&str, Option<&str>)]) -> NodeOp {
+    let NodeOp::Effect { effect, .. } = effect(input) else {
+        unreachable!("effect() is an effect node");
+    };
+    NodeOp::Effect {
+        input: Some(node_id(input)),
+        inputs: inputs
+            .iter()
+            .map(|(name, node)| ((*name).to_owned(), node.map(node_id)))
+            .collect(),
+        effect,
+    }
+}
+
+#[test]
+fn named_inputs_are_planned_before_their_effect_in_name_order() {
+    let project = project(composition(
+        vec![
+            node("clip", NodeOp::Clip {}),
+            node(
+                "image",
+                NodeOp::Media {
+                    source_id: SourceId::new("other").expect("non-empty"),
+                    start: MediaTime::ZERO,
+                },
+            ),
+            node("blur", effect("clip")),
+            node(
+                "fx",
+                effect_with_inputs("clip", &[("map", Some("image")), ("glow", Some("blur"))]),
+            ),
+        ],
+        "fx",
+    ));
+    let plan = plan(&project).expect("a complete graph");
+    let at = |id: &str| {
+        plan.steps
+            .iter()
+            .position(|step| step.node.as_str() == id)
+            .expect("planned")
+    };
+    let StepOp::Effect { input, inputs, .. } = &plan.steps[plan.output].op else {
+        panic!("the output is the effect");
+    };
+    assert_eq!(*input, at("clip"));
+    assert_eq!(
+        inputs,
+        &[
+            ("glow".to_owned(), at("blur")),
+            ("map".to_owned(), at("image"))
+        ]
+    );
+    assert!(at("image") < plan.output && at("blur") < plan.output);
+}
+
+#[test]
+fn a_bypassed_effect_plans_none_of_its_named_inputs() {
+    let mut fx = node(
+        "fx",
+        effect_with_inputs("clip", &[("map", Some("image")), ("glow", None)]),
+    );
+    fx.bypass = true;
+    let project = project(composition(
+        vec![
+            node("clip", NodeOp::Clip {}),
+            node(
+                "image",
+                NodeOp::Media {
+                    source_id: SourceId::new("other").expect("non-empty"),
+                    start: MediaTime::ZERO,
+                },
+            ),
+            fx,
+        ],
+        "fx",
+    ));
+    let plan = plan(&project).expect("only the pass-through input is needed");
+    assert_eq!(step_nodes(&plan), ["clip"]);
+}
+
+#[test]
+fn an_unconnected_named_input_is_a_missing_input() {
+    let project = project(composition(
+        vec![
+            node("clip", NodeOp::Clip {}),
+            node("fx", effect_with_inputs("clip", &[("map", None)])),
+        ],
+        "fx",
+    ));
+    assert_eq!(
+        plan(&project),
+        Err(PlanError::MissingInput {
+            node: node_id("fx"),
+            input: "inputs.map".into(),
+        })
+    );
+}
+
+#[test]
+fn the_named_inputs_of_an_effect_in_a_group_read_the_group_inputs() {
+    // A bloom-shaped definition: the effect reads its source and, by name, a blur of it, both
+    // fed from the group node's input.
+    let mut bloom = Composition::new(CompositionId::new("bloom").expect("non-empty"));
+    bloom.nodes = vec![
+        node("source", NodeOp::GroupInput { index: 0 }),
+        node("blur", effect("source")),
+        node(
+            "combine",
+            effect_with_inputs("source", &[("glow", Some("blur"))]),
+        ),
+    ];
+    bloom.output = Some(node_id("combine"));
+    bloom.inputs = vec!["Source".into()];
+    let mut project = project(composition(vec![node("clip", NodeOp::Clip {})], "clip"));
+    project.compositions[0] = composition(
+        vec![
+            node("clip", NodeOp::Clip {}),
+            node(
+                "bloom",
+                NodeOp::Group {
+                    composition: CompositionId::new("bloom").expect("non-empty"),
+                    inputs: vec![Some(node_id("clip"))],
+                    controls: BTreeMap::new(),
+                },
+            ),
+        ],
+        "bloom",
+    );
+    project.compositions.push(bloom);
+    project.validate().expect("valid");
+    let plan = plan(&project).expect("a complete graph");
+    assert_eq!(step_nodes(&plan), ["clip", "bloom/blur", "bloom/combine"]);
+    let StepOp::Effect { input, inputs, .. } = &plan.steps[plan.output].op else {
+        panic!("the output is the effect");
+    };
+    assert_eq!(*input, 0);
+    assert_eq!(inputs, &[("glow".to_owned(), 1)]);
 }

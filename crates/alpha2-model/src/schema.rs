@@ -101,6 +101,7 @@ pub fn project_limits_json() -> Value {
         ("MAX_COMPOSITIONS", json!(crate::MAX_COMPOSITIONS)),
         ("MAX_COMPOSITION_NODES", json!(crate::MAX_COMPOSITION_NODES)),
         ("MAX_GROUP_INPUTS", json!(crate::MAX_GROUP_INPUTS)),
+        ("MAX_EFFECT_INPUTS", json!(crate::MAX_EFFECT_INPUTS)),
         (
             "MAX_COMPOSITION_CONTROLS",
             json!(crate::MAX_COMPOSITION_CONTROLS),

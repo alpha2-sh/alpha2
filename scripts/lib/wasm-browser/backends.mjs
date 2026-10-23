@@ -283,7 +283,7 @@ Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
 const engine = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(16, 16));
-const effect = (id, body) => JSON.stringify({ id, version: 1, kind: "effect", inputs: 1, params: [], wgslBody: body });
+const effect = (id, body) => JSON.stringify({ id, version: 1, kind: "effect", params: [], wgslBody: body });
 const attempt = async (definition) => {
   try { return { registered: engine.registerCompiledEffect(await engine.compileEffect(definition)) }; } catch (error) {
     return { code: error?.code ?? null, message: String(error?.message ?? error) };
@@ -725,6 +725,106 @@ report({
   lost,
   later,
   gpu: cache.gpu,
+});
+`;
+}
+
+// Bloom as a group of three effect nodes, the last reading the blurred bright parts by name: the
+// group draws what its nodes draw inline, and the glow reaches past the white half it comes from.
+export function namedInputs(webgl) {
+  return `
+${webgl ? 'Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });' : 'if (!navigator.gpu) throw new Error("this browser offers no WebGPU");'}
+const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+await init();
+const engine = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(64, 48));
+const float = (name, value, max) => ({ name, type: "float", default: value, min: 0, max, unit: "normalized" });
+for (const definition of [
+  { id: "test.bright-pass", version: 1, kind: "effect", params: [float("threshold", 0.7, 1)],
+    wgslBody: "fn effect(_uv: vec2f, src: vec4f) -> vec4f { let luma = dot(src.rgb, vec3f(0.2126, 0.7152, 0.0722)); return select(vec4f(0.0), src, luma >= params.threshold); }" },
+  { id: "test.add-glow", version: 1, kind: "effect", inputs: [{ name: "glow" }], params: [float("intensity", 1, 4)],
+    wgslBody: "fn effect(uv: vec2f, src: vec4f) -> vec4f { return min(src + sample_glow(uv) * params.intensity, vec4f(1.0)); }" },
+]) engine.registerCompiledEffect(await engine.compileEffect(JSON.stringify(definition)));
+const constant = (value) => ({ mode: "constant", value: { type: "float", value } });
+const passes = (source, radius, intensity) => [
+  { id: "bright", op: { type: "effect", input: source, effect: { id: "test.bright-pass", version: 1 } } },
+  { id: "blur", op: { type: "effect", input: "bright", effect: { id: "alpha2.effect.gaussian-blur", version: 1, params: { radius: constant(radius) } } } },
+  { id: "combine", op: { type: "effect", input: source, inputs: { glow: "blur" }, effect: { id: "test.add-glow", version: 1, params: { intensity: constant(intensity) } } } },
+];
+const bloom = { id: "bloom", inputs: ["Source"],
+  controls: [{ name: "radius", node: "blur", param: "radius" }, { name: "intensity", node: "combine", param: "intensity" }],
+  nodes: [{ id: "source", op: { type: "group_input", index: 0 } }, ...passes("source", 0.012, 1)], output: "combine" };
+const looks = {
+  inline: (intensity) => [{ id: "look", nodes: [{ id: "clip", op: { type: "clip" } }, ...passes("clip", 0.25, intensity)], output: "combine" }],
+  grouped: (intensity) => [bloom, { id: "look", nodes: [{ id: "clip", op: { type: "clip" } },
+    { id: "glow", op: { type: "group", composition: "bloom", inputs: ["clip"], controls: { radius: constant(0.25), intensity: constant(intensity) } } }], output: "glow" }],
+};
+// White over the left half, transparent over the right.
+const left = new Uint8Array(64 * 48 * 4).map((_, index) => ((index >> 2) % 64 < 32 ? 255 : 0));
+const draw = async (compositions) => {
+  engine.loadProject(JSON.stringify({
+    schema_version: 1, id: "bloom", name: "Bloom",
+    settings: { width: 64, height: 48, frame_rate: { num: 30, den: 1 }, sample_rate: 48000 },
+    sources: [{ id: "left", locator: "fixture://left", kind: "image" }],
+    compositions,
+    timeline: { tracks: [{ id: "v", name: "V", kind: "video", clips: [{ id: "c", source_id: "left",
+      timeline_range: { start: 0, end: 120000 }, source_range: { start: 0, end: 120000 }, composition: { id: "look" } }] }] },
+  }));
+  engine.uploadRgbaImage("left", 64, 48, left);
+  const ticket = engine.beginExportAt(0n, "h264");
+  const rendered = ticket.kind === "rendered" ? await ticket.readback : ticket;
+  if (rendered.kind !== "rendered") throw new Error("the frame did not render: " + rendered.kind);
+  const [{ offset, stride }] = rendered.layout;
+  return { pixels: Array.from(rendered.pixels), luma: (x, y) => rendered.pixels[offset + y * stride + x] };
+};
+const inline = await draw(looks.inline(2));
+const grouped = await draw(looks.grouped(2));
+const plain = await draw(looks.grouped(0));
+const differing = inline.pixels.filter((value, index) => value !== grouped.pixels[index]).length;
+const glow = { right: grouped.luma(40, 24), plainRight: plain.luma(40, 24), left: grouped.luma(8, 24) };
+const gpu = JSON.parse(engine.diagnostics()).gpu;
+const uncaptured = gpu.events.filter((event) => event.event === "uncaptured-error");
+report({
+  ok: differing === 0 && glow.right > glow.plainRight + 8 && glow.left > 200 && uncaptured.length === 0 && !engine.deviceLost,
+  differing, glow,
+  ...(uncaptured.length ? { uncaptured } : {}),
+});
+`;
+}
+
+// A WebGL2 shader stage samples at most 16 textures: an effect's source pair, six LUTs and eight
+// named inputs fill them and compile to GLSL on the real compiler; one more LUT is refused before
+// the device is asked.
+export function webgl2EffectTextureBudget() {
+  return `
+Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });
+const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+await init();
+const engine = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(16, 16));
+const range = (count) => Array.from({ length: count }, (_, index) => index);
+const definition = (id, luts) => JSON.stringify({
+  id, version: 1, kind: "effect",
+  inputs: range(8).map((index) => ({ name: "in" + index })),
+  resources: range(luts).map((index) => ({ name: "lut" + index, kind: "lut3d" })),
+  // Every texture read, so no compiler drops a sampler the count includes.
+  wgslBody: "fn effect(uv: vec2f, src: vec4f) -> vec4f { var sum = src; "
+    + range(8).map((index) => "sum += sample_in" + index + "(uv); ").join("")
+    + range(luts).map((index) => "sum += vec4f(sample_lut" + index + "(src.rgb), 0.0); ").join("")
+    + "return sum / 16.0; }",
+});
+const attempt = async (json) => {
+  try { return { registered: engine.registerCompiledEffect(await engine.compileEffect(json)) }; } catch (error) {
+    return { code: error?.code ?? null, message: String(error?.message ?? error) };
+  }
+};
+const full = await attempt(definition("test.sixteen", 6));
+const over = await attempt(definition("test.seventeen", 7));
+const gpu = JSON.parse(engine.diagnostics()).gpu;
+const uncaptured = gpu.events.filter((event) => event.event === "uncaptured-error");
+report({
+  ok: full.registered === "test.sixteen@1" && over.code === "EFFECT_ERROR" && /17 textures/.test(over.message)
+    && uncaptured.length === 0 && !engine.deviceLost,
+  full, over,
+  ...(uncaptured.length ? { uncaptured } : {}),
 });
 `;
 }

@@ -7,7 +7,7 @@ use std::fmt::Write as _;
 
 use alpha2_gpu::CapabilityTier;
 
-use crate::{EffectDef, EffectInputs, EffectKind, ParamSpec, ParamType, ParamUnit, ParamValue};
+use crate::{EffectDef, EffectKind, ParamSpec, ParamType, ParamUnit, ParamValue};
 
 /// Internal identifier of the shape-mask pass.
 pub const SHAPE_MASK_EFFECT_ID: &str = "alpha2.internal.shape-mask";
@@ -142,7 +142,7 @@ pub fn shape_mask_definition() -> EffectDef {
         id: SHAPE_MASK_EFFECT_ID.into(),
         version: 1,
         kind: EffectKind::Effect,
-        inputs: EffectInputs::One,
+        inputs: Vec::new(),
         params,
         resources: Vec::new(),
         wgsl_body: shape_mask_body(),
@@ -271,7 +271,7 @@ pub fn track_matte_definition() -> EffectDef {
         id: TRACK_MATTE_EFFECT_ID.into(),
         version: 1,
         kind: EffectKind::Transition,
-        inputs: EffectInputs::Two,
+        inputs: Vec::new(),
         params: vec![
             ParamSpec {
                 unit: ParamUnit::Bool,

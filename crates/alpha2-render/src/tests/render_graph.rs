@@ -22,7 +22,7 @@ fn render_graph_unifies_transition_effect_and_composition_nodes() {
         id: "test.graph-crossfade".into(),
         version: 1,
         kind: EffectKind::Transition,
-        inputs: EffectInputs::Two,
+        inputs: Vec::new(),
         params: Vec::new(),
             resources: Vec::new(),
         wgsl_body: "fn transition(uv: vec2f) -> vec4f { return mix(from_color(uv), to_color(uv), progress()); }".into(),
@@ -161,7 +161,7 @@ fn graphs_and_invocations_refuse_what_they_cannot_draw() {
     let transition = pollster::block_on(renderer.register_effect(EffectDef {
         id: "test.mix".into(),
         kind: EffectKind::Transition,
-        inputs: EffectInputs::Two,
+        inputs: Vec::new(),
         params: Vec::new(),
         wgsl_body: "fn transition(uv: vec2f) -> vec4f { return mix(from_color(uv), to_color(uv), progress()); }".into(),
         ..runtime_tint_effect("")

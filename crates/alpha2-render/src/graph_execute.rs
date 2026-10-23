@@ -165,6 +165,7 @@ impl Renderer {
                 RenderNode::Effect {
                     effect,
                     source,
+                    inputs,
                     params,
                     resources,
                     runtime,
@@ -176,6 +177,11 @@ impl Renderer {
                         return Err(GraphError::EffectKindMismatch);
                     }
                     let source_view = graph_view(graph, &outputs, *source);
+                    // Empty, and so not allocated, for an effect without named inputs.
+                    let input_views: Vec<(&str, &wgpu::TextureView)> = inputs
+                        .iter()
+                        .map(|(name, node)| (name, graph_view(graph, &outputs, node)))
+                        .collect();
                     let target = self.textures.acquire(
                         self.gpu.device(),
                         graph.size,
@@ -189,6 +195,7 @@ impl Renderer {
                             kind: crate::RenderNodeKind::Effect,
                             source_a: source_view,
                             source_b: None,
+                            inputs: &input_views,
                             size: graph.size,
                             params,
                             resources,
@@ -231,6 +238,7 @@ impl Renderer {
                             kind: crate::RenderNodeKind::Transition,
                             source_a: from_view,
                             source_b: Some(to_view),
+                            inputs: &[],
                             size: graph.size,
                             params,
                             resources,
@@ -270,6 +278,7 @@ impl Renderer {
                             kind: crate::RenderNodeKind::Generator,
                             source_a: &self.empty_input,
                             source_b: None,
+                            inputs: &[],
                             size: graph.size,
                             params,
                             resources,

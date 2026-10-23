@@ -1,8 +1,9 @@
+use std::borrow::Cow;
 use std::fmt;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::graph_cache::{
-    composite_cache_key, effect_cache_key_with_resources, transient_source_key,
+    composite_cache_key, effect_cache_key_with_resources, named_inputs_key, transient_source_key,
 };
 use crate::{
     BlendMode, Color, EffectId, EffectParams, EffectResources, EffectRuntime, LayerTransform,
@@ -29,7 +30,8 @@ impl RenderNodeId {
 pub enum RenderNodeKind {
     /// Externally owned input texture.
     Source,
-    /// Registered one-input effect.
+    /// Registered effect: one source, and the named inputs its definition
+    /// declares.
     Effect,
     /// Registered two-input transition.
     Transition,
@@ -37,6 +39,60 @@ pub enum RenderNodeKind {
     Generator,
     /// Ordered layer composition.
     Composite,
+}
+
+/// Named images one effect node samples besides its source, by the names its
+/// definition declares. Kept sorted by name, one node per name; a name is
+/// borrowed for `'a` or owned, as [`EffectParams`] names are.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct EffectInputs<'a> {
+    values: Vec<(Cow<'a, str>, RenderNodeId)>,
+}
+
+impl<'a> EffectInputs<'a> {
+    /// Creates an empty set, without allocating.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self { values: Vec::new() }
+    }
+
+    /// Adds or replaces one named input.
+    #[must_use]
+    pub fn with(mut self, name: impl Into<Cow<'a, str>>, node: RenderNodeId) -> Self {
+        self.insert(name, node);
+        self
+    }
+
+    /// Adds or replaces one named input in place.
+    pub fn insert(&mut self, name: impl Into<Cow<'a, str>>, node: RenderNodeId) {
+        let name = name.into();
+        match self
+            .values
+            .binary_search_by(|(held, _)| held.as_ref().cmp(name.as_ref()))
+        {
+            Ok(index) => self.values[index].1 = node,
+            Err(index) => self.values.insert(index, (name, node)),
+        }
+    }
+
+    /// Whether no input is named.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    /// The number of named inputs.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.values.len()
+    }
+
+    /// Every input by name, in name order.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&str, RenderNodeId)> {
+        self.values
+            .iter()
+            .map(|(name, node)| (name.as_ref(), *node))
+    }
 }
 
 /// One owned layer reference in a graph composition node.
@@ -76,6 +132,7 @@ pub(crate) enum RenderNode<'a> {
     Effect {
         effect: EffectId,
         source: RenderNodeId,
+        inputs: EffectInputs<'a>,
         params: EffectParams<'a>,
         resources: EffectResources,
         runtime: EffectRuntime,
@@ -263,28 +320,65 @@ impl<'a> RenderGraph<'a> {
         resources: EffectResources,
         runtime: EffectRuntime,
     ) -> Result<RenderNodeId, GraphError> {
+        self.add_effect_with_inputs(
+            effect,
+            source,
+            EffectInputs::new(),
+            params,
+            resources,
+            runtime,
+        )
+    }
+
+    /// Adds a registered effect node that also samples `inputs`, bound by the
+    /// names its definition declares.
+    ///
+    /// # Errors
+    /// Returns [`GraphError::InvalidDependency`] unless `source` and every
+    /// input are earlier; [`RenderError::InvalidEffectParams`] for named
+    /// inputs on a built-in drawn as passes, and as
+    /// [`Self::add_effect_with_resources`] does.
+    pub fn add_effect_with_inputs(
+        &mut self,
+        effect: EffectId,
+        source: RenderNodeId,
+        inputs: EffectInputs<'a>,
+        params: EffectParams<'a>,
+        resources: EffectResources,
+        runtime: EffectRuntime,
+    ) -> Result<RenderNodeId, GraphError> {
         self.validate_dependency(source)?;
-        // Some built-ins are drawn as several internal passes; they bind no resources.
+        for (_, input) in inputs.iter() {
+            self.validate_dependency(input)?;
+        }
+        // Some built-ins are drawn as several internal passes; they bind no resources and
+        // declare no inputs. Checked before they are expanded, so no node is left behind.
+        if !inputs.is_empty() && crate::gaussian_blur::expanded_passes(effect.as_str()).is_some() {
+            return Err(RenderError::InvalidEffectParams.into());
+        }
         if let Some(expanded) = self.add_expanded_effect(&effect, source, &params, runtime) {
             if resources.iter().next().is_some() {
                 return Err(RenderError::InvalidEffectParams.into());
             }
             return expanded;
         }
+        let source_key = self.cache_keys[source.index];
+        // Without named inputs the key is the one an effect always had.
+        let input_keys: &[RenderCacheKey] = if inputs.is_empty() {
+            &[source_key]
+        } else {
+            &[source_key, named_inputs_key(&inputs, &self.cache_keys)]
+        };
         let key = effect_cache_key_with_resources(
-            b"effect",
-            self.size,
-            &effect,
-            &[self.cache_keys[source.index]],
-            &params,
-            &resources,
-            runtime,
+            b"effect", self.size, &effect, input_keys, &params, &resources, runtime,
         );
-        let stable = self.stable[source.index];
+        let stable =
+            self.stable[source.index] && inputs.iter().all(|(_, input)| self.stable[input.index]);
         Ok(self.push(
             RenderNode::Effect {
                 effect,
                 source,
+                inputs,
                 params,
                 resources,
                 runtime,
@@ -592,7 +686,9 @@ impl RenderNode<'_> {
     pub(crate) fn dependencies(&self) -> Vec<RenderNodeId> {
         match self {
             Self::Source(_) | Self::Generator { .. } => Vec::new(),
-            Self::Effect { source, .. } => vec![*source],
+            Self::Effect { source, inputs, .. } => std::iter::once(*source)
+                .chain(inputs.iter().map(|(_, input)| input))
+                .collect(),
             Self::Transition { from, to, .. } => vec![*from, *to],
             Self::Composite { layers, .. } => layers.iter().map(|layer| layer.source).collect(),
         }
@@ -693,6 +789,125 @@ mod tests {
             Err(GraphError::Render(RenderError::InvalidColor))
         );
         assert_eq!(graph.node_count(), 1);
+    }
+
+    fn generator(graph: &mut RenderGraph<'_>, id: &'static str) -> RenderNodeId {
+        graph.add_generator(
+            EffectId::from_static(id, 1),
+            EffectParams::new(),
+            EffectRuntime::default(),
+        )
+    }
+
+    fn effect_with_inputs(
+        graph: &mut RenderGraph<'static>,
+        source: RenderNodeId,
+        inputs: EffectInputs<'static>,
+    ) -> Result<RenderNodeId, GraphError> {
+        graph.add_effect_with_inputs(
+            EffectId::from_static("test.multi-input", 1),
+            source,
+            inputs,
+            EffectParams::new(),
+            EffectResources::new(),
+            EffectRuntime::default(),
+        )
+    }
+
+    #[test]
+    fn named_inputs_are_dependencies() {
+        // A node read only as a named input is drawn before the effect and kept until it.
+        let size = RenderSize::new(16, 9).expect("non-zero size");
+        let mut graph = RenderGraph::new(size);
+        let source = generator(&mut graph, "test.source");
+        let map = generator(&mut graph, "test.map");
+        let unused = generator(&mut graph, "test.unused");
+        let effect = effect_with_inputs(&mut graph, source, EffectInputs::new().with("map", map))
+            .expect("earlier nodes");
+        graph.set_output(effect).expect("known output");
+        let plan = graph.compile().expect("compiles");
+        assert_eq!(plan.execution_order(), [source, map, effect]);
+        assert_eq!(plan.last_use(map), Some(2));
+        assert_eq!(plan.last_use(unused), None);
+        // An input must be an earlier node of this graph, as a source must.
+        let later = RenderNodeId {
+            graph: graph.id,
+            index: graph.node_count(),
+        };
+        assert_eq!(
+            effect_with_inputs(&mut graph, source, EffectInputs::new().with("map", later)),
+            Err(GraphError::InvalidDependency)
+        );
+    }
+
+    #[test]
+    fn named_inputs_on_a_built_in_drawn_as_passes_are_refused() {
+        let size = RenderSize::new(16, 9).expect("non-zero size");
+        let mut graph = RenderGraph::new(size);
+        let source = generator(&mut graph, "test.source");
+        let map = generator(&mut graph, "test.map");
+        let count = graph.node_count();
+        for id in [crate::builtins::GAUSSIAN_BLUR_ID, crate::builtins::GLOW_ID] {
+            assert_eq!(
+                graph.add_effect_with_inputs(
+                    EffectId::from_static(id, 1),
+                    source,
+                    EffectInputs::new().with("map", map),
+                    EffectParams::new(),
+                    EffectResources::new(),
+                    EffectRuntime::default(),
+                ),
+                Err(GraphError::Render(RenderError::InvalidEffectParams)),
+                "{id}"
+            );
+        }
+        assert_eq!(graph.node_count(), count, "no pass is left behind");
+    }
+
+    #[test]
+    fn a_named_input_is_part_of_the_cache_key() {
+        let size = RenderSize::new(16, 9).expect("non-zero size");
+        let key = |build: &dyn Fn(&mut RenderGraph<'static>, [RenderNodeId; 3]) -> RenderNodeId| {
+            let mut graph = RenderGraph::new(size);
+            let nodes = [
+                generator(&mut graph, "test.source"),
+                generator(&mut graph, "test.map"),
+                generator(&mut graph, "test.other-map"),
+            ];
+            let node = build(&mut graph, nodes);
+            graph.cache_keys[node.index]
+        };
+        let named = |name: &'static str, input: usize| {
+            key(&move |graph, nodes| {
+                effect_with_inputs(
+                    graph,
+                    nodes[0],
+                    EffectInputs::new().with(name, nodes[input]),
+                )
+                .expect("earlier nodes")
+            })
+        };
+        // Equal inputs give equal keys in another graph; another node or name another key.
+        assert_eq!(named("map", 1), named("map", 1));
+        assert_ne!(named("map", 1), named("map", 2));
+        assert_ne!(named("map", 1), named("mask", 1));
+        let none = key(&|graph, nodes| {
+            effect_with_inputs(graph, nodes[0], EffectInputs::new()).expect("earlier node")
+        });
+        assert_ne!(named("map", 1), none);
+        // Without named inputs, the key is the one an effect always had.
+        let plain = key(&|graph, nodes| {
+            graph
+                .add_effect_with_resources(
+                    EffectId::from_static("test.multi-input", 1),
+                    nodes[0],
+                    EffectParams::new(),
+                    EffectResources::new(),
+                    EffectRuntime::default(),
+                )
+                .expect("earlier node")
+        });
+        assert_eq!(none, plain);
     }
 
     #[test]

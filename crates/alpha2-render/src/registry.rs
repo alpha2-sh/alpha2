@@ -8,9 +8,9 @@ use crate::loop_bound::{BUDGET, MAX_LOOP_ITERATIONS, blank_comments, bound_for_l
 use crate::uniform::{PARAM_SLOT_BYTES, RUNTIME_UNIFORM_WORDS, param_uniform_bytes};
 
 use crate::{
-    DiagnosticSeverity, EffectDef, EffectId, EffectInputs, EffectKind, EffectResourceKind,
-    ParamSpec, ParamType, ParamUnit, ParamValue, Renderer, ResourceSpec, ShaderDiagnostic,
-    ShaderDiagnostics, UniformField, UniformLayout,
+    DiagnosticSeverity, EffectDef, EffectId, EffectKind, EffectResourceKind, InputSpec, ParamSpec,
+    ParamType, ParamUnit, ParamValue, Renderer, ResourceSpec, ShaderDiagnostic, ShaderDiagnostics,
+    UniformField, UniformLayout,
 };
 
 const MAX_REGISTERED_EFFECTS: usize = 256;
@@ -25,6 +25,14 @@ const MAX_WGSL_STATEMENT_OPERATORS: usize = 256;
 /// The identifier prefix of everything the generated wrapper declares.
 const RESERVED_PREFIX: &str = "alpha2_";
 const MAX_EFFECT_RESOURCES: usize = 8;
+/// The most named inputs an effect declares. With its source pair and its
+/// resources they stay inside the 16 sampled textures a WebGL2-class device
+/// offers a shader stage (checked per device at compilation).
+pub const MAX_EFFECT_INPUTS: usize = 8;
+/// The binding of an effect's first named input: past every resource slot a
+/// definition may declare, so an input never moves another binding.
+#[allow(clippy::cast_possible_truncation)]
+const INPUT_BINDING_BASE: u32 = 5 + 2 * MAX_EFFECT_RESOURCES as u32;
 /// A resource's `ResourceMetadata_<name>` uniform: `domain_min` and
 /// `domain_max`, two `vec4f`.
 const RESOURCE_METADATA_BYTES: usize = 32;
@@ -240,6 +248,7 @@ impl Renderer {
     ) -> Result<PendingEffect, ShaderDiagnostics> {
         validate_definition(&definition)?;
         self.validate_parameter_uniform(&definition)?;
+        self.validate_texture_bindings(&definition)?;
         if definition.tier_min == CapabilityTier::TierA
             && self.gpu.capabilities().tier == CapabilityTier::TierB
         {
@@ -260,8 +269,12 @@ impl Renderer {
         let compilation: Answer<wgpu::CompilationInfo> = Box::pin(shader.get_compilation_info());
         let shader_errors = shader_scope.pop();
         let pipeline_scope = CreationErrorScopes::push(device);
-        let bind_group_layout =
-            runtime_bind_group_layout(device, &definition.params, &definition.resources);
+        let bind_group_layout = runtime_bind_group_layout(
+            device,
+            &definition.params,
+            &definition.resources,
+            &definition.inputs,
+        );
         let pipeline = runtime_pipeline(
             device,
             &bind_group_layout,
@@ -336,6 +349,26 @@ impl Renderer {
                 "effect declares {} parameters, a {bytes}-byte uniform past this device's \
                  {limit}-byte uniform binding limit (at most {most} parameters)",
                 definition.params.len()
+            )));
+        }
+        Ok(())
+    }
+
+    /// Refuses a definition whose textures this device cannot bind in one
+    /// shader stage: the source pair, each resource, and each named input take
+    /// one sampled texture, and a device caps them (16 on the WebGL2 limits
+    /// every alpha2 device asks for). Past the cap the layout fails on the
+    /// device; this says why before it is asked.
+    fn validate_texture_bindings(&self, definition: &EffectDef) -> Result<(), ShaderDiagnostics> {
+        let textures = 2 + definition.resources.len() + definition.inputs.len();
+        let limit = usize::try_from(self.limits.max_sampled_textures_per_shader_stage)
+            .unwrap_or(usize::MAX);
+        if textures > limit {
+            return Err(ShaderDiagnostics::error(format!(
+                "effect samples {textures} textures (its source pair, {} resources, and {} \
+                 named inputs), past this device's {limit} per shader stage",
+                definition.resources.len(),
+                definition.inputs.len()
             )));
         }
         Ok(())
@@ -474,6 +507,7 @@ fn runtime_bind_group_layout(
     device: &wgpu::Device,
     params: &[ParamSpec],
     resources: &[ResourceSpec],
+    inputs: &[InputSpec],
 ) -> wgpu::BindGroupLayout {
     let mut entries = vec![
         runtime_texture_entry(0, wgpu::TextureViewDimension::D2),
@@ -497,10 +531,21 @@ fn runtime_bind_group_layout(
         entries.push(runtime_texture_entry(binding, dimension));
         entries.push(runtime_uniform_entry(binding + 1, RESOURCE_METADATA_BYTES));
     }
+    for index in 0..inputs.len() {
+        entries.push(runtime_texture_entry(
+            input_binding(index),
+            wgpu::TextureViewDimension::D2,
+        ));
+    }
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("alpha2 runtime effect layout"),
         entries: &entries,
     })
+}
+
+/// The binding of an effect's named input `index`, in declaration order.
+pub(crate) fn input_binding(index: usize) -> u32 {
+    INPUT_BINDING_BASE + u32::try_from(index).unwrap_or(0)
 }
 
 fn runtime_texture_entry(
@@ -651,6 +696,7 @@ pub(crate) fn build_shader(definition: &EffectDef) -> String {
         }
     };
     let resource_declarations = resource_declarations(&definition.resources);
+    let input_declarations = input_declarations(&definition.inputs);
     format!(
         r"@group(0) @binding(0) var source_a: texture_2d<f32>;
 @group(0) @binding(1) var source_b: texture_2d<f32>;
@@ -664,7 +710,7 @@ var<private> params: EffectParams;
 var<private> {BUDGET}: u32;
 struct RuntimeValues {{ resolution_time: vec4f, transition: vec4f, ticks: vec4u, }};
 @group(0) @binding(4) var<uniform> runtime: RuntimeValues;
-{resource_declarations}
+{resource_declarations}{input_declarations}
 
 fn sample_src(uv: vec2f) -> vec4f {{ return textureSampleLevel(source_a, source_sampler, uv, 0.0); }}
 fn from_color(uv: vec2f) -> vec4f {{ return textureSampleLevel(source_a, source_sampler, uv, 0.0); }}
@@ -698,6 +744,7 @@ struct VertexOutput {{ @builtin(position) position: vec4f, @location(0) uv: vec2
         body =
             bound_for_loops(&definition.wgsl_body).unwrap_or_else(|_| definition.wgsl_body.clone()),
         resource_declarations = resource_declarations,
+        input_declarations = input_declarations,
         transition_wrapper = transition_wrapper,
     )
 }
@@ -737,6 +784,27 @@ fn resource_declarations(resources: &[ResourceSpec]) -> String {
         .join("\n")
 }
 
+/// What the wrapper declares for each named input: its texture, its sampling
+/// helper, and its size. Empty without inputs, so such a module is the one an
+/// effect without them always had.
+fn input_declarations(inputs: &[InputSpec]) -> String {
+    inputs
+        .iter()
+        .enumerate()
+        .fold(String::new(), |mut output, (index, input)| {
+            let name = &input.name;
+            write!(
+                output,
+                "\n@group(0) @binding({binding}) var input_{name}: texture_2d<f32>;\n\
+                 fn sample_{name}(uv: vec2f) -> vec4f {{ return textureSampleLevel(input_{name}, source_sampler, uv, 0.0); }}\n\
+                 fn size_{name}() -> vec2f {{ return vec2f(textureDimensions(input_{name})); }}",
+                binding = input_binding(index),
+            )
+            .expect("writing to a String cannot fail");
+            output
+        })
+}
+
 fn uniform_value(index: usize, param_type: ParamType) -> String {
     match param_type {
         ParamType::Float => format!("bitcast<f32>(param_uniforms.slot_{index}.x)"),
@@ -767,15 +835,15 @@ fn validate_definition(definition: &EffectDef) -> Result<(), ShaderDiagnostics> 
         return Err(ShaderDiagnostics::error("effect version must be non-zero"));
     }
     validate_wgsl_body(&definition.wgsl_body)?;
-    if !matches!(
-        (definition.kind, definition.inputs),
-        (EffectKind::Effect, EffectInputs::One)
-            | (EffectKind::Transition, EffectInputs::Two)
-            | (EffectKind::Generator, EffectInputs::None)
-    ) {
+    if !definition.inputs.is_empty() && definition.kind != EffectKind::Effect {
         return Err(ShaderDiagnostics::error(
-            "effects require one input, transitions two, and generators none",
+            "only effects declare named inputs; a transition samples from and to",
         ));
+    }
+    if definition.inputs.len() > MAX_EFFECT_INPUTS {
+        return Err(ShaderDiagnostics::error(format!(
+            "effect declares more than {MAX_EFFECT_INPUTS} named inputs"
+        )));
     }
     let mut names = std::collections::HashSet::new();
     for param in &definition.params {
@@ -811,7 +879,36 @@ fn validate_definition(definition: &EffectDef) -> Result<(), ShaderDiagnostics> 
             )));
         }
     }
+    // An input's names share the module scope with the resources'.
+    let mut input_names = std::collections::HashSet::new();
+    for input in &definition.inputs {
+        let generated = input_declarations_of(&input.name);
+        if !valid_wgsl_identifier(&input.name)
+            || names.contains(input.name.as_str())
+            || resource_names.contains(input.name.as_str())
+            || !input_names.insert(input.name.as_str())
+            || !generated
+                .iter()
+                .all(|name| valid_wgsl_identifier(name) && declared.insert(name.clone()))
+        {
+            return Err(ShaderDiagnostics::error(format!(
+                "invalid or duplicate effect input name {}",
+                input.name
+            )));
+        }
+    }
     Ok(())
+}
+
+/// The module-scope names [`build_shader`] declares for a named input called
+/// `name`. The name `src` is refused through them: `sample_src` is the
+/// prelude's.
+fn input_declarations_of(name: &str) -> [String; 3] {
+    [
+        format!("input_{name}"),
+        format!("sample_{name}"),
+        format!("size_{name}"),
+    ]
 }
 
 /// The module-scope names [`build_shader`] declares for a resource named

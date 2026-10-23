@@ -15,8 +15,8 @@ use alpha2_model::{
     TextStyle,
 };
 use alpha2_render::{
-    BlendMode, CacheIntent, Color, EffectId, EffectParams, EffectResources, EffectRuntime,
-    FrameSubmitTimings, GENERATOR_EFFECT_ID, GraphError, GraphLayer, LayerTransform,
+    BlendMode, CacheIntent, Color, EffectId, EffectInputs, EffectParams, EffectResources,
+    EffectRuntime, FrameSubmitTimings, GENERATOR_EFFECT_ID, GraphError, GraphLayer, LayerTransform,
     MAX_SHAPE_MASKS, Nv12PlaneTargets, ParamSpec, ParamValue, PendingSourceWork, RenderCacheKey,
     RenderError, RenderGraph, RenderNodeId, RenderNodeKind, RenderSize, RenderedTexture, Renderer,
     SHAPE_MASK_EFFECT_ID, SHAPE_MASK_PARAMS, SourceView, TRACK_MATTE_EFFECT_ID, Yuv420pReadback,
@@ -1031,6 +1031,9 @@ fn plan_node<'a>(
     step_input(&built, plan.output)
 }
 
+// A node names at most as many inputs as an effect may declare.
+const _: () = assert!(alpha2_model::MAX_EFFECT_INPUTS == alpha2_render::MAX_EFFECT_INPUTS);
+
 /// The node an earlier step drew.
 fn step_input(built: &[RenderNodeId], step: usize) -> Result<RenderNodeId, RenderError> {
     built.get(step).copied().ok_or(RenderError::InvalidGraph)
@@ -1051,15 +1054,21 @@ fn step_node<'a>(
         StepOp::Generator(generator) => generator_node(graph, generator, runtime),
         StepOp::Effect {
             input: from,
+            inputs,
             effect,
         } => {
             let id = project_effect_id(renderer, &effect.id, effect.version)?;
             let active = ActiveEffect::new(effect, time);
             let params = effect_params(renderer, &id, active);
             let runtime = effect_runtime(renderer, &id, runtime);
-            graph.add_effect_with_resources(
+            let mut named = EffectInputs::new();
+            for (name, step) in inputs {
+                named.insert(name.as_str(), input(*step)?);
+            }
+            graph.add_effect_with_inputs(
                 id,
                 input(*from)?,
+                named,
                 params,
                 effect_resources(active),
                 runtime,

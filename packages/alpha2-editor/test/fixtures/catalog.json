@@ -3,7 +3,7 @@
     {
       "group": "Blur & Sharpen",
       "id": "alpha2.effect.gaussian-blur",
-      "inputs": 1,
+      "inputs": [],
       "kind": "effect",
       "label": "Gaussian Blur",
       "params": [
@@ -26,7 +26,7 @@
     {
       "group": "Keying",
       "id": "alpha2.effect.chroma-key",
-      "inputs": 1,
+      "inputs": [],
       "kind": "effect",
       "label": "Chroma Key",
       "params": [
@@ -105,7 +105,7 @@
     {
       "group": "Color",
       "id": "alpha2.effect.lut-3d",
-      "inputs": 1,
+      "inputs": [],
       "kind": "effect",
       "label": "3D LUT",
       "params": [
@@ -133,7 +133,7 @@
     {
       "group": "Color",
       "id": "alpha2.effect.color-controls",
-      "inputs": 1,
+      "inputs": [],
       "kind": "effect",
       "label": "Color Controls",
       "params": [
@@ -204,7 +204,7 @@
     {
       "group": "Stylize",
       "id": "alpha2.effect.vignette",
-      "inputs": 1,
+      "inputs": [],
       "kind": "effect",
       "label": "Vignette",
       "params": [
@@ -251,7 +251,7 @@
     {
       "group": "Blur & Sharpen",
       "id": "alpha2.effect.sharpen",
-      "inputs": 1,
+      "inputs": [],
       "kind": "effect",
       "label": "Sharpen",
       "params": [
@@ -274,7 +274,7 @@
     {
       "group": "Distort",
       "id": "alpha2.effect.pixelate",
-      "inputs": 1,
+      "inputs": [],
       "kind": "effect",
       "label": "Pixelate",
       "params": [
@@ -297,7 +297,7 @@
     {
       "group": "Stylize",
       "id": "alpha2.effect.glow",
-      "inputs": 1,
+      "inputs": [],
       "kind": "effect",
       "label": "Glow",
       "params": [
@@ -344,7 +344,7 @@
     {
       "group": "Stylize",
       "id": "alpha2.effect.film-grain",
-      "inputs": 1,
+      "inputs": [],
       "kind": "effect",
       "label": "Film Grain",
       "params": [
@@ -379,7 +379,7 @@
     {
       "group": "Distort",
       "id": "alpha2.effect.crop",
-      "inputs": 1,
+      "inputs": [],
       "kind": "effect",
       "label": "Crop",
       "params": [
@@ -432,7 +432,7 @@
     {
       "group": "Distort",
       "id": "alpha2.effect.mirror",
-      "inputs": 1,
+      "inputs": [],
       "kind": "effect",
       "label": "Mirror",
       "params": [
@@ -472,7 +472,7 @@
     {
       "group": "Classic",
       "id": "alpha2.transition.fade",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Fade",
       "params": [],
@@ -482,7 +482,7 @@
     {
       "group": "Classic",
       "id": "alpha2.transition.directional",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Directional",
       "params": [
@@ -508,7 +508,7 @@
     {
       "group": "Classic",
       "id": "alpha2.transition.circle-open",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Circle Open",
       "params": [
@@ -543,7 +543,7 @@
     {
       "group": "Classic",
       "id": "alpha2.transition.angular",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Angular",
       "params": [
@@ -566,7 +566,7 @@
     {
       "group": "Classic",
       "id": "alpha2.transition.pixelize",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Pixelize",
       "params": [
@@ -604,7 +604,7 @@
     {
       "group": "Classic",
       "id": "alpha2.transition.directional-wipe",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Directional Wipe",
       "params": [
@@ -642,7 +642,7 @@
     {
       "group": "Classic",
       "id": "alpha2.transition.circle",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Circle",
       "params": [
@@ -685,7 +685,7 @@
     {
       "group": "Classic",
       "id": "alpha2.transition.cross-warp",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Cross Warp",
       "params": [],
@@ -695,7 +695,7 @@
     {
       "group": "Classic",
       "id": "alpha2.transition.dreamy",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Dreamy",
       "params": [],
@@ -705,7 +705,7 @@
     {
       "group": "Classic",
       "id": "alpha2.transition.radial",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Radial",
       "params": [
@@ -728,7 +728,7 @@
     {
       "group": "Wipes",
       "id": "alpha2.transition.wipe-up",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Wipe Up",
       "params": [],
@@ -738,7 +738,7 @@
     {
       "group": "Wipes",
       "id": "alpha2.transition.wipe-down",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Wipe Down",
       "params": [],
@@ -748,7 +748,7 @@
     {
       "group": "Wipes",
       "id": "alpha2.transition.wipe-left",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Wipe Left",
       "params": [],
@@ -758,7 +758,7 @@
     {
       "group": "Wipes",
       "id": "alpha2.transition.wipe-right",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Wipe Right",
       "params": [],
@@ -768,7 +768,7 @@
     {
       "group": "Wipes",
       "id": "alpha2.transition.window-blinds",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Window Blinds",
       "params": [],
@@ -778,7 +778,7 @@
     {
       "group": "Wipes",
       "id": "alpha2.transition.window-slice",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Window Slice",
       "params": [
@@ -813,7 +813,7 @@
     {
       "group": "Wipes",
       "id": "alpha2.transition.wind",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Wind",
       "params": [
@@ -848,7 +848,7 @@
     {
       "group": "Wipes",
       "id": "alpha2.transition.pinwheel",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Pinwheel",
       "params": [
@@ -871,7 +871,7 @@
     {
       "group": "Wipes",
       "id": "alpha2.transition.heart",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Heart",
       "params": [],
@@ -881,7 +881,7 @@
     {
       "group": "Stylized",
       "id": "alpha2.transition.color-phase",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Color Phase",
       "params": [
@@ -926,7 +926,7 @@
     {
       "group": "Stylized",
       "id": "alpha2.transition.fade-color",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Fade Color",
       "params": [
@@ -966,7 +966,7 @@
     {
       "group": "Stylized",
       "id": "alpha2.transition.fade-grayscale",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Fade Grayscale",
       "params": [
@@ -989,7 +989,7 @@
     {
       "group": "Stylized",
       "id": "alpha2.transition.morph",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Morph",
       "params": [
@@ -1012,7 +1012,7 @@
     {
       "group": "Stylized",
       "id": "alpha2.transition.ripple",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Ripple",
       "params": [
@@ -1047,7 +1047,7 @@
     {
       "group": "Stylized",
       "id": "alpha2.transition.squeeze",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Squeeze",
       "params": [
@@ -1070,7 +1070,7 @@
     {
       "group": "Stylized",
       "id": "alpha2.transition.simple-zoom",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Simple Zoom",
       "params": [
@@ -1093,7 +1093,7 @@
     {
       "group": "Stylized",
       "id": "alpha2.transition.circle-crop",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Circle Crop",
       "params": [
@@ -1121,7 +1121,7 @@
     {
       "group": "Stylized",
       "id": "alpha2.transition.colour-distance",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Colour Distance",
       "params": [
@@ -1144,7 +1144,7 @@
     {
       "group": "Stylized",
       "id": "alpha2.transition.polka-dots-curtain",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Polka Dots Curtain",
       "params": [
@@ -1182,7 +1182,7 @@
     {
       "group": "Stylized",
       "id": "alpha2.transition.directional-warp",
-      "inputs": 2,
+      "inputs": [],
       "kind": "transition",
       "label": "Directional Warp",
       "params": [

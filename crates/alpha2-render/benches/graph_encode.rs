@@ -19,9 +19,9 @@ use std::time::{Duration, Instant};
 use alpha2_gpu::{CapabilityTier, GpuContext};
 use alpha2_media::{VideoCodec, YuvEncoding};
 use alpha2_render::{
-    BlendMode, Color, EffectDef, EffectId, EffectInputs, EffectKind, EffectParams, EffectRuntime,
-    GraphLayer, LayerTransform, ParamSpec, ParamType, ParamUnit, ParamValue, RenderGraph,
-    RenderSize, Renderer, SourceView,
+    BlendMode, Color, EffectDef, EffectId, EffectKind, EffectParams, EffectRuntime, GraphLayer,
+    LayerTransform, ParamSpec, ParamType, ParamUnit, ParamValue, RenderGraph, RenderSize, Renderer,
+    SourceView,
 };
 
 const WARMUP: usize = 20;
@@ -32,7 +32,7 @@ fn tint_effect() -> EffectDef {
         id: "bench.tint".into(),
         version: 1,
         kind: EffectKind::Effect,
-        inputs: EffectInputs::One,
+        inputs: Vec::new(),
         params: vec![ParamSpec {
             name: "tint".into(),
             param_type: ParamType::Color,

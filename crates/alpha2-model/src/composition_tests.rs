@@ -49,6 +49,7 @@ fn branched() -> Project {
                 "blur",
                 NodeOp::Effect {
                     input: input("clip"),
+                    inputs: BTreeMap::new(),
                     effect: effect("alpha2.effect.gaussian-blur"),
                 },
             ),
@@ -56,6 +57,7 @@ fn branched() -> Project {
                 "grade",
                 NodeOp::Effect {
                     input: input("clip"),
+                    inputs: BTreeMap::new(),
                     effect: effect("alpha2.effect.brightness"),
                 },
             ),
@@ -131,6 +133,7 @@ fn cycles_are_rejected_wherever_they_are() {
     };
     project.compositions[0].nodes[1].op = NodeOp::Effect {
         input: input("spare"),
+        inputs: BTreeMap::new(),
         effect: effect("alpha2.effect.gaussian-blur"),
     };
     assert!(matches!(
@@ -238,6 +241,7 @@ fn node_settings_are_checked() {
     assert!(invalid(with_node(
         NodeOp::Effect {
             input: None,
+            inputs: BTreeMap::new(),
             effect: effect(""),
         },
         false,
@@ -416,6 +420,99 @@ fn inputs_and_the_bypass_input_are_listed_per_operation() {
     assert_eq!(NodeOp::Merge { layers: Vec::new() }.bypass_input(), None);
 }
 
+/// An effect node reading `input` and the named inputs `inputs`.
+fn effect_with_inputs(input_id: Option<NodeId>, inputs: &[(&str, Option<NodeId>)]) -> NodeOp {
+    NodeOp::Effect {
+        input: input_id,
+        inputs: inputs
+            .iter()
+            .map(|(name, node)| ((*name).to_owned(), node.clone()))
+            .collect(),
+        effect: effect("test.add-glow"),
+    }
+}
+
+#[test]
+fn named_effect_inputs_round_trip_in_name_order_and_are_omitted_when_empty() {
+    let mut project = branched();
+    project.compositions[0].nodes[4].op =
+        effect_with_inputs(input("clip"), &[("map", input("blur")), ("glow", None)]);
+    project.validate().expect("valid graph");
+    let json = serde_json::to_value(&project.compositions[0].nodes[4]).expect("serializes");
+    assert_eq!(
+        json["op"]["inputs"],
+        serde_json::json!({ "glow": null, "map": "blur" })
+    );
+    let text = serde_json::to_string(&project).expect("serializes");
+    assert!(text.find("\"glow\"") < text.find("\"map\""), "{text}");
+    assert_eq!(Project::from_json(&text).expect("round trip"), project);
+    // An effect without named inputs writes none, as it always has.
+    let plain = serde_json::to_value(&project.compositions[0].nodes[1]).expect("serializes");
+    assert!(plain["op"].get("inputs").is_none(), "{plain}");
+    assert_eq!(
+        project.compositions[0].nodes[4]
+            .op
+            .inputs()
+            .into_iter()
+            .map(NodeInput::name)
+            .collect::<Vec<_>>(),
+        ["input", "inputs.glow", "inputs.map"]
+    );
+    assert_eq!(
+        project.compositions[0].nodes[4]
+            .op
+            .bypass_input()
+            .map(NodeInput::name)
+            .as_deref(),
+        Some("input")
+    );
+}
+
+#[test]
+fn a_named_input_naming_an_absent_node_or_closing_a_cycle_is_rejected() {
+    let mut dangling = branched();
+    dangling.compositions[0].nodes[4].op =
+        effect_with_inputs(input("clip"), &[("map", input("gone"))]);
+    assert_eq!(
+        dangling.validate(),
+        Err(ModelError::UnknownNodeInput {
+            composition: dangling.compositions[0].id.clone(),
+            node: node_id("spare"),
+            input: "inputs.map".into(),
+            target: node_id("gone"),
+        })
+    );
+    // blur reads spare through a named input, and spare reads blur.
+    let mut cycle = branched();
+    cycle.compositions[0].nodes[4].op = effect_with_inputs(input("blur"), &[]);
+    cycle.compositions[0].nodes[1].op =
+        effect_with_inputs(input("clip"), &[("map", input("spare"))]);
+    assert!(matches!(
+        cycle.validate(),
+        Err(ModelError::CompositionCycle { .. })
+    ));
+}
+
+#[test]
+fn named_inputs_are_well_named_and_at_most_eight() {
+    let with = |inputs: &[(&str, Option<NodeId>)]| {
+        let mut project = branched();
+        project.compositions[0].nodes[4].op = effect_with_inputs(input("clip"), inputs);
+        project.validate()
+    };
+    let invalid = |result: Result<(), ModelError>| matches!(result, Err(ModelError::InvalidNode { ref node, .. }) if node.as_str() == "spare");
+    for bad in ["", "2map", "a-b", "map.x", "sample src"] {
+        assert!(invalid(with(&[(bad, None)])), "{bad:?}");
+    }
+    let names: Vec<String> = (0..=MAX_EFFECT_INPUTS)
+        .map(|index| format!("in{index}"))
+        .collect();
+    let inputs: Vec<(&str, Option<NodeId>)> =
+        names.iter().map(|name| (name.as_str(), None)).collect();
+    with(&inputs[..MAX_EFFECT_INPUTS]).expect("eight inputs");
+    assert!(invalid(with(&inputs)));
+}
+
 #[test]
 fn sources_read_through_a_shown_composition_are_used() {
     let mut project = branched();
@@ -472,6 +569,7 @@ fn grouped() -> Project {
             "blur",
             NodeOp::Effect {
                 input: input("in"),
+                inputs: BTreeMap::new(),
                 effect: effect("alpha2.effect.gaussian-blur"),
             },
         ),

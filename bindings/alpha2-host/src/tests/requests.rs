@@ -1155,7 +1155,7 @@ fn runtime_effect_wire_shape_matches_the_timeline_editor() {
         "id": "demo.effect.test",
         "version": 1,
         "kind": "effect",
-        "inputs": 1,
+        "inputs": [{ "name": "map" }],
         "params": [{
             "name": "amount",
             "type": "float",
@@ -1170,8 +1170,34 @@ fn runtime_effect_wire_shape_matches_the_timeline_editor() {
     .expect("web effect request parses");
     let definition = request.into_definition().expect("definition converts");
     assert_eq!(definition.id, "demo.effect.test");
-    assert_eq!(definition.inputs, EffectInputs::One);
+    assert_eq!(definition.inputs, [InputSpec { name: "map".into() }]);
     assert_eq!(definition.params.len(), 1);
+}
+
+#[test]
+fn an_effect_request_lists_its_named_inputs_or_leaves_them_out() {
+    let wire = |inputs: Option<Value>| {
+        let mut request = json!({
+            "id": "demo.effect.plain",
+            "version": 1,
+            "kind": "effect",
+            "wgslBody": "fn effect(uv: vec2f, src: vec4f) -> vec4f { return src; }"
+        });
+        if let Some(inputs) = inputs {
+            request["inputs"] = inputs;
+        }
+        serde_json::from_value::<EffectRequest>(request)
+    };
+    let definition = wire(None)
+        .expect("inputs may be left out")
+        .into_definition()
+        .expect("definition converts");
+    assert_eq!(definition.inputs, []);
+    let error = wire(Some(json!(1))).expect_err("a count is not a list of inputs");
+    assert!(error.to_string().contains("invalid type"), "{error}");
+    let error = wire(Some(json!([{ "name": "map", "wrap": "repeat" }])))
+        .expect_err("an input has a name only");
+    assert!(error.to_string().contains("unknown field"), "{error}");
 }
 
 #[test]

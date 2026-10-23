@@ -41,6 +41,7 @@ import {
   MAX_COMPOSITION_CONTROLS,
   MAX_COMPOSITION_DEPTH,
   MAX_GROUP_INPUTS,
+  MAX_EFFECT_INPUTS,
   MAX_FRAME_INLINED_NODES,
   MAX_INLINED_NODES,
   MAX_MERGE_LAYERS,
@@ -1884,7 +1885,10 @@ function validEffectParam(param: unknown): boolean {
   );
 }
 
-/** A parameter or resource name an effect may bind: an ASCII identifier, as the model requires. */
+/**
+ * A parameter, resource, or named input an effect may bind: an ASCII identifier, as the model
+ * requires.
+ */
 const EFFECT_BINDING_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function validClipEffect(effect: unknown): boolean {
@@ -1903,6 +1907,17 @@ function validClipEffect(effect: unknown): boolean {
     Object.entries(resources ?? {}).every(
       ([name, id]) => EFFECT_BINDING_NAME.test(name) && text(id).length > 0,
     )
+  );
+}
+
+/** An effect node's named inputs: absent, or at most `MAX_EFFECT_INPUTS` well-named ones. */
+function validEffectInputs(inputs: unknown): boolean {
+  if (inputs === undefined) return true;
+  if (!isRecord(inputs)) return false;
+  const names = Object.keys(inputs);
+  return (
+    names.length <= MAX_EFFECT_INPUTS &&
+    names.every((name) => EFFECT_BINDING_NAME.test(name))
   );
 }
 
@@ -2448,7 +2463,17 @@ function validRgba(color: unknown): boolean {
 /** The inputs of a composition node's operation, named as diagnostics show them. */
 function nodeInputs(op: Record<string, unknown>): [string, unknown][] {
   switch (op.type) {
-    case "effect":
+    case "effect": {
+      // In name order, as the model's map keeps them; names are ASCII, so the default string
+      // order is its byte order.
+      const named = isRecord(op.inputs) ? op.inputs : {};
+      return [
+        ["input", op.input],
+        ...Object.keys(named)
+          .sort()
+          .map((name): [string, unknown] => [`inputs.${name}`, named[name]]),
+      ];
+    }
     case "transform":
     case "shape_mask":
       return [["input", op.input]];
@@ -2775,7 +2800,9 @@ function compositionProblems(
         if (!validGenerator(op.generator)) invalid();
         break;
       case "effect":
-        if (!validClipEffect(op.effect)) invalid();
+        if (!validClipEffect(op.effect) || !validEffectInputs(op.inputs)) {
+          invalid();
+        }
         break;
       case "transition":
         if (!validClipEffect(op.effect) || !unit(op.progress)) invalid();

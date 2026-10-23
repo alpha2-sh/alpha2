@@ -123,24 +123,14 @@ impl Eq for dyn EffectKey + '_ {}
 /// Runtime shader category.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum EffectKind {
-    /// One-input image effect.
+    /// An image effect: one source image (`src`, `sample_src`), plus the
+    /// named inputs its definition declares.
     Effect,
     /// Two-input timeline transition.
     Transition,
     /// Zero-input picture source: its body defines `fn generate(uv: vec2f) ->
     /// vec4f`, returning a premultiplied, sRGB-encoded color.
     Generator,
-}
-
-/// Number of sampled image inputs.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum EffectInputs {
-    /// One source image.
-    One,
-    /// From and to images.
-    Two,
-    /// No image: a generator.
-    None,
 }
 
 /// Host-side parameter representation.
@@ -348,6 +338,15 @@ pub struct ResourceSpec {
     pub kind: EffectResourceKind,
 }
 
+/// One image an effect samples besides its source, by the name its shader
+/// reads it under: `sample_<name>(uv)` and `size_<name>()`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InputSpec {
+    /// WGSL-safe name, unique among the definition's parameters, resources,
+    /// and inputs.
+    pub name: String,
+}
+
 /// Data-only runtime effect, transition, or generator definition.
 ///
 /// The renderer's quality controls reach every effect at run time, not
@@ -362,8 +361,10 @@ pub struct EffectDef {
     pub version: u32,
     /// Effect or transition contract.
     pub kind: EffectKind,
-    /// Declared input count.
-    pub inputs: EffectInputs,
+    /// Images the effect samples besides its source, at most
+    /// [`crate::MAX_EFFECT_INPUTS`]; only an [`EffectKind::Effect`] declares
+    /// them.
+    pub inputs: Vec<InputSpec>,
     /// Ordered parameter schema.
     pub params: Vec<ParamSpec>,
     /// Ordered external resource schema.

@@ -24,7 +24,7 @@ use alpha2_model::{
     MediaSource, NodeId, NodeOp, Paint, ShapeMask, VisualProperties,
 };
 use alpha2_time::MediaTime;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 /// Most bytes the compiled composition plans of one project hold together,
@@ -103,10 +103,12 @@ pub enum StepOp {
     /// A picture the engine draws: a generator node, or a media node naming
     /// a generated source.
     Generator(Generator),
-    /// A registered one-input effect.
+    /// A registered effect.
     Effect {
         /// The processed image.
         input: usize,
+        /// The images it samples besides, by name, in name order.
+        inputs: Vec<(String, usize)>,
         /// The effect.
         effect: ClipEffect,
     },
@@ -171,8 +173,8 @@ pub enum PlanError {
     MissingInput {
         /// The node.
         node: NodeId,
-        /// The input: `input`, `from`, `to`, `matte`, `layers[i]`, or
-        /// `inputs[i]`.
+        /// The input: `input`, `from`, `to`, `matte`, `layers[i]`,
+        /// `inputs[i]`, or `inputs.<name>`.
         input: String,
     },
     /// A group input read where no group node feeds it: in a composition
@@ -494,8 +496,13 @@ impl<'a> Planner<'a, '_> {
                 )
             }
             NodeOp::Generator { generator } => StepOp::Generator(generator.clone()),
-            NodeOp::Effect { input, effect } => StepOp::Effect {
+            NodeOp::Effect {
+                input,
+                inputs,
+                effect,
+            } => StepOp::Effect {
                 input: at(input),
+                inputs: named_steps(inputs, &at),
                 effect: controlled(scope, &node.id, effect),
             },
             NodeOp::Transition {
@@ -638,6 +645,18 @@ fn scoped(prefix: &str, id: &NodeId) -> NodeId {
     NodeId::new(format!("{prefix}{id}")).expect("a prefixed id is not empty")
 }
 
+/// An effect node's named inputs, each with the step drawing it, in name
+/// order.
+fn named_steps(
+    inputs: &BTreeMap<String, Option<NodeId>>,
+    at: &dyn Fn(&Option<NodeId>) -> usize,
+) -> Vec<(String, usize)> {
+    inputs
+        .iter()
+        .map(|(name, node)| (name.clone(), at(node)))
+        .collect()
+}
+
 /// `effect` with the parameters its group node sets.
 fn controlled(scope: &Scope<'_>, node: &NodeId, effect: &ClipEffect) -> ClipEffect {
     let mut effect = effect.clone();
@@ -655,7 +674,13 @@ fn step_bytes(step: &Step) -> u64 {
         StepOp::Clip | StepOp::Matte { .. } => 0,
         StepOp::Media { source_id, .. } => source_id.as_str().len(),
         StepOp::Generator(generator) => generator_bytes(generator),
-        StepOp::Effect { effect, .. } => effect_bytes(effect),
+        StepOp::Effect { effect, inputs, .. } => {
+            effect_bytes(effect)
+                + inputs
+                    .iter()
+                    .map(|(name, _)| name.len() + size_of::<(String, usize)>())
+                    .sum::<usize>()
+        }
         StepOp::Transition {
             effect, progress, ..
         } => effect_bytes(effect) + keyframe_bytes(progress),

@@ -45,8 +45,8 @@ pub use caption_import::{
 pub use composition::{
     ClipComposition, Composition, CompositionControl, CompositionNode, CompositionReads,
     MAX_COMPOSITION_CONTROLS, MAX_COMPOSITION_DEPTH, MAX_COMPOSITION_NODES, MAX_COMPOSITIONS,
-    MAX_FRAME_INLINED_NODES, MAX_GROUP_INPUTS, MAX_INLINED_NODES, MAX_MERGE_LAYERS, MergeLayer,
-    NodeInput, NodeOp, TimeScale,
+    MAX_EFFECT_INPUTS, MAX_FRAME_INLINED_NODES, MAX_GROUP_INPUTS, MAX_INLINED_NODES,
+    MAX_MERGE_LAYERS, MergeLayer, NodeInput, NodeOp, TimeScale,
 };
 pub use easing::{CubicBezier, Easing};
 pub use effect::{ClipBlendMode, ClipEffect, EffectValue};

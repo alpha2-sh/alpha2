@@ -36,7 +36,7 @@ mod pool;
 mod quad;
 mod readback;
 mod registry;
-pub use registry::{CompiledEffect, PendingEffect};
+pub use registry::{CompiledEffect, MAX_EFFECT_INPUTS, PendingEffect};
 mod renderer;
 mod repack;
 mod result_cache;
@@ -76,9 +76,9 @@ pub use diagnostics::{
     AdapterDiagnostics, BenchmarkMetadata, PassTiming, RenderDiagnostics, TimingSource,
 };
 pub use effect::{
-    DiagnosticSeverity, EffectDef, EffectId, EffectInputs, EffectKind, EffectParams,
-    EffectResourceKind, EffectResources, EffectRuntime, ParamSpec, ParamType, ParamUnit,
-    ParamValue, ResourceSpec, ShaderDiagnostic, ShaderDiagnostics, UniformField, UniformLayout,
+    DiagnosticSeverity, EffectDef, EffectId, EffectKind, EffectParams, EffectResourceKind,
+    EffectResources, EffectRuntime, InputSpec, ParamSpec, ParamType, ParamUnit, ParamValue,
+    ResourceSpec, ShaderDiagnostic, ShaderDiagnostics, UniformField, UniformLayout,
 };
 pub use effect_resource::{Lut3dData, LutParseError};
 pub use error::{
@@ -91,7 +91,7 @@ pub use generator::{
 };
 pub use gpu_errors::GpuErrorReports;
 pub use graph::{
-    GraphError, GraphLayer, RenderCacheKey, RenderGraph, RenderNodeId, RenderNodeKind,
+    EffectInputs, GraphError, GraphLayer, RenderCacheKey, RenderGraph, RenderNodeId, RenderNodeKind,
 };
 pub use graph_plan::RenderPlan;
 pub use graph_submit::FrameSubmitTimings;

@@ -56,6 +56,9 @@ export const MAX_COMPOSITION_NODES = 256;
 /** Mirrors `alpha2_model::MAX_COMPRESSOR_RATIO`. */
 export const MAX_COMPRESSOR_RATIO = 100;
 
+/** Mirrors `alpha2_model::MAX_EFFECT_INPUTS`. */
+export const MAX_EFFECT_INPUTS = 8;
+
 /** Mirrors `alpha2_model::MAX_ENVELOPE_MS`. */
 export const MAX_ENVELOPE_MS = 10000;
 
@@ -1576,13 +1579,22 @@ export type NodeOp =
        */
       readonly effect: ClipEffect;
       /**
-       * The image the effect processes.
+       * The image the effect processes; a bypassed node passes it through.
        *
        * @defaultValue `null`
        */
       readonly input?: NodeId | null;
       /**
-       * A registered one-input effect.
+       * The images the effect samples besides its input, by the names its
+       * definition declares (`sample_<name>` in its shader); at most
+       * `MAX_EFFECT_INPUTS`. A name the definition does not declare, or
+       * one it declares and this leaves out, fails the frames that draw
+       * the node.
+       */
+      readonly inputs?: Readonly<Record<string, NodeId | null>>;
+      /**
+       * A registered effect: its input and the named images it samples
+       * besides.
        */
       readonly type: "effect";
     }

@@ -9,8 +9,8 @@ use alpha2_shaders::{
 };
 
 use crate::{
-    EffectDef, EffectId, EffectInputs, EffectKind, EffectResourceKind, ParamSpec, ParamType,
-    ParamUnit, ParamValue, Renderer, ResourceSpec, ShaderDiagnostics,
+    EffectDef, EffectId, EffectKind, EffectResourceKind, ParamSpec, ParamType, ParamUnit,
+    ParamValue, Renderer, ResourceSpec, ShaderDiagnostics,
 };
 
 /// Stable identifier of the built-in chroma-key effect.
@@ -352,7 +352,7 @@ pub fn chroma_key_definition() -> EffectDef {
         id: CHROMA_KEY_ID.into(),
         version: 1,
         kind: EffectKind::Effect,
-        inputs: EffectInputs::One,
+        inputs: Vec::new(),
         params: vec![
             color("key_color", [0.0, 1.0, 0.0, 1.0]),
             float("threshold", 0.35, 0.0, 3.0_f32.sqrt()),
@@ -378,7 +378,7 @@ pub fn gaussian_blur_definition() -> EffectDef {
         id: GAUSSIAN_BLUR_ID.into(),
         version: 1,
         kind: EffectKind::Effect,
-        inputs: EffectInputs::One,
+        inputs: Vec::new(),
         params: vec![float_step("radius", 0.012, 0.0, 1.0, 0.001)],
         resources: Vec::new(),
         wgsl_body: EXPANDED_EFFECT.into(),
@@ -392,7 +392,7 @@ pub(crate) fn gaussian_blur_pass_definition() -> EffectDef {
         id: GAUSSIAN_BLUR_PASS_ID.into(),
         version: 1,
         kind: EffectKind::Effect,
-        inputs: EffectInputs::One,
+        inputs: Vec::new(),
         params: vec![
             vec2("step", [0.0, 0.0]),
             float_step(
@@ -422,7 +422,7 @@ pub fn glow_definition() -> EffectDef {
         id: GLOW_ID.into(),
         version: 1,
         kind: EffectKind::Effect,
-        inputs: EffectInputs::One,
+        inputs: Vec::new(),
         params: vec![
             float("threshold", 0.6, 0.0, 1.0),
             float("intensity", 0.8, 0.0, 3.0),
@@ -453,7 +453,7 @@ fn glow_combine_definition() -> EffectDef {
         id: GLOW_COMBINE_ID.into(),
         version: 1,
         kind: EffectKind::Transition,
-        inputs: EffectInputs::Two,
+        inputs: Vec::new(),
         params: vec![float("intensity", 0.8, 0.0, 3.0)],
         resources: Vec::new(),
         wgsl_body: GLOW_COMBINE.into(),
@@ -469,7 +469,7 @@ pub fn lut_3d_definition() -> EffectDef {
         id: LUT_3D_ID.into(),
         version: 1,
         kind: EffectKind::Effect,
-        inputs: EffectInputs::One,
+        inputs: Vec::new(),
         params: vec![float("strength", 1.0, 0.0, 1.0)],
         resources: vec![ResourceSpec {
             name: "lut".into(),
@@ -576,7 +576,7 @@ fn simple_effect(name: &str, body: &str, params: Vec<ParamSpec>) -> EffectDef {
         id: format!("alpha2.effect.{name}"),
         version: 1,
         kind: EffectKind::Effect,
-        inputs: EffectInputs::One,
+        inputs: Vec::new(),
         params,
         resources: Vec::new(),
         wgsl_body: body.into(),
@@ -596,7 +596,7 @@ fn transition(
         id: format!("alpha2.transition.{name}"),
         version: 1,
         kind: EffectKind::Transition,
-        inputs: EffectInputs::Two,
+        inputs: Vec::new(),
         params,
         resources: Vec::new(),
         wgsl_body: format!("{TRANSITION_HELPERS}\n{body}"),

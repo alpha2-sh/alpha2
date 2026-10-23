@@ -12,11 +12,11 @@ use alpha2_media::{
 
 use crate::readback::read_rgba8;
 use crate::{
-    BlendMode, BlendSpace, Color, ColorPolicy, CompositeLayer, EffectDef, EffectInputs, EffectKind,
-    EffectParams, EffectRuntime, ExternalTextureLease, GpuVideoPlanes, GraphError, GraphLayer,
-    LayerTransform, ParamSpec, ParamType, ParamUnit, ParamValue, PlaneTarget, RenderCacheKey,
-    RenderError, RenderGraph, RenderNodeKind, RenderSize, RenderedTexture, Renderer,
-    SourcePresentation, SourceView, Yuv420Frame, Yuv420pTargets,
+    BlendMode, BlendSpace, Color, ColorPolicy, CompositeLayer, EffectDef, EffectKind, EffectParams,
+    EffectRuntime, ExternalTextureLease, GpuVideoPlanes, GraphError, GraphLayer, LayerTransform,
+    ParamSpec, ParamType, ParamUnit, ParamValue, PlaneTarget, RenderCacheKey, RenderError,
+    RenderGraph, RenderNodeKind, RenderSize, RenderedTexture, Renderer, SourcePresentation,
+    SourceView, Yuv420Frame, Yuv420pTargets,
 };
 use golden::{assert_rgba8_golden, assert_rgba8_golden_tiles};
 
@@ -375,7 +375,7 @@ fn runtime_tint_effect(wgsl_body: &str) -> EffectDef {
         id: "test.tint".into(),
         version: 1,
         kind: EffectKind::Effect,
-        inputs: EffectInputs::One,
+        inputs: Vec::new(),
         params: vec![ParamSpec {
             name: "tint".into(),
             param_type: ParamType::Color,

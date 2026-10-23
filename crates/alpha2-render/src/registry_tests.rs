@@ -190,7 +190,7 @@ fn definition(params: Vec<ParamSpec>, resources: Vec<ResourceSpec>) -> EffectDef
         id: "test.schema".into(),
         version: 1,
         kind: EffectKind::Effect,
-        inputs: EffectInputs::One,
+        inputs: Vec::new(),
         params,
         resources,
         wgsl_body: "fn effect(uv: vec2f, src: vec4f) -> vec4f { return src; }".into(),
@@ -244,21 +244,6 @@ fn every_schema_rule_refuses_what_it_names_and_accepts_its_boundary() {
             "version 0",
             with(&|d| d.version = 0),
             "version must be non-zero",
-        ),
-        (
-            "effect with two inputs",
-            with(&|d| d.inputs = EffectInputs::Two),
-            "effects require one input",
-        ),
-        (
-            "transition with one input",
-            with(&|d| d.kind = EffectKind::Transition),
-            "effects require one input",
-        ),
-        (
-            "generator with an input",
-            with(&|d| d.kind = EffectKind::Generator),
-            "effects require one input",
         ),
         (
             "name declaring code",
@@ -473,10 +458,8 @@ fn every_schema_rule_refuses_what_it_names_and_accepts_its_boundary() {
             "id with every allowed symbol",
             with(&|d| d.id = "a-b_c.D9".into()),
         ),
-        (
-            "transition with two inputs",
-            with(&|d| (d.kind, d.inputs) = (EffectKind::Transition, EffectInputs::Two)),
-        ),
+        ("a transition", with(&|d| d.kind = EffectKind::Transition)),
+        ("a generator", with(&|d| d.kind = EffectKind::Generator)),
         (
             "eight resources",
             with(&|d| d.resources = (0..8).map(|index| lut(&format!("lut{index}"))).collect()),
@@ -523,4 +506,92 @@ fn every_schema_rule_refuses_what_it_names_and_accepts_its_boundary() {
     for (label, definition) in &accepted {
         assert_eq!(refusal(definition), None, "{label}");
     }
+}
+
+fn input(name: &str) -> InputSpec {
+    InputSpec { name: name.into() }
+}
+
+#[test]
+fn named_inputs_are_declared_by_effects_only() {
+    // A transition samples from and to, and a generator nothing: neither has a node that
+    // could connect another image.
+    for kind in [EffectKind::Transition, EffectKind::Generator] {
+        let mut definition = definition(Vec::new(), Vec::new());
+        definition.kind = kind;
+        definition.inputs = vec![input("map")];
+        let message = refusal(&definition).unwrap_or_else(|| panic!("{kind:?}: accepted"));
+        assert!(
+            message.contains("only effects declare named inputs"),
+            "{message}"
+        );
+    }
+    let mut effect = definition(Vec::new(), Vec::new());
+    effect.inputs = vec![input("map")];
+    assert_eq!(refusal(&effect), None);
+}
+
+#[test]
+fn an_effect_declares_at_most_eight_named_inputs() {
+    let mut definition = definition(Vec::new(), Vec::new());
+    definition.inputs = (0..8).map(|index| input(&format!("in{index}"))).collect();
+    assert_eq!(refusal(&definition), None);
+    definition.inputs.push(input("in8"));
+    let message = refusal(&definition).expect("nine inputs are refused");
+    assert!(message.contains("more than 8 named inputs"), "{message}");
+}
+
+#[test]
+fn an_input_name_may_not_shadow_a_parameter_resource_or_the_source() {
+    // Each input declares `input_<name>`, `sample_<name>` and `size_<name>` at module scope,
+    // beside the resources' names and the prelude's.
+    let with_inputs = |names: &[&str]| {
+        let mut definition = definition(vec![float_param("amount")], vec![lut("grade")]);
+        definition.inputs = names.iter().map(|name| input(name)).collect();
+        definition
+    };
+    for (label, names) in [
+        ("a parameter's name", &["amount"][..]),
+        ("a resource's name", &["grade"]),
+        ("the source, whose sample_src is the prelude's", &["src"]),
+        ("a reserved prefix", &["alpha2_x"]),
+        ("code", &["x; fn spin() { loop {} } //"]),
+        ("a duplicate", &["map", "map"]),
+        ("an empty name", &[""]),
+    ] {
+        let message = refusal(&with_inputs(names)).unwrap_or_else(|| panic!("{label}: accepted"));
+        assert!(
+            message.contains("invalid or duplicate effect input name"),
+            "{label}: {message}"
+        );
+    }
+    // Only `sample_<name>` is declared for both a resource and an input; names whose other
+    // helpers merely look alike declare different identifiers and are accepted.
+    let alike = EffectDef {
+        resources: vec![lut("size_a")],
+        ..with_inputs(&["a", "input_b"])
+    };
+    assert_eq!(refusal(&alike), None);
+}
+
+#[test]
+fn an_effect_without_named_inputs_generates_the_same_module() {
+    // Inputs only add their declarations after the resources': without them every module,
+    // and so every built-in and pipeline, is the one an effect always had.
+    let builtin = crate::builtin_effect_definitions()
+        .into_iter()
+        .find(|definition| !definition.params.is_empty())
+        .expect("a built-in with parameters");
+    assert_eq!(builtin.inputs, []);
+    let plain = build_shader(&builtin);
+    let mut with_inputs = builtin.clone();
+    with_inputs.inputs = vec![input("glow"), input("map")];
+    let declarations = input_declarations(&with_inputs.inputs);
+    let module = build_shader(&with_inputs);
+    assert!(declarations.starts_with('\n'));
+    assert!(module.contains(&declarations));
+    assert_eq!(module.replacen(&declarations, "", 1), plain);
+    assert!(!plain.contains("@binding(21)"));
+    assert!(declarations.contains("@binding(21) var input_glow"));
+    assert!(declarations.contains("@binding(22) var input_map"));
 }

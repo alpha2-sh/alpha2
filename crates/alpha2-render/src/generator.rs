@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 
 use alpha2_gpu::CapabilityTier;
 
-use crate::{EffectDef, EffectInputs, EffectKind, ParamSpec, ParamType, ParamUnit, ParamValue};
+use crate::{EffectDef, EffectKind, ParamSpec, ParamType, ParamUnit, ParamValue};
 
 /// Internal identifier of the generator pass.
 pub const GENERATOR_EFFECT_ID: &str = "alpha2.internal.generator";
@@ -164,7 +164,7 @@ pub fn generator_definition() -> EffectDef {
         id: GENERATOR_EFFECT_ID.into(),
         version: 1,
         kind: EffectKind::Generator,
-        inputs: EffectInputs::None,
+        inputs: Vec::new(),
         params,
         resources: Vec::new(),
         wgsl_body: generator_body(),

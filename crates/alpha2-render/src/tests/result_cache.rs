@@ -389,3 +389,52 @@ fn a_filter_sample_budget_past_what_a_pass_takes_is_applied_and_reported_as_what
     assert_eq!(renderer.result_cache_stats().entries, 0);
     assert_eq!(quality_invalidations(&renderer), before + 1);
 }
+
+#[test]
+fn a_named_input_decides_what_its_effect_may_cache() {
+    // A named input is as much a dependency as the source: a transient one leaves the
+    // effect's key incomplete, and a bypass on it reaches the effect.
+    let _lock = gpu_test_lock();
+    let (renderer, tint) = renderer_with_tint();
+    let texture = rgba_texture(&renderer, [200, 100, 50, 255]);
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let size = RenderSize::new(2, 2).expect("size");
+    let build = |keyed_map: bool| {
+        let mut graph = RenderGraph::new(size);
+        let source =
+            graph.add_source_with_key(SourceView::from_wgpu(&view), RenderCacheKey::source(1));
+        let map = if keyed_map {
+            graph.add_source_with_key(SourceView::from_wgpu(&view), RenderCacheKey::source(2))
+        } else {
+            graph.add_source(SourceView::from_wgpu(&view))
+        };
+        let effect = graph
+            .add_effect_with_inputs(
+                tint.clone(),
+                source,
+                crate::EffectInputs::new().with("map", map),
+                EffectParams::new(),
+                crate::EffectResources::new(),
+                EffectRuntime::default(),
+            )
+            .expect("earlier nodes");
+        (graph, map, effect)
+    };
+    let (transient, _, effect) = build(false);
+    assert_eq!(
+        transient.cache_eligibility(effect),
+        Ok(CacheEligibility::TransientSource)
+    );
+    let (mut keyed, map, effect) = build(true);
+    assert_eq!(
+        keyed.cache_eligibility(effect),
+        Ok(CacheEligibility::Eligible)
+    );
+    keyed
+        .set_cache_intent(map, CacheIntent::Bypass)
+        .expect("known node");
+    assert_eq!(
+        keyed.cache_eligibility(effect),
+        Ok(CacheEligibility::Bypassed)
+    );
+}

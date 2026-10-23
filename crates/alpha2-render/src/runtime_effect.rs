@@ -2,9 +2,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::{
-    EffectId, EffectInputs, EffectKind, EffectParams, EffectResources, EffectRuntime, GraphError,
-    ParamSpec, ParamType, ParamValue, RenderError, RenderGraph, RenderSize, RenderedTexture,
-    Renderer,
+    EffectId, EffectKind, EffectParams, EffectResources, EffectRuntime, GraphError, ParamSpec,
+    ParamType, ParamValue, RenderError, RenderGraph, RenderSize, RenderedTexture, Renderer,
     uniform::{
         PARAM_SLOT_BYTES, RUNTIME_UNIFORM_WORDS, UniformArenaLease, f32_bytes, param_uniform_bytes,
     },
@@ -76,6 +75,7 @@ impl Renderer {
             kind,
             source_a,
             source_b,
+            inputs,
             size,
             params,
             resources,
@@ -83,10 +83,10 @@ impl Renderer {
             output,
         } = pass;
         let registered = self.effects.get(id).ok_or(RenderError::UnknownEffect)?;
-        let source_b = match (registered.definition.inputs, source_b) {
-            (EffectInputs::None | EffectInputs::One, _) => source_a,
-            (EffectInputs::Two, Some(source)) => source,
-            (EffectInputs::Two, None) => return Err(RenderError::MissingEffectInput),
+        let source_b = match (registered.definition.kind, source_b) {
+            (EffectKind::Transition, Some(source)) => source,
+            (EffectKind::Transition, None) => return Err(RenderError::MissingEffectInput),
+            (EffectKind::Effect | EffectKind::Generator, _) => source_a,
         };
         validate_runtime(runtime)?;
         let parameter_bytes = encode_params(&registered.definition.params, params)?;
@@ -145,6 +145,27 @@ impl Renderer {
             entries.push(wgpu::BindGroupEntry {
                 binding: u32::try_from(index).unwrap_or(0) * 2 + 6,
                 resource: resource.metadata.as_entire_binding(),
+            });
+        }
+        // As for resources: a name the definition does not declare is a bad setting, and a
+        // declared one left unbound a missing input.
+        if inputs.iter().any(|(name, _)| {
+            !registered
+                .definition
+                .inputs
+                .iter()
+                .any(|spec| spec.name == *name)
+        }) {
+            return Err(RenderError::InvalidEffectParams);
+        }
+        for (index, spec) in registered.definition.inputs.iter().enumerate() {
+            let (_, view) = inputs
+                .iter()
+                .find(|(name, _)| *name == spec.name)
+                .ok_or(RenderError::MissingEffectInput)?;
+            entries.push(wgpu::BindGroupEntry {
+                binding: crate::registry::input_binding(index),
+                resource: wgpu::BindingResource::TextureView(view),
             });
         }
         let bind_group = self
@@ -263,6 +284,8 @@ pub(crate) struct EffectPass<'a> {
     pub(crate) kind: crate::RenderNodeKind,
     pub(crate) source_a: &'a wgpu::TextureView,
     pub(crate) source_b: Option<&'a wgpu::TextureView>,
+    /// The named inputs the node binds, by the names it gives them.
+    pub(crate) inputs: &'a [(&'a str, &'a wgpu::TextureView)],
     pub(crate) size: RenderSize,
     pub(crate) params: &'a EffectParams<'a>,
     pub(crate) resources: &'a EffectResources,

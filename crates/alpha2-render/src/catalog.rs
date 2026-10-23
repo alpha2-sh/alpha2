@@ -38,11 +38,11 @@ fn catalog_entry(definition: &EffectDef) -> Value {
             EffectKind::Transition => "transition",
             EffectKind::Generator => "generator",
         },
-        "inputs": match definition.inputs {
-            crate::EffectInputs::None => 0,
-            crate::EffectInputs::One => 1,
-            crate::EffectInputs::Two => 2,
-        },
+        "inputs": definition
+            .inputs
+            .iter()
+            .map(|input| json!({ "name": input.name }))
+            .collect::<Vec<_>>(),
         "label": label,
         "group": group,
         "params": definition.params.iter().map(param).collect::<Vec<_>>(),
@@ -185,6 +185,19 @@ mod tests {
         assert_eq!(crop["params"][0]["min"], 0.0);
         assert_eq!(crop["params"][0]["max"], 1.0);
         assert!((crop["params"][0]["step"].as_f64().unwrap() - 0.005).abs() < 1e-8);
+    }
+
+    #[test]
+    fn every_built_in_lists_its_named_inputs_and_none_has_any() {
+        let catalog = builtin_catalog();
+        for entry in catalog["effects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .chain(catalog["transitions"].as_array().unwrap())
+        {
+            assert_eq!(entry["inputs"], json!([]), "{}", entry["id"]);
+        }
     }
 
     #[test]

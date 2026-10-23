@@ -128,23 +128,25 @@ impl ClipEffect {
     pub(crate) fn is_valid(&self) -> bool {
         !self.id.is_empty()
             && self.version > 0
-            && self.params.iter().all(|(name, value)| {
-                let mut bytes = name.bytes();
-                bytes
-                    .next()
-                    .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
-                    && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-                    && valid_param(value)
-            })
-            && self.resources.iter().all(|(name, id)| {
-                let mut bytes = name.bytes();
-                bytes
-                    .next()
-                    .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
-                    && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-                    && !id.as_str().is_empty()
-            })
+            && self
+                .params
+                .iter()
+                .all(|(name, value)| valid_binding_name(name) && valid_param(value))
+            && self
+                .resources
+                .iter()
+                .all(|(name, id)| valid_binding_name(name) && !id.as_str().is_empty())
     }
+}
+
+/// Whether `name` can name what an effect binds: a parameter, a resource, or
+/// a named input. An ASCII letter or `_`, then letters, digits, or `_`.
+pub(crate) fn valid_binding_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    bytes
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
 pub(crate) fn valid_param(animation: &Animated<EffectValue>) -> bool {

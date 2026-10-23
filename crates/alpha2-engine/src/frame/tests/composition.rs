@@ -18,7 +18,7 @@ fn renderer() -> Renderer {
             id: "test.fade".into(),
             version: 1,
             kind: EffectKind::Transition,
-            inputs: EffectInputs::Two,
+            inputs: Vec::new(),
             params: Vec::new(),
             resources: Vec::new(),
             wgsl_body: "fn transition(uv: vec2f) -> vec4f { return mix(from_color(uv), to_color(uv), progress()); }".into(),
@@ -433,4 +433,322 @@ fn a_composition_source_draws_what_its_nodes_draw_as_the_clip_picture() {
     assert_eq!(pixel(&expected, 0, 0), [255, 153, 64, 255]);
     assert_eq!(pixel(&expected, 3, 0), [0, 0, 0, 255]);
     assert_eq!(pixels(&renderer, &source, 120_000), expected);
+}
+
+/// An effect with named `inputs` and float parameters `params` (name, default, max), each in
+/// `0..=max`.
+fn effect_with_inputs(
+    id: &str,
+    inputs: &[&str],
+    params: &[(&str, f32, f32)],
+    body: &str,
+) -> EffectDef {
+    EffectDef {
+        id: id.into(),
+        version: 1,
+        kind: EffectKind::Effect,
+        inputs: inputs
+            .iter()
+            .map(|name| alpha2_render::InputSpec {
+                name: (*name).into(),
+            })
+            .collect(),
+        params: params
+            .iter()
+            .map(|(name, default, max)| alpha2_render::ParamSpec {
+                name: (*name).into(),
+                param_type: alpha2_render::ParamType::Float,
+                default: alpha2_render::ParamValue::Float(*default),
+                min: Some(0.0),
+                max: Some(*max),
+                step: None,
+                unit: alpha2_render::ParamUnit::Normalized,
+                enum_values: Vec::new(),
+            })
+            .collect(),
+        resources: Vec::new(),
+        wgsl_body: body.into(),
+        tier_min: CapabilityTier::TierB,
+        license: None,
+    }
+}
+
+/// [`renderer`] with the built-in blur and the multi-input effects of the bloom and
+/// displacement references: `test.multiply-map`, `test.input-size`, `test.bright-pass`,
+/// `test.add-glow`, and `test.displace`.
+fn renderer_with_inputs() -> Renderer {
+    let mut renderer = renderer();
+    pollster::block_on(renderer.register_builtin_gaussian_blur()).expect("blur compiles");
+    for definition in [
+        effect_with_inputs(
+            "test.multiply-map",
+            &["map"],
+            &[],
+            "fn effect(uv: vec2f, src: vec4f) -> vec4f { return src * sample_map(uv); }",
+        ),
+        effect_with_inputs(
+            "test.input-size",
+            &["map"],
+            &[],
+            "fn effect(_uv: vec2f, _src: vec4f) -> vec4f { return vec4f(size_map() / 255.0, 0.0, 1.0); }",
+        ),
+        effect_with_inputs(
+            "test.bright-pass",
+            &[],
+            &[("threshold", 0.7, 1.0)],
+            "fn effect(_uv: vec2f, src: vec4f) -> vec4f { let luma = dot(src.rgb, vec3f(0.2126, 0.7152, 0.0722)); return select(vec4f(0.0), src, luma >= params.threshold); }",
+        ),
+        effect_with_inputs(
+            "test.add-glow",
+            &["glow"],
+            &[("intensity", 1.0, 4.0)],
+            "fn effect(uv: vec2f, src: vec4f) -> vec4f { return min(src + sample_glow(uv) * params.intensity, vec4f(1.0)); }",
+        ),
+        effect_with_inputs(
+            "test.displace",
+            &["map"],
+            &[("amount", 0.05, 1.0)],
+            "fn effect(uv: vec2f, _src: vec4f) -> vec4f { let offset = (sample_map(uv).rg - vec2f(0.5)) * params.amount; return sample_src(uv + offset); }",
+        ),
+    ] {
+        pollster::block_on(renderer.register_effect(definition)).expect("effect compiles");
+    }
+    renderer
+}
+
+/// An effect node `id` of `effect` reading `input` and, by name, `inputs` (a JSON object).
+fn effect_node(id: &str, effect: &str, input: &str, inputs: &str) -> String {
+    format!(
+        r#"{{ "id": "{id}", "op": {{ "type": "effect", "input": "{input}", "inputs": {inputs},
+            "effect": {{ "id": "{effect}", "version": 1 }} }} }}"#
+    )
+}
+
+#[test]
+fn a_named_input_reads_another_branch() {
+    let _lock = gpu_test_lock();
+    let renderer = renderer_with_inputs();
+    let nodes = format!(
+        r#"{{ "id": "clip", "op": {{ "type": "clip" }} }},
+           {{ "id": "red", "op": {{ "type": "media", "source_id": "red" }} }}, {}"#,
+        effect_node("fx", "test.multiply-map", "clip", r#"{ "map": "red" }"#)
+    );
+    let image = pixels(&renderer, &project(&nodes, "fx", "", ""), 90_000);
+    for chunk in image.as_chunks::<4>().0 {
+        assert_eq!(*chunk, [255, 0, 0, 255]);
+    }
+}
+
+#[test]
+fn an_image_feeds_a_named_input_at_its_own_resolution() {
+    // A media node is a named input as it is any other: its frame is asked for, waited for,
+    // and bound at the size it was decoded at.
+    let _lock = gpu_test_lock();
+    let renderer = renderer_with_inputs();
+    let texture = rgba_image_texture(&renderer, RenderSize::new(2, 1).expect("size"), &[255; 8]);
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let frames = SingleFrame {
+        source: SourceId::new("video").expect("id"),
+        texture: &view,
+    };
+    let nodes = format!(
+        r#"{{ "id": "clip", "op": {{ "type": "clip" }} }},
+           {{ "id": "image", "op": {{ "type": "media", "source_id": "video" }} }}, {}"#,
+        effect_node("fx", "test.input-size", "clip", r#"{ "map": "image" }"#)
+    );
+    let project = project(&nodes, "fx", "", "");
+    let needs = project.frame_needs(MediaTime(90_000)).expect("needs");
+    assert_eq!(
+        needs
+            .iter()
+            .map(|need| need.source_id.as_str())
+            .collect::<Vec<_>>(),
+        ["video"]
+    );
+    let drawn = render(&renderer, &project, 90_000, &frames);
+    let image = read_rgba8(&renderer, &drawn.texture.expect("complete"));
+    assert_eq!(pixel(&image, 0, 0), [2, 1, 0, 255]);
+    let missing = render(&renderer, &project, 90_000, &MissingFrames);
+    assert!(missing.texture.is_none());
+    assert_eq!(
+        missing.report.missing_sources,
+        [SourceId::new("video").expect("id")]
+    );
+}
+
+#[test]
+fn a_bypassed_effect_does_not_need_its_named_inputs() {
+    let _lock = gpu_test_lock();
+    let renderer = renderer_with_inputs();
+    let nodes = format!(
+        r#"{{ "id": "clip", "op": {{ "type": "clip" }} }},
+           {{ "id": "image", "op": {{ "type": "media", "source_id": "video" }} }}, {}"#,
+        effect_node("fx", "test.multiply-map", "clip", r#"{ "map": "image" }"#).replacen(
+            r#""id": "fx","#,
+            r#""id": "fx", "bypass": true,"#,
+            1
+        )
+    );
+    let project = project(&nodes, "fx", "", "");
+    assert_eq!(project.frame_needs(MediaTime(90_000)).expect("needs"), []);
+    assert_eq!(
+        pixel(&pixels(&renderer, &project, 90_000), 0, 0),
+        [255, 255, 255, 255]
+    );
+}
+
+#[test]
+fn an_unconnected_named_input_makes_the_composition_incomplete() {
+    let nodes = format!(
+        r#"{{ "id": "clip", "op": {{ "type": "clip" }} }}, {}"#,
+        effect_node("fx", "test.multiply-map", "clip", r#"{ "map": null }"#)
+    );
+    let project = project(&nodes, "fx", "", "");
+    let error = project
+        .evaluate(MediaTime(90_000))
+        .expect_err("the map is needed");
+    assert_eq!(
+        crate::ErrorCode::of(&error),
+        Some(crate::ErrorCode::IncompleteComposition)
+    );
+    match error {
+        alpha2_eval::EvalError::IncompleteComposition { reason, .. } => assert_eq!(
+            reason,
+            alpha2_eval::PlanError::MissingInput {
+                node: alpha2_model::NodeId::new("fx").expect("id"),
+                input: "inputs.map".into(),
+            }
+        ),
+        other => panic!("expected an incomplete composition, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_named_input_the_definition_does_not_declare_fails_the_frame() {
+    let _lock = gpu_test_lock();
+    let renderer = renderer_with_inputs();
+    let frame_error = |nodes: String| {
+        let project = project(&nodes, "fx", "", "");
+        let frame = project.evaluate(MediaTime(90_000)).expect("evaluates");
+        let error = renderer
+            .render_frame(RenderSize::new(W, H).expect("size"), &frame, &MissingFrames)
+            .expect_err("the frame fails");
+        crate::ErrorCode::of(&error)
+    };
+    let red = r#"{ "id": "red", "op": { "type": "media", "source_id": "red" } }"#;
+    // The tint declares no input; the map declares one the node leaves out.
+    assert_eq!(
+        frame_error(format!(
+            r#"{{ "id": "clip", "op": {{ "type": "clip" }} }}, {red}, {}"#,
+            effect_node("fx", "test.tint", "clip", r#"{ "map": "red" }"#)
+        )),
+        Some(crate::ErrorCode::EffectError)
+    );
+    assert_eq!(
+        frame_error(format!(
+            r#"{{ "id": "clip", "op": {{ "type": "clip" }} }}, {red}, {}"#,
+            effect_node("fx", "test.multiply-map", "clip", r#"{ "mask": "red" }"#)
+        )),
+        Some(crate::ErrorCode::EffectError)
+    );
+}
+
+/// The bloom reference's three passes, as nodes reading `source`: the bright parts, blurred,
+/// added back over the source by name.
+fn bloom_nodes(source: &str, radius: f32, intensity: f32) -> String {
+    format!(
+        r#"{{ "id": "bright", "op": {{ "type": "effect", "input": "{source}", "effect": {{ "id": "test.bright-pass", "version": 1 }} }} }},
+           {{ "id": "blur", "op": {{ "type": "effect", "input": "bright", "effect": {{ "id": "alpha2.effect.gaussian-blur", "version": 1,
+             "params": {{ "radius": {{ "mode": "constant", "value": {{ "type": "float", "value": {radius} }} }} }} }} }} }},
+           {{ "id": "combine", "op": {{ "type": "effect", "input": "{source}", "inputs": {{ "glow": "blur" }},
+             "effect": {{ "id": "test.add-glow", "version": 1,
+             "params": {{ "intensity": {{ "mode": "constant", "value": {{ "type": "float", "value": {intensity} }} }} }} }} }} }}"#
+    )
+}
+
+#[test]
+fn a_multi_pass_group_draws_what_its_passes_draw_inline() {
+    // Bloom with no engine primitive of its own: a group of three effect nodes, the last
+    // reading the blurred bright parts as a named input, its settings exposed as controls.
+    let _lock = gpu_test_lock();
+    let renderer = renderer_with_inputs();
+    let inline = |intensity: f32| {
+        project_with(
+            &format!(
+                r#"{{ "id": "clip", "op": {{ "type": "clip" }} }}, {}"#,
+                bloom_nodes("clip", 0.5, intensity)
+            ),
+            "combine",
+            "",
+            "",
+            "",
+            "",
+            "left",
+        )
+    };
+    let definition = format!(
+        r#", {{ "id": "bloom", "inputs": ["Source"],
+              "controls": [
+                {{ "name": "threshold", "node": "bright", "param": "threshold" }},
+                {{ "name": "radius", "node": "blur", "param": "radius" }},
+                {{ "name": "intensity", "node": "combine", "param": "intensity" }} ],
+              "nodes": [{{ "id": "source", "op": {{ "type": "group_input", "index": 0 }} }}, {}],
+              "output": "combine" }}"#,
+        bloom_nodes("source", 0.012, 1.0)
+    );
+    let grouped = |intensity: f32| {
+        project_with(
+            &format!(
+                r#"{{ "id": "clip", "op": {{ "type": "clip" }} }},
+                   {{ "id": "bloom", "op": {{ "type": "group", "composition": "bloom", "inputs": ["clip"],
+                     "controls": {{
+                       "radius": {{ "mode": "constant", "value": {{ "type": "float", "value": 0.5 }} }},
+                       "intensity": {{ "mode": "constant", "value": {{ "type": "float", "value": {intensity} }} }} }} }} }}"#
+            ),
+            "bloom",
+            "",
+            "",
+            &definition,
+            "",
+            "left",
+        )
+    };
+    let glowing = pixels(&renderer, &inline(2.0), 120_000);
+    assert_eq!(pixels(&renderer, &grouped(2.0), 120_000), glowing);
+    // The white left half stays white, and its glow reaches the transparent right half.
+    assert_eq!(pixel(&glowing, 0, 0), [255, 255, 255, 255]);
+    assert!(pixel(&glowing, 3, 0)[0] > 0, "{:?}", pixel(&glowing, 3, 0));
+    // Without intensity there is no glow: the picture is the source's.
+    let plain = pixels(&renderer, &grouped(0.0), 120_000);
+    assert_eq!(pixels(&renderer, &inline(0.0), 120_000), plain);
+    assert_eq!(pixel(&plain, 3, 0), [0, 0, 0, 255]);
+    assert_eq!(pixel(&plain, 0, 0), [255, 255, 255, 255]);
+}
+
+#[test]
+fn a_displacement_map_moves_the_picture() {
+    // A red map offsets every sample by (+0.5, -0.5) * amount: a quarter of the width at 0.5,
+    // which moves the left half's edge left by one pixel of four.
+    let _lock = gpu_test_lock();
+    let renderer = renderer_with_inputs();
+    let displaced = |amount: f32| {
+        let nodes = format!(
+            r#"{{ "id": "clip", "op": {{ "type": "clip" }} }},
+               {{ "id": "noise", "op": {{ "type": "media", "source_id": "red" }} }},
+               {{ "id": "warp", "op": {{ "type": "effect", "input": "clip", "inputs": {{ "map": "noise" }},
+                 "effect": {{ "id": "test.displace", "version": 1,
+                   "params": {{ "amount": {{ "mode": "constant", "value": {{ "type": "float", "value": {amount} }} }} }} }} }} }}"#
+        );
+        pixels(
+            &renderer,
+            &project_with(&nodes, "warp", "", "", "", "", "left"),
+            120_000,
+        )
+    };
+    let still = displaced(0.0);
+    assert_eq!(pixel(&still, 1, 0), [255, 255, 255, 255]);
+    assert_eq!(pixel(&still, 2, 0), [0, 0, 0, 255]);
+    let moved = displaced(0.5);
+    assert_eq!(pixel(&moved, 0, 0), [255, 255, 255, 255]);
+    assert_eq!(pixel(&moved, 1, 0), [0, 0, 0, 255]);
 }

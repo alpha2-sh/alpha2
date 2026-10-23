@@ -67,7 +67,13 @@ export function effectStack(
     if (node.op.type === "clip") {
       return stack.length + 1 === nodes.size ? stack.reverse() : undefined;
     }
-    if (node.op.type !== "effect" || node.op.input == null) return undefined;
+    // An effect reading named inputs reads another branch, which a stack cannot show.
+    if (
+      node.op.type !== "effect" ||
+      node.op.input == null ||
+      Object.keys(node.op.inputs ?? {}).length > 0
+    )
+      return undefined;
     stack.push({ id: node.id, effect: node.op.effect, bypass: !!node.bypass });
     at = node.op.input;
   }
@@ -357,6 +363,10 @@ function divide(
 function inputsOf(op: CompositionNode["op"]): string[] {
   switch (op.type) {
     case "effect":
+      return [
+        op.input,
+        ...effectInputNames(op).map((name) => op.inputs![name]),
+      ].filter((id): id is string => id != null);
     case "transform":
     case "shape_mask":
       return op.input != null ? [op.input] : [];
@@ -460,14 +470,37 @@ function drawn(
 }
 
 /**
- * A node input as graph commands name it: `input`, `from`, `to`, `matte`, or a merge layer's index.
+ * A node input as graph commands name it: `input`, `from`, `to`, `matte`, an effect's named input
+ * as `inputs.<name>`, or a merge layer's or group port's index.
  */
-export type InputKey = "input" | "from" | "to" | "matte" | number;
+export type InputKey =
+  "input" | "from" | "to" | "matte" | `inputs.${string}` | number;
+
+/** A name an effect node may give a named input, as the model requires. */
+const EFFECT_INPUT_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** The name of the effect input `key` names, or `undefined` for any other key. */
+function effectInputName(key: InputKey): string | undefined {
+  return typeof key === "string" && key.startsWith("inputs.")
+    ? key.slice("inputs.".length)
+    : undefined;
+}
+
+/** An effect node's named inputs, in name order, as the model keeps them. */
+function effectInputNames(
+  op: Extract<CompositionNode["op"], { type: "effect" }>,
+): string[] {
+  return Object.keys(op.inputs ?? {}).sort();
+}
 
 /** The input keys of a node's operation, in order. */
 export function inputKeys(op: CompositionNode["op"]): InputKey[] {
   switch (op.type) {
     case "effect":
+      return [
+        "input",
+        ...effectInputNames(op).map((name) => `inputs.${name}` as const),
+      ];
     case "transform":
     case "shape_mask":
       return ["input"];
@@ -609,21 +642,46 @@ export function inputOf(
       : op.type === "group"
         ? (op.inputs?.[key] ?? undefined)
         : undefined;
+  const name = effectInputName(key);
+  if (name !== undefined)
+    return op.type === "effect"
+      ? Object.hasOwn(op.inputs ?? {}, name)
+        ? (op.inputs![name] ?? undefined)
+        : undefined
+      : undefined;
   const value = (op as Record<string, unknown>)[key];
   return typeof value === "string" ? value : undefined;
 }
 
 /**
- * `op` with input `key` reading `node` (`null` disconnects it). Throws when `op` has no input
- * `key`.
+ * Whether `op` has input `key`, or can take it: an effect node takes any well-named `inputs.<name>`,
+ * which its definition may declare.
+ */
+export function acceptsInput(
+  op: CompositionNode["op"],
+  key: InputKey,
+): boolean {
+  const name = effectInputName(key);
+  if (name !== undefined)
+    return op.type === "effect" && EFFECT_INPUT_NAME.test(name);
+  return inputKeys(op).includes(key);
+}
+
+/**
+ * `op` with input `key` reading `node` (`null` disconnects it, keeping an effect's named input).
+ * An effect's named input is added when it has none of the name. Throws when `op` cannot take
+ * input `key`.
  */
 export function withInput(
   op: CompositionNode["op"],
   key: InputKey,
   node: string | null,
 ): CompositionNode["op"] {
-  if (!inputKeys(op).includes(key))
+  if (!acceptsInput(op, key))
     throw new Error(`A ${op.type} node has no input ${String(key)}`);
+  const name = effectInputName(key);
+  if (name !== undefined && op.type === "effect")
+    return { ...op, inputs: { ...(op.inputs ?? {}), [name]: node } };
   if (typeof key === "number" && op.type === "merge")
     return {
       ...op,
@@ -639,6 +697,20 @@ export function withInput(
       ),
     };
   return { ...op, [key]: node };
+}
+
+/**
+ * `op` without its effect input `name`; an effect left with none has no `inputs`, as the model
+ * writes it. Any other operation is returned as it is.
+ */
+export function withoutEffectInput(
+  op: CompositionNode["op"],
+  name: string,
+): CompositionNode["op"] {
+  if (op.type !== "effect" || !Object.hasOwn(op.inputs ?? {}, name)) return op;
+  const { [name]: _removed, ...rest } = op.inputs!;
+  const { inputs: _inputs, ...without } = op;
+  return Object.keys(rest).length > 0 ? { ...without, inputs: rest } : without;
 }
 
 /**

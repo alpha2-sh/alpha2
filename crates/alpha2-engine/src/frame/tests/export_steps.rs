@@ -115,6 +115,7 @@ fn an_unregistered_effect_is_named_by_every_entry_point() {
                 alpha2_model::NodeId::new("glow").expect("valid ID"),
                 alpha2_model::NodeOp::Effect {
                     input: Some(alpha2_model::NodeId::new("clip").expect("valid ID")),
+                    inputs: BTreeMap::new(),
                     effect: ClipEffect {
                         id: "vendor.glow".to_owned(),
                         version: 2,

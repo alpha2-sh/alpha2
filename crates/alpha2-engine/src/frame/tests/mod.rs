@@ -10,9 +10,9 @@ use alpha2_gpu::{CapabilityTier, GpuContext};
 use alpha2_media::{ColorMetadata, SourceId};
 use alpha2_model::{Animated, ClipBlendMode, ClipEffect, ClipId, EffectValue, TrackId, Vec2};
 use alpha2_render::{
-    ColorPolicy, EffectDef, EffectInputs, EffectKind, ExternalTextureLease, GpuVideoPlanes,
-    ParamSpec, ParamType, ParamUnit, ParamValue, PendingSourceWork, RenderError, RenderSize,
-    RenderedTexture, Renderer, SourcePresentation, SourceView, Yuv420Frame,
+    ColorPolicy, EffectDef, EffectKind, ExternalTextureLease, GpuVideoPlanes, ParamSpec, ParamType,
+    ParamUnit, ParamValue, PendingSourceWork, RenderError, RenderSize, RenderedTexture, Renderer,
+    SourcePresentation, SourceView, Yuv420Frame,
 };
 use alpha2_time::MediaTime;
 
@@ -59,6 +59,7 @@ fn chain(effects: &'static [ClipEffect], time: MediaTime) -> Option<ActiveCompos
         offset: MediaTime::ZERO,
         op: StepOp::Effect {
             input: index,
+            inputs: Vec::new(),
             effect: effect.clone(),
         },
     }));
@@ -136,7 +137,7 @@ fn runtime_tint_effect(wgsl_body: &str) -> EffectDef {
         id: "test.tint".into(),
         version: 1,
         kind: EffectKind::Effect,
-        inputs: EffectInputs::One,
+        inputs: Vec::new(),
         params: vec![ParamSpec {
             name: "tint".into(),
             param_type: ParamType::Color,

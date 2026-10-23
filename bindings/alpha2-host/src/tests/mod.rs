@@ -35,7 +35,7 @@ use alpha2_media::{
 };
 use alpha2_model::{ClipId, MediaKind, Project};
 use alpha2_native::{NativeAudioCodec, NativeVideoCodec};
-use alpha2_render::{EffectInputs, FrameSubmitTimings, RenderSize};
+use alpha2_render::{FrameSubmitTimings, InputSpec, RenderSize};
 use alpha2_time::{MediaTime, TimeRange};
 use serde_json::{Value, json};
 

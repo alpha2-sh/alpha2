@@ -843,6 +843,12 @@ export const PROJECT_SHAPE: unknown = {
           properties: {
             effect: { $ref: "#/$defs/ClipEffect" },
             input: { anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }] },
+            inputs: {
+              additionalProperties: {
+                anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }],
+              },
+              type: "object",
+            },
             type: { const: "effect", type: "string" },
           },
           required: ["type", "effect"],

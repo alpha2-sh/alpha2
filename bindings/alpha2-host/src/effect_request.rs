@@ -2,7 +2,7 @@
 
 use alpha2_gpu::CapabilityTier;
 use alpha2_render::{
-    EffectDef, EffectInputs, EffectKind, EffectResourceKind, ParamSpec, ParamType, ParamUnit,
+    EffectDef, EffectKind, EffectResourceKind, InputSpec, ParamSpec, ParamType, ParamUnit,
     ParamValue, ResourceSpec,
 };
 use serde::Deserialize;
@@ -16,7 +16,9 @@ pub struct EffectRequest {
     pub id: String,
     pub version: u32,
     pub kind: EffectKindRequest,
-    pub inputs: u8,
+    /// The images an effect samples besides its source, by name.
+    #[serde(default)]
+    pub inputs: Vec<InputRequest>,
     #[serde(default)]
     pub params: Vec<ParameterRequest>,
     #[serde(default)]
@@ -27,6 +29,13 @@ pub struct EffectRequest {
     pub tier_min: TierRequest,
     #[serde(default)]
     pub license: Option<String>,
+}
+
+/// One named input of an effect as the protocol sends it.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct InputRequest {
+    pub name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -102,8 +111,7 @@ impl EffectRequest {
     /// Converts the request into the renderer's definition.
     ///
     /// # Errors
-    /// Fails when `inputs` is not 1 or 2, or when a parameter's default does not match its
-    /// type.
+    /// Fails when a parameter's default does not match its type.
     pub fn into_definition(self) -> Result<EffectDef, String> {
         Ok(EffectDef {
             id: self.id,
@@ -112,11 +120,11 @@ impl EffectRequest {
                 EffectKindRequest::Effect => EffectKind::Effect,
                 EffectKindRequest::Transition => EffectKind::Transition,
             },
-            inputs: match self.inputs {
-                1 => EffectInputs::One,
-                2 => EffectInputs::Two,
-                count => return Err(format!("effect inputs must be 1 or 2, received {count}")),
-            },
+            inputs: self
+                .inputs
+                .into_iter()
+                .map(|input| InputSpec { name: input.name })
+                .collect(),
             params: self
                 .params
                 .into_iter()

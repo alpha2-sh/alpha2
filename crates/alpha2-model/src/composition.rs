@@ -38,6 +38,9 @@ use std::collections::{HashMap, HashSet};
 pub const MAX_COMPOSITIONS: usize = 10_000;
 /// Most nodes in one composition.
 pub const MAX_COMPOSITION_NODES: usize = 256;
+/// The most named inputs an effect node gives its effect: what an effect
+/// definition may declare.
+pub const MAX_EFFECT_INPUTS: usize = 8;
 /// Most layers in one merge node.
 pub const MAX_MERGE_LAYERS: usize = 32;
 /// Most inputs a composition takes as a group.
@@ -188,11 +191,19 @@ pub enum NodeOp {
         /// What is drawn.
         generator: Generator,
     },
-    /// A registered one-input effect.
+    /// A registered effect: its input and the named images it samples
+    /// besides.
     Effect {
-        /// The image the effect processes.
+        /// The image the effect processes; a bypassed node passes it through.
         #[serde(default)]
         input: Option<NodeId>,
+        /// The images the effect samples besides its input, by the names its
+        /// definition declares (`sample_<name>` in its shader); at most
+        /// [`MAX_EFFECT_INPUTS`]. A name the definition does not declare, or
+        /// one it declares and this leaves out, fails the frames that draw
+        /// the node.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        inputs: BTreeMap<String, Option<NodeId>>,
         /// The versioned effect and its parameters.
         effect: ClipEffect,
     },
@@ -447,6 +458,8 @@ pub enum NodeInput<'a> {
     Layer(usize, Option<&'a NodeId>),
     /// An input of a group node, by port index.
     Port(usize, Option<&'a NodeId>),
+    /// A named input of an effect node.
+    EffectInput(&'a str, Option<&'a NodeId>),
 }
 
 impl<'a> NodeInput<'a> {
@@ -454,18 +467,22 @@ impl<'a> NodeInput<'a> {
     #[must_use]
     pub const fn node(self) -> Option<&'a NodeId> {
         match self {
-            Self::Named(_, node) | Self::Layer(_, node) | Self::Port(_, node) => node,
+            Self::Named(_, node)
+            | Self::Layer(_, node)
+            | Self::Port(_, node)
+            | Self::EffectInput(_, node) => node,
         }
     }
 
     /// The input's name as a diagnostic shows it: `input`, `from`, `to`,
-    /// `matte`, `layers[i]`, or `inputs[i]`.
+    /// `matte`, `layers[i]`, `inputs[i]`, or `inputs.<name>`.
     #[must_use]
     pub fn name(self) -> String {
         match self {
             Self::Named(name, _) => name.to_owned(),
             Self::Layer(index, _) => format!("layers[{index}]"),
             Self::Port(index, _) => format!("inputs[{index}]"),
+            Self::EffectInput(name, _) => format!("inputs.{name}"),
         }
     }
 }
@@ -484,9 +501,18 @@ impl NodeOp {
                 .enumerate()
                 .map(|(index, input)| NodeInput::Port(index, input.as_ref()))
                 .collect(),
-            Self::Effect { input, .. }
-            | Self::Transform { input, .. }
-            | Self::ShapeMask { input, .. } => vec![NodeInput::Named("input", input.as_ref())],
+            Self::Effect { input, inputs, .. } => {
+                std::iter::once(NodeInput::Named("input", input.as_ref()))
+                    .chain(
+                        inputs
+                            .iter()
+                            .map(|(name, node)| NodeInput::EffectInput(name, node.as_ref())),
+                    )
+                    .collect()
+            }
+            Self::Transform { input, .. } | Self::ShapeMask { input, .. } => {
+                vec![NodeInput::Named("input", input.as_ref())]
+            }
             Self::Transition { from, to, .. } => vec![
                 NodeInput::Named("from", from.as_ref()),
                 NodeInput::Named("to", to.as_ref()),
@@ -936,7 +962,13 @@ fn validate_node(
             start.ticks() >= 0
         }
         NodeOp::Generator { generator } => generator.is_valid(),
-        NodeOp::Effect { effect, .. } => effect.is_valid(),
+        NodeOp::Effect { effect, inputs, .. } => {
+            effect.is_valid()
+                && inputs.len() <= MAX_EFFECT_INPUTS
+                && inputs
+                    .keys()
+                    .all(|name| crate::effect::valid_binding_name(name))
+        }
         NodeOp::Transition {
             effect, progress, ..
         } => effect.is_valid() && unit(progress),

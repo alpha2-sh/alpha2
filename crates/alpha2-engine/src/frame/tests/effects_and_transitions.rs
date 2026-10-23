@@ -183,7 +183,7 @@ fn evaluated_frame_executes_active_transition_nodes() {
         id: "test.frame-fade".into(),
         version: 1,
         kind: EffectKind::Transition,
-        inputs: EffectInputs::Two,
+        inputs: Vec::new(),
         params: Vec::new(),
             resources: Vec::new(),
         wgsl_body: "fn transition(uv: vec2f) -> vec4f { return mix(from_color(uv), to_color(uv), progress()); }".into(),

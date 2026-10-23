@@ -3,20 +3,21 @@
 
 use alpha2_gpu::CapabilityTier;
 use alpha2_render::{
-    EffectDef, EffectInputs, EffectKind, EffectResourceKind, ParamSpec, ParamType, ParamUnit,
+    EffectDef, EffectKind, EffectResourceKind, InputSpec, ParamSpec, ParamType, ParamUnit,
     ParamValue, ResourceSpec,
 };
 use serde::Deserialize;
 
 /// An effect definition in camelCase wire form. `tierMin` defaults to tier B;
-/// `params` and `resources` default to empty.
+/// `inputs`, `params` and `resources` default to empty.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct EffectRequest {
     id: String,
     version: u32,
     kind: Kind,
-    inputs: u8,
+    #[serde(default)]
+    inputs: Vec<InputRequest>,
     #[serde(default)]
     params: Vec<ParameterRequest>,
     #[serde(default)]
@@ -26,6 +27,12 @@ pub(crate) struct EffectRequest {
     tier_min: Tier,
     #[serde(default)]
     license: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct InputRequest {
+    name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -97,9 +104,8 @@ enum ParameterUnit {
 impl EffectRequest {
     /// Parses a wire definition into an [`EffectDef`].
     ///
-    /// Fails with a message for JSON that does not match the wire schema, an
-    /// input count other than 1 or 2, or a parameter default whose shape does
-    /// not match its type. The WGSL body is not compiled here.
+    /// Fails with a message for JSON that does not match the wire schema, or a
+    /// parameter default whose shape does not match its type. The WGSL body is not compiled here.
     pub(crate) fn parse(json: &str) -> Result<EffectDef, String> {
         serde_json::from_str::<Self>(json)
             .map_err(|error| error.to_string())?
@@ -111,11 +117,11 @@ impl EffectRequest {
             Kind::Effect => EffectKind::Effect,
             Kind::Transition => EffectKind::Transition,
         };
-        let inputs = match self.inputs {
-            1 => EffectInputs::One,
-            2 => EffectInputs::Two,
-            count => return Err(format!("inputs must be 1 or 2, received {count}")),
-        };
+        let inputs = self
+            .inputs
+            .into_iter()
+            .map(|input| InputSpec { name: input.name })
+            .collect();
         let params = self
             .params
             .into_iter()
@@ -235,7 +241,7 @@ mod tests {
     fn parses_the_typescript_wire_schema() {
         let definition = EffectRequest::parse(
             r#"{
-                "id":"example.tint","version":1,"kind":"effect","inputs":1,
+                "id":"example.tint","version":1,"kind":"effect",
                 "params":[{
                     "name":"tint","type":"color","default":[1,0.5,0.25,1],
                     "unit":"color"
@@ -245,16 +251,39 @@ mod tests {
         )
         .expect("valid wire definition");
         assert_eq!(definition.id, "example.tint");
-        assert_eq!(definition.inputs, EffectInputs::One);
+        assert_eq!(definition.inputs, []);
         assert_eq!(definition.params.len(), 1);
         assert_eq!(definition.tier_min, CapabilityTier::TierB);
+    }
+
+    #[test]
+    fn parses_named_inputs_and_refuses_an_input_count() {
+        let definition = EffectRequest::parse(
+            r#"{
+                "id":"example.displace","version":1,"kind":"effect",
+                "inputs":[{"name":"map"}],
+                "wgslBody":"fn effect(uv: vec2f, src: vec4f) -> vec4f { return sample_map(uv); }"
+            }"#,
+        )
+        .expect("valid wire definition");
+        assert_eq!(definition.inputs, [InputSpec { name: "map".into() }]);
+        let error = EffectRequest::parse(
+            r#"{"id":"old","version":1,"kind":"effect","inputs":1,"wgslBody":""}"#,
+        )
+        .expect_err("a count is not a list of inputs");
+        assert!(error.contains("invalid type"), "{error}");
+        let error = EffectRequest::parse(
+            r#"{"id":"odd","version":1,"kind":"effect","inputs":[{"name":"map","wrap":"repeat"}],"wgslBody":""}"#,
+        )
+        .expect_err("an input has only a name");
+        assert!(error.contains("unknown field"), "{error}");
     }
 
     #[test]
     fn rejects_a_default_with_the_wrong_shape() {
         let error = EffectRequest::parse(
             r#"{
-                "id":"bad","version":1,"kind":"effect","inputs":1,
+                "id":"bad","version":1,"kind":"effect",
                 "params":[{"name":"offset","type":"vec2","default":[1],"unit":"normalized"}],
                 "wgslBody":""
             }"#,

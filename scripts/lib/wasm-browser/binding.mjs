@@ -151,7 +151,7 @@ export function effectRegistrationOverlap() {
 if (!navigator.gpu) throw new Error("this browser offers no WebGPU");
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
-const effect = (id) => JSON.stringify({ id, version: 1, kind: "effect", inputs: 1, params: [], wgslBody: "fn effect(uv: vec2f, src: vec4f) -> vec4f { return src; }" });
+const effect = (id) => JSON.stringify({ id, version: 1, kind: "effect", params: [], wgslBody: "fn effect(uv: vec2f, src: vec4f) -> vec4f { return src; }" });
 // The parent binding's one-step registerEffect, for the case's run against it.
 const register = (engine, json) => Promise.resolve().then(() => engine.compileEffect
   ? engine.compileEffect(json).then((compiled) => engine.registerCompiledEffect(compiled))

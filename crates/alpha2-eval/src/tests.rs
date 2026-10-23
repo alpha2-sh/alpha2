@@ -218,6 +218,7 @@ fn with_effect(project: &mut Project, effect: alpha2_model::ClipEffect) {
                 node("fx"),
                 NodeOp::Effect {
                     input: Some(node("clip")),
+                    inputs: BTreeMap::new(),
                     effect,
                 },
             ),

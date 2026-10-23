@@ -292,7 +292,7 @@ fn registered_transition_executes_with_two_inputs() {
         id: "test.crossfade".into(),
         version: 1,
         kind: EffectKind::Transition,
-        inputs: EffectInputs::Two,
+        inputs: Vec::new(),
         params: Vec::new(),
             resources: Vec::new(),
         wgsl_body: "fn transition(uv: vec2f) -> vec4f { return mix(from_color(uv), to_color(uv), progress()); }".into(),
@@ -433,7 +433,7 @@ fn effect_with_float_params(id: &str, count: usize) -> EffectDef {
         id: id.into(),
         version: 1,
         kind: EffectKind::Effect,
-        inputs: EffectInputs::One,
+        inputs: Vec::new(),
         params: (0..count)
             .map(|index| ParamSpec {
                 name: format!("p{index}"),
@@ -513,7 +513,7 @@ fn a_generator_that_declares_a_resource_draws_with_the_resource_it_is_given() {
         id: "test.graded-generator".into(),
         version: 1,
         kind: EffectKind::Generator,
-        inputs: EffectInputs::None,
+        inputs: Vec::new(),
         params: Vec::new(),
         resources: vec![crate::ResourceSpec {
             name: "grade".into(),
@@ -591,4 +591,221 @@ fn a_generator_that_declares_a_resource_draws_with_the_resource_it_is_given() {
             .map(|_| ()),
         Err(RenderError::MissingEffectResource)
     );
+}
+
+/// An effect that samples the named `inputs` with `wgsl_body`.
+fn effect_with_inputs(id: &str, inputs: &[&str], wgsl_body: &str) -> EffectDef {
+    EffectDef {
+        id: id.into(),
+        version: 1,
+        kind: EffectKind::Effect,
+        inputs: inputs
+            .iter()
+            .map(|name| crate::InputSpec {
+                name: (*name).into(),
+            })
+            .collect(),
+        params: Vec::new(),
+        resources: Vec::new(),
+        wgsl_body: wgsl_body.into(),
+        tier_min: CapabilityTier::TierB,
+        license: None,
+    }
+}
+
+/// Draws `effect` over a white 2x2 source with `inputs`, each a solid texture or one of
+/// the given size and pixels.
+fn draw_with_inputs(
+    renderer: &Renderer,
+    effect: &crate::EffectId,
+    inputs: &[(&str, RenderSize, &[u8])],
+) -> Result<Vec<u8>, GraphError> {
+    let size = RenderSize::new(2, 2).expect("size");
+    let source = rgba_texture(renderer, [255; 4]);
+    let source_view = source.create_view(&wgpu::TextureViewDescriptor::default());
+    let textures: Vec<wgpu::Texture> = inputs
+        .iter()
+        .map(|(_, size, pixels)| rgba_image_texture(renderer, *size, pixels))
+        .collect();
+    let views: Vec<wgpu::TextureView> = textures
+        .iter()
+        .map(|texture| texture.create_view(&wgpu::TextureViewDescriptor::default()))
+        .collect();
+    let mut graph = RenderGraph::new(size);
+    let source = graph.add_source(SourceView::from_wgpu(&source_view));
+    let mut named = crate::EffectInputs::new();
+    for ((name, _, _), view) in inputs.iter().zip(&views) {
+        named.insert(*name, graph.add_source(SourceView::from_wgpu(view)));
+    }
+    let output = graph.add_effect_with_inputs(
+        effect.clone(),
+        source,
+        named,
+        EffectParams::new(),
+        crate::EffectResources::new(),
+        EffectRuntime::default(),
+    )?;
+    graph.set_output(output)?;
+    let result = renderer.execute_graph(&graph)?;
+    Ok(read_rgba8(renderer, &result))
+}
+
+const ONE: RenderSize = RenderSize {
+    width: 1,
+    height: 1,
+};
+
+#[test]
+fn an_effect_samples_its_named_inputs_by_name() {
+    // Declared `b` then `a`, given in name order: each binds to its own name, not its place.
+    let _lock = gpu_test_lock();
+    let mut renderer = Renderer::new(gpu());
+    let id = pollster::block_on(renderer.register_effect(effect_with_inputs(
+        "test.two-inputs",
+        &["b", "a"],
+        "fn effect(uv: vec2f, src: vec4f) -> vec4f { return vec4f(sample_a(uv).r, src.g * 0.6, sample_b(uv).b, 1.0); }",
+    )))
+    .expect("an effect with named inputs registers");
+    let scope = renderer
+        .gpu
+        .device()
+        .push_error_scope(wgpu::ErrorFilter::Validation);
+    let pixels = draw_with_inputs(
+        &renderer,
+        &id,
+        &[("b", ONE, &[0, 0, 255, 255]), ("a", ONE, &[255, 0, 0, 255])],
+    )
+    .expect("the effect draws");
+    assert!(pollster::block_on(scope.pop()).is_none());
+    assert_rgb_close(&pixels, &[[255, 153, 255]; 4], "named inputs");
+}
+
+#[test]
+fn size_of_a_named_input_is_the_bound_textures() {
+    let _lock = gpu_test_lock();
+    let mut renderer = Renderer::new(gpu());
+    let id = pollster::block_on(renderer.register_effect(effect_with_inputs(
+        "test.input-size",
+        &["x"],
+        "fn effect(uv: vec2f, src: vec4f) -> vec4f { return vec4f(size_x() / 255.0, 0.0, 1.0); }",
+    )))
+    .expect("registers");
+    let wide = RenderSize::new(3, 1).expect("size");
+    let pixels = draw_with_inputs(&renderer, &id, &[("x", wide, &[255; 12])]).expect("draws");
+    assert_rgb_close(&pixels, &[[3, 1, 0]; 4], "size_x");
+}
+
+#[test]
+fn a_declared_input_left_unbound_fails_the_pass() {
+    let _lock = gpu_test_lock();
+    let mut renderer = Renderer::new(gpu());
+    let id = pollster::block_on(renderer.register_effect(effect_with_inputs(
+        "test.needs-map",
+        &["map"],
+        "fn effect(uv: vec2f, src: vec4f) -> vec4f { return sample_map(uv); }",
+    )))
+    .expect("registers");
+    assert_eq!(
+        draw_with_inputs(&renderer, &id, &[]).err(),
+        Some(GraphError::Render(RenderError::MissingEffectInput))
+    );
+}
+
+#[test]
+fn an_undeclared_input_fails_the_pass() {
+    let _lock = gpu_test_lock();
+    let mut renderer = Renderer::new(gpu());
+    let id = pollster::block_on(renderer.register_effect(effect_with_inputs(
+        "test.needs-map",
+        &["map"],
+        "fn effect(uv: vec2f, src: vec4f) -> vec4f { return sample_map(uv); }",
+    )))
+    .expect("registers");
+    let white: &[u8] = &[255; 4];
+    assert_eq!(
+        draw_with_inputs(&renderer, &id, &[("map", ONE, white), ("mask", ONE, white)]).err(),
+        Some(GraphError::Render(RenderError::InvalidEffectParams))
+    );
+}
+
+#[test]
+fn an_effect_past_the_devices_texture_budget_is_refused_at_compilation() {
+    // Every device asks for WebGL2's limits: 16 sampled textures per stage, two of them the
+    // source pair. Eight resources and six inputs fill it; a seventh input is refused before
+    // the device is asked.
+    let _lock = gpu_test_lock();
+    let mut renderer = Renderer::new(gpu());
+    assert_eq!(renderer.limits().max_sampled_textures_per_shader_stage, 16);
+    let budget = |inputs: usize| EffectDef {
+        resources: (0..8)
+            .map(|index| crate::ResourceSpec {
+                name: format!("lut{index}"),
+                kind: crate::EffectResourceKind::Lut3d,
+            })
+            .collect(),
+        ..effect_with_inputs(
+            &format!("test.budget-{inputs}"),
+            &(0..inputs)
+                .map(|index| format!("in{index}"))
+                .collect::<Vec<_>>()
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            "fn effect(uv: vec2f, src: vec4f) -> vec4f { return sample_in0(uv) * vec4f(sample_lut0(src.rgb), 1.0); }",
+        )
+    };
+    let Err(refused) = renderer.compile_effect(budget(7)) else {
+        panic!("seventeen textures are refused");
+    };
+    let message = &refused.messages[0].message;
+    assert!(
+        message.contains("17 textures") && message.contains("16 per shader stage"),
+        "{message}"
+    );
+    let id =
+        pollster::block_on(renderer.register_effect(budget(6))).expect("sixteen textures register");
+    // And it draws: every resource and input binding is laid out where the shader reads it.
+    let identity = crate::Lut3dData::from_cube(
+        "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n",
+    )
+    .expect("identity LUT parses");
+    for index in 0..8 {
+        renderer
+            .register_lut3d(format!("identity{index}"), &identity)
+            .expect("LUT uploads");
+    }
+    let size = RenderSize::new(2, 2).expect("size");
+    let source = rgba_texture(&renderer, [255; 4]);
+    let source_view = source.create_view(&wgpu::TextureViewDescriptor::default());
+    let map = rgba_texture(&renderer, [153, 51, 204, 255]);
+    let map_view = map.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut graph = RenderGraph::new(size);
+    let source = graph.add_source(SourceView::from_wgpu(&source_view));
+    let map = graph.add_source(SourceView::from_wgpu(&map_view));
+    let mut inputs = crate::EffectInputs::new();
+    for index in 0..6 {
+        inputs.insert(format!("in{index}"), map);
+    }
+    let resources = (0..8).fold(crate::EffectResources::new(), |resources, index| {
+        resources.with(format!("lut{index}"), format!("identity{index}"))
+    });
+    let output = graph
+        .add_effect_with_inputs(
+            id,
+            source,
+            inputs,
+            EffectParams::new(),
+            resources,
+            EffectRuntime::default(),
+        )
+        .expect("earlier nodes");
+    graph.set_output(output).expect("known output");
+    let scope = renderer
+        .gpu
+        .device()
+        .push_error_scope(wgpu::ErrorFilter::Validation);
+    let result = renderer.execute_graph(&graph).expect("draws");
+    let pixels = read_rgba8(&renderer, &result);
+    assert!(pollster::block_on(scope.pop()).is_none());
+    assert_rgb_close(&pixels, &[[153, 51, 204]; 4], "a full binding budget");
 }

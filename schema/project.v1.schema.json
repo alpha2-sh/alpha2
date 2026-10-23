@@ -2182,7 +2182,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "A registered one-input effect.",
+          "description": "A registered effect: its input and the named images it samples\nbesides.",
           "properties": {
             "effect": {
               "$ref": "#/$defs/ClipEffect",
@@ -2198,7 +2198,21 @@
                 }
               ],
               "default": null,
-              "description": "The image the effect processes."
+              "description": "The image the effect processes; a bypassed node passes it through."
+            },
+            "inputs": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/NodeId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "description": "The images the effect samples besides its input, by the names its\ndefinition declares (`sample_<name>` in its shader); at most\n[`MAX_EFFECT_INPUTS`]. A name the definition does not declare, or\none it declares and this leaves out, fails the frames that draw\nthe node.",
+              "type": "object"
             },
             "type": {
               "const": "effect",

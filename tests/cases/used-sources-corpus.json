@@ -1898,5 +1898,148 @@
       "g",
       "v"
     ]
+  },
+  {
+    "name": "an-image-read-only-through-a-named-input",
+    "project": {
+      "schema_version": 1,
+      "id": "used-sources",
+      "name": "Used sources",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v", "kind": "video", "locator": "v.mp4" },
+        { "id": "a", "kind": "video", "locator": "a.mp4" },
+        { "id": "b", "kind": "image", "locator": "b.png" },
+        { "id": "c", "kind": "video", "locator": "c.mp4" },
+        { "id": "d", "kind": "image", "locator": "d.png" },
+        {
+          "id": "g",
+          "kind": "generated",
+          "generator": {
+            "type": "fill",
+            "paint": {
+              "type": "solid",
+              "color": { "red": 1, "green": 0, "blue": 0, "alpha": 1 }
+            }
+          }
+        }
+      ],
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            { "id": "m", "op": { "type": "media", "source_id": "b" } },
+            {
+              "id": "fx",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "inputs": { "map": "m" },
+                "effect": { "id": "test.displace", "version": 1 }
+              }
+            }
+          ],
+          "output": "fx"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "look" }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "used": ["b", "v"]
+  },
+  {
+    "name": "a-bypassed-effect-reads-none-of-its-named-inputs",
+    "project": {
+      "schema_version": 1,
+      "id": "used-sources",
+      "name": "Used sources",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [
+        { "id": "v", "kind": "video", "locator": "v.mp4" },
+        { "id": "a", "kind": "video", "locator": "a.mp4" },
+        { "id": "b", "kind": "image", "locator": "b.png" },
+        { "id": "c", "kind": "video", "locator": "c.mp4" },
+        { "id": "d", "kind": "image", "locator": "d.png" },
+        {
+          "id": "g",
+          "kind": "generated",
+          "generator": {
+            "type": "fill",
+            "paint": {
+              "type": "solid",
+              "color": { "red": 1, "green": 0, "blue": 0, "alpha": 1 }
+            }
+          }
+        }
+      ],
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            { "id": "m", "op": { "type": "media", "source_id": "b" } },
+            {
+              "id": "fx",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "inputs": { "map": "m" },
+                "effect": { "id": "test.displace", "version": 1 }
+              },
+              "bypass": true
+            }
+          ],
+          "output": "fx"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "composition": { "id": "look" }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "used": ["v"]
   }
 ]

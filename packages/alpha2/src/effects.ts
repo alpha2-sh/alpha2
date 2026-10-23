@@ -17,6 +17,11 @@ export interface EffectResourceSpec {
   readonly kind: EffectResourceKind;
 }
 
+/** An image an effect samples besides its source; an effect node binds it under `inputs.<name>`. */
+export interface EffectInputSpec {
+  readonly name: string;
+}
+
 /** Host-loaded bytes for one project effect resource. */
 export type EffectResourceData = {
   readonly id: string;
@@ -30,7 +35,7 @@ export interface BuiltinEffectCatalogEntry {
   readonly id: string;
   readonly version: number;
   readonly kind: EffectKind;
-  readonly inputs: 1 | 2;
+  readonly inputs: readonly EffectInputSpec[];
   readonly label: string;
   readonly group: string;
   readonly params: readonly (EffectParameter & {
@@ -120,7 +125,13 @@ export interface EffectDefinition {
   readonly id: string;
   readonly version: number;
   readonly kind: EffectKind;
-  readonly inputs: 1 | 2;
+  /**
+   * Images the effect samples besides its source, at most 8; only `kind: "effect"` declares them.
+   * The shader reads each as `sample_<name>(uv) -> vec4f` (premultiplied, sRGB-encoded, clamped at
+   * the edges, as `sample_src`) and `size_<name>() -> vec2f` (the bound texture's size in texels).
+   * The wrapper declares `input_<name>`, `sample_<name>` and `size_<name>`, so a body must not.
+   */
+  readonly inputs?: readonly EffectInputSpec[];
   readonly params?: readonly EffectParameter[];
   readonly resources?: readonly EffectResourceSpec[];
   /** WGSL the engine places into its effect shader; compile errors reject registration. */

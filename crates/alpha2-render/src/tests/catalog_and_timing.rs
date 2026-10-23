@@ -375,11 +375,11 @@ fn a_transition_or_generator_pass_records_its_gpu_time_under_its_own_kind() {
     // node's own kind.
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    let definition = |id: &str, kind, inputs, wgsl_body: &str| EffectDef {
+    let definition = |id: &str, kind, wgsl_body: &str| EffectDef {
         id: id.into(),
         version: 1,
         kind,
-        inputs,
+        inputs: Vec::new(),
         params: Vec::new(),
         resources: Vec::new(),
         wgsl_body: wgsl_body.into(),
@@ -389,14 +389,12 @@ fn a_transition_or_generator_pass_records_its_gpu_time_under_its_own_kind() {
     let transition = pollster::block_on(renderer.register_effect(definition(
         "test.timed-crossfade",
         EffectKind::Transition,
-        EffectInputs::Two,
         "fn transition(uv: vec2f) -> vec4f { return mix(from_color(uv), to_color(uv), progress()); }",
     )))
     .expect("transition compiles");
     let generator = pollster::block_on(renderer.register_effect(definition(
         "test.timed-gradient",
         EffectKind::Generator,
-        EffectInputs::None,
         "fn generate(uv: vec2f) -> vec4f { return vec4f(uv, 0.5, 1.0); }",
     )))
     .expect("generator compiles");

@@ -837,6 +837,57 @@
       ],
       "sources": [],
       "issues": []
+    },
+    {
+      "name": "an unconnected named input the output needs",
+      "use": "clip",
+      "composition": "look",
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            {
+              "id": "fx",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "inputs": { "glow": "clip", "map": null },
+                "effect": { "id": "test.add-glow", "version": 1 }
+              }
+            }
+          ],
+          "output": "fx"
+        }
+      ],
+      "sources": [],
+      "issues": [{ "kind": "missing_input", "node": "fx", "input": "inputs.map" }]
+    },
+    {
+      "name": "a bypassed effect needs no named input",
+      "use": "clip",
+      "composition": "look",
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            { "id": "clip", "op": { "type": "clip" } },
+            {
+              "id": "fx",
+              "bypass": true,
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "inputs": { "map": null },
+                "effect": { "id": "test.add-glow", "version": 1 }
+              }
+            }
+          ],
+          "output": "fx"
+        }
+      ],
+      "sources": [],
+      "issues": []
     }
   ]
 }

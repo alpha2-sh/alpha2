@@ -155,6 +155,7 @@ fn chain(id: CompositionId, effects: Vec<ClipEffect>) -> Composition {
             id.clone(),
             NodeOp::Effect {
                 input: Some(previous),
+                inputs: BTreeMap::new(),
                 effect,
             },
         ));

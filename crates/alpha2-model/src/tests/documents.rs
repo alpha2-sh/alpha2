@@ -14,6 +14,7 @@ pub(crate) fn with_effect(mut project: Project, effect: crate::ClipEffect) -> Pr
                 node("effect"),
                 crate::NodeOp::Effect {
                     input: Some(node("clip")),
+                    inputs: std::collections::BTreeMap::new(),
                     effect,
                 },
             ),
