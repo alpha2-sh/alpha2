@@ -12,6 +12,9 @@ const RESULT_CACHE_FRAMES = 6;
 /** The diagnostics panel refreshes at this rate, not at the render rate. */
 const DIAGNOSTICS_INTERVAL_MS = 250;
 
+/** A runtime effect definition's identity, `id@version`, as the engine names it. */
+const effectKey = (definition) => `${definition.id}@${definition.version}`;
+
 /**
  * The wasm renderer of one preview or export: owns the engine instance, its frame supply, and a
  * render queue that collapses to the newest request.
@@ -28,6 +31,8 @@ export class Engine {
   #lastDiagnosticsAt = 0;
   #fps = [];
   #effectResources = new Map();
+  /** The runtime effects registered on this renderer, as `id@version`. */
+  #effects = new Set();
   /** Frames the player drew, and frames it found equal to the one shown; cumulative. */
   #renders = 0;
   #unchanged = 0;
@@ -220,6 +225,57 @@ export class Engine {
     this.#project = project;
     this.#revision += 1;
     this.#registry.resetPlayer();
+  }
+
+  /**
+   * Compiles runtime effect definitions (`alpha2/effects` `EffectDefinition`s) on this renderer's
+   * device and registers them, all or none. An `id@version` this renderer holds already is skipped:
+   * a definition never changes under its version.
+   *
+   * Throws `invalid_effect` naming the first definition the engine refuses, with its diagnostics;
+   * then none of the call's definitions is registered.
+   */
+  async registerEffects(definitions, operation = "preview") {
+    if (!this.#registry) throw new Error("the renderer is not initialized");
+    const fresh = definitions.filter(
+      (definition) => !this.#effects.has(effectKey(definition)),
+    );
+    const refusal = (definition, error) =>
+      new EditorError(
+        "invalid_effect",
+        `Effect ${effectKey(definition)} is not one the engine runs: ${error instanceof Error ? error.message : String(error)}`,
+        operation,
+        effectKey(definition),
+        true,
+        { cause: error },
+      );
+    // `compileEffect` throws for a definition it refuses before compiling, else its promise
+    // rejects with the shader's diagnostics.
+    const compiled = await Promise.allSettled(
+      fresh.map(async (definition) =>
+        this.#registry.compileEffect(JSON.stringify(definition)),
+      ),
+    );
+    const failed = compiled.findIndex(({ status }) => status === "rejected");
+    if (failed !== -1) {
+      for (const result of compiled)
+        if (result.status === "fulfilled") result.value.free?.();
+      throw refusal(fresh[failed], compiled[failed].reason);
+    }
+    const registered = [];
+    for (const [index, definition] of fresh.entries()) {
+      try {
+        this.#registry.registerCompiledEffect(compiled[index].value);
+      } catch (error) {
+        for (const later of compiled.slice(index + 1)) later.value.free?.();
+        for (const done of registered)
+          this.#registry.unregisterEffect(done.id, done.version);
+        throw refusal(definition, error);
+      }
+      registered.push(definition);
+    }
+    for (const definition of registered)
+      this.#effects.add(effectKey(definition));
   }
 
   /**

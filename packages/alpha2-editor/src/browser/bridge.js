@@ -1514,6 +1514,7 @@ export function createBrowserBridge(options) {
       await engine.start();
       engine.setPreviewScale(previewScale);
       capabilities = capabilityReport(engine.capabilityReport());
+      await registerKeptEffects();
       // The surface already shows copied frames (its context is a bitmap renderer's).
       if (useWorker && workerGivenUp) copySurface = true;
       else if (useWorker) {
@@ -1535,6 +1536,8 @@ export function createBrowserBridge(options) {
         try {
           await workerPreview.ready;
           await workerPreview.setPreviewScale(previewScale);
+          if (effectDefinitions.size)
+            await workerPreview.registerEffects(keptEffects());
         } catch (error) {
           await abandonWorker(error);
         }
@@ -1590,6 +1593,74 @@ export function createBrowserBridge(options) {
         .catch(onError);
     }
     return true;
+  }
+  /**
+   * Runtime effects `registerEffects` kept, by `id@version`, with their JSON text, in the order they
+   * came: every renderer the bridge makes registers them.
+   */
+  const effectDefinitions = new Map();
+  const keptEffects = () =>
+    [...effectDefinitions.values()].map(({ definition }) => definition);
+  function registerEffects(definitions) {
+    return enqueue(async () => {
+      const added = new Map();
+      for (const definition of definitions) {
+        if (
+          typeof definition?.id !== "string" ||
+          !Number.isInteger(definition.version)
+        )
+          throw new EditorError(
+            "invalid_effect",
+            "An effect definition needs a string id and an integer version",
+            "effects",
+          );
+        const key = `${definition.id}@${definition.version}`;
+        const text = JSON.stringify(definition);
+        const known = (added.get(key) ?? effectDefinitions.get(key))?.text;
+        if (known === text) continue;
+        if (known !== undefined)
+          throw new EditorError(
+            "effect_conflict",
+            `Effect ${key} is registered with another definition; a changed effect takes another version`,
+            "effects",
+            key,
+          );
+        added.set(key, { definition, text });
+      }
+      if (!added.size) return;
+      const fresh = [...added.values()].map(({ definition }) => definition);
+      // The main renderer loads every project the worker does, so both hold every effect.
+      if (engine) await engine.registerEffects(fresh);
+      if (workerPreview) {
+        try {
+          await workerPreview.registerEffects(fresh);
+        } catch (error) {
+          // The main renderer has just registered the same definitions.
+          await abandonWorker(error);
+        }
+      }
+      for (const [key, entry] of added) effectDefinitions.set(key, entry);
+      // A frame that drew one of them failed; it draws now.
+      if (engine) refreshPreview();
+    });
+  }
+  /**
+   * Registers the kept runtime effects on the main renderer `buildPreview` just started, one by
+   * one: one its device refuses (kept while no preview was bound, so never compiled) is dropped and
+   * reported, and the others draw. A device lost meanwhile drops none: the next render makes the
+   * preview again, which registers them again.
+   */
+  async function registerKeptEffects() {
+    const kept = [...effectDefinitions];
+    const results = await Promise.allSettled(
+      kept.map(([, { definition }]) => engine.registerEffects([definition])),
+    );
+    if (engine.deviceLost) return;
+    for (const [index, result] of results.entries()) {
+      if (result.status === "fulfilled") continue;
+      effectDefinitions.delete(kept[index][0]);
+      onError(result.reason);
+    }
   }
   /** Whether a renderer is ready, making it again first if a lost GPU left none. */
   async function previewReady() {
@@ -1920,7 +1991,8 @@ export function createBrowserBridge(options) {
     requireExportFrameRate(options.frameRate);
     materializeText(editor.document);
     const snapshot = editor.document,
-      revision = editor.revision;
+      revision = editor.revision,
+      effects = keptEffects();
     const compiled = compileEditorDocument(snapshot);
     if (compiled.diagnostics.length) throw compiled.diagnostics[0];
     requireShownText(snapshot, compiled.project);
@@ -1978,6 +2050,8 @@ export function createBrowserBridge(options) {
         try {
           signal.throwIfAborted();
           await renderer.start();
+          signal.throwIfAborted();
+          await renderer.registerEffects(effects, "export");
           signal.throwIfAborted();
           renderer.loadProject(project, "export");
           const refused = renderer.setCaptionFonts(fontStack);
@@ -2617,6 +2691,7 @@ export function createBrowserBridge(options) {
     get catalog() {
       return engine?.catalog ?? null;
     },
+    registerEffects,
     // A source's own media while it is online, whichever preview reads: its size, file and peaks
     // are the original's.
     getAsset: (id) =>

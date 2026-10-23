@@ -1,6 +1,6 @@
 import type { Generator, MediaFingerprint, Project } from "alpha2/project";
 import type { AssetBinding, ConformReport, MediaPurpose } from "alpha2/assets";
-import type { BuiltinEffectCatalog } from "alpha2/effects";
+import type { BuiltinEffectCatalog, EffectDefinition } from "alpha2/effects";
 import type { EditorSession } from "../core/session.js";
 import type { CapabilityReport, PlaybackPolicy } from "alpha2";
 import type { Capability } from "../ports/index.js";
@@ -386,6 +386,25 @@ export interface BrowserBridge {
   /** The engine's built-in effects and transitions; `null` until a preview is bound. */
   readonly catalog: BuiltinEffectCatalog | null;
   /**
+   * Adds runtime effects (and transitions) beyond the built-in catalog, so the document can draw
+   * them by `id@version`: every renderer the bridge makes registers them, the preview's (in its
+   * worker and on the main thread, and again after a lost GPU) and each export attempt's. They
+   * belong to the bridge, not the document: loading another project keeps them.
+   *
+   * With a preview bound, the definitions are compiled on its device, all or none, and the current
+   * frame is drawn again; the call rejects with `invalid_effect` naming the first one the engine
+   * refuses, and keeps none of them. Without one they are kept unchecked: `bindPreview` compiles
+   * them, and one refused then is dropped and reported to `onError` as `invalid_effect`. An export
+   * registers those kept when it starts, and an export attempt the engine refuses one in fails with
+   * `invalid_effect`.
+   *
+   * A definition registered already under the same `id@version` is skipped; a different one under
+   * it is refused (`effect_conflict`): a changed effect takes another version. Rejects with
+   * `invalid_effect` for a definition without a string `id` and an integer `version`, and once the
+   * bridge is disposed (`disposed`).
+   */
+  registerEffects(definitions: readonly EffectDefinition[]): Promise<void>;
+  /**
    * Source `id` of the draft: its original while it is online, even where preview reads a proxy
    * (see {@link BrowserBridge.setPreviewMedia}), else the kept proxy standing in for it; opened
    * with the provider settings the document names. Use {@link BrowserBridge.hasOriginal} to ask
@@ -672,6 +691,12 @@ export interface WorkerPreview {
     passTiming?: boolean;
     traceUploads?: boolean;
   }): Promise<void>;
+  /**
+   * Compiles and registers runtime effects on the worker's renderer, all or none (see
+   * {@link BrowserBridge.registerEffects}); an `id@version` it holds already is skipped. Rejects
+   * with `invalid_effect` naming the first one the engine refuses.
+   */
+  registerEffects(effects: readonly EffectDefinition[]): Promise<void>;
   /** Mixes `frames` project-rate samples from `startSample`, one array per channel. */
   mix(startSample: number, frames: number): Promise<Float32Array[]>;
   /** Drops the render in flight; its `seek` resolves with `rendered: false`. */

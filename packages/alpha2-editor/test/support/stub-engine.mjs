@@ -11,6 +11,7 @@ export class Engine {
     this.deviceLost = false;
     this.audioEngine = {};
     this.loads = [];
+    this.effects = [];
     this.renders = [];
     this.catalog = null;
     this.lastDiagnostics = null;
@@ -50,6 +51,14 @@ export class Engine {
   }
   invalidate() {
     this.generation += 1;
+  }
+  /**
+   * Records each call's definitions; a test's `registerEffects` hook may refuse a call by throwing,
+   * and then nothing of it is registered, as the renderer's registration is all or none.
+   */
+  async registerEffects(definitions, operation = "preview") {
+    await globalThis.stubEngine.registerEffects?.(this, definitions, operation);
+    this.effects.push(...definitions.map((d) => `${d.id}@${d.version}`));
   }
   /** What a test's `setCaptionFonts` hook refuses, as the renderer reports refused fonts. */
   setCaptionFonts(fonts) {

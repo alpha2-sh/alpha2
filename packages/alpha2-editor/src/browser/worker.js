@@ -168,6 +168,8 @@ export function installEditorWorker(scope) {
             engine.resize(request.width, request.height);
           else if (type === "register-fonts")
             engine.setCaptionFonts(request.fonts);
+          else if (type === "register-effects")
+            await engine.registerEffects(request.effects);
           else if (type === "dispose") {
             await audio.close();
             await engine.dispose();
@@ -300,6 +302,10 @@ export function createWorkerPreview(
     async setTracing(options) {
       await ready;
       return call("set-tracing", options);
+    },
+    async registerEffects(effects) {
+      await ready;
+      return call("register-effects", { effects });
     },
     async mix(startSample, frames) {
       await ready;

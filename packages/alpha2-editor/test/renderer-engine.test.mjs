@@ -126,3 +126,66 @@ test("a LUT the engine cannot parse fails the load naming it, and what was regis
     globalThis.fakeRegistry.refuseLut = () => undefined;
   }
 });
+
+const effect = (id, version = 1) => ({ id, version, kind: "effect" });
+
+test("runtime effects register all or none, and one held already is not compiled again", async () => {
+  globalThis.fakeRegistry.refuseEffect = (definition) =>
+    definition.id === "broken" ? "shader error: unknown identifier" : undefined;
+  try {
+    const { engine, registry } = await started(64, 36);
+    await assert.rejects(
+      engine.registerEffects([
+        effect("blur"),
+        effect("broken"),
+        effect("glow"),
+      ]),
+      (error) =>
+        error.name === "EditorError" &&
+        error.code === "invalid_effect" &&
+        error.entityId === "broken@1" &&
+        /broken@1 is not one the engine runs: shader error/.test(error.message),
+    );
+    assert.deepEqual([...registry.effects], []);
+    assert.deepEqual(
+      registry.compiled.filter((c) => c.key !== "broken@1").map((c) => c.freed),
+      [true, true],
+      "what compiled is freed",
+    );
+    await engine.registerEffects([effect("blur"), effect("glow")]);
+    assert.deepEqual([...registry.effects], ["blur@1", "glow@1"]);
+    const compiles = registry.compiled.length;
+    await engine.registerEffects([effect("blur"), effect("blur", 2)]);
+    assert.equal(registry.compiled.length, compiles + 1, "blur@1 is held");
+    assert.deepEqual([...registry.effects], ["blur@1", "glow@1", "blur@2"]);
+  } finally {
+    globalThis.fakeRegistry.refuseEffect = () => undefined;
+  }
+});
+
+test("a runtime effect refused before compiling, or by a full registry, leaves none of its call registered", async () => {
+  globalThis.fakeRegistry.refuseEffect = (definition) =>
+    definition.id === "malformed" ? "before" : undefined;
+  try {
+    const { engine, registry } = await started(64, 36);
+    await assert.rejects(
+      engine.registerEffects([effect("blur"), effect("malformed")], "export"),
+      (error) =>
+        error.code === "invalid_effect" &&
+        error.operation === "export" &&
+        error.entityId === "malformed@1",
+    );
+    registry.effectLimit = 2;
+    await assert.rejects(
+      engine.registerEffects([effect("a"), effect("b"), effect("c")]),
+      (error) => error.code === "invalid_effect" && error.entityId === "c@1",
+    );
+    assert.deepEqual([...registry.effects], [], "a and b are taken back");
+    // Taken back, they are registered by the next call.
+    registry.effectLimit = undefined;
+    await engine.registerEffects([effect("a"), effect("b")]);
+    assert.deepEqual([...registry.effects], ["a@1", "b@1"]);
+  } finally {
+    globalThis.fakeRegistry.refuseEffect = () => undefined;
+  }
+});

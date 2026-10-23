@@ -10,7 +10,11 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { createEditor, createEmptyDocument } from "../dist/index.js";
+import {
+  createEditor,
+  createEmptyDocument,
+  EditorError,
+} from "../dist/index.js";
 import { createBrowserBridge } from "../dist/browser/index.js";
 
 const wasmDirectory = join(
@@ -800,6 +804,178 @@ test(
     await bridge.setPreviewScale(0.5);
     assert.deepEqual([canvas.width, canvas.height], [32, 18]);
     assert.equal(worker.requests.at(-1).type, "seek", "and draws again");
+    await bridge.dispose();
+    editor.dispose();
+  },
+);
+
+const effect = (id, version = 1, extra = {}) => ({
+  id,
+  version,
+  kind: "effect",
+  ...extra,
+});
+const effectRequests = (worker) =>
+  worker.requests
+    .filter((r) => r.type === "register-effects")
+    .map((r) => r.effects.map((e) => `${e.id}@${e.version}`));
+
+test(
+  "runtime effects reach the worker and the main renderer, kept from before binding, each once",
+  { skip },
+  async () => {
+    let worker;
+    const { editor, bridge, reported } = await session({
+      workerFactory: () => (worker = workingWorker()),
+    });
+    addColor(editor);
+    await bridge.registerEffects([effect("blur")]);
+    await bridge.bindPreview(new FakeCanvas(64, 36));
+    assert.equal(bridge.previewBackend, "worker");
+    assert.deepEqual(latestEngine().effects, ["blur@1"]);
+    assert.deepEqual(effectRequests(worker), [["blur@1"]]);
+    const seeks = () => worker.requests.filter((r) => r.type === "seek").length;
+    const before = seeks();
+    // blur@1 again is nothing new; glow@1 is compiled on both and the frame drawn again.
+    await bridge.registerEffects([effect("blur"), effect("glow")]);
+    await settle(10);
+    assert.deepEqual(latestEngine().effects, ["blur@1", "glow@1"]);
+    assert.deepEqual(effectRequests(worker), [["blur@1"], ["glow@1"]]);
+    assert.ok(seeks() > before, "the frame is drawn again");
+    await bridge.registerEffects([effect("glow")]);
+    assert.equal(effectRequests(worker).length, 2);
+    await assert.rejects(
+      bridge.registerEffects([effect("glow", 1, { label: "Glow 2" })]),
+      (error) =>
+        error.code === "effect_conflict" && error.entityId === "glow@1",
+    );
+    await assert.rejects(
+      bridge.registerEffects([{ id: "nameless" }]),
+      (error) => error.code === "invalid_effect",
+    );
+    assert.deepEqual(reported, []);
+    await bridge.dispose();
+    editor.dispose();
+  },
+);
+
+test(
+  "an effect the device refuses when binding is dropped and reported, and one refused while bound keeps nothing",
+  { skip },
+  async () => {
+    globalThis.stubEngine.registerEffects = (_engine, definitions) => {
+      const refused = definitions.find((d) => d.id.startsWith("bad"));
+      if (refused)
+        throw new EditorError(
+          "invalid_effect",
+          `Effect ${refused.id}@1 is not one the engine runs`,
+          "preview",
+          `${refused.id}@1`,
+        );
+    };
+    const { editor, bridge, reported } = await session();
+    try {
+      addColor(editor);
+      await bridge.registerEffects([effect("good"), effect("bad")]);
+      await bridge.bindPreview(new FakeCanvas(64, 36));
+      assert.deepEqual(latestEngine().effects, ["good@1"]);
+      assert.deepEqual(
+        reported.map((e) => [e.code, e.entityId]),
+        [["invalid_effect", "bad@1"]],
+      );
+      await assert.rejects(
+        bridge.registerEffects([effect("fine"), effect("bad-too")]),
+        (error) => error.code === "invalid_effect",
+      );
+      // A lost GPU makes the preview again with what is kept: neither the dropped one nor the
+      // refused call.
+      const lostEngine = latestEngine();
+      lostEngine.render = async () => {
+        lostEngine.deviceLost = true;
+        throw Object.assign(new Error("the device was lost"), {
+          code: "GPU_DEVICE_LOST",
+        });
+      };
+      assert.equal(await bridge.seek(4000), true);
+      assert.equal(bridge.previewRecoveries, 1);
+      assert.notEqual(latestEngine(), lostEngine);
+      assert.deepEqual(latestEngine().effects, ["good@1"]);
+      assert.equal(reported.length, 1);
+    } finally {
+      globalThis.stubEngine.registerEffects = null;
+      await bridge.dispose();
+      editor.dispose();
+    }
+  },
+);
+
+test(
+  "a preview worker that refuses an effect the main renderer took hands the surface over",
+  { skip },
+  async () => {
+    let worker;
+    const { editor, bridge, reported } = await session({
+      workerFactory: () => (worker = failingWorker("register-effects")),
+    });
+    addColor(editor);
+    await bridge.bindPreview(new FakeCanvas(64, 36));
+    assert.equal(bridge.previewBackend, "worker");
+    await bridge.registerEffects([effect("blur")]);
+    assert.equal(bridge.previewBackend, "main-thread");
+    assert.ok(worker.terminated);
+    assert.deepEqual(latestEngine().effects, ["blur@1"]);
+    assert.deepEqual(
+      reported.map((e) => e.code),
+      ["preview_worker_failed"],
+    );
+    await bridge.dispose();
+    editor.dispose();
+  },
+);
+
+test(
+  "an export registers the effects kept when it starts, and one the engine refuses fails it as invalid input, once",
+  { skip },
+  async () => {
+    const { editor, bridge } = await session();
+    addColor(editor);
+    await bridge.registerEffects([effect("blur")]);
+    await bridge.conform("export_original");
+    const engines = globalThis.stubEngine.engines.length;
+    const exported = bridge.startExport({ output: { kind: "memory" } });
+    // Registered later, it is not this export's.
+    await bridge.registerEffects([effect("glow")]);
+    await exported.result.catch(() => {});
+    const exportEngines = globalThis.stubEngine.engines.slice(engines);
+    assert.ok(exportEngines.length >= 1);
+    for (const engine of exportEngines)
+      assert.deepEqual(engine.effects, ["blur@1"]);
+
+    globalThis.stubEngine.registerEffects = (
+      _engine,
+      _definitions,
+      operation,
+    ) => {
+      if (operation === "export")
+        throw new EditorError(
+          "invalid_effect",
+          "Effect blur@1 is not one the engine runs",
+          operation,
+          "blur@1",
+        );
+    };
+    try {
+      const refused = bridge.startExport({ output: { kind: "memory" } });
+      await assert.rejects(
+        refused.result,
+        (error) =>
+          error.code === "invalid_effect" &&
+          error.failureCode === "INVALID_INPUT",
+      );
+      assert.equal(refused.attempts.length, 1, "not retried");
+    } finally {
+      globalThis.stubEngine.registerEffects = null;
+    }
     await bridge.dispose();
     editor.dispose();
   },
