@@ -64,6 +64,7 @@ fn request(output: &Path, rate_control: VideoRateControl) -> HardwareEncodeReque
         rate_control,
         color: ColorMetadata::EXPORT,
         output,
+        container: alpha2_media::Container::Mp4,
         audio: None,
     }
 }

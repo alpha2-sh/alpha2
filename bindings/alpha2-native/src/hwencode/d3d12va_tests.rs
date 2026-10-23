@@ -158,6 +158,7 @@ fn request<'a>(
         rate_control,
         color: ColorMetadata::EXPORT,
         output,
+        container: alpha2_media::Container::Mp4,
         audio: None,
     }
 }
