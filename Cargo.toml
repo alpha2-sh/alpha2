@@ -85,15 +85,3 @@ pedantic = { level = "warn", priority = -1 }
 
 [profile.release]
 overflow-checks = true
-
-# Text is shaped and rasterized once per new caption or text request, never per frame, so its crates
-# are built for size: the browser module stays within its budget (`scripts/check-npm-package.mjs`).
-# Their output does not depend on the optimization level, which `npm run test:wasm-parity` holds.
-[profile.release.package.rustybuzz]
-opt-level = "z"
-
-[profile.release.package.ttf-parser]
-opt-level = "z"
-
-[profile.release.package.ab_glyph_rasterizer]
-opt-level = "z"
