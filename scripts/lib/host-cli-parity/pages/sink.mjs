@@ -7,10 +7,13 @@ export function sinkPage() {
 try {
   const wasm = await import("/packages/alpha2/wasm/alpha2_wasm.js");
   await wasm.default();
-  const { MediabunnyMp4Sink } = await import("/packages/alpha2/dist/mediabunny.js");
+  const { MediabunnyMp4Sink, videoEncoderLatencyMode } = await import("/packages/alpha2/dist/mediabunny.js");
   const { resolveVideoRateControl } = await import("/packages/alpha2/dist/rate-control.js");
   // The quantizer each frame is encoded at, as the encoder receives it: mediabunny passes it in the
   // frame's encode options, not in the configuration the sink reads back.
+  // The sink's first use probes the encoder's latency mode with frames of its own, which carry no
+  // quantizer; probed here first, they are not counted as the sink's.
+  await videoEncoderLatencyMode("avc");
   let encodedQuantizers = new Set();
   const encode = VideoEncoder.prototype.encode;
   VideoEncoder.prototype.encode = function (frame, options) {
