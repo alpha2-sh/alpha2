@@ -1,24 +1,26 @@
-//! The transactional MP4 the GPU-resident and packet-copy exports mux into.
+//! The transactional output file the GPU-resident and packet-copy exports
+//! mux into, in any export container.
 //!
 //! Nothing here depends on where the video packets come from: a hardware
 //! session hands over what its encoder produced, a packet copy what it read
 //! from its source. This writes them beside an audio stream that is either
-//! AAC encoded on its own thread or copied packets. Every such export
-//! therefore shares one partial-file contract: only a successful
-//! [`Mp4Muxer::close`] renames the partial file into place, and anything else
-//! removes it.
+//! encoded on its own thread or copied packets. Every such export therefore
+//! shares one partial-file contract: only a successful [`Muxer::close`]
+//! renames the partial file into place, and anything else removes it.
 
 use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use alpha2_ffmpeg_bridge::OutputFile;
-use alpha2_media::EncodeError;
-use rsmpeg::avcodec::{AVCodec, AVCodecContext, AVCodecParameters, AVPacket};
-use rsmpeg::avutil::{AVChannelLayout, AVRational, ra};
+use alpha2_media::{Container, EncodeError};
+use rsmpeg::avcodec::{AVCodecContext, AVCodecParameters, AVPacket};
+use rsmpeg::avutil::AVRational;
 use rsmpeg::ffi;
 
-use crate::aac::{AacInput, encoder_sample_rate};
+use crate::audio_input::{
+    AudioStreamConfig, EncoderAudioInput, OpenedAudioEncoder, open_audio_encoder,
+};
 use crate::convert::{encode_adapter_error, encode_adapter_error_at};
 use crate::encode::{
     AudioCommand, AudioEncodeThread, AudioEncoderConfig, EncodeStageTimings, QueuedPacket,
@@ -26,32 +28,21 @@ use crate::encode::{
 };
 use crate::partial::PartialOutput;
 
-/// The AAC stream an export encodes beside its video.
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub struct AacStreamConfig {
-    /// Project audio sample rate.
-    pub sample_rate: u32,
-    /// Channel count.
-    pub channels: u16,
-    /// Resolved bitrate in bits per second; the host resolves the level.
-    pub bit_rate: u32,
-}
-
-/// The video stream an [`Mp4Muxer`] carries.
+/// The video stream a [`Muxer`] carries.
 pub(crate) struct VideoStream {
     /// Its codec parameters, sample description included.
     pub(crate) parameters: AVCodecParameters,
     /// The time base its packets arrive in.
     pub(crate) time_base: AVRational,
     /// The parameters were read from another file, whose container codec tag
-    /// is not necessarily MP4's.
+    /// is not necessarily this one's.
     pub(crate) copied: bool,
 }
 
-/// The audio stream an [`Mp4Muxer`] carries.
+/// The audio stream a [`Muxer`] carries.
 pub(crate) enum AudioStream {
     /// Encoded here, from audio blocks.
-    Encode(AacStreamConfig),
+    Encode(AudioStreamConfig),
     /// Packets copied from another file.
     Copy {
         /// Their codec parameters.
@@ -71,8 +62,9 @@ enum MuxedAudioTrack {
     },
 }
 
-/// A transactional MP4 with one video stream and at most one audio stream.
-pub(crate) struct Mp4Muxer {
+/// A transactional output with one video stream and at most one audio
+/// stream.
+pub(crate) struct Muxer {
     final_path: PathBuf,
     partial_path: PathBuf,
     /// Held until the partial file is renamed into place or removed.
@@ -85,8 +77,8 @@ pub(crate) struct Mp4Muxer {
     complete: bool,
     audio: Option<MuxedAudioTrack>,
     audio_stream_index: i32,
-    /// Finished AAC packets collected from the audio thread, on their way to
-    /// the muxer. Before a deferred header they wait here.
+    /// Finished audio packets collected from the audio thread, on their way
+    /// to the muxer. Before a deferred header they wait here.
     audio_packets: VecDeque<QueuedPacket>,
     /// The header [`Self::open_deferred`] holds back until the first video
     /// packet; `None` once it is written, or for a header written at open.
@@ -100,18 +92,20 @@ pub(crate) struct Mp4Muxer {
     audio_rescale: Option<(AVRational, AVRational)>,
 }
 
-/// An AAC stream encoded on its own thread.
+/// An audio stream encoded on its own thread.
 struct MuxedAudio {
     thread: AudioEncodeThread,
-    input: AacInput,
+    input: EncoderAudioInput,
 }
 
-impl Mp4Muxer {
-    /// Opens a transactional MP4 beside `path` for an encoder's stream.
+impl Muxer {
+    /// Opens a transactional `container` file beside `path` for an
+    /// encoder's stream.
     ///
     /// `video` is the opened encoder, whose parameters describe the stream;
-    /// it must have opened with global headers, because an MP4 carries the
-    /// parameter sets in its sample description rather than in-band.
+    /// it must have opened with global headers, because every export
+    /// container carries the parameter sets in its header rather than
+    /// in-band.
     ///
     /// # Errors
     /// As [`Self::open_streams`].
@@ -122,12 +116,14 @@ impl Mp4Muxer {
     )]
     pub(crate) fn open(
         path: &Path,
+        container: Container,
         video: &AVCodecContext,
         video_time_base: AVRational,
-        audio: Option<AacStreamConfig>,
+        audio: Option<AudioStreamConfig>,
     ) -> Result<Self, EncodeError> {
         Self::open_streams(
             path,
+            container,
             VideoStream {
                 parameters: video.extract_codecpar(),
                 time_base: video_time_base,
@@ -137,36 +133,39 @@ impl Mp4Muxer {
         )
     }
 
-    /// Opens a transactional MP4 beside `path` and writes its header.
+    /// Opens a transactional `container` file beside `path` and writes its
+    /// header.
     ///
     /// # Errors
     /// Returns an adapter failure for an existing output, a partial a running export holds, a
-    /// container without global headers, or a muxer that cannot be created.
+    /// codec the container does not offer, or a muxer that cannot be created.
     pub(crate) fn open_streams(
         path: &Path,
+        container: Container,
         video: VideoStream,
         audio: Option<AudioStream>,
     ) -> Result<Self, EncodeError> {
-        let mut unwritten = Unwritten::open(path, video, audio)?;
+        let mut unwritten = Unwritten::open(path, container, video, audio)?;
         unwritten
             .format
-            .write_header(&mut None)
+            .write_header(&mut crate::convert::muxer_header_options(container))
             .map_err(encode_adapter_error)?;
         let stream_time_base = unwritten.time_base(unwritten.stream_index);
         let audio_stream_time_base = unwritten.time_base(unwritten.audio_stream_index);
         unwritten.start(stream_time_base, audio_stream_time_base, None)
     }
 
-    /// Opens a transactional MP4 beside `path` for an encoder that writes
-    /// its parameter sets in-band rather than as extradata, behind an
-    /// [`EncodedVideoFilter`](crate::bitstream::EncodedVideoFilter).
+    /// Opens a transactional `container` file beside `path` for an encoder
+    /// that writes its parameter sets in-band rather than as extradata,
+    /// behind an [`EncodedVideoFilter`](crate::bitstream::EncodedVideoFilter).
     ///
     /// The partial file and its lock exist from here on, as with
     /// [`Self::open`], so a failure past this point is the export's.
     /// The header waits for the first video packet, which brings the
-    /// parameter sets as `AV_PKT_DATA_NEW_EXTRADATA`: an MP4 writes them into
-    /// its sample description in the header, and the encoder has none
-    /// before it has encoded a picture. Until then, audio packets wait in
+    /// parameter sets as `AV_PKT_DATA_NEW_EXTRADATA`: every export container
+    /// writes them into its header (an MP4's sample description, a Matroska
+    /// track's `CodecPrivate`), and the encoder has none before it has
+    /// encoded a picture. Until then, audio packets wait in
     /// order, and nothing is written, so the interleave is decided exactly
     /// as it is for [`Self::open`].
     ///
@@ -179,12 +178,14 @@ impl Mp4Muxer {
     )]
     pub(crate) fn open_deferred(
         path: &Path,
+        container: Container,
         video: &AVCodecContext,
         video_time_base: AVRational,
-        audio: Option<AacStreamConfig>,
+        audio: Option<AudioStreamConfig>,
     ) -> Result<Self, EncodeError> {
         let unwritten = Unwritten::open(
             path,
+            container,
             VideoStream {
                 parameters: video.extract_codecpar(),
                 time_base: video_time_base,
@@ -202,7 +203,10 @@ impl Mp4Muxer {
         unwritten.start(
             video_time_base,
             audio_time_base.unwrap_or(video_time_base),
-            Some(PendingHeader { audio_time_base }),
+            Some(PendingHeader {
+                audio_time_base,
+                container,
+            }),
         )
     }
 
@@ -218,11 +222,11 @@ impl Mp4Muxer {
                 .map(|sets| distinct_parameter_sets(&sets))
                 .ok_or_else(|| {
                     EncodeError::Adapter(
-                        "the encoder's first packet carried no parameter sets for the MP4 header"
+                        "the encoder's first packet carried no parameter sets for the header"
                             .into(),
                     )
                 })?;
-        let audio_time_base = pending.audio_time_base;
+        let (audio_time_base, container) = (pending.audio_time_base, pending.container);
         let format = self
             .format
             .as_mut()
@@ -235,7 +239,7 @@ impl Mp4Muxer {
         .map_err(|error| encode_adapter_error_at("storing the parameter sets", error))?;
         crate::encode::beat_encode_call();
         format
-            .write_header(&mut None)
+            .write_header(&mut crate::convert::muxer_header_options(container))
             .map_err(encode_adapter_error)?;
         self.stream_time_base =
             format.streams()[usize::try_from(self.stream_index).unwrap_or(0)].time_base;
@@ -270,7 +274,7 @@ impl Mp4Muxer {
             .as_mut()
             .ok_or_else(|| EncodeError::Adapter("muxer is already closed".into()))?
             .interleaved_write_frame(packet)
-            .map_err(|error| encode_adapter_error_at("MP4 packet write failed", error))
+            .map_err(|error| encode_adapter_error_at("packet write failed", error))
     }
 
     /// Writes one video packet the encoder produced, in `encoder_time_base`.
@@ -298,8 +302,8 @@ impl Mp4Muxer {
             // would be decoded against the header's.
             if repeated.is_some_and(|sets| distinct_parameter_sets(&sets) != header) {
                 return Err(EncodeError::Adapter(
-                    "the encoder changed its parameter sets mid-stream, which one MP4 sample \
-                     description cannot carry"
+                    "the encoder changed its parameter sets mid-stream, which one stream \
+                     header cannot carry"
                         .into(),
                 ));
             }
@@ -313,11 +317,11 @@ impl Mp4Muxer {
             .as_mut()
             .ok_or_else(|| EncodeError::Adapter("muxer is already closed".into()))?
             .interleaved_write_frame(packet)
-            .map_err(|error| encode_adapter_error_at("MP4 packet write failed", error))
+            .map_err(|error| encode_adapter_error_at("packet write failed", error))
     }
 
-    /// Buffers one audio block and hands the thread every whole AAC frame it
-    /// completes.
+    /// Buffers one audio block and hands the thread every whole encoder
+    /// frame it completes.
     ///
     /// # Errors
     /// Returns an adapter failure for a format change, a non-monotonic block,
@@ -408,7 +412,7 @@ impl Mp4Muxer {
             timed(&mut stages.audio_mux_write, || {
                 format.interleaved_write_frame(&mut queued.packet)
             })
-            .map_err(|error| encode_adapter_error_at("MP4 packet write failed", error))?;
+            .map_err(|error| encode_adapter_error_at("packet write failed", error))?;
         }
         Ok(())
     }
@@ -443,8 +447,7 @@ impl Mp4Muxer {
     pub(crate) fn close(&mut self) -> Result<(), EncodeError> {
         if self.pending_header.is_some() {
             return Err(EncodeError::Adapter(
-                "the encoder produced no parameter sets: no video packet reached the MP4 header"
-                    .into(),
+                "the encoder produced no parameter sets: no video packet reached the header".into(),
             ));
         }
         crate::encode::beat_encode_call();
@@ -481,15 +484,15 @@ impl Mp4Muxer {
     }
 }
 
-impl Drop for Mp4Muxer {
+impl Drop for Muxer {
     fn drop(&mut self) {
         // A failed export leaves no half-written file, as the software sinks do.
         self.abort();
     }
 }
 
-/// A transactional MP4 whose streams exist and whose header is not written
-/// yet.
+/// A transactional output whose streams exist and whose header is not
+/// written yet.
 struct Unwritten {
     final_path: PathBuf,
     /// Declared before `partial`, so a failed header closes the file before
@@ -498,7 +501,7 @@ struct Unwritten {
     partial: PartialOutput,
     stream_index: i32,
     audio_stream_index: i32,
-    opened_audio: Option<OpenedAac>,
+    opened_audio: Option<OpenedAudioEncoder>,
     copied_audio: Option<AVRational>,
 }
 
@@ -507,23 +510,24 @@ impl Unwritten {
     /// adds the streams.
     ///
     /// # Errors
-    /// As [`Mp4Muxer::open_streams`], short of the header.
+    /// As [`Muxer::open_streams`], short of the header.
     fn open(
         path: &Path,
+        container: Container,
         video: VideoStream,
         audio: Option<AudioStream>,
     ) -> Result<Self, EncodeError> {
         let final_path = path.to_owned();
         let partial = PartialOutput::claim(&final_path)?;
-        let mut format = partial.open_muxer()?;
+        let mut format = partial.open_muxer(container)?;
         let global_header =
             format.oformat().flags & i32::try_from(ffi::AVFMT_GLOBALHEADER).unwrap_or(0) != 0;
-        // Parameter sets exist only in the sample description; a container without one would get a
-        // stream no decoder can start.
+        // Parameter sets exist only in the header; a container without one would get a stream no
+        // decoder can start. Every export container has one, so this only guards the muxer table.
         if !global_header {
-            return Err(EncodeError::Adapter(
-                "these exports write only to containers with global headers, such as MP4".into(),
-            ));
+            return Err(EncodeError::Adapter(format!(
+                "the muxer for {container} has no global header"
+            )));
         }
         let stream_index;
         {
@@ -531,11 +535,11 @@ impl Unwritten {
             stream.set_time_base(video.time_base);
             let (codec_id, tag) = (video.parameters.codec_id, video.parameters.codec_tag);
             stream.set_codecpar(video.parameters);
-            // Another container's tag need not be MP4's; HEVC is `hvc1` unless a copy says
-            // otherwise.
+            // Another container's tag need not be this one's; in MP4 and MOV HEVC is `hvc1`
+            // unless a copy says otherwise.
             alpha2_ffmpeg_bridge::set_stream_codec_tag(
                 &mut stream,
-                crate::convert::mp4_codec_tag(codec_id, tag, video.copied),
+                crate::convert::container_codec_tag(container, codec_id, tag, video.copied),
             );
             stream_index = stream.index;
         }
@@ -544,7 +548,13 @@ impl Unwritten {
         let mut audio_stream_index = 0_i32;
         match audio {
             Some(AudioStream::Encode(config)) => {
-                let opened = open_aac(config, global_header)?;
+                if !container.offers_audio(config.codec.model()) {
+                    return Err(EncodeError::Adapter(format!(
+                        "{container} does not offer audio codec {}",
+                        config.codec.as_str()
+                    )));
+                }
+                let opened = open_audio_encoder(config, global_header)?;
                 let mut stream = format.new_stream();
                 stream.set_time_base(opened.encoder_time_base);
                 stream.set_codecpar(opened.encoder.extract_codecpar());
@@ -561,7 +571,7 @@ impl Unwritten {
                 stream.set_codecpar(parameters);
                 alpha2_ffmpeg_bridge::set_stream_codec_tag(
                     &mut stream,
-                    crate::convert::mp4_codec_tag(codec_id, tag, true),
+                    crate::convert::container_codec_tag(container, codec_id, tag, true),
                 );
                 audio_stream_index = stream.index;
                 copied_audio = Some(time_base);
@@ -594,7 +604,7 @@ impl Unwritten {
         stream_time_base: AVRational,
         audio_stream_time_base: AVRational,
         pending_header: Option<PendingHeader>,
-    ) -> Result<Mp4Muxer, EncodeError> {
+    ) -> Result<Muxer, EncodeError> {
         // Bound after `partial`, `format` is dropped before it when the thread cannot start.
         let Self {
             final_path,
@@ -607,21 +617,17 @@ impl Unwritten {
         } = self;
         let partial_path = partial.path().to_owned();
         // Started after the header: the stream index and container time base it rescales into exist
-        // only then. A deferred header is the exception ([`Mp4Muxer::open_deferred`]).
+        // only then. A deferred header is the exception ([`Muxer::open_deferred`]).
         let audio = match (opened_audio, copied_audio) {
             (Some(opened), _) => Some(MuxedAudioTrack::Encoded(MuxedAudio {
-                input: AacInput::new(
-                    opened.project_rate,
-                    opened.encoder_rate,
-                    opened.channels,
-                    opened.frame_size,
-                ),
+                input: opened.input,
                 thread: spawn_audio_encoder(AudioEncoderConfig {
                     encoder: opened.encoder,
                     stream_index: audio_stream_index,
                     encoder_time_base: opened.encoder_time_base,
                     stream_time_base: audio_stream_time_base,
                     sample_rate: opened.encoder_rate,
+                    sample_format: opened.sample_format,
                 })?,
             })),
             (None, Some(source_time_base)) => Some(MuxedAudioTrack::Copied {
@@ -632,7 +638,7 @@ impl Unwritten {
             (None, None) => None,
         };
         let partial_lock = partial.keep();
-        Ok(Mp4Muxer {
+        Ok(Muxer {
             final_path,
             partial_path,
             _partial_lock: partial_lock,
@@ -650,62 +656,13 @@ impl Unwritten {
     }
 }
 
-/// What a deferred header ([`Mp4Muxer::open_deferred`]) still needs.
+/// What a deferred header ([`Muxer::open_deferred`]) still needs.
 struct PendingHeader {
     /// The time base the audio thread rescales into until the header fixes
     /// the stream's, when there is an encoded audio stream.
     audio_time_base: Option<AVRational>,
-}
-
-/// The AAC encoder a muxed hardware export opens, before it has a stream.
-struct OpenedAac {
-    encoder: AVCodecContext,
-    encoder_time_base: AVRational,
-    /// The rate the audio arrives at.
-    project_rate: u32,
-    /// The rate it is encoded at ([`encoder_sample_rate`]).
-    encoder_rate: u32,
-    channels: usize,
-    frame_size: usize,
-}
-
-/// Opens the AAC encoder for a muxed hardware export.
-fn open_aac(config: AacStreamConfig, global_header: bool) -> Result<OpenedAac, EncodeError> {
-    let AacStreamConfig {
-        sample_rate,
-        channels,
-        bit_rate,
-    } = config;
-    let codec = AVCodec::find_encoder(ffi::AV_CODEC_ID_AAC)
-        .ok_or_else(|| EncodeError::Adapter("aac encoder is unavailable".into()))?;
-    let encoder_rate = encoder_sample_rate(&codec, sample_rate);
-    let rate = i32::try_from(encoder_rate)
-        .map_err(|_| EncodeError::Adapter("audio sample rate is out of range".into()))?;
-    let encoder_time_base = ra(1, rate);
-    let mut encoder = AVCodecContext::new(&codec);
-    encoder.set_sample_rate(rate);
-    encoder.set_sample_fmt(ffi::AV_SAMPLE_FMT_FLTP);
-    encoder.set_ch_layout(AVChannelLayout::from_nb_channels(i32::from(channels)).into_inner());
-    encoder.set_time_base(encoder_time_base);
-    encoder.set_bit_rate(i64::from(bit_rate));
-    if global_header {
-        encoder.set_flags(
-            encoder.flags | i32::try_from(ffi::AV_CODEC_FLAG_GLOBAL_HEADER).unwrap_or(0),
-        );
-    }
-    encoder.open(None).map_err(encode_adapter_error)?;
-    let frame_size = usize::try_from(encoder.frame_size)
-        .ok()
-        .filter(|size| *size > 0)
-        .ok_or_else(|| EncodeError::Adapter("AAC encoder has no fixed frame size".into()))?;
-    Ok(OpenedAac {
-        encoder,
-        encoder_time_base,
-        project_rate: sample_rate,
-        encoder_rate,
-        channels: usize::from(channels),
-        frame_size,
-    })
+    /// The container the header is written for.
+    container: Container,
 }
 
 /// Parameter sets as a sample description takes them: for Annex B (H.264

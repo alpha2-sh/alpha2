@@ -181,8 +181,8 @@ pub struct RasterScratch {
     cursor: Vec<usize>,
 }
 
-/// [`Run`] as the scratch keeps it (private types cannot be in a public
-/// struct's `Debug`).
+/// A [`Run`] as the scratch stores it: kind (0 constant, 1 pixels), `x0`,
+/// `x1`, and the value or offset.
 #[derive(Clone, Copy, Debug)]
 struct RunSlot(u8, usize, usize, usize);
 

@@ -146,7 +146,7 @@ enum Ranges {
 pub struct Measured {
     /// The subpath, in its own space.
     pub subpath: Subpath,
-    /// The space lengths are measured in: the subpath's points through it.
+    /// Maps the subpath's points into the space its lengths are measured in.
     pub measure: Affine,
 }
 

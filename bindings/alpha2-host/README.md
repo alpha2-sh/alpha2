@@ -1,6 +1,6 @@
 # alpha2-host
 
-`alpha2-host` is the native alpha2 renderer: a program that renders alpha2 projects on the GPU and encodes them to MP4 files with FFmpeg 8. It exports one project from the command line (`alpha2-host export`), or serves export requests over standard input and output (`alpha2-host serve`), which is how [`@alpha2-sh/node`](https://www.npmjs.com/package/@alpha2-sh/node) and programs in other languages use it.
+`alpha2-host` is the native alpha2 renderer: a program that renders alpha2 projects on the GPU and encodes them to MP4, MOV, Matroska or WebM files with FFmpeg 8. It exports one project from the command line (`alpha2-host export`), or serves export requests over standard input and output (`alpha2-host serve`), which is how [`@alpha2-sh/node`](https://www.npmjs.com/package/@alpha2-sh/node) and programs in other languages use it.
 
 - [Native archives and commands](https://github.com/alpha2-sh/alpha2/blob/main/docs/native.md)
 - [Host protocol](https://github.com/alpha2-sh/alpha2/blob/main/docs/host-protocol.md)

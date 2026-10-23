@@ -255,6 +255,7 @@ fn an_encode_sink_converts_red_green_and_blue_planes_into_its_matrix() {
                 rate_control: VideoRateControl::bitrate(4_000_000, BitrateMode::Variable).unwrap(),
                 codec: NativeVideoCodec::Mpeg4Part2,
                 display: crate::VideoDisplay::default(),
+                container: alpha2_media::Container::Mp4,
             },
         )
         .expect("encoder");

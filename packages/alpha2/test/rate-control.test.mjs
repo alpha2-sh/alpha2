@@ -132,14 +132,24 @@ test("nothing in the package names a quality level or hands mediabunny one", () 
 });
 
 test("the mediabunny sink refuses a codec without resolved numbers", async () => {
-  const { MediabunnyMp4Sink } = await import("../dist/mediabunny.js");
+  const { MediabunnySink } = await import("../dist/mediabunny.js");
   const memory = { kind: "memory", maxBytes: 1 << 20 };
   assert.throws(
-    () => new MediabunnyMp4Sink({ videoCodec: "avc", destination: memory }),
+    () =>
+      new MediabunnySink({
+        container: "mp4",
+        videoCodec: "avc",
+        destination: memory,
+      }),
     /videoRateControl is required/,
   );
   assert.throws(
-    () => new MediabunnyMp4Sink({ audioCodec: "aac", destination: memory }),
+    () =>
+      new MediabunnySink({
+        container: "mp4",
+        audioCodec: "aac",
+        destination: memory,
+      }),
     /audioBitrate is required/,
   );
 });

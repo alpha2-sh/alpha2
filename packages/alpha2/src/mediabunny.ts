@@ -16,12 +16,16 @@ import {
   Input,
   type InputTrack,
   type InputVideoTrack,
+  MkvOutputFormat,
+  MovOutputFormat,
   Mp4OutputFormat,
   Output,
+  type OutputFormat,
   Quality,
   VideoSample,
   VideoSampleSink,
   VideoSampleSource,
+  WebMOutputFormat,
   type Source,
 } from "mediabunny";
 
@@ -54,6 +58,7 @@ import type {
 import type { BrowserAudioBlockSink } from "./audio.js";
 import type { BrowserEncodeSink, ExportedFrame } from "./exporter.js";
 import type { VideoRateControl } from "./rate-control.js";
+import { type ExportContainer, resolveExportFormat } from "./containers.js";
 import type { PositionedWrite } from "./export-destination.js";
 import { ExportFailureError } from "./export-failure.js";
 
@@ -1433,9 +1438,14 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
 }
 
 /**
- * Options for {@link MediabunnyMp4Sink}. At least one of `videoCodec` and `audioCodec` is required.
+ * Options for {@link MediabunnySink}. At least one of `videoCodec` and `audioCodec` is required.
  */
-export interface MediabunnyMp4SinkOptions {
+export interface MediabunnySinkOptions {
+  /**
+   * The file format. The codecs must be ones it offers (see `alpha2/containers`): MOV takes no VP9,
+   * AV1 or Opus, and WebM takes only VP9, AV1 and Opus.
+   */
+  readonly container: ExportContainer;
   /** Adds a video track in this codec; requires `videoRateControl`. */
   readonly videoCodec?: "avc" | "hevc" | "vp9" | "av1";
   /**
@@ -1480,20 +1490,21 @@ export interface MediabunnyMp4SinkOptions {
    */
   readonly audioResampler?: AudioResamplerBinding;
   /**
-   * Where the file goes. `stream` writes a plain MP4 (`moov` at the end, no fast start) through a
-   * seekable positioned stream as it is muxed (see `WritableFileDestination` in
-   * `alpha2/export-destination`), so no part of the encoded output accumulates in memory; the
-   * stream is closed (committed) only once {@link MediabunnyMp4Sink.finish} has finished the file,
-   * and aborted (discarded) when the export fails or is cancelled. `memory` keeps it in an
-   * `ArrayBuffer`, for small outputs only: `maxBytes` is the most the output may reach, which the
-   * caller sizes (and budgets for, see `memoryOutputPeakBytes`) before starting; past it the export
-   * fails with `RESOURCE_LIMIT` instead of growing.
+   * Where the file goes. `stream` writes through a seekable positioned stream as it is muxed (see
+   * `WritableFileDestination` in `alpha2/export-destination`): MP4 and MOV put `moov` at the end,
+   * without fast start, and MKV and WebM patch sizes and Cues in place, so no part of the encoded
+   * output accumulates in memory; the stream is closed (committed) only once
+   * {@link MediabunnySink.finish} has finished the file, and aborted (discarded) when the export
+   * fails or is cancelled. `memory` keeps it in an `ArrayBuffer`, for small outputs only:
+   * `maxBytes` is the most the output may reach, which the caller sizes (and budgets for, see
+   * `memoryOutputPeakBytes`) before starting; past it the export fails with `RESOURCE_LIMIT`
+   * instead of growing.
    */
-  readonly destination: Mp4Destination;
+  readonly destination: ExportDestination;
 }
 
-/** Where a {@link MediabunnyMp4Sink} writes. */
-export type Mp4Destination =
+/** Where a {@link MediabunnySink} writes. */
+export type ExportDestination =
   | {
       readonly kind: "stream";
       readonly writable: WritableStream<PositionedWrite>;
@@ -1502,7 +1513,7 @@ export type Mp4Destination =
 
 /**
  * The mediabunny quality a video track encodes at for the engine's rate control: what
- * {@link MediabunnyMp4Sink} configures its encoder with.
+ * {@link MediabunnySink} configures its encoder with.
  */
 export function videoEncoderQuality(rate: VideoRateControl): Quality {
   return new Quality({
@@ -1514,7 +1525,7 @@ export function videoEncoderQuality(rate: VideoRateControl): Quality {
 
 /**
  * Whether this browser can encode `codec` video at `width`x`height` with `rate`, asked with the
- * configurations {@link MediabunnyMp4Sink} would try. WebCodecs leaves the codecs to the browser
+ * configurations {@link MediabunnySink} would try. WebCodecs leaves the codecs to the browser
  * (Chrome on Linux encodes no HEVC, for one), so an export asks before it opens its encoder.
  */
 export async function canEncodeVideoTrack(
@@ -1535,7 +1546,10 @@ export async function canEncodeVideoTrack(
 /** How a browser's video encoder is opened: see {@link videoEncoderLatencyMode}. */
 export type VideoEncoderLatencyMode = "quality" | "realtime";
 
-/** The profiles mediabunny opens (H.264 High, HEVC Main), at a level for the probe's frames. */
+/**
+ * The profiles mediabunny opens (H.264 High, HEVC Main, VP9 profile 0, AV1 Main), at a level for
+ * the probe's frames.
+ */
 const LATENCY_PROBE_CODECS = {
   avc: "avc1.64001e",
   hevc: "hev1.1.6.L93.B0",
@@ -1554,7 +1568,7 @@ const latencyModes = new Map<
 >();
 
 /**
- * The latency mode {@link MediabunnyMp4Sink} opens `codec`'s encoder with: `"realtime"` only where a
+ * The latency mode {@link MediabunnySink} opens `codec`'s encoder with: `"realtime"` only where a
  * quality-mode encoder puts out nothing (Safari 27's H.264) and a realtime one works. Measured once
  * per codec.
  */
@@ -1655,7 +1669,7 @@ async function encoderPutsOut(
 }
 
 /**
- * The sample rates each audio codec a {@link MediabunnyMp4Sink} writes can carry, lowest first:
+ * The sample rates each audio codec a {@link MediabunnySink} writes can carry, lowest first:
  * AAC's MPEG-4 rates up to the project limit, and Opus's.
  */
 const ENCODER_SAMPLE_RATES = {
@@ -1670,7 +1684,7 @@ const ENCODER_SAMPLE_RATES = {
  * The rate this browser encodes `codec` audio of a project at `sampleRate` with, by the rule a
  * native host follows: the project rate when the browser's encoder takes it, else the lowest rate
  * the codec carries above it that the encoder takes, else the highest below it; `null` when the
- * encoder takes none. Pass it to {@link MediabunnyMp4Sink} as `audioSampleRate`, so every project
+ * encoder takes none. Pass it to {@link MediabunnySink} as `audioSampleRate`, so every project
  * rate exports where the browser encodes the codec at all.
  */
 export async function audioEncoderSampleRate(
@@ -1805,8 +1819,26 @@ class EncoderRateConverter {
   }
 }
 
-/** What a finished {@link MediabunnyMp4Sink} produced. */
-export type Mp4Output =
+/**
+ * The muxer for `container`. MP4 and MOV go without fast start and MKV and WebM are not
+ * append-only, so the payload is never held in memory or rewritten: the muxer seeks back only to
+ * patch headers.
+ */
+function outputFormat(container: ExportContainer): OutputFormat {
+  switch (container) {
+    case "mp4":
+      return new Mp4OutputFormat({ fastStart: false });
+    case "mov":
+      return new MovOutputFormat({ fastStart: false });
+    case "mkv":
+      return new MkvOutputFormat({ appendOnly: false });
+    case "webm":
+      return new WebMOutputFormat({ appendOnly: false });
+  }
+}
+
+/** What a finished {@link MediabunnySink} produced. */
+export type ExportOutput =
   | { readonly kind: "stream"; readonly bytes: number }
   | { readonly kind: "memory"; readonly buffer: ArrayBuffer };
 
@@ -1824,16 +1856,16 @@ export interface AppliedVideoRateControl {
  * The sink is the file: its `finish` finalizes every track, which suits one runner, or a host that
  * writes both tracks itself and finishes once. When two runners share the file (`exportToSink` for
  * the video and `renderOfflineAudio` for the audio, at once or one after the other), give each its
- * track instead, {@link MediabunnyMp4Sink.videoTrack} and {@link MediabunnyMp4Sink.audioTrack}: a
+ * track instead, {@link MediabunnySink.videoTrack} and {@link MediabunnySink.audioTrack}: a
  * runner's `finish` then ends its own track, and the file is finalized when every configured track
  * has ended. Either track's `abort` discards the whole file, and the other runner's next write
  * fails.
  *
- * The constructor throws `RangeError` when no track is configured, a codec lacks its rate, a
- * memory destination's `maxBytes` is not a positive safe integer, or `stallTimeoutMs` is out of
- * range.
+ * The constructor throws `RangeError` when no track is configured, the container does not offer a
+ * codec (an `ExportFormatError`), a codec lacks its rate, a memory destination's `maxBytes` is not
+ * a positive safe integer, or `stallTimeoutMs` is out of range.
  */
-export class MediabunnyMp4Sink
+export class MediabunnySink
   implements BrowserEncodeSink, BrowserAudioBlockSink
 {
   readonly #target: BufferTarget | StreamTarget;
@@ -1868,7 +1900,18 @@ export class MediabunnyMp4Sink
   #videoTrack?: BrowserEncodeSink;
   #audioTrack?: BrowserAudioBlockSink;
 
-  constructor(options: MediabunnyMp4SinkOptions) {
+  constructor(options: MediabunnySinkOptions) {
+    // Before anything is opened or locked: a pair the container does not offer is the caller's
+    // mistake, not a failed export.
+    resolveExportFormat({
+      container: options.container,
+      ...(options.videoCodec === undefined
+        ? {}
+        : { videoCodec: options.videoCodec }),
+      ...(options.audioCodec === undefined
+        ? {}
+        : { audioCodec: options.audioCodec }),
+    });
     const destination = options.destination;
     if (destination.kind === "memory") {
       if (
@@ -1915,8 +1958,7 @@ export class MediabunnyMp4Sink
       };
     }
     this.#output = new Output({
-      // Plain MP4 without fast start, so the payload is never held in memory or rewritten.
-      format: new Mp4OutputFormat({ fastStart: false }),
+      format: outputFormat(options.container),
       target: this.#target,
     });
     this.#hasVideo = options.videoCodec !== undefined;
@@ -1952,7 +1994,7 @@ export class MediabunnyMp4Sink
   }
 
   /** Adds the tracks once the video latency mode is known, and starts the file. */
-  async #open(options: MediabunnyMp4SinkOptions): Promise<void> {
+  async #open(options: MediabunnySinkOptions): Promise<void> {
     const codec = options.videoCodec;
     const rate = options.videoRateControl;
     if (codec !== undefined && rate !== undefined) {
@@ -2269,7 +2311,7 @@ export class MediabunnyMp4Sink
    * The finished output: its length for a stream, the bytes in memory. Null until {@link finish}
    * resolves.
    */
-  get output(): Mp4Output | null {
+  get output(): ExportOutput | null {
     if (!this.#finished) return null;
     if (this.#target instanceof BufferTarget) {
       const buffer = this.#target.buffer;

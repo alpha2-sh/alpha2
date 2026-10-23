@@ -15,7 +15,9 @@ use std::ffi::CStr;
 ///
 /// Encoders without one are held to a constant rate by the generic
 /// `minrate`/`maxrate`/`bufsize` alone, which is how libavcodec's own
-/// encoders (`mpeg4` among them) implement it.
+/// encoders (`mpeg4` among them) implement it, and which `libvpx` takes as
+/// its own CBR switch. `libsvtav1` sets it through `svtav1-params` instead
+/// ([`mechanism_request`]).
 pub(crate) fn constant_mode_option(encoder_name: &str) -> Option<(&'static CStr, &'static CStr)> {
     if encoder_name.ends_with("_vulkan") {
         Some((c"rc_mode", c"cbr"))
@@ -65,13 +67,13 @@ pub(crate) fn rate_control_options(
     match rate.mode {
         BitrateMode::Variable => options,
         BitrateMode::Constant => {
-            let bitrate = i64::try_from(rate.bitrate).unwrap_or(i64::MAX);
-            let options = options
-                .set_int(c"maxrate", bitrate, 0)
-                .set_int(c"minrate", bitrate, 0)
-                .set_int(c"bufsize", bitrate, 0);
-            match constant_mode_option(encoder_name) {
-                Some((key, value)) => options.set(key, value, 0),
+            match mechanism_request(
+                encoder_name,
+                RateControlMechanism::ConstantBitrate,
+                rate.bitrate,
+                0,
+            ) {
+                Some(request) => request.dictionary(options),
                 None => options,
             }
         }
@@ -134,11 +136,10 @@ impl MechanismRequest {
         parts.join(" ")
     }
 
-    /// The options as a dictionary to open a context with.
+    /// The options added to a dictionary to open a context with.
     pub fn dictionary(&self, mut options: AVDictionary) -> AVDictionary {
         for (key, value) in &self.options {
-            let value = std::ffi::CString::new(value.as_str()).unwrap_or_default();
-            options = options.set(key, &value, 0);
+            options = crate::convert::set_encoder_option(options, key, value);
         }
         options
     }
@@ -208,6 +209,18 @@ pub(crate) fn mechanism_request(
         "libavcodec"
     };
     Some(match (family, mechanism) {
+        // SVT-AV1 has a constant rate only in its low-delay prediction structure, and refuses a
+        // maximum bitrate outside its quantizer mode, which `FFmpeg` would pass on from `maxrate`.
+        // So the switch is spelled in its own parameters, against the same one-second buffer.
+        ("crf", RateControlMechanism::ConstantBitrate) if encoder_name == "libsvtav1" => {
+            MechanismRequest {
+                options: vec![
+                    (c"bufsize", bitrate.to_string()),
+                    (c"svtav1-params", "rc=2:pred-struct=1".to_owned()),
+                ],
+                bit_rate: target,
+            }
+        }
         (_, RateControlMechanism::ConstantBitrate) => constant(
             constant_mode_option(encoder_name)
                 .map(|(key, value)| (key, value.to_str().unwrap_or_default())),

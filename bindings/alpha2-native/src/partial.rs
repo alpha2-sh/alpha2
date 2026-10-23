@@ -16,7 +16,7 @@ use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 
 use alpha2_ffmpeg_bridge::OutputFile;
-use alpha2_media::EncodeError;
+use alpha2_media::{Container, EncodeError};
 
 /// The words an output refused because a live export writes its partial file
 /// ([`EncodeError::OutputInUse`]) starts with.
@@ -202,20 +202,21 @@ impl PartialOutput {
         &self.path
     }
 
-    /// Opens the partial file for an `FFmpeg` muxer to write. Declared after
-    /// `self`, the output closes the file before `self` removes it.
+    /// Opens the partial file for the `FFmpeg` muxer that writes `container`.
+    /// The output must drop before `self` (a local declared after it, or a
+    /// field declared before it), so the file is closed before `self` removes it.
     ///
     /// # Errors
     /// When the path is not UTF-8 or has a NUL byte, or the muxer cannot be
     /// created.
-    pub(crate) fn open_muxer(&self) -> Result<OutputFile, EncodeError> {
+    pub(crate) fn open_muxer(&self, container: Container) -> Result<OutputFile, EncodeError> {
         let text = self
             .path
             .to_str()
             .ok_or_else(|| EncodeError::Output("output path is not UTF-8".into()))?;
         let name = CString::new(text)
             .map_err(|_| EncodeError::Output("output path contains a NUL byte".into()))?;
-        OutputFile::create(&name).map_err(output_error)
+        OutputFile::create(&name, crate::convert::muxer_name(container)).map_err(output_error)
     }
 
     /// Opens the partial file for this process to write.

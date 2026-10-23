@@ -9,8 +9,10 @@
 //! Every result is the same bits on every target. Geometry is `f64`,
 //! trigonometry is `libm`'s, arc lengths and flattening use only `+ - * /`
 //! and `sqrt`, and coverage is accumulated in scalar `f32` in a fixed order.
-//! Stroke expansion is kurbo's; its few transcendental calls have matched on
-//! every platform measured, and shared hash goldens catch a divergence.
+//! Stroke expansion is kurbo's, and its transcendental calls are `libm`'s
+//! too, unless another crate in the build turns on kurbo's `std`: then
+//! outlines and scene keys can differ in the last bits, and the shared hash
+//! goldens compare coverage only.
 
 pub mod affine;
 pub mod arclen;

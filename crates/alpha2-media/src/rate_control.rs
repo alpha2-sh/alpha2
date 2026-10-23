@@ -304,18 +304,23 @@ pub const MIN_VIDEO_BITRATE: u64 = 250_000;
 ///
 /// HEVC and AV1 were measured on NVENC against `h264_nvenc` at equal PSNR-Y
 /// (0.61 to 0.71 and 0.56 to 0.61 over 40 to 48 dB), MPEG-4 Part 2 on `mpeg4` against
-/// `h264_vulkan` (3.3x at 40 dB falling to 2.1x at 48). VP9 is not
-/// measured: neither measured runtime links a VP9 encoder. It is set to
-/// HEVC's factor, a codec of the same generation, and it is reachable: the
-/// browser exporter encodes VP9 through `WebCodecs`, and a native host whose
-/// `FFmpeg` has `libvpx-vp9` encodes it too. Its levels therefore rest on this
-/// assumption until VP9 is measured as HEVC and AV1 were.
+/// `h264_vulkan` (3.3x at 40 dB falling to 2.1x at 48). The software encoders the
+/// pinned SDK links were measured the same way, against `h264_nvenc` on the colour
+/// clip at 1920x816, at the PSNR-Y `h264_nvenc` reaches at each level's H.264 rate:
+/// `libvpx-vp9` (`cpu-used` 4) needs 0.60x at `very-low` rising to 0.87x at
+/// `very-high`, so VP9 is the middle of that, 0.75. `libsvtav1` (preset 8) needs
+/// 0.47x rising to 0.93x, where `av1_nvenc` on the same frames needs 0.49x to 0.61x;
+/// one AV1 factor serves both encoders, so it is the higher of their middles, 0.70, which
+/// gives `av1_nvenc` more than it needs rather than `libsvtav1` far less. The same runs put HEVC
+/// at 0.60x to 0.73x, in line with its factor. A browser's `WebCodecs` VP9 and AV1
+/// encoders take the same factors.
 #[must_use]
 pub const fn codec_factor(codec: VideoCodec) -> f64 {
     match codec {
         VideoCodec::H264 => 1.0,
-        VideoCodec::Hevc | VideoCodec::Vp9 => 0.65,
-        VideoCodec::Av1 => 0.58,
+        VideoCodec::Hevc => 0.65,
+        VideoCodec::Vp9 => 0.75,
+        VideoCodec::Av1 => 0.70,
         VideoCodec::Mpeg4Part2 => 2.7,
     }
 }
@@ -386,9 +391,9 @@ pub fn resolve_video_rate_control(
 
 /// Audio codecs the engine resolves a rate for.
 ///
-/// AAC is the only one the native sinks encode. Opus is here because the
-/// browser app falls back to it where a browser cannot encode AAC, and that
-/// sink must receive a number from the engine like every other.
+/// AAC and Opus. The native sinks encode Opus with `libopus`, the browser
+/// with `WebCodecs`; which containers offer which is
+/// [`Container::audio_codecs`](crate::Container::audio_codecs).
 #[derive(Copy, Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AudioCodec {

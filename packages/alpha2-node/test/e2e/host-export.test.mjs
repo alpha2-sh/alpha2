@@ -89,7 +89,25 @@ function assertDeclaredPerformance(performance, path) {
 test("the client reports the host's encode capabilities", async () => {
   const capabilities = await client.getCapabilities();
   assert.equal(capabilities.status, "ready");
-  assert.equal(capabilities.capabilities.encode.container, "mp4");
+  // The containers are the engine's policy, as the shared corpus pins it.
+  const corpus = JSON.parse(
+    await readFile(
+      join(root, "tests", "cases", "export-container-corpus.json"),
+      "utf8",
+    ),
+  );
+  assert.deepEqual(
+    capabilities.capabilities.encode.containers,
+    corpus.containers.map((entry) => ({
+      id: entry.id,
+      extensions: entry.extensions,
+      video: entry.video,
+      audio: entry.audio,
+      defaultVideoCodec: entry.defaultVideoCodec,
+      defaultAudioCodec: entry.defaultAudioCodec,
+    })),
+  );
+  assert.equal("container" in capabilities.capabilities.encode, false);
   assert.ok(
     capabilities.capabilities.encode.video.some(
       (codec) => codec.id === "mpeg4-part2",
@@ -632,6 +650,93 @@ test("the host conforms media before it renders, and says what an export read", 
   }
 });
 
+/** The EBML DocType a Matroska file names in its header, or null for another file. */
+function matroskaDocType(bytes) {
+  if (!bytes.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3])))
+    return null;
+  const header = bytes.subarray(0, 64).toString("latin1");
+  if (header.includes("webm")) return "webm";
+  return header.includes("matroska") ? "matroska" : null;
+}
+
+test("an export writes the container its output names", async () => {
+  const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-e2e-"));
+  const vp9 = encode.video.some((codec) => codec.id === "vp9");
+  try {
+    for (const name of ["export.mov", "export.mkv", "export.webm"]) {
+      const webm = name.endsWith(".webm");
+      if (webm && !vp9) {
+        // A runtime without a VP9 encoder refuses WebM's default before anything opens.
+        await assert.rejects(
+          client.exportProject({
+            project,
+            assets: { "image-source": assetPath },
+            startTicks: 0,
+            endTicks: 5_000,
+            frameRate: { num: 24, den: 1 },
+            includeAudio: false,
+            output: join(scratch, name),
+          }),
+          { code: "INVALID_INPUT" },
+        );
+        continue;
+      }
+      let result;
+      const output = join(scratch, name);
+      await client.exportProject({
+        project,
+        assets: { "image-source": assetPath },
+        startTicks: 0,
+        endTicks: 5_000,
+        frameRate: { num: 24, den: 1 },
+        includeAudio: false,
+        // MOV and Matroska take the reference encoder every runtime has; WebM its own default.
+        ...(webm ? {} : { videoCodec: "mpeg4-part2" }),
+        output,
+        onResult: (value) => {
+          result = value;
+        },
+      });
+      const bytes = await readFile(output);
+      if (name.endsWith(".mov")) {
+        assert.equal(bytes.subarray(4, 8).toString("ascii"), "ftyp");
+        assert.equal(bytes.subarray(8, 12).toString("ascii"), "qt  ");
+        assert.equal(result?.container, "mov");
+      } else if (webm) {
+        assert.equal(matroskaDocType(bytes), "webm");
+        assert.equal(result?.container, "webm");
+        assert.equal(result?.videoCodec, "vp9");
+      } else {
+        assert.equal(matroskaDocType(bytes), "matroska");
+        assert.equal(result?.container, "mkv");
+      }
+      await assert.rejects(stat(partialOf(output)), { code: "ENOENT" });
+    }
+    // A container and an extension that disagree are refused before anything is written.
+    const mismatched = join(scratch, "mismatched.mp4");
+    await assert.rejects(
+      client.exportProject({
+        project,
+        assets: { "image-source": assetPath },
+        startTicks: 0,
+        endTicks: 5_000,
+        frameRate: { num: 24, den: 1 },
+        includeAudio: false,
+        container: "mov",
+        output: mismatched,
+      }),
+      (error) => {
+        assert.equal(error.code, "INVALID_INPUT");
+        assert.match(error.message, /a mov output must end in \.mov/);
+        return true;
+      },
+    );
+    await assert.rejects(stat(mismatched), { code: "ENOENT" });
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+});
+
 test("an export that names no codec gets H.264, or is refused without it", async () => {
   const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-e2e-"));
   const output = join(scratch, "default-codec.mp4");
@@ -998,7 +1103,8 @@ const heldImageExport = (output, frames) => ({
   videoCodec: "mpeg4-part2",
   output,
 });
-const partialOf = (output) => output.replace(/\.mp4$/, ".alpha2-partial.mp4");
+const partialOf = (output) =>
+  output.replace(/\.([^./\\]+)$/, ".alpha2-partial.$1");
 
 test("an export aborted mid-frame leaves neither its output nor its partial file, and the same path exports again", async () => {
   const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-e2e-abort-"));

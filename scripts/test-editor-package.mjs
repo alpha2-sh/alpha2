@@ -113,7 +113,7 @@ try {
   // @types/dom-webcodecs and use `Disposable` (the `esnext.disposable` library).
   await writeFile(
     join(dir, "mediabunny-consumer.ts"),
-    `import * as wasm from 'alpha2/wasm';\nimport { audioEncoderSampleRate, MediabunnyMp4Sink } from 'alpha2/mediabunny';\nconst audioSampleRate = await audioEncoderSampleRate('aac', { sampleRate: 22050, numberOfChannels: 2, bitrate: 128000 });\nconst sink = new MediabunnyMp4Sink({ audioCodec: 'aac', audioBitrate: 128000, audioSampleRate: audioSampleRate ?? undefined, audioResampler: wasm, destination: { kind: 'memory', maxBytes: 1 << 20 } });\nvoid sink.finish();\n`,
+    `import * as wasm from 'alpha2/wasm';\nimport { audioEncoderSampleRate, MediabunnySink } from 'alpha2/mediabunny';\nconst audioSampleRate = await audioEncoderSampleRate('aac', { sampleRate: 22050, numberOfChannels: 2, bitrate: 128000 });\nconst sink = new MediabunnySink({ container: 'mp4', audioCodec: 'aac', audioBitrate: 128000, audioSampleRate: audioSampleRate ?? undefined, audioResampler: wasm, destination: { kind: 'memory', maxBytes: 1 << 20 } });\nvoid sink.finish();\n`,
   );
   await typecheck("mediabunny-consumer.ts", {
     lib: ["ES2022", "ESNext.Disposable", "DOM", "DOM.Iterable"],

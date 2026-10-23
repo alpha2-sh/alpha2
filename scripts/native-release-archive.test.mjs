@@ -446,6 +446,9 @@ function fakeMacRelease(scratch) {
     "sdk/licenses/FFmpeg",
     "sdk/licenses/zlib",
     "sdk/licenses/dav1d",
+    "sdk/licenses/opus",
+    "sdk/licenses/libvpx",
+    "sdk/licenses/SVT-AV1",
   ])
     mkdirSync(join(dir.startsWith("sdk") ? scratch : ws, dir), {
       recursive: true,
@@ -460,7 +463,7 @@ function fakeMacRelease(scratch) {
   ])
     copyFileSync(join(root, file), join(ws, file));
   chmodSync(join(ws, "scripts/build-native-release.sh"), 0o755);
-  for (const name of ["FFmpeg", "zlib", "dav1d"])
+  for (const name of ["FFmpeg", "zlib", "dav1d", "opus", "libvpx", "SVT-AV1"])
     writeFileSync(join(sdk, "licenses", name, "LICENSE"), "");
   for (const lib of ["libavcodec.62.dylib", "libswscale.9.dylib"])
     writeFileSync(join(sdk, "lib", lib), "");

@@ -1,9 +1,9 @@
 //! Arc lengths of path segments, from `+ - * /` and `sqrt` alone.
 //!
-//! kurbo's arc length goes through `hypot`, a platform library call; these
-//! integrate the speed with a fixed 16-point Gauss-Legendre rule, halving a
-//! segment while the halves disagree with the whole, so the result is the
-//! same bits everywhere.
+//! kurbo's arc length calls `powi` and `powf`, which are the platform's
+//! math library when kurbo's `std` is on; these integrate the speed with a
+//! fixed 16-point Gauss-Legendre rule, halving a segment while the halves
+//! disagree with the whole, so the result is the same bits everywhere.
 
 use kurbo::{ParamCurve, ParamCurveDeriv, PathSeg, Vec2};
 
@@ -114,7 +114,7 @@ pub fn parameter_at(segment: &PathSeg, distance: f64, total: f64) -> f64 {
     t
 }
 
-/// The point at parameter `t`, by de Casteljau, as kurbo evaluates it.
+/// The point at parameter `t`, as kurbo evaluates it (Bernstein form, `+ - *` only).
 #[must_use]
 pub fn point_at(segment: &PathSeg, t: f64) -> kurbo::Point {
     segment.eval(t)

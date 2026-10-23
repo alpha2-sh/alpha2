@@ -7,8 +7,8 @@ use alpha2_time::MediaTime;
 
 /// Evaluates visual properties at a timestamp: a clip's at timeline time,
 /// a transform node's at composition time. `aspect` is the width over the
-/// height of the space the position is normalized in (the canvas), which
-/// a position moving along a spatial curve needs to measure it.
+/// height of the space the position is normalized in (the canvas), in which
+/// a position moving along a spatial curve is measured.
 ///
 /// An overshooting timing curve can carry a value past its keyframes. Opacity
 /// is clamped to its domain, `0..=1`; position, scale, and rotation have no
@@ -83,8 +83,8 @@ fn evaluate_scalar(animation: &Animated<f32>, time: MediaTime) -> f32 {
 /// line exactly as an `Animated<Vec2>` does. Otherwise it travels along the
 /// cubic Bezier through them, measured in a space `aspect` wide per unit
 /// high, at the speed the timing curve sets: the curve's eased amount is the
-/// fraction of its length travelled. An overshooting amount continues
-/// straight past the end along its tangent.
+/// fraction of its length travelled. An amount past either end continues
+/// straight on along the curve's tangent there.
 #[must_use]
 pub fn sample_point(animation: &AnimatedPoint, time: MediaTime, aspect: f64) -> Vec2 {
     match animation {
@@ -157,7 +157,7 @@ fn point_segment(keyframes: &[PointKeyframe], time: MediaTime) -> PointSegment<'
     }
 }
 
-/// `value` as the nearest finite `f32`.
+/// `value` as the nearest finite `f32`; NaN becomes zero.
 #[allow(clippy::cast_possible_truncation)]
 fn finite_f32(value: f64) -> f32 {
     if value.is_nan() {

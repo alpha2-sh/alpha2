@@ -576,8 +576,8 @@ fn an_input_name_may_not_shadow_a_parameter_resource_or_the_source() {
 
 #[test]
 fn an_effect_without_named_inputs_generates_the_same_module() {
-    // Inputs only add their declarations after the resources': without them every module,
-    // and so every built-in and pipeline, is the one an effect always had.
+    // Inputs only add their declarations after the resources': the module with them, minus
+    // the declarations, is the module without them.
     let builtin = crate::builtin_effect_definitions()
         .into_iter()
         .find(|definition| !definition.params.is_empty())

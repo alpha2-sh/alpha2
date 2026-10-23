@@ -1,7 +1,7 @@
 //! The bitstream filter chain a hardware export runs its encoder's packets
-//! through on their way to the MP4 muxer.
+//! through on their way to the muxer.
 //!
-//! An MP4 takes two things from a stream's own bitstream that some hardware
+//! A container takes two things from a stream's own bitstream that some hardware
 //! encoders do not write. `FFmpeg`'s D3D12 Video encoders (8.1) are the case
 //! in point: they put their parameter sets in-band on every IDR picture and
 //! leave the extradata empty, and their sequence parameter sets carry no
@@ -11,10 +11,10 @@
 //!   colour into every sequence header, in-band and in the extradata alike;
 //! - `extract_extradata` with `remove=1` then cuts the parameter sets out of
 //!   the packets and hands them over as `AV_PKT_DATA_NEW_EXTRADATA`, so they
-//!   end up only in the sample description, which `hvc1` requires and `avc1`
-//!   expects.
+//!   end up only in the stream header (an MP4 sample description, which `hvc1`
+//!   requires and `avc1` expects, or a Matroska `CodecPrivate`).
 //!
-//! [`crate::mux::Mp4Muxer::open_deferred`] is the muxer half: it holds its
+//! [`crate::mux::Muxer::open_deferred`] is the muxer half: it holds its
 //! header back until the first packet out of this chain brings the
 //! parameter sets.
 
@@ -34,7 +34,7 @@ use rsmpeg::ffi;
 
 use crate::convert::encode_adapter_error_at;
 
-/// An encoder's packets on their way to an MP4: its colour written into
+/// An encoder's packets on their way to a container: its colour written into
 /// every sequence header, and its parameter sets moved out of the packets
 /// into `AV_PKT_DATA_NEW_EXTRADATA` side data.
 pub(crate) struct EncodedVideoFilter {

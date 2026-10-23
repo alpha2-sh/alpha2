@@ -25,9 +25,9 @@ const MAX_WGSL_STATEMENT_OPERATORS: usize = 256;
 /// The identifier prefix of everything the generated wrapper declares.
 const RESERVED_PREFIX: &str = "alpha2_";
 const MAX_EFFECT_RESOURCES: usize = 8;
-/// The most named inputs an effect declares. With its source pair and its
-/// resources they stay inside the 16 sampled textures a WebGL2-class device
-/// offers a shader stage (checked per device at compilation).
+/// The most named inputs an effect declares. Its source pair, resources, and
+/// inputs must also fit the sampled textures a device offers a shader stage
+/// (16 on WebGL2-class limits), which registration checks per device.
 pub const MAX_EFFECT_INPUTS: usize = 8;
 /// The binding of an effect's first named input: past every resource slot a
 /// definition may declare, so an input never moves another binding.
@@ -785,8 +785,8 @@ fn resource_declarations(resources: &[ResourceSpec]) -> String {
 }
 
 /// What the wrapper declares for each named input: its texture, its sampling
-/// helper, and its size. Empty without inputs, so such a module is the one an
-/// effect without them always had.
+/// helper, and its size. Empty without inputs, so an effect that declares none adds
+/// nothing to its module.
 fn input_declarations(inputs: &[InputSpec]) -> String {
     inputs
         .iter()

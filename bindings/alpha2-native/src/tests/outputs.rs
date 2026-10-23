@@ -25,23 +25,36 @@ fn an_audio_encode_thread_that_cannot_start_fails_the_open_and_leaves_no_partial
     let muxed = output_path("audio-thread-refused-mux").with_extension("mp4");
     let _ = fs::remove_file(&muxed);
     let video = mp4_video_encoder();
-    let audio = AacStreamConfig {
+    let audio = crate::AudioStreamConfig {
+        codec: crate::NativeAudioCodec::Aac,
         sample_rate: 48_000,
         channels: 2,
         bit_rate: 128_000,
     };
     crate::encode::REFUSE_AUDIO_ENCODE_THREAD.set(true);
-    let error = crate::mux::Mp4Muxer::open(&muxed, &video, ra(1, 30), Some(audio))
-        .err()
-        .expect("the muxer's open fails");
+    let error = crate::mux::Muxer::open(
+        &muxed,
+        alpha2_media::Container::Mp4,
+        &video,
+        ra(1, 30),
+        Some(audio),
+    )
+    .err()
+    .expect("the muxer's open fails");
     assert!(
         matches!(&error, EncodeError::Adapter(message) if message.contains("failed to start the audio encode thread")),
         "{error:?}"
     );
     assert!(!partial_beside(&muxed).exists());
     drop(
-        crate::mux::Mp4Muxer::open(&muxed, &video, ra(1, 30), Some(audio))
-            .expect("the retry opens"),
+        crate::mux::Muxer::open(
+            &muxed,
+            alpha2_media::Container::Mp4,
+            &video,
+            ra(1, 30),
+            Some(audio),
+        )
+        .expect("the retry opens"),
     );
     assert!(!partial_beside(&muxed).exists());
 }
@@ -75,17 +88,29 @@ fn an_output_that_fails_to_open_removes_the_partial_it_created() {
     assert!(matches!(error, EncodeError::Adapter(_)), "{error:?}");
     assert!(!partial_beside(&video).exists());
 
-    let stream = output_path("no-global-header").with_extension("ts");
-    let _ = fs::remove_file(&stream);
+    // The muxer claims its partial before it checks the streams against the container.
+    let muxed = output_path("not-offered").with_extension("mov");
+    let _ = fs::remove_file(&muxed);
     let encoder = mp4_video_encoder();
-    let error = crate::mux::Mp4Muxer::open(&stream, &encoder, ra(1, 30), None)
-        .err()
-        .expect("MPEG-TS has no global headers");
+    let error = crate::mux::Muxer::open(
+        &muxed,
+        alpha2_media::Container::Mov,
+        &encoder,
+        ra(1, 30),
+        Some(crate::AudioStreamConfig {
+            codec: crate::NativeAudioCodec::Opus,
+            sample_rate: 48_000,
+            channels: 2,
+            bit_rate: 96_000,
+        }),
+    )
+    .err()
+    .expect("MOV offers no Opus");
     assert!(
-        matches!(&error, EncodeError::Adapter(message) if message.contains("global headers")),
+        matches!(&error, EncodeError::Adapter(message) if message.contains("mov does not offer audio codec opus")),
         "{error:?}"
     );
-    assert!(!partial_beside(&stream).exists());
+    assert!(!partial_beside(&muxed).exists());
 }
 
 /// Each transactional output, opened at `path`, as the value that holds its
@@ -98,8 +123,9 @@ fn open_each_output(path: &Path, kind: &str) -> Result<Box<dyn std::any::Any>, E
             av_config(48_000).video,
         )?),
         "wav" => Box::new(NativeWavEncodeSink::create(path, 48_000, 2)?),
-        "mux" => Box::new(crate::mux::Mp4Muxer::open(
+        "mux" => Box::new(crate::mux::Muxer::open(
             path,
+            alpha2_media::Container::Mp4,
             &mp4_video_encoder(),
             ra(1, 30),
             None,
@@ -373,6 +399,7 @@ fn export_until_it_fails(sink: &str, output: &Path) -> Result<(), EncodeError> {
                     sample_rate: 48_000,
                     channels: 2,
                 }),
+                container: alpha2_media::Container::Mp4,
             })
             .expect("plan");
             assert!(plan.copies_audio());
@@ -380,6 +407,7 @@ fn export_until_it_fails(sink: &str, output: &Path) -> Result<(), EncodeError> {
             crate::copy_packets(
                 &copy,
                 output,
+                alpha2_media::Container::Mp4,
                 crate::CopyAudio::Source,
                 &cancel,
                 &mut |_| {},
@@ -486,8 +514,13 @@ fn a_file_that_appears_at_the_output_during_an_export_is_not_replaced() {
                     sink.finish_audio(&cancel)
                 }
                 "mux" => {
-                    let mut muxer =
-                        crate::mux::Mp4Muxer::open(&path, &mp4_video_encoder(), ra(1, 30), None)?;
+                    let mut muxer = crate::mux::Muxer::open(
+                        &path,
+                        alpha2_media::Container::Mp4,
+                        &mp4_video_encoder(),
+                        ra(1, 30),
+                        None,
+                    )?;
                     fs::write(&path, b"someone else's").expect("appear");
                     muxer.close()
                 }

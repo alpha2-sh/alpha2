@@ -11,8 +11,8 @@ Every target runs the same rendering code, so a project renders the same in a br
 | A browser app that previews and exports, decoding and encoding the media itself | [`alpha2`](packages/alpha2/README.md) (npm) |
 | A browser editor: documents, commands, undo, and a preview and export bridge | [`@alpha2-sh/editor`](packages/alpha2-editor/README.md) (npm) |
 | A React canvas over the `alpha2` browser player | [`@alpha2-sh/react`](packages/alpha2-react/README.md) (npm) |
-| MP4 export from Node.js or Electron | [`@alpha2-sh/node`](packages/alpha2-node/README.md) (npm) and `alpha2-host` |
-| MP4 export from any other language | `alpha2-host serve` and its [stdio protocol](docs/host-protocol.md) |
+| MP4, MOV, MKV or WebM export from Node.js or Electron | [`@alpha2-sh/node`](packages/alpha2-node/README.md) (npm) and `alpha2-host` |
+| MP4, MOV, MKV or WebM export from any other language | `alpha2-host serve` and its [stdio protocol](docs/host-protocol.md) |
 | A Rust program | [`alpha2`](crates/alpha2/README.md) (crate) |
 
 ## Quick start
@@ -69,7 +69,7 @@ engine.renderAt(0n); // draws the frame at time 0
 
 ### Native
 
-Native export runs `alpha2-host`, which renders on the GPU and decodes and encodes with FFmpeg 8: MP4 with H.264 video and AAC audio by default. Get it one of three ways:
+Native export runs `alpha2-host`, which renders on the GPU and decodes and encodes with FFmpeg 8: MP4 with H.264 video and AAC audio by default, and MOV, Matroska or WebM (VP9 or AV1 with Opus) when the output's extension or `container` says so. Get it one of three ways:
 
 - **Download** an archive from the [Releases page](https://github.com/alpha2-sh/alpha2/releases). `alpha2-<version>-<target>-bundled` carries FFmpeg; `-thin` loads the FFmpeg 8 installed on the system.
 - **Build** the same archive from a clone, on the target platform (Git Bash on Windows). The script fetches the pinned FFmpeg build and writes the archives to `target/alpha2-native-release/archives/`.

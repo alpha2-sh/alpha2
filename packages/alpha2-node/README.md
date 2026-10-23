@@ -1,6 +1,6 @@
 # @alpha2-sh/node
 
-A Node.js client for `alpha2-host`, the native alpha2 renderer: it exports alpha2 projects to MP4 files from Node.js or an Electron main process, with FFmpeg for decoding and encoding and the GPU for rendering.
+A Node.js client for `alpha2-host`, the native alpha2 renderer: it exports alpha2 projects to MP4, MOV, Matroska or WebM files from Node.js or an Electron main process, with FFmpeg for decoding and encoding and the GPU for rendering.
 
 ## Install
 
@@ -40,11 +40,11 @@ const output = await client.exportProject({
 
 Each export runs in its own `alpha2-host` process. The project is checked with `validateProject` from `alpha2/project` before a process starts; an invalid one is refused with an `Alpha2ProjectValidationError` listing the problems. The output must not exist yet: the host writes `<stem>.alpha2-partial.<ext>` beside it and renames it into place when it is complete. `exportProject` resolves with the output path once the file is complete; `onResult` receives what the host reports about the export (frames, encoder, rate control, timing, which media each source read).
 
-The request's fields are typed and described in `ExportProjectRequest`; the [host protocol](https://github.com/alpha2-sh/alpha2/blob/main/docs/host-protocol.md) lists them with their defaults. Among them: `videoCodec` (`h264` by default; `hevc`, `vp9`, `av1`, `mpeg4-part2`), `videoQuality` and `audioQuality` (a level, `very-low` to `very-high`, `high` by default, which the host turns into a rate for the codec, size and frame rate, or an explicit bitrate), `includeAudio`, `loudness`, `fonts`, `effectAssets`, `proxies` with `media: "proxies"`, `renderCache` and `memory`.
+The request's fields are typed and described in `ExportProjectRequest`; the [host protocol](https://github.com/alpha2-sh/alpha2/blob/main/docs/host-protocol.md) lists them with their defaults. Among them: `container` (`mp4`, `mov`, `mkv` or `webm`; by default the one the output's extension names), `videoCodec` and `audioCodec` (by default the container's: `h264` and `aac`, or `vp9` and `opus` for WebM; `hevc`, `av1` and `mpeg4-part2` are the other video codecs, and each container offers only some, as `encode.containers` lists), `videoQuality` and `audioQuality` (a level, `very-low` to `very-high`, `high` by default, which the host turns into a rate for the codec, size and frame rate, or an explicit bitrate), `includeAudio`, `loudness`, `fonts`, `effectAssets`, `proxies` with `media: "proxies"`, `renderCache` and `memory`.
 
 ## Capabilities
 
-`client.getCapabilities()` reports what the host can decode and encode. An export without `videoCodec` gets H.264, and a host that cannot encode it refuses the export instead of writing another codec. A host encodes H.264 either with an encoder listed in `encode.video` or through its GPU-resident path, `encode.gpuOutputPath`, whose encoder takes frames on the GPU only (on Linux, `h264_vulkan`) and so is not in `encode.video`:
+`client.getCapabilities()` reports what the host can decode and encode, and `encode.containers` which codecs each container offers. An MP4, MOV or Matroska export without `videoCodec` gets H.264, and a host that cannot encode it refuses the export instead of writing another codec. A host encodes H.264 either with an encoder listed in `encode.video` or through its GPU-resident path, `encode.gpuOutputPath`, whose encoder takes frames on the GPU only (on Linux, `h264_vulkan`) and so is not in `encode.video`:
 
 ```js
 const { encode } = (await client.getCapabilities()).capabilities;

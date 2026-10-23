@@ -391,13 +391,18 @@ fn allowed_name(name: &CStr, formats: &CStr) -> bool {
 pub struct OutputFile(AVFormatContextOutput);
 
 impl OutputFile {
-    /// Creates the output, guessing its muxer from `filename`, and opens the
-    /// file.
+    /// Creates the output with the `FFmpeg` muxer named `format` (`mp4`,
+    /// `mov`, `matroska`, `webm`), and opens `filename` for it. Nothing is
+    /// guessed from the file name.
     ///
     /// # Errors
-    /// When no muxer fits or the file cannot be opened.
-    pub fn create(filename: &CStr) -> Result<Self, RsmpegError> {
-        AVFormatContextOutput::create(filename).map(Self)
+    /// When there is no such muxer or the file cannot be opened.
+    pub fn create(filename: &CStr, format: &CStr) -> Result<Self, RsmpegError> {
+        AVFormatContextOutput::builder()
+            .format_name(format)
+            .filename(filename)
+            .build()
+            .map(Self)
     }
 
     /// Closes the file, after the trailer.

@@ -965,9 +965,9 @@ fn clip_picture<'a>(
     }
 }
 
-/// A shapes generator's picture at `time`, the picture's own: its tree
-/// evaluated there (its fixed parts shared) and drawn as a vector scene at
-/// the graph's size. A frame that draws the same scene has the same key.
+/// A shapes generator's picture at `time`, in the picture's own time: its
+/// tree evaluated there (its fixed parts shared) and drawn as a vector scene
+/// at the graph's size. A frame that draws the same scene has the same key.
 fn shapes_node(graph: &mut RenderGraph<'_>, plan: &ShapesPlan, time: MediaTime) -> RenderNodeId {
     let size = graph.size();
     let canvas = alpha2_geometry::CanvasSize::new(size.width, size.height);

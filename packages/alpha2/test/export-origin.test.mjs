@@ -13,7 +13,7 @@ import {
 } from "mediabunny";
 
 import { Alpha2Exporter, exportToSink } from "../dist/exporter.js";
-import { MediabunnyMp4Sink } from "../dist/mediabunny.js";
+import { MediabunnySink } from "../dist/mediabunny.js";
 
 /** Enough of a `VideoFrame` for mediabunny to wrap it in a sample. */
 class TestVideoFrame {
@@ -118,7 +118,8 @@ test("exported frames count from the output's zero; the backend renders timeline
 });
 
 test("a range from the middle of the timeline is a file that starts at 0", async () => {
-  const sink = new MediabunnyMp4Sink({
+  const sink = new MediabunnySink({
+    container: "mp4",
     videoCodec: "vp9",
     videoRateControl: { bitrate: 1_000_000, bitrateMode: "variable" },
     frameRate: { num: 30, den: 1 },

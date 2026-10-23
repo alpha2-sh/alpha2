@@ -38,7 +38,7 @@ editor.dispose();
 
 ## Browser bridge
 
-`@alpha2-sh/editor/browser` connects a session to the engine in the browser: import, preview, playback with audio, and export to an MP4 file through WebCodecs.
+`@alpha2-sh/editor/browser` connects a session to the engine in the browser: import, preview, playback with audio, and export to an MP4, MOV, MKV or WebM file through WebCodecs.
 
 ```js
 import { createEditor, createEmptyDocument } from "@alpha2-sh/editor";
@@ -75,7 +75,7 @@ const placed = editor.dispatch({
 if (!placed.ok) throw placed.error;
 await bridge.seek(0);
 
-const artifact = await bridge.startExport({ videoCodec: "avc" }).result;
+const artifact = await bridge.startExport({ container: "webm" }).result;
 // artifact.kind "file": a temporary file in the origin's private storage; release it once downloaded.
 if (artifact.kind === "file") await artifact.release();
 
@@ -86,7 +86,7 @@ await editor.dispose();
 - Import checks each file with the engine (media, fonts, `.cube` LUTs, SRT and WebVTT captions through `importCaptions`) and adds it to the document in one undoable step. `importSequence` imports numbered PNG or OpenEXR files as one image sequence.
 - `bindPreview` draws on a canvas. With `runtimeAssets.workerFactory`, a worker running the `@alpha2-sh/editor/preview-worker` entry renders the preview off the main thread; without one, or when the worker fails, the main thread does. `hashWorkerFactory` (`@alpha2-sh/editor/hash-worker`) and `extensionsWorkerFactory` (`@alpha2-sh/editor/extensions-worker`, with `extensionsWasmUrl`) move file hashing and SVG, animated image, Lottie and OpenEXR reading into workers too.
 - `seek`, `play` and `pause` move the playhead; with audio, playback follows the audio clock. Audio preview needs a cross-origin isolated page; editing and video preview do not.
-- `startExport` returns a job with `result`, progress (`subscribe`) and `cancel`. The output goes to a temporary file in the origin's private storage by default (`release()` deletes it), to a file the user picked (`output: { kind: "file", handle }`), or to memory (`output: { kind: "memory", maxBytes }`). Whether the browser encodes a codec is the browser's to say: `bridge.videoEncoders()` asks ahead, and an export with a codec the browser does not encode is refused before it renders.
+- `startExport` returns a job with `result`, progress (`subscribe`) and `cancel`. `container` (`mp4` by default, `mov`, `mkv` or `webm`) names the file and decides the codecs: an absent `videoCodec` or `audioCodec` is the container's default (H.264 and AAC, or VP9 and Opus for WebM, with Opus where a browser cannot encode AAC in MP4 or MKV), and one the container does not offer is refused. The output goes to a temporary file in the origin's private storage by default (`release()` deletes it), to a file the user picked (`output: { kind: "file", handle }`), or to memory (`output: { kind: "memory", maxBytes }`). Whether the browser encodes a codec is the browser's to say: `bridge.videoEncoders()` asks ahead, and an export with a codec the browser does not encode is refused before it renders.
 
 ## React
 

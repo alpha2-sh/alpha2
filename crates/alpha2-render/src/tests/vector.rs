@@ -524,7 +524,7 @@ fn many_fills_each_take_their_own_uniform_slice() {
         .device()
         .push_error_scope(wgpu::ErrorFilter::Validation);
     let size = RenderSize::new(64, 8).expect("size");
-    // Sixteen one-pixel-apart columns, each its own color: each fill reads its own slice.
+    // Sixteen 2-pixel columns 4 pixels apart, each its own color: each fill reads its own slice.
     let items: Vec<EvaluatedItem> = (0..16_u8)
         .flat_map(|index| {
             let x = (f64::from(index) * 4.0 + 2.0) / 64.0;

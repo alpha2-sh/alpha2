@@ -33,8 +33,8 @@ use crate::metrics::{
 };
 use crate::protocol::LoudnessRequest;
 use crate::protocol::{
-    AudioQualityRequest, HostError, RateRequest, Request, VideoQualityRequest, code_tag,
-    codec_capabilities_json, decode_capabilities_json,
+    AudioQualityRequest, HostError, RateRequest, Request, ResolvedFormat, VideoQualityRequest,
+    code_tag, codec_capabilities_json, decode_capabilities_json,
 };
 use crate::render_cache::BakedFrame;
 use crate::trace::{AudioBlockTrace, ExportTrace, VideoFrameTrace};
@@ -49,8 +49,8 @@ use alpha2_gpu::CapabilityTier;
 use alpha2_media::{CancelToken, ColorMetadata, EncodeEvent};
 use alpha2_model::{MediaFingerprint, MediaKind, Project};
 use alpha2_native::{
-    AvEncodeConfig, NativeAudioCodec, NativeAvEncodeSink, NativeVideoCodec, NativeVideoEncodeSink,
-    VideoEncodeConfig, codec_capabilities, ffmpeg_runtime_identity,
+    AvEncodeConfig, NativeAvEncodeSink, NativeVideoCodec, NativeVideoEncodeSink, VideoEncodeConfig,
+    codec_capabilities, ffmpeg_runtime_identity,
 };
 #[cfg(all(target_os = "windows", feature = "hwdevice"))]
 use alpha2_native_gpu::SharedD3D12Context;
@@ -181,7 +181,7 @@ fn unavailable_codec_message(
 ) -> String {
     let identity = alpha2_native::ffmpeg_runtime_identity();
     let registered = inventory
-        .mp4_video
+        .video
         .iter()
         .map(|capability| format!("{}:{}", capability.codec.as_str(), capability.encoder_name))
         .collect::<Vec<_>>()
@@ -567,6 +567,8 @@ impl Host {
         request: crate::protocol::ExportRequest,
         progress: &mut dyn FnMut(crate::protocol::Progress) -> Result<(), HostError>,
     ) -> Result<Value, HostError> {
+        // Resolved again: the request was checked when it was parsed.
+        let format = request.format()?;
         let crate::protocol::ExportRequest {
             project,
             assets,
@@ -581,10 +583,8 @@ impl Host {
             end_ticks,
             frame_rate,
             include_audio,
-            video_codec,
             video_encoder,
             video_quality,
-            audio_codec,
             audio_quality,
             loudness,
             render_cache,
@@ -604,7 +604,7 @@ impl Host {
                 frame_rate,
                 include_audio,
                 media,
-                video_codec: video_codec.into_native(),
+                video_codec: format.video,
                 video_encoder: video_encoder.as_deref(),
                 input_policy,
             },
@@ -658,10 +658,9 @@ impl Host {
                     end_ticks,
                     frame_rate,
                     include_audio,
-                    video_codec.into_native(),
+                    format,
                     video_encoder.as_deref(),
                     video_quality,
-                    audio_codec.into_native(),
                     audio_quality,
                     loudness,
                     &output,
@@ -1207,10 +1206,9 @@ impl Host {
         end_ticks: i64,
         frame_rate: RateRequest,
         include_audio: bool,
-        video_codec: NativeVideoCodec,
+        format: ResolvedFormat,
         requested_video_encoder: Option<&str>,
         video_quality: VideoQualityRequest,
-        audio_codec: NativeAudioCodec,
         audio_quality: AudioQualityRequest,
         loudness: Option<LoudnessRequest>,
         output: &Path,
@@ -1235,10 +1233,9 @@ impl Host {
                 end_ticks,
                 frame_rate,
                 include_audio,
-                video_codec,
+                format,
                 requested_video_encoder,
                 video_quality,
-                audio_codec,
                 audio_quality,
                 loudness,
                 output,
@@ -1260,6 +1257,7 @@ impl Host {
         }
         result["resultCache"] =
             result_cache_json(&cache_before, &self.renderer.result_cache_stats());
+        result["container"] = json!(format.container.as_str());
         Ok(result)
     }
 
@@ -1274,10 +1272,9 @@ impl Host {
         end_ticks: i64,
         frame_rate: RateRequest,
         include_audio: bool,
-        video_codec: NativeVideoCodec,
+        format: ResolvedFormat,
         requested_video_encoder: Option<&str>,
         video_quality: VideoQualityRequest,
-        audio_codec: NativeAudioCodec,
         audio_quality: AudioQualityRequest,
         loudness: Option<LoudnessRequest>,
         output: &Path,
@@ -1285,6 +1282,11 @@ impl Host {
         progress: &mut dyn FnMut(crate::protocol::Progress) -> Result<(), HostError>,
     ) -> Result<Value, String> {
         let started = Instant::now();
+        let ResolvedFormat {
+            container,
+            video: video_codec,
+            audio: audio_codec,
+        } = format;
         let (project, snapshot) = self.prepare(project, effect_assets, effects)?;
         let parked_leases = ParkedLeaseGuard {
             renderer: &self.renderer,
@@ -1332,6 +1334,27 @@ impl Host {
         if loudness.is_some() && !has_audio {
             return Err(loudness_without_audio());
         }
+        // Every path encodes the mix with the same encoder, so a runtime without one is refused
+        // before any of them opens a device or an output.
+        let codec_inventory = codec_capabilities();
+        let audio_encoder_name = has_audio
+            .then(|| {
+                codec_inventory
+                    .audio
+                    .iter()
+                    .find(|capability| capability.codec == audio_codec)
+                    .map(|capability| capability.encoder_name.clone())
+                    .ok_or_else(|| {
+                        code_tag(
+                            "INVALID_INPUT",
+                            format!(
+                                "this FFmpeg runtime has no {} encoder",
+                                audio_codec.as_str()
+                            ),
+                        )
+                    })
+            })
+            .transpose()?;
         // A copy is taken only when asked for, and only when both the project and the file prove
         // the copied packets decode into exactly the frames a render would show.
         let strategy = self.strategy;
@@ -1349,6 +1372,7 @@ impl Host {
                     frames: exporter.progress().total,
                     include_audio: has_audio,
                     video_codec,
+                    container,
                     pinned_encoder: requested_video_encoder.map(str::to_owned),
                     loudness: loudness.is_some(),
                     cancel: cancel.clone(),
@@ -1362,7 +1386,9 @@ impl Host {
                             project: &project,
                             assets,
                             effective_range: exporter.effective_range(),
+                            container,
                             audio_codec,
+                            audio_encoder: audio_encoder_name.clone(),
                             audio_rate,
                             loudness,
                             output,
@@ -1426,6 +1452,7 @@ impl Host {
                             rate,
                             has_audio,
                             video_rate,
+                            container,
                             audio_codec,
                             audio_rate,
                             loudness,
@@ -1517,9 +1544,8 @@ impl Host {
             .ok()
         });
         let mut cache_reads = CacheReads::default();
-        let codec_inventory = codec_capabilities();
         let video_encoder = codec_inventory
-            .mp4_video
+            .video
             .iter()
             .find(|capability| {
                 capability.codec == video_codec
@@ -1567,21 +1593,6 @@ impl Host {
             configured_frame_depth(),
             configured_encode_channel_depth(),
         )?;
-        let audio_encoder_name = has_audio
-            .then(|| {
-                codec_inventory
-                    .mp4_audio
-                    .iter()
-                    .find(|capability| capability.codec == audio_codec)
-                    .map(|capability| capability.encoder_name.clone())
-                    .ok_or_else(|| {
-                        code_tag(
-                            "INVALID_INPUT",
-                            format!("{} encoder is unavailable", audio_codec.as_str()),
-                        )
-                    })
-            })
-            .transpose()?;
 
         let video_config = VideoEncodeConfig {
             width: size.width,
@@ -1591,6 +1602,7 @@ impl Host {
             rate_control: video_rate.control,
             codec: video_codec,
             display: alpha2_native::VideoDisplay::default(),
+            container,
         };
         // The split follows the encoder that opens: a hardware encoder can fail `avcodec_open2` and
         // fall through to a software one, which needs a software encoder's share of the CPU.

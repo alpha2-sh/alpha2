@@ -401,6 +401,7 @@ fn render_gpu_encode_slice(
             },
             color: alpha2_media::ColorMetadata::EXPORT,
             output: std::path::Path::new(path),
+            container: alpha2_media::Container::Mp4,
             audio: None,
         })
         .map_err(|error| HostError::new("ENCODE_ERROR", error.to_string()))?;
@@ -633,7 +634,7 @@ fn create_host(policy: VideoDecodePolicy) -> Result<Host, HostError> {
     alpha2_os::diagnostic!(
         "alpha2-host MP4 encoders: video=[{}] audio=[{}]",
         codecs
-            .mp4_video
+            .video
             .iter()
             .map(|capability| format!(
                 "{}:{}{}",
@@ -648,7 +649,7 @@ fn create_host(policy: VideoDecodePolicy) -> Result<Host, HostError> {
             .collect::<Vec<_>>()
             .join(", "),
         codecs
-            .mp4_audio
+            .audio
             .iter()
             .map(|capability| format!("{}:{}", capability.codec.as_str(), capability.encoder_name))
             .collect::<Vec<_>>()

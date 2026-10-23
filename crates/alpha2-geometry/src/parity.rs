@@ -562,7 +562,7 @@ pub fn tree_scenes() -> Vec<(&'static str, Vec<crate::EvaluatedItem>)> {
 }
 
 /// The golden file's contents: every scene's coverage and outline hashes,
-/// and every tree scene's key, as JSON text.
+/// and every tree scene's key and coverage hash, as JSON text.
 #[must_use]
 pub fn golden_json() -> String {
     let mut out = String::from("{\n  \"coverage\": [\n");

@@ -37,7 +37,7 @@ use super::{
 use crate::NativeVideoCodec;
 use crate::convert::{encode_adapter_error, tick_base};
 use crate::encode::{EncodeStageTimings, timed};
-use crate::mux::Mp4Muxer;
+use crate::mux::Muxer;
 
 const ENCODER: &str = "h264_videotoolbox";
 
@@ -231,8 +231,14 @@ pub(super) fn open(
         stats: EncoderPoolStats::default(),
     };
     // From here on a failure is the export's rather than a refusal: the partial output exists.
-    let muxer = Mp4Muxer::open(request.output, &context, time_base, request.audio)
-        .map_err(HardwareEncodeOpenError::Failed)?;
+    let muxer = Muxer::open(
+        request.output,
+        request.container,
+        &context,
+        time_base,
+        request.audio,
+    )
+    .map_err(HardwareEncodeOpenError::Failed)?;
     Ok((
         VideoToolboxEncodeSession {
             context,
@@ -397,7 +403,7 @@ pub(super) struct VideoToolboxEncodeSession {
     context: AVCodecContext,
     device: wgpu::Device,
     time_base: AVRational,
-    muxer: Mp4Muxer,
+    muxer: Muxer,
     stages: EncodeStageTimings,
     selection: crate::NativeVideoEncoderSelection,
     generation: u64,

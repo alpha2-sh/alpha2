@@ -74,7 +74,6 @@ fn clip_position(pixel: vec2f) -> vec4f {{
 
 @vertex
 fn vs_tile(@builtin(vertex_index) index: u32, @location(0) tile: vec2u, @location(1) slot: u32) -> TileOut {{
-    // Two triangles: (0,0) (1,0) (0,1) and (0,1) (1,0) (1,1).
     var corners = array<vec2f, 6>(
         vec2f(0.0, 0.0), vec2f(1.0, 0.0), vec2f(0.0, 1.0),
         vec2f(0.0, 1.0), vec2f(1.0, 0.0), vec2f(1.0, 1.0),
@@ -455,7 +454,7 @@ impl Renderer {
         }
         let pipelines = self.vector_pipelines(format);
         let cached = self.vector_pipeline();
-        // Pages tall enough for every slot, up to the device's largest texture.
+        // Pages at most as tall as they are wide, and no taller than the device's largest texture.
         let max_rows = (self.limits.max_texture_dimension_2d.min(ATLAS_WIDTH) / 16).max(1);
         #[cfg(test)]
         let max_rows = match self

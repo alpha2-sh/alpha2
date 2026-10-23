@@ -27,6 +27,7 @@ use crate::decode::{effective_media_duration, normalize_audio_frame_layout};
 use alpha2_ffmpeg_bridge::DisplayRotation;
 
 mod audio_io;
+mod containers;
 mod copies;
 mod damaged_input;
 mod encoders;
@@ -286,6 +287,7 @@ fn av_config(audio_sample_rate: u32) -> AvEncodeConfig {
             rate_control: VideoRateControl::bitrate(200_000, BitrateMode::Variable).unwrap(),
             codec: NativeVideoCodec::Mpeg4Part2,
             display: crate::VideoDisplay::default(),
+            container: alpha2_media::Container::Mp4,
         },
         audio_sample_rate,
         audio_channels: 2,
@@ -338,11 +340,13 @@ fn tone_block(first: i64, samples: usize, rate: u32) -> AudioBlock {
 fn export_muxed_audio(label: &str, rate: u32, samples: usize) -> PathBuf {
     let path = output_path(label);
     let _ = fs::remove_file(&path);
-    let mut muxer = crate::mux::Mp4Muxer::open(
+    let mut muxer = crate::mux::Muxer::open(
         &path,
+        alpha2_media::Container::Mp4,
         &mp4_video_encoder(),
         ra(1, 30),
-        Some(crate::mux::AacStreamConfig {
+        Some(crate::AudioStreamConfig {
+            codec: crate::NativeAudioCodec::Aac,
             sample_rate: rate,
             channels: 2,
             bit_rate: 128_000,

@@ -9,15 +9,16 @@ use crate::config::VideoDecodePolicy;
 use crate::effect_request::EffectRequest;
 use crate::host::Host;
 use crate::protocol::{
-    AudioCodecRequest, AudioQualityRequest, ExportMedia, ExportRequest, HostError, LoudnessRequest,
-    ProjectJson, PurposeRequest, RateRequest, Request, VideoCodecRequest, VideoQualityRequest,
+    AudioQualityRequest, ExportMedia, ExportRequest, HostError, LoudnessRequest, ProjectJson,
+    PurposeRequest, RateRequest, Request, VideoQualityRequest,
 };
 use crate::{PROTOCOL_VERSION, create_host, write_stdout};
+use alpha2_media::{AudioCodec, Container, VideoCodec};
 use serde_json::{Value, json};
 
 /// The command-line synopsis, returned as the error for an unrecognized command line or `--help`.
 pub fn usage() -> String {
-    "usage: alpha2-host serve\n       alpha2-host conform --project <project.json> --asset <source-id>=<path> [--proxy <source-id>=<path>]... [--purpose preview|preview-proxy|thumbnail|remote-edit|export-original|export-proxy]\n       alpha2-host export --project <project.json> --asset <source-id>=<path> [--proxy <source-id>=<path>]... [--frames <source-id>=<path>,...]... [--resource <source-id> <locator> <path>]... [--media original|proxies] --effect-asset <resource-id>=<path> [--font <font-file>]... --out <output.mp4> [--effects <effects.json>] [--start-ticks <ticks>] [--end-ticks <ticks>] [--frame-rate <num>/<den>] [--no-audio] [--video-codec <id>] [--video-encoder <ffmpeg-name>] [--input-policy auto|gpu-required|cpu-readback] [--strategy render|prefer-copy|require-copy] [--video-quality very-low|low|medium|high|very-high|<bits-per-second>] [--video-quantizer <n>] [--audio-codec aac] [--audio-quality very-low|low|medium|high|very-high|<bits-per-second>] [--loudness-target <LUFS> [--true-peak-ceiling <dBTP>]] [--video-decode software|auto|hardware-required] [--render-cache <dir> [--render-cache-quota <bytes>] [--render-cache-backlog skip|wait]]".to_owned()
+    "usage: alpha2-host serve\n       alpha2-host conform --project <project.json> --asset <source-id>=<path> [--proxy <source-id>=<path>]... [--purpose preview|preview-proxy|thumbnail|remote-edit|export-original|export-proxy]\n       alpha2-host export --project <project.json> --asset <source-id>=<path> [--proxy <source-id>=<path>]... [--frames <source-id>=<path>,...]... [--resource <source-id> <locator> <path>]... [--media original|proxies] --effect-asset <resource-id>=<path> [--font <font-file>]... --out <output.mp4|.mov|.mkv|.webm> [--container mp4|mov|mkv|webm] [--effects <effects.json>] [--start-ticks <ticks>] [--end-ticks <ticks>] [--frame-rate <num>/<den>] [--no-audio] [--video-codec <id>] [--video-encoder <ffmpeg-name>] [--input-policy auto|gpu-required|cpu-readback] [--strategy render|prefer-copy|require-copy] [--video-quality very-low|low|medium|high|very-high|<bits-per-second>] [--video-quantizer <n>] [--audio-codec aac|opus] [--audio-quality very-low|low|medium|high|very-high|<bits-per-second>] [--loudness-target <LUFS> [--true-peak-ceiling <dBTP>]] [--video-decode software|auto|hardware-required] [--render-cache <dir> [--render-cache-quota <bytes>] [--render-cache-backlog skip|wait]]".to_owned()
 }
 
 /// The flags shared by `conform` and `export`, as parsed. `include_audio` is true unless
@@ -39,13 +40,14 @@ pub struct ExportCliOptions {
     pub end_ticks: Option<i64>,
     pub frame_rate: Option<RateRequest>,
     pub include_audio: bool,
-    pub video_codec: VideoCodecRequest,
+    pub container: Option<Container>,
+    pub video_codec: Option<VideoCodec>,
     pub video_encoder: Option<String>,
     pub input_policy: crate::config::VideoInputPolicy,
     pub strategy: crate::config::ExportStrategy,
     pub video_quality: VideoQualityRequest,
     pub video_quantizer: Option<u32>,
-    pub audio_codec: AudioCodecRequest,
+    pub audio_codec: Option<AudioCodec>,
     pub audio_quality: AudioQualityRequest,
     pub loudness_target: Option<f64>,
     pub true_peak_ceiling: Option<f64>,
@@ -175,6 +177,7 @@ pub fn export_request(options: ExportCliOptions) -> Result<(Request, PathBuf), H
         end_ticks,
         frame_rate,
         include_audio: options.include_audio,
+        container: options.container,
         video_codec: options.video_codec,
         video_encoder: options.video_encoder,
         input_policy: options.input_policy,
@@ -380,9 +383,16 @@ pub fn parse_export_args(args: Vec<String>) -> Result<ExportCliOptions, HostErro
             }
             "--no-audio" => options.include_audio = false,
             "--include-audio" => options.include_audio = true,
+            "--container" => {
+                options.container =
+                    Some(value(&mut args)?.parse().map_err(|error| {
+                        HostError::invalid_input(format!("--container: {error}"))
+                    })?);
+            }
             "--video-codec" => {
-                options.video_codec = serde_json::from_value(json!(value(&mut args)?))
-                    .map_err(|error| HostError::invalid_input(error.to_string()))?;
+                options.video_codec = Some(value(&mut args)?.parse().map_err(|error| {
+                    HostError::invalid_input(format!("--video-codec: {error}"))
+                })?);
             }
             "--video-encoder" => options.video_encoder = Some(value(&mut args)?),
             "--strategy" => {
@@ -418,8 +428,9 @@ pub fn parse_export_args(args: Vec<String>) -> Result<ExportCliOptions, HostErro
                     .map_err(HostError::invalid_input)?;
             }
             "--audio-codec" => {
-                options.audio_codec = serde_json::from_value(json!(value(&mut args)?))
-                    .map_err(|error| HostError::invalid_input(error.to_string()))?;
+                options.audio_codec = Some(value(&mut args)?.parse().map_err(|error| {
+                    HostError::invalid_input(format!("--audio-codec: {error}"))
+                })?);
             }
             "--loudness-target" => {
                 options.loudness_target = Some(parse_arg(&flag, &value(&mut args)?)?);

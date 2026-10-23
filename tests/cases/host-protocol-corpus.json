@@ -18,7 +18,20 @@
             "schema": "alpha2-capabilities",
             "version": 1,
             "runtime": "native",
-            "encode": { "container": "mp4", "video": [], "audio": [] }
+            "encode": {
+              "containers": [
+                {
+                  "id": "webm",
+                  "extensions": ["webm"],
+                  "video": ["vp9", "av1"],
+                  "audio": ["opus"],
+                  "defaultVideoCodec": "vp9",
+                  "defaultAudioCodec": "opus"
+                }
+              ],
+              "video": [],
+              "audio": [{ "id": "opus", "encoder": "libopus" }]
+            }
           }
         }
       }
@@ -465,6 +478,105 @@
       "audioCodec": "aac",
       "output": "/staging/output.mp4",
       "renderCache": { "directory": "/staging/render-cache", "quotaBytes": 0 }
+    },
+    "messages": [],
+    "expectedErrorCode": "INVALID_INPUT"
+  },
+  {
+    "name": "export whose output extension names its container",
+    "requestValid": true,
+    "request": {
+      "protocolVersion": 1,
+      "operation": "export",
+      "requestId": "export-whose-output-extension-names-its-container",
+      "project": {},
+      "assets": { "video": "/staging/video.mp4" },
+      "effects": [],
+      "startTicks": 0,
+      "endTicks": 120000,
+      "frameRate": { "num": 30, "den": 1 },
+      "includeAudio": true,
+      "output": "/staging/output.webm"
+    },
+    "messages": []
+  },
+  {
+    "name": "export naming its container and codecs",
+    "requestValid": true,
+    "request": {
+      "protocolVersion": 1,
+      "operation": "export",
+      "requestId": "export-naming-its-container-and-codecs",
+      "project": {},
+      "assets": { "video": "/staging/video.mp4" },
+      "effects": [],
+      "startTicks": 0,
+      "endTicks": 120000,
+      "frameRate": { "num": 30, "den": 1 },
+      "includeAudio": true,
+      "container": "mkv",
+      "videoCodec": "av1",
+      "audioCodec": "opus",
+      "output": "/staging/output.mkv"
+    },
+    "messages": []
+  },
+  {
+    "name": "a container its output extension contradicts is the caller's input",
+    "requestValid": false,
+    "request": {
+      "protocolVersion": 1,
+      "operation": "export",
+      "requestId": "a-container-its-output-extension-contradicts-is-the-callers-input",
+      "project": {},
+      "assets": { "video": "/staging/video.mp4" },
+      "effects": [],
+      "startTicks": 0,
+      "endTicks": 120000,
+      "frameRate": { "num": 30, "den": 1 },
+      "includeAudio": true,
+      "container": "mov",
+      "output": "/staging/output.mp4"
+    },
+    "messages": [],
+    "expectedErrorCode": "INVALID_INPUT"
+  },
+  {
+    "name": "a codec the container does not offer is the caller's input",
+    "requestValid": false,
+    "request": {
+      "protocolVersion": 1,
+      "operation": "export",
+      "requestId": "a-codec-the-container-does-not-offer-is-the-callers-input",
+      "project": {},
+      "assets": { "video": "/staging/video.mp4" },
+      "effects": [],
+      "startTicks": 0,
+      "endTicks": 120000,
+      "frameRate": { "num": 30, "den": 1 },
+      "includeAudio": true,
+      "container": "webm",
+      "videoCodec": "h264",
+      "output": "/staging/output.webm"
+    },
+    "messages": [],
+    "expectedErrorCode": "INVALID_INPUT"
+  },
+  {
+    "name": "an output extension that names no container is the caller's input",
+    "requestValid": false,
+    "request": {
+      "protocolVersion": 1,
+      "operation": "export",
+      "requestId": "an-output-extension-that-names-no-container-is-the-callers-input",
+      "project": {},
+      "assets": { "video": "/staging/video.mp4" },
+      "effects": [],
+      "startTicks": 0,
+      "endTicks": 120000,
+      "frameRate": { "num": 30, "den": 1 },
+      "includeAudio": true,
+      "output": "/staging/output.avi"
     },
     "messages": [],
     "expectedErrorCode": "INVALID_INPUT"

@@ -2,8 +2,10 @@
 
 use crate::capabilities::{NativeEncoderClass, encoder_class};
 use alpha2_ffmpeg_bridge::{DecodedFrame, DisplayRotation};
+use std::ffi::{CStr, CString};
+
 use alpha2_media::{
-    ChromaLocation, ColorMatrix, ColorMetadata, ColorPrimaries, ColorRange, DecodeError,
+    ChromaLocation, ColorMatrix, ColorMetadata, ColorPrimaries, ColorRange, Container, DecodeError,
     DecodedVideoFrame, DynamicRange, EncodeError, Orientation, PixelFormat, Plane, Rect, Rotation,
     SampleAspectRatio, TransferFunction, YuvFormat,
 };
@@ -685,15 +687,51 @@ const HVC1: u32 = u32::from_le_bytes(*b"hvc1");
 /// `hev1`: one whose parameter sets may also be in the stream.
 const HEV1: u32 = u32::from_le_bytes(*b"hev1");
 
-/// The codec tag (sample entry) a stream of `codec_id` carrying `tag` is
-/// written to MP4 or MOV with. HEVC is `hvc1`, as browsers and Apple's
-/// players expect and as the browser exporter writes it; an encoder's
-/// parameter sets are always in the sample description (global header). A
-/// copied HEVC stream keeps the entry it came with, which says where its
-/// parameter sets are. Any other copied stream's tag is cleared, so the muxer
-/// picks its container's; an encoded one keeps what the encoder set.
-pub(crate) fn mp4_codec_tag(codec_id: ffi::AVCodecID, tag: u32, copied: bool) -> u32 {
-    if codec_id == ffi::AV_CODEC_ID_HEVC {
+/// The `FFmpeg` muxer that writes `container`.
+pub(crate) const fn muxer_name(container: Container) -> &'static CStr {
+    match container {
+        Container::Mp4 => c"mp4",
+        Container::Mov => c"mov",
+        Container::Mkv => c"matroska",
+        Container::Webm => c"webm",
+    }
+}
+
+/// The options `container`'s muxer writes its header with.
+///
+/// Matroska and `WebM` get `fflags=+bitexact`: without it, `matroskaenc` gives
+/// every track, and a Matroska file its segment, a random UID, so two exports
+/// of the same frames would differ. With it the track UIDs are their numbers,
+/// the segment has no UID (it links to no other), and the writing
+/// application is `Lavf` without a version. MP4 and MOV are deterministic
+/// without it and keep their header as it is.
+pub(crate) fn muxer_header_options(container: Container) -> Option<AVDictionary> {
+    matches!(container, Container::Mkv | Container::Webm)
+        .then(|| AVDictionary::new(c"fflags", c"+bitexact", 0))
+}
+
+/// The codec tag a stream of `codec_id` carrying `tag` is written to
+/// `container` with.
+///
+/// MP4 and MOV name a stream's codec by its sample entry. HEVC is `hvc1`, as
+/// browsers and Apple's players expect and as the browser exporter writes it;
+/// an encoder's parameter sets are always in the sample description (global
+/// header). A copied HEVC stream keeps the entry it came with, which says
+/// where its parameter sets are. Any other copied stream's tag is cleared, so
+/// the muxer picks its container's; an encoded one keeps what the encoder set.
+///
+/// Matroska and `WebM` name it by a `CodecID` string the muxer derives from the
+/// codec, and a fourcc left over from another container can make it refuse
+/// the stream, so the tag is always cleared there.
+pub(crate) fn container_codec_tag(
+    container: Container,
+    codec_id: ffi::AVCodecID,
+    tag: u32,
+    copied: bool,
+) -> u32 {
+    if matches!(container, Container::Mkv | Container::Webm) {
+        0
+    } else if codec_id == ffi::AV_CODEC_ID_HEVC {
         if tag == HVC1 || tag == HEV1 {
             tag
         } else {
@@ -790,12 +828,14 @@ pub(crate) fn video_decoder_options(threads: i64) -> AVDictionary {
     AVDictionary::new_int(c"threads", threads, 0).set(c"flags", c"+unaligned", 0)
 }
 
-/// Options every export sends `codec`, run on the GPU when `on_hardware`.
+/// Options every export sends `codec`, run on the GPU when `on_hardware`, for
+/// frames `width` wide.
 pub(crate) fn video_encoder_options(
     color: ColorMetadata,
     codec: &AVCodec,
     on_hardware: bool,
     threads: i64,
+    width: u32,
 ) -> AVDictionary {
     let mut options = color_options(color);
     // A hybrid encoder is a software transform until it is told otherwise, and `hw_encoding` exists
@@ -805,9 +845,96 @@ pub(crate) fn video_encoder_options(
         options = options.set_int(c"hw_encoding", i64::from(on_hardware), 0);
     }
     if on_hardware {
-        options
+        return options;
+    }
+    let name = codec.name().to_string_lossy();
+    for (key, value) in software_encoder_profile(&name, width, threads) {
+        options = set_encoder_option(options, key, &value);
+    }
+    options.set_int(c"threads", threads, 0)
+}
+
+/// Speed and structure options a software encoder runs with, fixed per
+/// encoder so an export is reproducible: the levels choose only the rate.
+///
+/// - `libvpx-vp9` runs libvpx's `good` deadline at `cpu-used` 4 with
+///   row-based multithreading, one tile column per 256 pixels of width (the
+///   most libvpx allows, and what its threads split across), and its
+///   alt-ref frames over a 25-frame look-ahead.
+/// - `libsvtav1` runs preset 8. SVT-AV1 sizes its threads from a level of
+///   parallelism (1 to 6), not from `threads`; the level is the one SVT-AV1
+///   would pick for a machine with `threads` cores, so the export's codec
+///   thread budget still bounds it. Above level 1 its pictures can be coded
+///   in whatever order its threads finish them (two encodes of the same
+///   frames at levels 3 and 5 differed); [`deterministic_encode`] runs it at
+///   level 1, which codes them in decode order.
+///
+/// `libvpx-vp9` writes the same bytes at any thread count.
+fn software_encoder_profile(name: &str, width: u32, threads: i64) -> Vec<(&'static CStr, String)> {
+    match name {
+        "libvpx-vp9" => vec![
+            (c"deadline", "good".into()),
+            (c"cpu-used", "4".into()),
+            (c"row-mt", "1".into()),
+            (c"tile-columns", vp9_tile_columns_log2(width).to_string()),
+            (c"lag-in-frames", "25".into()),
+            (c"auto-alt-ref", "1".into()),
+        ],
+        "libsvtav1" => vec![
+            (c"preset", "8".into()),
+            (
+                c"svtav1-params",
+                format!(
+                    "lp={}",
+                    if deterministic_encode() {
+                        1
+                    } else {
+                        svt_av1_parallelism(threads)
+                    }
+                ),
+            ),
+        ],
+        _ => Vec::new(),
+    }
+}
+
+/// Whether `ALPHA2_DETERMINISTIC_ENCODE=1` asks every software encoder for
+/// output that is the same bytes on every run, at the cost of speed. Only
+/// `libsvtav1` needs it: it then runs on one thread of pictures.
+pub(crate) fn deterministic_encode() -> bool {
+    std::env::var_os("ALPHA2_DETERMINISTIC_ENCODE").is_some_and(|value| value == "1")
+}
+
+/// `tile-columns` for libvpx: log2 of the tile columns a `width`-pixel frame
+/// splits into, at least 256 pixels each.
+pub(crate) fn vp9_tile_columns_log2(width: u32) -> u32 {
+    (width / 256).max(1).ilog2().min(6)
+}
+
+/// SVT-AV1's level of parallelism for a budget of `threads` workers: the
+/// level its own default gives a machine with that many cores (levels 1 to 6
+/// for 1, 2, 3-5, 6-11, 12-23, and 24 or more cores).
+pub(crate) fn svt_av1_parallelism(threads: i64) -> u32 {
+    match threads {
+        ..=1 => 1,
+        2 => 2,
+        3..=5 => 3,
+        6..=11 => 4,
+        12..=23 => 5,
+        _ => 6,
+    }
+}
+
+/// Sets `key` to `value` in an encoder's options. A list-valued option
+/// (`svtav1-params`, `:`-separated `key=value` pairs) already set gains
+/// `value` instead of losing what it held.
+pub(crate) fn set_encoder_option(options: AVDictionary, key: &CStr, value: &str) -> AVDictionary {
+    let value = CString::new(value).unwrap_or_default();
+    if key == c"svtav1-params" && options.get(key, None, 0).is_some() {
+        let appended = CString::new(format!(":{}", value.to_string_lossy())).unwrap_or_default();
+        options.set(key, &appended, ffi::AV_DICT_APPEND)
     } else {
-        options.set_int(c"threads", threads, 0)
+        options.set(key, &value, 0)
     }
 }
 

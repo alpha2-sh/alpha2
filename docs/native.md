@@ -32,7 +32,7 @@ Keep `bin/` and `lib/` together when the archive is moved or packaged into an ap
 
 ## `alpha2-host`
 
-`alpha2-host` renders a project on the GPU and encodes it to MP4. Run it without arguments to print every flag.
+`alpha2-host` renders a project on the GPU and encodes it to MP4, MOV, Matroska or WebM. Run it without arguments to print every flag.
 
 - `alpha2-host export` exports one project and prints the result as JSON on standard output; progress goes to standard error.
 
@@ -40,7 +40,7 @@ Keep `bin/` and `lib/` together when the archive is moved or packaged into an ap
   alpha2-host export --project project.json --asset image-1=image.png --out tutorial.mp4
   ```
 
-  Each `--asset <source-id>=<path>` gives the file of one source of the project. The output must not exist yet: the export writes `<stem>.alpha2-partial.<ext>` beside it and renames that into place when it is finished. `--start-ticks` and `--end-ticks` choose the range (the whole timeline by default), `--frame-rate <num>/<den>` the output rate (the project's by default), `--video-codec` the codec (`h264` by default), `--video-quality` a level (`very-low`, `low`, `medium`, `high`, `very-high`) or a bitrate in bits per second, and `--no-audio` leaves the audio out.
+  Each `--asset <source-id>=<path>` gives the file of one source of the project. The output must not exist yet: the export writes `<stem>.alpha2-partial.<ext>` beside it and renames that into place when it is finished. `--start-ticks` and `--end-ticks` choose the range (the whole timeline by default), `--frame-rate <num>/<den>` the output rate (the project's by default), the output's extension (`.mp4`, `.mov`, `.mkv`, `.webm`) or `--container` the container, `--video-codec` and `--audio-codec` the codecs (the container's by default: H.264 and AAC, or VP9 and Opus for WebM), `--video-quality` a level (`very-low`, `low`, `medium`, `high`, `very-high`) or a bitrate in bits per second, and `--no-audio` leaves the audio out.
 - `alpha2-host conform` checks a project's media without rendering: it prints what each source would read and what is missing or unusable, and exits with status 1 when something blocks the export.
 - `alpha2-host serve` reads requests on standard input and answers on standard output, one JSON object per line: the [host protocol](host-protocol.md).
 
@@ -50,6 +50,10 @@ Keep `bin/` and `lib/` together when the archive is moved or packaged into an ap
 
 An export hands its frames to the encoder either by reading them back from the GPU or, where the host has a GPU-resident encode path that takes the codec and the output size, without leaving the GPU. The `capabilities` request reports the decode mode and the hardware decoders (`decode`), and the encoders and the GPU-resident path (`encode`); every export result reports the decode mode it ran (`videoDecodeMode`) and the output path it took (`videoOutputPath`).
 
+### Encoders
+
+The pinned FFmpeg runtime encodes on the CPU with `libvpx-vp9` (VP9), `libsvtav1` (AV1), `mpeg4` (MPEG-4 Part 2), `aac` and `libopus` (Opus), so a host without a GPU encoder still writes VP9 or AV1 in MP4, Matroska or WebM. H.264 and HEVC come from the platform's hardware encoders: Vulkan Video on Linux, VideoToolbox on macOS, Media Foundation and D3D12 Video on Windows. VP9 and AV1 run at one fixed speed setting each, so the quality level chooses only the rate; software AV1 is slow at 4K.
+
 ## `alpha2`
 
 `alpha2` works on one media file at a time. Run it without arguments to print every command.
@@ -58,7 +62,7 @@ An export hands its frames to the encoder either by reading them back from the G
 | --- | --- |
 | `alpha2 probe <media>` | Prints the container, its duration and its streams (codec, size, frame rate, color). |
 | `alpha2 thumbnail <media> <out.png> [--at <seconds>]` | Writes one frame as PNG: the frame at a time on the source's own timeline, or by default the sharpest of nine frames spread over the video that is neither black nor white. |
-| `alpha2 transcode <media> <out.mp4> [--proxy half\|quarter] [--video-codec <id>]` | Encodes the video again at its own size, or at half or a quarter of it for a proxy. Without `--video-codec` it uses H.264 when the runtime has an H.264 encoder that takes frames from memory, and otherwise another codec the runtime encodes; it prints which. |
+| `alpha2 transcode <media> <out.mp4\|.mov\|.mkv\|.webm> [--proxy half\|quarter] [--video-codec <id>]` | Encodes the video again at its own size, or at half or a quarter of it for a proxy, into the container the output's extension names. Without `--video-codec` it uses the container's default codec (H.264, or VP9 for WebM) when the runtime has an encoder for it that takes frames from memory, and otherwise another codec the runtime encodes that the container offers; it prints which. |
 | `alpha2 export-audio <media> <out.wav>` | Decodes the audio, resampled to 48 kHz, into a WAV file that starts at the source's time zero. |
 | `alpha2 waveform <media> [bucket-ms] [levels]` | Prints a waveform summary as JSON: the minimum, maximum and RMS of each bucket of samples (10 ms by default), at that size and at coarser levels each four times the last (6 levels by default). |
 

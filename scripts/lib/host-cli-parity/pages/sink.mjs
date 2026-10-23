@@ -7,13 +7,13 @@ export function sinkPage() {
 try {
   const wasm = await import("/packages/alpha2/wasm/alpha2_wasm.js");
   await wasm.default();
-  const { MediabunnyMp4Sink, videoEncoderLatencyMode } = await import("/packages/alpha2/dist/mediabunny.js");
+  const { MediabunnySink, videoEncoderLatencyMode } = await import("/packages/alpha2/dist/mediabunny.js");
   const { resolveVideoRateControl } = await import("/packages/alpha2/dist/rate-control.js");
-  // The quantizer each frame is encoded at, as the encoder receives it: mediabunny passes it in the
-  // frame's encode options, not in the configuration the sink reads back.
   // The sink's first use probes the encoder's latency mode with frames of its own, which carry no
   // quantizer; probed here first, they are not counted as the sink's.
   await videoEncoderLatencyMode("avc");
+  // The quantizer each frame is encoded at, as the encoder receives it: mediabunny passes it in the
+  // frame's encode options, not in the configuration the sink reads back.
   let encodedQuantizers = new Set();
   const encode = VideoEncoder.prototype.encode;
   VideoEncoder.prototype.encode = function (frame, options) {
@@ -26,7 +26,7 @@ try {
     const videoRateControl = resolveVideoRateControl(wasm, {
       codec: "h264", width: 640, height: 360, frameRate: { num: 30, den: 1 }, quality: level,
     });
-    const sink = new MediabunnyMp4Sink({ videoCodec: "avc", videoRateControl, frameRate: { num: 30, den: 1 }, destination: { kind: "memory", maxBytes: 64 * 1024 * 1024 } });
+    const sink = new MediabunnySink({ container: "mp4", videoCodec: "avc", videoRateControl, frameRate: { num: 30, den: 1 }, destination: { kind: "memory", maxBytes: 64 * 1024 * 1024 } });
     const canvas = new OffscreenCanvas(640, 360);
     const context = canvas.getContext("2d");
     for (let index = 0; index < 60; index += 1) {

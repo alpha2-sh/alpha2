@@ -1,7 +1,7 @@
 schema = 2
 name = "alpha2-ffmpeg-lgpl-runtime"
 repository = "alpha2-sh/ffmpeg-builds"
-release_tag = "ffmpeg-8.1.3-shared-build1"
+release_tag = "ffmpeg-8.1.3-shared-build3"
 ffmpeg_version = "8.1.3"
 source_tag = "n8.1.3"
 source_url = "https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz"
@@ -29,6 +29,9 @@ required_configure = [
   "--disable-iconv",
   "--enable-zlib",
   "--enable-libdav1d",
+  "--enable-libopus",
+  "--enable-libvpx",
+  "--enable-libsvtav1",
 ]
 forbidden_configure = [
   "--enable-gpl",
@@ -95,6 +98,12 @@ notices = [
   "licenses/FFmpeg/CREDITS",
   "licenses/zlib/LICENSE",
   "licenses/dav1d/COPYING",
+  "licenses/opus/COPYING",
+  "licenses/libvpx/LICENSE",
+  "licenses/libvpx/AUTHORS",
+  "licenses/libvpx/PATENTS",
+  "licenses/SVT-AV1/LICENSE.md",
+  "licenses/SVT-AV1/PATENTS.md",
 ]
 # Only the Linux builds compile against the Vulkan headers, so only they carry that notice. macOS
 # uses VideoToolbox and Windows uses D3D11VA/D3D12VA.
@@ -106,28 +115,28 @@ notices_linux = [
 
 [assets.win-x64]
 archive = "ffmpeg-8.1.3-shared-win-x64.zip"
-sha256 = "be238adbd1ca872c460d98d6b56ce1867f97d2de76a267922657b9f5a8078102"
+sha256 = "8065fd48f62ce11c6ac255a0a8cfceb6591312a15cef8b57439dcfb1fb33d06b"
 report = "ffmpeg-8.1.3-shared-win-x64.configure.txt"
-report_sha256 = "8424e67ded8b6c1cd0d3a89b48af5221233f20da63cebb86e0b7c4657102c6f4"
+report_sha256 = "1967f8afa9912a02fd2e5cb19eb914843cc27504d0ce8d93b081bf57b9e0b476"
 minimum_os = "Windows 10"
 
 [assets.linux-x64]
 archive = "ffmpeg-8.1.3-shared-linux-x64.tar.gz"
-sha256 = "805d67c744542cd912d4c37d7b8c4e4072edd516f3ad110ee7b44c626586951c"
+sha256 = "5810a7c8133c0b4bbbd67c01e7a4410cb1502ab6e37b377b11ebc5315a2200f4"
 report = "ffmpeg-8.1.3-shared-linux-x64.configure.txt"
-report_sha256 = "04281c41f49fc63d21fdf0a94dc170f63d9c0b10eccba759c2d00a37bc97cf15"
+report_sha256 = "06f08010e577be34cc1ecaf4930e9fb63a91b3d647b51fcc7e3b6063b3aefe0e"
 minimum_os = "glibc 2.35"
 
 [assets.linux-arm64]
 archive = "ffmpeg-8.1.3-shared-linux-arm64.tar.gz"
-sha256 = "4f52a21d93a68012eee926c09040446ce3c17b3edd514f343334b963f42b159f"
+sha256 = "e011d7a983bdaf3f2d125b911a2cb1c461cfdc2e2f70b701d2ab01599aecd00e"
 report = "ffmpeg-8.1.3-shared-linux-arm64.configure.txt"
-report_sha256 = "fe7c13fd8e5490b877594daabf2aa85ed2f92b01e39f0e19e3fa7725450da607"
+report_sha256 = "3bb81d80ffc7798612a5ab6f239b1f53626914227d25a08efabb89876902dc1b"
 minimum_os = "glibc 2.35"
 
 [assets.macos-arm64]
 archive = "ffmpeg-8.1.3-shared-macos-arm64.tar.gz"
-sha256 = "bbd0fa5868cb6dcdde6b44d7e7c3a95aab4b7acaeb328fb69a4621cf42cc48c9"
+sha256 = "375321e331550130878b3fb719863beece05b59e891ccfa8018b381cbe42412a"
 report = "ffmpeg-8.1.3-shared-macos-arm64.configure.txt"
-report_sha256 = "c8caf4f65feb901dd5bf51a7ae1bba2927c1908937f730a61cadcb8390d89291"
+report_sha256 = "1f772a0638ae697ec91000a406204d528c489790d3a982f91e27dbc0fc4abd2c"
 minimum_os = "macOS 11"

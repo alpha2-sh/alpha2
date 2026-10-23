@@ -160,7 +160,11 @@ function scripted({
       log.order.push("sink.abort");
     },
   };
-  const openOutput = async () => ({
+  const openOutput = async (request) => {
+    log.outputRequest = request;
+    return opened();
+  };
+  const opened = () => ({
     mode: "memory",
     estimatedBytes: 1_000,
     storageEstimate: null,
@@ -170,7 +174,7 @@ function scripted({
       log.order.push("output.abort");
     },
   });
-  const run = ({ inFlightBytes, signal } = {}) =>
+  const run = ({ inFlightBytes, signal, options = {} } = {}) =>
     exportTimeline({
       supplyFrame: async (seconds, missing) => {
         log.supplied.push([seconds, missing]);
@@ -185,9 +189,13 @@ function scripted({
       options: {
         includeAudio: false,
         ...(inFlightBytes ? { memory: { inFlightBytes } } : {}),
+        ...options,
       },
       openOutput,
-      createSink: () => sink,
+      createSink: (sinkOptions) => {
+        log.sinkOptions = sinkOptions;
+        return sink;
+      },
       signal,
     });
   return { log, run };
@@ -228,6 +236,55 @@ test(
     assert.equal(log.released, 1);
     assert.equal(memory.idleBytesReleased, 1_000);
     assert.deepEqual(log.order, ["beginExport", "endExport", "sink.finish"]);
+  },
+);
+
+test(
+  "a container's defaults fill the codecs left out, and the result names the container",
+  { skip },
+  async () => {
+    for (const [container, videoCodec] of [
+      [undefined, "avc"],
+      ["mov", "avc"],
+      ["mkv", "avc"],
+      ["webm", "vp9"],
+    ]) {
+      const { log, run } = scripted({ frames: 2 });
+      const { result } = await quiet(() =>
+        run({ options: container === undefined ? {} : { container } }),
+      );
+      const expected = container ?? "mp4";
+      assert.equal(log.sinkOptions.container, expected);
+      assert.equal(log.sinkOptions.videoCodec, videoCodec);
+      assert.equal(log.outputRequest.container, expected);
+      assert.equal(result.container, expected);
+      assert.equal(result.videoCodec, videoCodec);
+    }
+  },
+);
+
+test(
+  "a codec the container does not offer is refused before the output opens",
+  { skip },
+  async () => {
+    for (const options of [
+      { container: "webm", videoCodec: "avc" },
+      { container: "mov", videoCodec: "av1" },
+      { container: "mov", audioCodec: "opus" },
+      { container: "avi" },
+    ]) {
+      const { log, run } = scripted({ frames: 2 });
+      await assert.rejects(
+        run({ options }),
+        (error) =>
+          error.failure?.code === "INVALID_INPUT" &&
+          error.failure.phase === "prepare" &&
+          !isRetryableFailure(error.failure),
+        JSON.stringify(options),
+      );
+      assert.equal(log.outputRequest, undefined);
+      assert.deepEqual(log.order, []);
+    }
   },
 );
 

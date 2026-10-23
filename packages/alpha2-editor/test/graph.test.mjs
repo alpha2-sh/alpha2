@@ -934,7 +934,7 @@ test("an effect's named inputs are graph inputs: listed in name order, connected
   assert.equal(inputOf(op, "inputs.map"), "noise");
   assert.equal(inputOf(op, "inputs.glow"), undefined);
   assert.equal(inputOf(op, "inputs.mask"), undefined);
-  // Connecting a name the node has not got adds it; disconnecting keeps the slot.
+  // Connecting a name the node does not have adds it; disconnecting keeps the slot.
   const masked = withInput(op, "inputs.mask", "clip");
   assert.deepEqual(masked.inputs, { map: "noise", glow: null, mask: "clip" });
   assert.deepEqual(withInput(op, "inputs.map", null).inputs, {
@@ -993,7 +993,7 @@ test("graph commands connect, disconnect, remove, group, and ungroup through nam
   const project = () => e.document.project;
   const composition = () => project().compositions.find((c) => c.id === id);
   assert.deepEqual(graphIssues(composition(), "clip", project()), []);
-  // A node read only through a named input means the clip's picture is no stack.
+  // An effect with a named input reads another branch, so the clip's graph is no effect stack.
   assert.equal(
     effectStack(project(), e.query().clips.get("c").clip),
     undefined,
@@ -1036,7 +1036,7 @@ test("graph commands connect, disconnect, remove, group, and ungroup through nam
   ok({ type: "graph.ungroup", compositionId: id, nodeId: "look" });
   assert.deepEqual(nodes(e)["look-fx"].op.inputs, { glow: "glow-source-soft" });
 
-  // Removing what a named input reads leaves it unconnected, which the output needs.
+  // Removing what a named input reads leaves it unconnected, a missing input of the output's graph.
   ok({
     type: "graph.node.remove",
     compositionId: id,
@@ -1170,7 +1170,7 @@ test("multi-pass groups save as presets with the images and effects their passes
       "test.displace@1",
     ],
   );
-  // A file-backed image is the project's to have: a project without it falls short of it.
+  // A preset does not carry a file-backed image: a project without that source falls short of it.
   const bare = createDocument({ ...base, sources: [base.sources[0]] });
   assert.deepEqual(presetShortfall(bare, preset, () => true).sources, ["i"]);
   const e = createEditor({ document: createDocument(base) });

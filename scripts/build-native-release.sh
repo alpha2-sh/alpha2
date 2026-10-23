@@ -205,7 +205,9 @@ package_mode() {
     cp -R "$sdk_root/licenses/Vulkan-Headers" "$package/licenses/Vulkan-Headers"
   fi
   cp -R "$sdk_root/licenses/zlib" "$package/licenses/zlib"
-  cp -R "$sdk_root/licenses/dav1d" "$package/licenses/dav1d"
+  for library in dav1d opus libvpx SVT-AV1; do
+    cp -R "$sdk_root/licenses/$library" "$package/licenses/$library"
+  done
   cp "$crate_licenses" "$package/licenses/rust-crate-licenses.md"
 
   patch_list=$(sed -n 's/.*file = "\([^"]*\)", upstream = "\([0-9a-f]*\)".*/  - \1 (FFmpeg \2)/p' "$manifest" |

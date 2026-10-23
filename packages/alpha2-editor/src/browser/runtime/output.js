@@ -9,6 +9,7 @@ import {
   MEMORY_OUTPUT_MARGIN,
   WritableFileDestination,
 } from "alpha2/export-destination";
+import { containerPolicy } from "alpha2/containers";
 import { ExportFailureError } from "alpha2/export-failure";
 import { holdShared, whenUnheld } from "./locks.js";
 
@@ -45,6 +46,8 @@ export function storageSupport() {
  * counts every write since its last disk scan, so `quota - usage` can be near zero on an empty
  * disk. A full disk fails at the write (`STORAGE_QUOTA_EXCEEDED`); the estimate is only reported.
  *
+ * `container` (default `mp4`) gives the temporary file its extension and the artifact its MIME
+ * type.
  * Returns `{ mode, destination, storageEstimate, abort, finish }`: `destination` is the sink's,
  * `abort` discards the file, and `finish(sinkOutput)` turns the finished output into the artifact's
  * fields.
@@ -52,6 +55,7 @@ export function storageSupport() {
 export async function openExportOutput({
   jobId,
   name,
+  container = "mp4",
   target,
   durationSeconds,
   videoBitrate,
@@ -62,14 +66,16 @@ export async function openExportOutput({
     videoBitrate,
     audioBitrate,
   });
+  const policy = containerPolicy(container);
   const kind = target?.kind ?? "opfs";
   if (kind === "file") return openPickedFile(target.handle, estimate);
   if (kind === "opfs") {
-    const opened = await openOriginPrivateFile(jobId, name, estimate);
+    const opened = await openOriginPrivateFile(jobId, name, policy, estimate);
     if (opened) return opened;
   }
   return openMemory(target?.maxBytes ?? DEFAULT_MEMORY_OUTPUT_LIMIT, estimate, {
     name,
+    mimeType: policy.mimeType,
     fellBack: kind !== "memory",
   });
 }
@@ -100,13 +106,13 @@ async function openPickedFile(handle, estimate) {
   };
 }
 
-async function openOriginPrivateFile(jobId, name, estimate) {
+async function openOriginPrivateFile(jobId, name, policy, estimate) {
   const storage = globalThis.navigator?.storage;
   if (typeof storage?.getDirectory !== "function") return null;
   let directory;
   let handle;
   let writable;
-  const fileName = `${Date.now()}-${jobId}.mp4`;
+  const fileName = `${Date.now()}-${jobId}.${policy.extensions[0]}`;
   // Held from before the file exists until it is removed, so another page's sweep leaves it alone.
   const lease = await holdShared(exportLock(fileName));
   try {
@@ -156,7 +162,7 @@ async function openOriginPrivateFile(jobId, name, estimate) {
       const file = await handle.getFile();
       return {
         kind: "file",
-        file: new File([file], name, { type: "video/mp4" }),
+        file: new File([file], name, { type: policy.mimeType }),
         name,
         bytes: output.bytes,
         release: remove,
@@ -183,7 +189,7 @@ async function reportedStorage(storage, estimate) {
   };
 }
 
-function openMemory(limit, estimate, { name, fellBack }) {
+function openMemory(limit, estimate, { name, mimeType, fellBack }) {
   const peak = memoryOutputPeakBytes(estimate);
   if (peak > limit)
     throw refused(
@@ -203,7 +209,7 @@ function openMemory(limit, estimate, { name, fellBack }) {
     abort: async () => {},
     finish: async (output) => ({
       kind: "blob",
-      blob: new Blob([output.buffer], { type: "video/mp4" }),
+      blob: new Blob([output.buffer], { type: mimeType }),
       name,
       bytes: output.buffer.byteLength,
     }),

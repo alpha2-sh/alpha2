@@ -33,4 +33,4 @@ The bundled archive contains the seven locked LGPL shared libraries and uses a p
 
 Headers, pkg-config files, and import libraries are build inputs only. They stay in the generic SDK release and are not copied into an alpha2 runtime archive.
 
-Every native archive carries the exact lock file, platform configure/runtime audit, alpha2 third-party notices, FFmpeg, zlib, and dav1d notices (and, on Linux, Vulkan-Headers), and a source/provenance record. Consumers may replace the bundled libraries with ABI-compatible FFmpeg 8 builds. Patent and codec distribution rules remain the distributor's responsibility even when the software license is LGPL.
+Every native archive carries the exact lock file, platform configure/runtime audit, alpha2 third-party notices, FFmpeg, zlib, dav1d, libopus, libvpx and SVT-AV1 notices (and, on Linux, Vulkan-Headers), and a source/provenance record. Consumers may replace the bundled libraries with ABI-compatible FFmpeg 8 builds. Patent and codec distribution rules remain the distributor's responsibility even when the software license is LGPL.

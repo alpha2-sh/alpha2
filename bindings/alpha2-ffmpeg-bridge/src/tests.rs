@@ -634,6 +634,44 @@ fn yuv_layouts_come_from_the_pixel_format_descriptor() {
 }
 
 #[test]
+fn interleaved_audio_keeps_channel_order() {
+    // A left channel of positive ramps and a right one of negative ramps.
+    let channels = [
+        vec![0.25_f32, 0.5, 0.75, 1.0],
+        vec![-0.25_f32, -0.5, -0.75, -1.5],
+    ];
+    let frame = audio_frame(&channels, ffi::AV_SAMPLE_FMT_FLT, 48_000, 0).expect("FLT frame");
+    assert_eq!(frame.format, ffi::AV_SAMPLE_FMT_FLT);
+    assert_eq!(frame.nb_samples, 4);
+    // SAFETY: an FLT frame has one plane of nb_samples x channels f32 samples.
+    let packed = unsafe { slice::from_raw_parts(frame.data[0], 8 * size_of::<f32>()) };
+    let packed = packed
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|bytes| f32::from_ne_bytes(*bytes))
+        .collect::<Vec<_>>();
+    assert_eq!(packed, [0.25, -0.25, 0.5, -0.5, 0.75, -0.75, 1.0, -1.5]);
+    let frame = audio_frame(&channels, ffi::AV_SAMPLE_FMT_S16, 48_000, 0).expect("S16 frame");
+    // SAFETY: an S16 frame has one plane of nb_samples x channels i16 samples.
+    let packed = unsafe { slice::from_raw_parts(frame.data[0], 8 * size_of::<i16>()) };
+    let packed = packed
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|bytes| i16::from_ne_bytes(*bytes))
+        .collect::<Vec<_>>();
+    // Rounded to the nearest step, and the out-of-range sample clamped.
+    assert_eq!(
+        packed,
+        [
+            8_192, -8_192, 16_384, -16_384, 24_575, -24_575, 32_767, -32_767
+        ]
+    );
+    assert!(audio_frame(&channels, ffi::AV_SAMPLE_FMT_DBL, 48_000, 0).is_err());
+}
+
+#[test]
 fn planar_audio_supports_the_declared_channel_matrix() {
     for channel_count in [1_usize, 2, 3, 8] {
         let channels = (0..channel_count)
@@ -641,7 +679,8 @@ fn planar_audio_supports_the_declared_channel_matrix() {
                 vec![f32::from(u8::try_from(channel).expect("small channel")) + 0.25; 1_024]
             })
             .collect::<Vec<_>>();
-        let frame = audio_frame_f32p(&channels, 48_000, 7).expect("valid planar frame");
+        let frame =
+            audio_frame(&channels, ffi::AV_SAMPLE_FMT_FLTP, 48_000, 7).expect("valid planar frame");
         assert_eq!(frame.nb_samples, 1_024);
         assert_eq!(
             frame.ch_layout().nb_channels,
@@ -651,7 +690,7 @@ fn planar_audio_supports_the_declared_channel_matrix() {
         for (index, expected) in channels.iter().enumerate() {
             assert!(!frame.data[index].is_null());
             let byte_len = expected.len() * size_of::<f32>();
-            // SAFETY: `audio_frame_f32p` created one FLTP plane containing exactly
+            // SAFETY: `audio_frame` created one FLTP plane containing exactly
             // `expected.len()` initialized f32 samples.
             let actual = unsafe { slice::from_raw_parts(frame.data[index], byte_len) };
             // SAFETY: a Vec<f32> is initialized storage readable as bytes.

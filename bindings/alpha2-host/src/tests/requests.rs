@@ -1200,27 +1200,67 @@ fn an_effect_request_lists_its_named_inputs_or_leaves_them_out() {
     assert!(error.to_string().contains("unknown field"), "{error}");
 }
 
+/// An export request line with `fields` set over a minimal one.
+fn format_line(fields: &Value) -> String {
+    let mut request = json!({
+        "protocolVersion": PROTOCOL_VERSION,
+        "operation": "export",
+        "requestId": "format",
+        "project": {},
+        "assets": {},
+        "startTicks": 0,
+        "endTicks": 1,
+        "frameRate": {"num": 30, "den": 1},
+        "output": "output.mp4"
+    });
+    for (key, value) in fields.as_object().expect("fields") {
+        request[key] = value.clone();
+    }
+    request.to_string()
+}
+
+/// The container and codecs an export request resolves to, or its refusal.
+fn resolved_format(fields: &Value) -> Result<crate::protocol::ResolvedFormat, HostError> {
+    match parse_request(&format_line(fields))? {
+        Request::Export(export) => export.format(),
+        Request::Capabilities { .. } | Request::Conform(_) => {
+            unreachable!("an export line parses as an export")
+        }
+    }
+}
+
 #[test]
 fn codec_request_ids_match_the_browser_protocol() {
-    let h264: VideoCodecRequest = serde_json::from_value(json!("h264")).expect("H.264 ID");
-    let hevc: VideoCodecRequest = serde_json::from_value(json!("hevc")).expect("HEVC ID");
-    let vp9: VideoCodecRequest = serde_json::from_value(json!("vp9")).expect("VP9 ID");
-    let av1: VideoCodecRequest = serde_json::from_value(json!("av1")).expect("AV1 ID");
-    let legacy: VideoCodecRequest =
-        serde_json::from_value(json!("mpeg4-part2")).expect("MPEG-4 ID");
-    let aac: AudioCodecRequest = serde_json::from_value(json!("aac")).expect("AAC ID");
-    assert_eq!(h264.into_native(), NativeVideoCodec::H264);
-    assert_eq!(hevc.into_native(), NativeVideoCodec::Hevc);
-    assert_eq!(vp9.into_native(), NativeVideoCodec::Vp9);
-    assert_eq!(av1.into_native(), NativeVideoCodec::Av1);
-    assert_eq!(legacy.into_native(), NativeVideoCodec::Mpeg4Part2);
-    assert_eq!(aac.into_native(), NativeAudioCodec::Aac);
-    // A request that names no codec gets H.264, not a 2001 codec.
+    use alpha2_media::Container;
+    for (id, native) in [
+        ("h264", NativeVideoCodec::H264),
+        ("hevc", NativeVideoCodec::Hevc),
+        ("vp9", NativeVideoCodec::Vp9),
+        ("av1", NativeVideoCodec::Av1),
+        ("mpeg4-part2", NativeVideoCodec::Mpeg4Part2),
+    ] {
+        let format = resolved_format(&json!({"videoCodec": id, "output": "out.mkv"}))
+            .unwrap_or_else(|error| panic!("{id}: {}", error.message));
+        assert_eq!(format.video, native, "{id}");
+        assert_eq!(format.container, Container::Mkv);
+    }
+    for (id, native) in [
+        ("aac", NativeAudioCodec::Aac),
+        ("opus", NativeAudioCodec::Opus),
+    ] {
+        let format = resolved_format(&json!({"audioCodec": id})).expect(id);
+        assert_eq!(format.audio, native, "{id}");
+    }
+    // A request that names no codec gets the container's defaults: H.264 and AAC for MP4.
+    let format = resolved_format(&json!({})).expect("defaults");
     assert_eq!(
-        VideoCodecRequest::default().into_native(),
-        NativeVideoCodec::H264
+        (format.container, format.video, format.audio),
+        (
+            Container::Mp4,
+            NativeVideoCodec::H264,
+            NativeAudioCodec::Aac
+        )
     );
-
     let request = parse_request(
         &json!({
         "protocolVersion": PROTOCOL_VERSION,
@@ -1242,6 +1282,113 @@ fn codec_request_ids_match_the_browser_protocol() {
         request,
         Request::Export(export) if export.video_encoder.as_deref() == Some("h264_nvenc")
     ));
+}
+
+#[test]
+fn an_export_resolves_its_container_from_the_request_or_its_output() {
+    use alpha2_media::Container;
+    let format = resolved_format(&json!({"output": "clip.WEBM"})).expect("webm");
+    assert_eq!(
+        (format.container, format.video, format.audio),
+        (
+            Container::Webm,
+            NativeVideoCodec::Vp9,
+            NativeAudioCodec::Opus
+        )
+    );
+    let format = resolved_format(&json!({"container": "mov", "output": "clip.mov"})).expect("mov");
+    assert_eq!(format.container, Container::Mov);
+    let refused = |fields: Value, words: &str| {
+        let error = resolved_format(&fields)
+            .err()
+            .unwrap_or_else(|| panic!("{fields} must be refused"));
+        assert_eq!(error.code, "INVALID_INPUT", "{}", error.message);
+        assert!(error.message.contains(words), "{fields}: {}", error.message);
+    };
+    refused(
+        json!({"container": "mov", "output": "clip.mp4"}),
+        "output: a mov output must end in .mov, not \".mp4\"",
+    );
+    refused(
+        json!({"container": "webm", "output": "clip.webm", "videoCodec": "h264"}),
+        "videoCodec: webm does not offer video codec h264; it offers vp9, av1",
+    );
+    refused(
+        json!({"output": "clip.mov", "audioCodec": "opus"}),
+        "audioCodec: mov does not offer audio codec opus; it offers aac",
+    );
+    refused(json!({"output": "clip.avi"}), "names no container");
+    refused(json!({"output": "clip"}), "has no extension");
+    refused(
+        json!({"container": "avi"}),
+        "container: unknown container \"avi\"",
+    );
+    refused(json!({"videoCodec": "theora"}), "videoCodec: unknown codec");
+    refused(json!({"audioCodec": "mp3"}), "audioCodec: unknown codec");
+    // A refused format is refused when the request is parsed, before anything opens.
+    let error = parse_request(&format_line(&json!({"output": "clip.avi"})))
+        .err()
+        .expect("refused at parse");
+    assert_eq!(error.code, "INVALID_INPUT");
+}
+
+#[test]
+fn a_cli_export_resolves_its_container_as_the_protocol_does() {
+    use alpha2_media::Container;
+    let project = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/cases/host-video-export-project.json")
+        .display()
+        .to_string();
+    let format = |out: &str, extra: &[&str]| {
+        let mut args = ["--project", project.as_str(), "--out", out]
+            .map(str::to_owned)
+            .to_vec();
+        args.extend(extra.iter().map(|arg| (*arg).to_owned()));
+        crate::cli::parse_export_args(args)
+            .and_then(crate::cli::export_request)
+            .and_then(|(request, _)| match request {
+                Request::Export(export) => export.format(),
+                Request::Capabilities { .. } | Request::Conform(_) => unreachable!("an export"),
+            })
+    };
+    let webm = format("out.webm", &[]).expect("webm");
+    assert_eq!(
+        (webm.container, webm.video, webm.audio),
+        (
+            Container::Webm,
+            NativeVideoCodec::Vp9,
+            NativeAudioCodec::Opus
+        )
+    );
+    let mkv = format("out.mkv", &["--container", "mkv", "--audio-codec", "opus"]).expect("mkv");
+    assert_eq!(
+        (mkv.container, mkv.video, mkv.audio),
+        (
+            Container::Mkv,
+            NativeVideoCodec::H264,
+            NativeAudioCodec::Opus
+        )
+    );
+    for (out, extra, words) in [
+        ("out.mp4", &["--container", "mov"][..], "must end in .mov"),
+        (
+            "out.webm",
+            &["--video-codec", "h264"][..],
+            "webm does not offer",
+        ),
+        ("out.avi", &[][..], "names no container"),
+        (
+            "out.mp4",
+            &["--container", "avi"][..],
+            "--container: unknown container",
+        ),
+    ] {
+        let error = format(out, extra)
+            .err()
+            .unwrap_or_else(|| panic!("{out} {extra:?} must be refused"));
+        assert_eq!(error.code, "INVALID_INPUT", "{}", error.message);
+        assert!(error.message.contains(words), "{}", error.message);
+    }
 }
 
 #[test]
@@ -1268,7 +1415,40 @@ fn capabilities_are_the_shared_capability_report() {
         report["playback"]["policies"].as_array().map(Vec::len),
         Some(4)
     );
-    assert_eq!(report["encode"]["container"], json!("mp4"));
+    // The containers are the engine's policy, as the shared corpus pins it.
+    let corpus: Value = serde_json::from_str(include_str!(
+        "../../../../tests/cases/export-container-corpus.json"
+    ))
+    .expect("container corpus");
+    let containers = corpus["containers"]
+        .as_array()
+        .expect("containers")
+        .iter()
+        .map(|entry| {
+            json!({
+                "id": entry["id"],
+                "extensions": entry["extensions"],
+                "video": entry["video"],
+                "audio": entry["audio"],
+                "defaultVideoCodec": entry["defaultVideoCodec"],
+                "defaultAudioCodec": entry["defaultAudioCodec"],
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(report["encode"]["containers"], json!(containers));
+    assert!(report["encode"].get("container").is_none());
+    if alpha2_native::ffmpeg_runtime_identity()
+        .pinned_sdk_mismatch()
+        .is_none()
+    {
+        assert_eq!(
+            report["encode"]["audio"],
+            json!([
+                {"id": "aac", "encoder": "aac"},
+                {"id": "opus", "encoder": "libopus"}
+            ])
+        );
+    }
     assert!(report["encode"]["gpuOutputPath"].is_object());
     assert_eq!(report["decode"]["mode"], json!("software"));
     // Every extension format is the build's to answer, image sequences included: a build without

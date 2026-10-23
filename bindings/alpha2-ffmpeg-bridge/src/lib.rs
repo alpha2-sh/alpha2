@@ -1675,6 +1675,28 @@ pub fn runtime_configuration() -> String {
         .into_owned()
 }
 
+/// Whether the linked muxer named `format` (`mp4`, `matroska`, ...) can
+/// store `codec` at normal standard compliance; `None` when no such muxer is
+/// linked.
+#[must_use]
+pub fn muxer_accepts_codec(format: &CStr, codec: ffi::AVCodecID) -> Option<bool> {
+    // SAFETY: `format` is NUL-terminated; FFmpeg returns a registered, process-lifetime muxer
+    // or null.
+    let muxer = unsafe { ffi::av_guess_format(format.as_ptr(), ptr::null(), ptr::null()) };
+    if muxer.is_null() {
+        return None;
+    }
+    // SAFETY: `muxer` is the live registered muxer found above.
+    let accepted = unsafe {
+        ffi::avformat_query_codec(
+            muxer,
+            codec,
+            i32::try_from(ffi::FF_COMPLIANCE_NORMAL).unwrap_or(0),
+        )
+    };
+    Some(accepted == 1)
+}
+
 /// Chroma layout, component depth, and alpha of one pixel format.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct SampleProfile {
@@ -2739,13 +2761,17 @@ fn copy_plane_to_frame(
     Ok(())
 }
 
-/// Copies planar `f32` samples into an owned `FFmpeg` audio frame.
+/// Copies planar `f32` samples into an owned `FFmpeg` audio frame of
+/// `format`: planar float (`AV_SAMPLE_FMT_FLTP`), interleaved float
+/// (`AV_SAMPLE_FMT_FLT`), or interleaved 16-bit (`AV_SAMPLE_FMT_S16`). A
+/// 16-bit sample is clamped to [-1, 1] and rounded to the nearest step.
 ///
 /// # Errors
-/// Returns an error for mismatched channels, invalid dimensions, or an `FFmpeg`
-/// allocation failure.
-pub fn audio_frame_f32p(
+/// Returns an error for mismatched channels, invalid dimensions, another
+/// sample format, or an `FFmpeg` allocation failure.
+pub fn audio_frame(
     channels: &[Vec<f32>],
+    format: ffi::AVSampleFormat,
     sample_rate: i32,
     pts: i64,
 ) -> Result<AVFrame, BridgeError> {
@@ -2761,12 +2787,18 @@ pub fn audio_frame_f32p(
             "planar audio channel lengths differ",
         ));
     }
+    let sample_bytes = match format {
+        ffi::AV_SAMPLE_FMT_FLTP | ffi::AV_SAMPLE_FMT_FLT => size_of::<f32>(),
+        ffi::AV_SAMPLE_FMT_S16 => size_of::<i16>(),
+        _ => return Err(BridgeError::InvalidInput("unsupported audio sample format")),
+    };
+    let planar = format == ffi::AV_SAMPLE_FMT_FLTP;
     let channel_count = i32::try_from(channels.len())
         .map_err(|_| BridgeError::InvalidInput("audio channel count overflow"))?;
     let sample_count = i32::try_from(samples)
         .map_err(|_| BridgeError::InvalidInput("audio sample count overflow"))?;
     let mut frame = AVFrame::new();
-    frame.set_format(ffi::AV_SAMPLE_FMT_FLTP);
+    frame.set_format(format);
     frame.set_ch_layout(
         rsmpeg::avutil::AVChannelLayout::from_nb_channels(channel_count).into_inner(),
     );
@@ -2780,7 +2812,8 @@ pub fn audio_frame_f32p(
     frame.get_buffer(0)?;
     frame.make_writable()?;
     let plane_bytes = samples
-        .checked_mul(size_of::<f32>())
+        .checked_mul(sample_bytes)
+        .and_then(|bytes| bytes.checked_mul(if planar { 1 } else { channels.len() }))
         .ok_or(BridgeError::InvalidInput("audio plane byte count overflow"))?;
     let plane_capacity = usize::try_from(frame.linesize[0]).unwrap_or(0);
     if plane_capacity < plane_bytes {
@@ -2788,15 +2821,39 @@ pub fn audio_frame_f32p(
             "audio plane capacity is too small",
         ));
     }
-
-    for (index, source) in channels.iter().enumerate() {
-        if frame.data[index].is_null() {
-            return Err(BridgeError::InvalidInput("audio plane pointer is null"));
+    let planes = if planar { channels.len() } else { 1 };
+    if frame.data[..planes].iter().any(|plane| plane.is_null()) {
+        return Err(BridgeError::InvalidInput("audio plane pointer is null"));
+    }
+    if planar {
+        for (index, source) in channels.iter().enumerate() {
+            // SAFETY: av_frame_get_buffer allocated one writable FLTP plane per channel with the
+            // common `linesize[0]` capacity used by planar audio, checked above to hold the
+            // channel.
+            unsafe {
+                ptr::copy_nonoverlapping(
+                    source.as_ptr().cast::<u8>(),
+                    frame.data[index],
+                    plane_bytes,
+                );
+            }
         }
-        // SAFETY: av_frame_get_buffer allocated one writable FLTP plane per channel with the common
-        // `linesize[0]` capacity used by planar audio.
-        unsafe {
-            ptr::copy_nonoverlapping(source.as_ptr().cast::<u8>(), frame.data[index], plane_bytes);
+        return Ok(frame);
+    }
+    // SAFETY: an interleaved format has one writable plane, checked above to hold every channel's
+    // samples, and nothing else refers to it while this slice lives.
+    let plane = unsafe { std::slice::from_raw_parts_mut(frame.data[0], plane_bytes) };
+    let interleaved = (0..samples).flat_map(|sample| channels.iter().map(move |c| c[sample]));
+    if format == ffi::AV_SAMPLE_FMT_FLT {
+        for (bytes, value) in plane.as_chunks_mut::<4>().0.iter_mut().zip(interleaved) {
+            *bytes = value.to_ne_bytes();
+        }
+    } else {
+        for (bytes, value) in plane.as_chunks_mut::<2>().0.iter_mut().zip(interleaved) {
+            // In range after the clamp, so the cast cannot truncate.
+            #[allow(clippy::cast_possible_truncation)]
+            let value = (value.clamp(-1.0, 1.0) * 32_767.0).round() as i16;
+            *bytes = value.to_ne_bytes();
         }
     }
     Ok(frame)

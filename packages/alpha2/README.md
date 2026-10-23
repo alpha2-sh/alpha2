@@ -13,7 +13,7 @@ npm install alpha2
 - The WebAssembly modules need Chrome 96, Firefox 89 or Safari 16.4, or later.
 - Serve `.wasm` files as `application/wasm`; otherwise the loader falls back to a slower way of compiling them and warns.
 - Audio preview needs a cross-origin isolated page (`Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Embedder-Policy: require-corp`).
-- [mediabunny](https://www.npmjs.com/package/mediabunny) is an optional dependency, for the decoders and the MP4 writer in `alpha2/mediabunny`. It installs `@types/dom-webcodecs` 0.1.13, whose declarations clash with TypeScript 5.9's DOM library. A TypeScript application either compiles with `skipLibCheck` or adds `"overrides": { "@types/dom-webcodecs": "0.1.19" }` to its `package.json`; one that imports `alpha2/mediabunny` also needs `"ESNext.Disposable"` in its `lib`.
+- [mediabunny](https://www.npmjs.com/package/mediabunny) is an optional dependency, for the decoders and the MP4, MOV, MKV and WebM writer in `alpha2/mediabunny`. It installs `@types/dom-webcodecs` 0.1.13, whose declarations clash with TypeScript 5.9's DOM library. A TypeScript application either compiles with `skipLibCheck` or adds `"overrides": { "@types/dom-webcodecs": "0.1.19" }` to its `package.json`; one that imports `alpha2/mediabunny` also needs `"ESNext.Disposable"` in its `lib`.
 
 ## Render a frame
 
@@ -66,7 +66,7 @@ for (;;) {
 engine.endExport();
 ```
 
-A `waiting` ticket names the source frames the next frame needs (`missingFrames`); upload them and ask again, and the export continues at the same frame. `beginExportFrame` can be called again before a readback resolves, so that the GPU renders the next frame while the last one is read back. `exportToSink` in `alpha2/exporter` runs an export this way into an encoder sink, and `MediabunnyMp4Sink` in `alpha2/mediabunny` is a WebCodecs and MP4 sink for it.
+A `waiting` ticket names the source frames the next frame needs (`missingFrames`); upload them and ask again, and the export continues at the same frame. `beginExportFrame` can be called again before a readback resolves, so that the GPU renders the next frame while the last one is read back. `exportToSink` in `alpha2/exporter` runs an export this way into an encoder sink, and `MediabunnySink` in `alpha2/mediabunny` is a WebCodecs sink for it that writes MP4, MOV, MKV or WebM.
 
 ## Audio
 
@@ -94,18 +94,19 @@ For preview, `alpha2/audio-timeline` moves the mixed blocks to the audio thread 
 | `alpha2/assets` | Media identity, proxies and conform reports. |
 | `alpha2/frame-supply` | `FrameSupply`: decodes and uploads the frames a time needs. |
 | `alpha2/media` | Decoder contracts, `WebCodecsVideoDecoder`, `DecoderRefillCoordinator`. |
-| `alpha2/mediabunny` | Decoders and an MP4 sink on mediabunny (an optional dependency). |
+| `alpha2/mediabunny` | Decoders and an MP4, MOV, MKV and WebM sink on mediabunny (an optional dependency). |
 | `alpha2/hdr-frames`, `alpha2/video-frames` | Uploading planar and HDR `VideoFrame`s; `VideoFrame`s from exported I420 planes. |
 | `alpha2/player`, `alpha2/worker` | `Alpha2Player` and the render worker. |
 | `alpha2/exporter` | `Alpha2Exporter` and `exportToSink`. |
 | `alpha2/export-destination` | Where an export's bytes go: a file, or memory. |
 | `alpha2/export-failure`, `alpha2/export-retry` | How export failures are classified, and a retry policy over them. |
+| `alpha2/containers` | The export containers (MP4, MOV, MKV, WebM) and the codecs each offers. |
 | `alpha2/rate-control` | Output bitrates for the engine's quality levels. |
 | `alpha2/audio`, `alpha2/audio-worker` | Offline audio rendering into a sink, in a worker or not. |
 | `alpha2/audio-timeline`, `alpha2/audio-worklet`, `alpha2/audio-worklet-processor` | Real-time audio: the shared ring, its pump, and the AudioWorklet and its processor module. |
 | `alpha2/loudness`, `alpha2/waveform` | Loudness measurement and normalization; waveform summaries. |
 | `alpha2/robustness` | Browser capability detection and degradation reports. |
-| `alpha2` | `alpha2/assets`, `audio`, `audio-timeline`, `audio-worker`, `audio-worklet`, `effects`, `exporter`, `extensions`, `frame-supply`, `hdr-frames`, `loudness`, `media`, `player`, `project`, `rate-control`, `robustness`, `text`, `waveform` and `worker` in one import. |
+| `alpha2` | `alpha2/assets`, `audio`, `audio-timeline`, `audio-worker`, `audio-worklet`, `containers`, `effects`, `exporter`, `extensions`, `frame-supply`, `hdr-frames`, `loudness`, `media`, `player`, `project`, `rate-control`, `robustness`, `text`, `waveform` and `worker` in one import. |
 
 Each module's declarations document its API.
 

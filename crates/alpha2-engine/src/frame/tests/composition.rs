@@ -476,9 +476,9 @@ fn effect_with_inputs(
     }
 }
 
-/// [`renderer`] with the built-in blur and the multi-input effects of the bloom and
-/// displacement references: `test.multiply-map`, `test.input-size`, `test.bright-pass`,
-/// `test.add-glow`, and `test.displace`.
+/// [`renderer`] with the built-in blur and the effects the named-input tests use:
+/// `test.multiply-map`, `test.input-size`, `test.bright-pass`, `test.add-glow`, and
+/// `test.displace`.
 fn renderer_with_inputs() -> Renderer {
     let mut renderer = renderer();
     pollster::block_on(renderer.register_builtin_gaussian_blur()).expect("blur compiles");
@@ -544,8 +544,8 @@ fn a_named_input_reads_another_branch() {
 
 #[test]
 fn an_image_feeds_a_named_input_at_its_own_resolution() {
-    // A media node is a named input as it is any other: its frame is asked for, waited for,
-    // and bound at the size it was decoded at.
+    // A media node feeds a named input as any other node does: its frame is asked for,
+    // waited for, and bound at the size it was decoded at.
     let _lock = gpu_test_lock();
     let renderer = renderer_with_inputs();
     let texture = rgba_image_texture(&renderer, RenderSize::new(2, 1).expect("size"), &[255; 8]);

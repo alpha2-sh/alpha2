@@ -1,0 +1,55 @@
+{
+  "containers": [
+    {
+      "id": "mp4",
+      "extensions": ["mp4", "m4v"],
+      "mime": "video/mp4",
+      "video": ["h264", "hevc", "vp9", "av1", "mpeg4-part2"],
+      "audio": ["aac", "opus"],
+      "defaultVideoCodec": "h264",
+      "defaultAudioCodec": "aac"
+    },
+    {
+      "id": "mov",
+      "extensions": ["mov"],
+      "mime": "video/quicktime",
+      "video": ["h264", "hevc", "mpeg4-part2"],
+      "audio": ["aac"],
+      "defaultVideoCodec": "h264",
+      "defaultAudioCodec": "aac"
+    },
+    {
+      "id": "mkv",
+      "extensions": ["mkv"],
+      "mime": "video/x-matroska",
+      "video": ["h264", "hevc", "vp9", "av1", "mpeg4-part2"],
+      "audio": ["aac", "opus"],
+      "defaultVideoCodec": "h264",
+      "defaultAudioCodec": "aac"
+    },
+    {
+      "id": "webm",
+      "extensions": ["webm"],
+      "mime": "video/webm",
+      "video": ["vp9", "av1"],
+      "audio": ["opus"],
+      "defaultVideoCodec": "vp9",
+      "defaultAudioCodec": "opus"
+    }
+  ],
+  "resolve": [
+    { "container": null, "extension": "webm", "video": null, "audio": null, "ok": ["webm", "vp9", "opus"] },
+    { "container": null, "extension": "MOV", "video": null, "audio": null, "ok": ["mov", "h264", "aac"] },
+    { "container": null, "extension": "m4v", "video": "av1", "audio": "opus", "ok": ["mp4", "av1", "opus"] },
+    { "container": "mkv", "extension": "mkv", "video": "hevc", "audio": null, "ok": ["mkv", "hevc", "aac"] },
+    { "container": "webm", "extension": null, "video": "av1", "audio": null, "ok": ["webm", "av1", "opus"] },
+    { "container": "webm", "extension": "mp4", "video": null, "audio": null, "error": "extension-mismatch" },
+    { "container": "mp4", "extension": "", "video": null, "audio": null, "error": "extension-mismatch" },
+    { "container": "webm", "extension": "webm", "video": "h264", "audio": null, "error": "video-codec-not-offered" },
+    { "container": "mov", "extension": "mov", "video": "vp9", "audio": null, "error": "video-codec-not-offered" },
+    { "container": "mov", "extension": null, "video": null, "audio": "opus", "error": "audio-codec-not-offered" },
+    { "container": null, "extension": "avi", "video": null, "audio": null, "error": "unknown-extension" },
+    { "container": null, "extension": "", "video": null, "audio": null, "error": "unknown-extension" },
+    { "container": null, "extension": null, "video": null, "audio": null, "ok": ["mp4", "h264", "aac"] }
+  ]
+}

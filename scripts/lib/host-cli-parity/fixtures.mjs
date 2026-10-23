@@ -62,7 +62,8 @@ export const complexAssets = {
 };
 
 // Shapes generators (animated paths, trims, dashes, compound fills, group layers, spatial
-// motion), a shapes generator node and a media node reading one later, and path masks.
+// motion), a shapes generator node, a media node reading the shapes source from a later time, and
+// path masks.
 export const shapesProjectPath = join(
   root,
   "tests",

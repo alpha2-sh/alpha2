@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use crate::aac::{AacInput, encoder_sample_rate};
+use crate::audio_input::{AudioStreamConfig, EncoderAudioInput, open_audio_encoder};
 use crate::capabilities::{
     AvEncodeConfig, NativeVideoEncoderSelection, VideoEncoderOpenRequest, open_video_encoder,
 };
@@ -25,8 +25,8 @@ use alpha2_media::{
     EncodeSink, MAX_AUDIO_CHANNELS, PixelFormat, SpeakerLayout,
 };
 use alpha2_time::MediaTime;
-use rsmpeg::avcodec::{AVCodec, AVCodecContext, AVPacket};
-use rsmpeg::avutil::{AVChannelLayout, AVFrameWithImage, AVImage, AVRational, av_rescale_q, ra};
+use rsmpeg::avcodec::{AVCodecContext, AVPacket};
+use rsmpeg::avutil::{AVFrameWithImage, AVImage, AVRational, av_rescale_q};
 use rsmpeg::error::RsmpegError;
 use rsmpeg::ffi;
 use rsmpeg::swscale::SwsContext;
@@ -98,7 +98,7 @@ thread_local! {
 /// that stopped answering is retried forever. Nothing can interrupt them, so
 /// the thread that drives a sink reports where it is instead, and its owner
 /// decides that a call which has not returned in time is stuck. A sink's calls
-/// all run on the thread that calls the sink, except the AAC encoder's own
+/// all run on the thread that calls the sink, except the audio encoder's own
 /// thread, which the sink waits on in a call this beat already covers.
 #[must_use = "the watch ends when the guard drops"]
 pub fn watch_encode_calls(beat: impl Fn() + 'static) -> EncodeCallWatch {
@@ -194,11 +194,11 @@ pub struct NativeAvEncodeSink {
     pub(crate) width: i32,
     pub(crate) height: i32,
     pub(crate) last_video_pts: Option<i64>,
-    /// AAC encoding, backlog and packet draining run on a separate thread
+    /// Audio encoding, backlog and packet draining run on a separate thread
     /// so video encoding cannot serialize audio work.
     pub(crate) audio: AudioEncodeThread,
-    /// The project's audio, as the AAC encoder takes it.
-    pub(crate) audio_input: AacInput,
+    /// The project's audio, as the audio encoder takes it.
+    pub(crate) audio_input: EncoderAudioInput,
     pub(crate) video_packets: VecDeque<QueuedPacket>,
     pub(crate) last_input_ticks: Option<i64>,
     pub(crate) complete: bool,
@@ -206,7 +206,7 @@ pub struct NativeAvEncodeSink {
     pub(crate) stages: EncodeStageTimings,
 }
 
-/// One AAC block handed to the audio encode thread.
+/// A command to the audio encode thread: one frame to encode, or the end of the input.
 pub(crate) enum AudioCommand {
     /// One frame of samples to encode, and the input tick the input reached.
     /// Every frame is the encoder's frame size but the last, which may be
@@ -348,6 +348,17 @@ impl NativeAvEncodeSink {
         software_threads: &dyn Fn() -> i64,
     ) -> Result<Self, EncodeError> {
         crate::video_encode::check_video_config(&config.video)?;
+        if !config
+            .video
+            .container
+            .offers_audio(config.audio_codec.model())
+        {
+            return Err(EncodeError::Adapter(format!(
+                "{} does not offer audio codec {}",
+                config.video.container,
+                config.audio_codec.as_str()
+            )));
+        }
         if config.audio_sample_rate == 0
             || config.audio_channels == 0
             || config.audio_channels > 8
@@ -361,7 +372,7 @@ impl NativeAvEncodeSink {
         let final_path = path.as_ref().to_owned();
         let partial = PartialOutput::claim(&final_path)?;
         let partial_path = partial.path().to_owned();
-        let mut output = partial.open_muxer()?;
+        let mut output = partial.open_muxer(config.video.container)?;
         let global_header =
             output.oformat().flags & i32::try_from(ffi::AVFMT_GLOBALHEADER).unwrap_or(0) != 0;
 
@@ -380,43 +391,16 @@ impl NativeAvEncodeSink {
         // The frame length, or the finest unit an encoder that cannot hold it takes.
         let video_encoder_time_base = video_encoder.time_base;
 
-        let audio_channels = i32::from(config.audio_channels);
-        let audio_codec =
-            AVCodec::find_encoder(config.audio_codec.codec_id()).ok_or_else(|| {
-                EncodeError::Adapter(format!(
-                    "{} encoder is unavailable",
-                    config.audio_codec.as_str()
-                ))
-            })?;
-        if audio_codec
-            .sample_fmts()
-            .is_some_and(|formats| !formats.contains(&ffi::AV_SAMPLE_FMT_FLTP))
-        {
-            return Err(EncodeError::Adapter(format!(
-                "the {} encoder does not take planar float samples",
-                config.audio_codec.as_str()
-            )));
-        }
-        let encoder_rate = encoder_sample_rate(&audio_codec, config.audio_sample_rate);
-        let audio_sample_rate = i32::try_from(encoder_rate)
-            .map_err(|_| EncodeError::Adapter("audio sample rate is out of range".into()))?;
-        let audio_encoder_time_base = ra(1, audio_sample_rate);
-        let mut audio_encoder = AVCodecContext::new(&audio_codec);
-        audio_encoder.set_sample_rate(audio_sample_rate);
-        audio_encoder.set_sample_fmt(ffi::AV_SAMPLE_FMT_FLTP);
-        audio_encoder.set_ch_layout(AVChannelLayout::from_nb_channels(audio_channels).into_inner());
-        audio_encoder.set_time_base(audio_encoder_time_base);
-        audio_encoder.set_bit_rate(i64::from(config.audio_bit_rate));
-        if global_header {
-            audio_encoder.set_flags(
-                audio_encoder.flags | i32::try_from(ffi::AV_CODEC_FLAG_GLOBAL_HEADER).unwrap_or(0),
-            );
-        }
-        audio_encoder.open(None).map_err(encode_adapter_error)?;
-        let audio_frame_size = usize::try_from(audio_encoder.frame_size)
-            .ok()
-            .filter(|size| *size > 0)
-            .ok_or_else(|| EncodeError::Adapter("AAC encoder has no fixed frame size".into()))?;
+        let audio = open_audio_encoder(
+            AudioStreamConfig {
+                codec: config.audio_codec,
+                sample_rate: config.audio_sample_rate,
+                channels: config.audio_channels,
+                bit_rate: config.audio_bit_rate,
+            },
+            global_header,
+        )?;
+        let audio_encoder_time_base = audio.encoder_time_base;
 
         let video_stream_index;
         {
@@ -427,6 +411,7 @@ impl NativeAvEncodeSink {
                 &mut stream,
                 &video_encoder,
                 config.video.display,
+                config.video.container,
             )?;
             video_stream_index = stream.index;
         }
@@ -434,11 +419,13 @@ impl NativeAvEncodeSink {
         {
             let mut stream = output.new_stream();
             stream.set_time_base(audio_encoder_time_base);
-            stream.set_codecpar(audio_encoder.extract_codecpar());
+            stream.set_codecpar(audio.encoder.extract_codecpar());
             audio_stream_index = stream.index;
         }
         output
-            .write_header(&mut None)
+            .write_header(&mut crate::convert::muxer_header_options(
+                config.video.container,
+            ))
             .map_err(encode_adapter_error)?;
         let video_stream_time_base =
             output.streams()[usize::try_from(video_stream_index).unwrap_or(0)].time_base;
@@ -459,12 +446,14 @@ impl NativeAvEncodeSink {
         .ok_or_else(|| EncodeError::Adapter("cannot create RGBA to YUV scaler".into()))?;
         configure_rgba_to_yuv(&mut video_scaler, config.video.color)
             .map_err(encode_adapter_error)?;
+        let audio_input = audio.input;
         let audio = spawn_audio_encoder(AudioEncoderConfig {
-            encoder: audio_encoder,
+            encoder: audio.encoder,
             stream_index: audio_stream_index,
             encoder_time_base: audio_encoder_time_base,
             stream_time_base: audio_stream_time_base,
-            sample_rate: encoder_rate,
+            sample_rate: audio.encoder_rate,
+            sample_format: audio.sample_format,
         })?;
         let partial_lock = partial.keep();
         Ok(Self {
@@ -486,12 +475,7 @@ impl NativeAvEncodeSink {
             height,
             last_video_pts: None,
             audio,
-            audio_input: AacInput::new(
-                config.audio_sample_rate,
-                encoder_rate,
-                usize::from(config.audio_channels),
-                audio_frame_size,
-            ),
+            audio_input,
             video_packets: VecDeque::new(),
             last_input_ticks: None,
             complete: false,
@@ -594,7 +578,7 @@ impl NativeAvEncodeSink {
                 .as_mut()
                 .ok_or_else(|| EncodeError::Adapter("muxer is already closed".into()))?;
             timed(total, || output.interleaved_write_frame(&mut queued.packet))
-                .map_err(|error| encode_adapter_error_at("MP4 packet write failed", error))?;
+                .map_err(|error| encode_adapter_error_at("packet write failed", error))?;
         }
         Ok(())
     }
@@ -730,8 +714,8 @@ impl NativeAvEncodeSink {
         self.write_ready_packets(false)
     }
 
-    /// Buffers one audio block and hands the thread every whole AAC frame it
-    /// completes.
+    /// Buffers one audio block and hands the thread every whole encoder
+    /// frame it completes.
     pub(crate) fn write_audio(&mut self, block: &AudioBlock) -> Result<(), EncodeError> {
         let frames = self.audio_input.push(block)?;
         let covered = self.audio_input.received_ticks();
@@ -751,9 +735,11 @@ pub(crate) struct AudioEncoderConfig {
     pub(crate) stream_time_base: AVRational,
     /// The rate the encoder runs at.
     pub(crate) sample_rate: u32,
+    /// The sample format its frames carry.
+    pub(crate) sample_format: ffi::AVSampleFormat,
 }
 
-/// Starts the AAC encoder on its own thread.
+/// Starts the audio encoder on its own thread.
 ///
 /// The channel is two deep: the coordinator hands blocks in faster than the
 /// video encoder consumes frames, and a deeper queue would only buy backlog
@@ -850,7 +836,7 @@ fn run_audio_encoder(
     }
 }
 
-/// Encodes one AAC frame, or with none flushes the encoder (which is where
+/// Encodes one audio frame, or with none flushes the encoder (which is where
 /// its delayed tail packets come from), and drains whatever packets that
 /// produced.
 fn encode_audio_block(
@@ -862,8 +848,9 @@ fn encode_audio_block(
     let last = channels.is_none();
     if let Some(channels) = channels {
         let pts = i64::try_from(*encoded_samples).map_err(|_| EncodeError::InvalidTimestamp)?;
-        let frame = alpha2_ffmpeg_bridge::audio_frame_f32p(
+        let frame = alpha2_ffmpeg_bridge::audio_frame(
             channels,
+            config.sample_format,
             i32::try_from(config.sample_rate).unwrap_or(i32::MAX),
             pts,
         )

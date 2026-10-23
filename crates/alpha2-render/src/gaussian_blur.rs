@@ -113,7 +113,7 @@ impl<'a> RenderGraph<'a> {
     /// `sigma_pixels` of the graph's pixels on both axes, drawn as the
     /// built-in blur draws: narrow one-axis passes, within the renderer's
     /// filter-sample budget. A mask's feather softens its coverage with it.
-    /// A deviation of zero or less returns `source` itself.
+    /// A deviation that is not finite and positive returns `source` itself.
     ///
     /// # Errors
     /// Returns [`GraphError::InvalidDependency`] unless `source` is earlier.

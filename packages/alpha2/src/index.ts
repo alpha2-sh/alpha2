@@ -4,6 +4,7 @@ export * from "./audio-worklet.js";
 export * from "./audio.js";
 export * from "./audio-timeline.js";
 export * from "./audio-worker.js";
+export * from "./containers.js";
 export * from "./effects.js";
 export * from "./exporter.js";
 export * from "./extensions.js";

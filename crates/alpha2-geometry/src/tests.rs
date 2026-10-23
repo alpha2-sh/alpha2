@@ -537,7 +537,7 @@ fn kurbo_has_std() -> bool {
     svg.is::<String>()
 }
 
-/// Drops the hashes of float bits, which only libm's math pins.
+/// Drops the outline and scene-key hashes, which only libm's math pins.
 fn without_float_bits(golden: &mut serde_json::Value) {
     for list in ["coverage", "trees"] {
         for row in golden[list].as_array_mut().expect("rows") {

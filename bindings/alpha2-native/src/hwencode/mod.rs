@@ -9,8 +9,8 @@
 //!   surfaces, names the plane textures the renderer packs a frame into, and
 //!   moves those planes into the surface on the GPU.
 //! - [`HardwareEncodeSession`], the encode worker's half: it submits surfaces
-//!   to the encoder and muxes the packets, beside an AAC stream, into a
-//!   transactional MP4.
+//!   to the encoder and muxes the packets, beside an audio stream, into a
+//!   transactional output file.
 //!
 //! A frame's surface moves `acquire -> begin -> (render) -> submit -> encode`, and
 //! it is only reused once every GPU access and every codec reference to it has
@@ -273,10 +273,13 @@ pub struct HardwareEncodeRequest<'a> {
     pub rate_control: VideoRateControl,
     /// The color the pack encodes, which the stream is tagged with.
     pub color: ColorMetadata,
-    /// Where the MP4 goes; a partial file sits beside it until it finishes.
+    /// Where the file goes; a partial file sits beside it until it finishes.
     pub output: &'a Path,
-    /// The AAC stream muxed beside the video, if any.
-    pub audio: Option<crate::AacStreamConfig>,
+    /// The file format written there, which must offer `codec` and the audio
+    /// codec.
+    pub container: alpha2_media::Container,
+    /// The audio stream muxed beside the video, if any.
+    pub audio: Option<crate::AudioStreamConfig>,
 }
 
 /// A session's frame rate as `FFmpeg` takes it, numerator and denominator.
@@ -789,7 +792,7 @@ impl HardwareEncodeSession {
         }
     }
 
-    /// Buffers one audio block for the AAC stream.
+    /// Buffers one audio block for the audio stream.
     ///
     /// # Errors
     /// Returns an adapter failure for a format change, a non-monotonic block,

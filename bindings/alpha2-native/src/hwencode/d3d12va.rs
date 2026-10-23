@@ -13,8 +13,8 @@
 //! encoders write neither extradata nor a colour description: the session
 //! runs its packets through an [`EncodedVideoFilter`], which writes the
 //! export's colour into every sequence header and moves the in-band
-//! parameter sets out into side data, and muxes into an MP4 whose header
-//! waits for the first packet ([`Mp4Muxer::open_deferred`]).
+//! parameter sets out into side data, and muxes into an output whose header
+//! waits for the first packet ([`Muxer::open_deferred`]).
 //!
 //! What a device encodes is asked of the device itself
 //! (`SharedD3D12Context::encode_support`), and a device that answers yes is
@@ -43,7 +43,7 @@ use crate::NativeVideoCodec;
 use crate::bitstream::EncodedVideoFilter;
 use crate::convert::{encode_adapter_error, tick_base};
 use crate::encode::{EncodeStageTimings, timed};
-use crate::mux::Mp4Muxer;
+use crate::mux::Muxer;
 use crate::rate_control::RateControlMechanism;
 
 #[path = "d3d12va_rate_control.rs"]
@@ -782,8 +782,14 @@ pub(super) fn open(
     };
     // From here on a failure is the export's rather than a refusal: the partial output exists. Its
     // header waits for the parameter sets the first packet brings.
-    let muxer = Mp4Muxer::open_deferred(request.output, &context, time_base, request.audio)
-        .map_err(HardwareEncodeOpenError::Failed)?;
+    let muxer = Muxer::open_deferred(
+        request.output,
+        request.container,
+        &context,
+        time_base,
+        request.audio,
+    )
+    .map_err(HardwareEncodeOpenError::Failed)?;
     Ok((
         D3D12EncodeSession {
             context,
@@ -974,7 +980,7 @@ pub(super) struct D3D12EncodeSession {
     context: AVCodecContext,
     time_base: AVRational,
     bitstream: EncodedVideoFilter,
-    muxer: Mp4Muxer,
+    muxer: Muxer,
     stages: EncodeStageTimings,
     selection: crate::NativeVideoEncoderSelection,
     generation: u64,

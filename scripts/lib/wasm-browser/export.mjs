@@ -7,7 +7,7 @@ export function exportEveryProjectRate() {
   return `
 const wasm = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await wasm.default();
-const { audioEncoderSampleRate, MediabunnyMp4Sink } = await import("/packages/alpha2/dist/mediabunny.js");
+const { audioEncoderSampleRate, MediabunnySink } = await import("/packages/alpha2/dist/mediabunny.js");
 const { renderOfflineAudio } = await import("/packages/alpha2/dist/audio.js");
 const mb = await import("mediabunny");
 if (typeof AudioEncoder === "undefined" || typeof AudioDecoder === "undefined") {
@@ -16,7 +16,8 @@ if (typeof AudioEncoder === "undefined" || typeof AudioDecoder === "undefined") 
   const AMPLITUDE = 0.25;
   // Half a second of a stereo 997 Hz tone at the project rate, exported and decoded again.
   const exportTone = async (codec, projectRate, encoderRate) => {
-    const sink = new MediabunnyMp4Sink({
+    const sink = new MediabunnySink({
+      container: "mp4",
       audioCodec: codec,
       audioBitrate: 128000,
       audioSampleRate: encoderRate,
@@ -71,6 +72,109 @@ if (typeof AudioEncoder === "undefined" || typeof AudioDecoder === "undefined") 
   const ok = exported.size === 5 && converted.every((value) => value === "no encoder" || value.ok)
     && Object.values(results).every((value) => value === "no encoder" || value.ok);
   report({ ok, results });
+}
+`;
+}
+
+// Each container through the browser sink, decoded back: one second of 30 fps video and 48 kHz
+// stereo audio comes back as 30 frames on the frame grid (to the millisecond in Matroska, whose
+// blocks are stamped in milliseconds) with the codecs asked for. MOV offers only AAC, so a browser
+// without an AAC encoder (Chrome on Linux) writes it without audio and the sink must refuse Opus.
+export function exportEveryContainer() {
+  return `
+const wasm = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+await wasm.default();
+const { audioEncoderSampleRate, canEncodeVideoTrack, MediabunnySink } = await import("/packages/alpha2/dist/mediabunny.js");
+const { renderOfflineAudio } = await import("/packages/alpha2/dist/audio.js");
+const mb = await import("mediabunny");
+if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined") {
+  report({ skipped: "this browser has no WebCodecs VideoEncoder and AudioEncoder" });
+} else {
+  const WIDTH = 320;
+  const HEIGHT = 240;
+  const FRAMES = 30;
+  const videoRateControl = { bitrate: 1000000, bitrateMode: "variable" };
+  const formats = { mp4: "MP4", mov: "QuickTime File Format", mkv: "Matroska", webm: "WebM" };
+  const exportOne = async (container, videoCodec, audioCodecs) => {
+    if (!(await canEncodeVideoTrack(videoCodec, { width: WIDTH, height: HEIGHT, rate: videoRateControl })))
+      return "no " + videoCodec + " encoder";
+    let audioCodec;
+    for (const codec of audioCodecs) {
+      if ((await audioEncoderSampleRate(codec, { sampleRate: 48000, numberOfChannels: 2, bitrate: 128000 })) === 48000) {
+        audioCodec = codec;
+        break;
+      }
+    }
+    const sink = new MediabunnySink({
+      container,
+      videoCodec,
+      videoRateControl,
+      frameRate: { num: 30, den: 1 },
+      ...(audioCodec === undefined ? {} : { audioCodec, audioBitrate: 128000 }),
+      destination: { kind: "memory", maxBytes: 1 << 24 },
+    });
+    const canvas = new OffscreenCanvas(WIDTH, HEIGHT);
+    const context = canvas.getContext("2d");
+    const writeVideo = async (track) => {
+      for (let index = 0; index < FRAMES; index += 1) {
+        context.fillStyle = "rgb(" + ((index * 8) & 255) + ", 64, 128)";
+        context.fillRect(0, 0, WIDTH, HEIGHT);
+        const frame = new VideoFrame(canvas, { timestamp: Math.round((index * 1e6) / 30), duration: Math.round(1e6 / 30) });
+        await track.writeVideo({ index: BigInt(index), timeTicks: BigInt(index * 4000), frame });
+      }
+      await track.finish();
+    };
+    const writeAudio = (track) => renderOfflineAudio(48000n, [1024], async (start, frames) => {
+      const left = new Float32Array(frames);
+      for (let i = 0; i < frames; i += 1) left[i] = 0.25 * Math.sin((2 * Math.PI * 997 * (Number(start) + i)) / 48000);
+      return { sourceId: "mix", startSample: start, generation: 0, sampleRate: 48000, channels: [left, left.slice()] };
+    }, track);
+    await Promise.all([writeVideo(sink.videoTrack), ...(audioCodec === undefined ? [] : [writeAudio(sink.audioTrack)])]);
+    const input = new mb.Input({ source: new mb.BufferSource(sink.output.buffer), formats: mb.ALL_FORMATS });
+    try {
+      const format = (await input.getFormat()).name;
+      const video = await input.getPrimaryVideoTrack();
+      const audio = await input.getPrimaryAudioTrack();
+      // Matroska stores each block's time in whole milliseconds.
+      const slack = container === "mkv" || container === "webm" ? 0.0005 + 1e-6 : 1e-6;
+      const times = [];
+      for await (const packet of new mb.EncodedPacketSink(video).packets()) times.push(packet.timestamp);
+      times.sort((a, b) => a - b);
+      const onGrid = times.every((time, index) => Math.abs(time - index / 30) <= slack);
+      const videoDuration = await video.computeDuration();
+      const audioDuration = audio === null ? null : await audio.computeDuration();
+      const ok = format === formats[container]
+        && video.codec === videoCodec
+        && (audio?.codec ?? undefined) === audioCodec
+        && times.length === FRAMES
+        && onGrid
+        && Math.abs(videoDuration - 1) <= 1 / 30 + slack
+        && (audioDuration === null || Math.abs(audioDuration - 1) < 0.05);
+      return {
+        ok, format, videoCodec: video.codec, audioCodec: audio?.codec ?? null, frames: times.length, onGrid,
+        videoDuration: Number(videoDuration.toFixed(4)),
+        audioDuration: audioDuration === null ? null : Number(audioDuration.toFixed(4)),
+      };
+    } finally {
+      input.dispose();
+    }
+  };
+  const results = {
+    webm: await exportOne("webm", "vp9", ["opus"]),
+    mkv: await exportOne("mkv", "avc", ["aac", "opus"]),
+    mov: await exportOne("mov", "avc", ["aac"]),
+    "mp4-av1": await exportOne("mp4", "av1", ["opus"]),
+  };
+  // A pair the container does not offer is refused before any encoder opens.
+  let refused = null;
+  try {
+    new MediabunnySink({ container: "mov", audioCodec: "opus", audioBitrate: 128000, destination: { kind: "memory", maxBytes: 1 << 20 } });
+  } catch (error) {
+    refused = error instanceof RangeError ? error.message : String(error);
+  }
+  const ran = Object.values(results).filter((value) => typeof value !== "string");
+  const ok = results.webm.ok === true && ran.every((value) => value.ok) && refused !== null;
+  report({ ok, results, refused });
 }
 `;
 }

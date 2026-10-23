@@ -85,6 +85,10 @@
       "types": "./dist/geometry.d.ts",
       "import": "./dist/geometry.js"
     },
+    "./containers": {
+      "types": "./dist/containers.d.ts",
+      "import": "./dist/containers.js"
+    },
     "./rate-control": {
       "types": "./dist/rate-control.d.ts",
       "import": "./dist/rate-control.js"

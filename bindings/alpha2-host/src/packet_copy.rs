@@ -13,7 +13,7 @@
 //! the source's own audio untouched over the whole file, its packets are
 //! copied too; anywhere else it is mixed exactly as a render mixes it
 //! (gain, fades, effects, the limiter, loudness normalization) and encoded
-//! to AAC beside the copied video.
+//! in the export's audio codec beside the copied video.
 //!
 //! Both the plan's reading of the sources and the copy itself run on a worker
 //! thread of their own, watched as the render path watches its decode and
@@ -42,7 +42,7 @@ use alpha2_engine::{AudioRenderer, EngineProject, PassthroughAudio};
 use alpha2_media::{AudioBlock, CancelToken, ColorMetadata};
 use alpha2_model::Project;
 use alpha2_native::{
-    AacStreamConfig, AudioBlockFeed, CopyAudio, NativeAudioCodec, NativeVideoCodec, PacketCopy,
+    AudioBlockFeed, AudioStreamConfig, CopyAudio, NativeAudioCodec, NativeVideoCodec, PacketCopy,
     PacketCopyAudio, PacketCopyPlanner, PacketCopyRequest,
 };
 use alpha2_time::{FrameRate, MediaTime, TimeRange};
@@ -58,6 +58,7 @@ pub(crate) struct CopyRequest {
     pub frames: u64,
     pub include_audio: bool,
     pub video_codec: NativeVideoCodec,
+    pub container: alpha2_media::Container,
     pub pinned_encoder: Option<String>,
     pub loudness: bool,
     /// The export's cancel, which stops the plan's reading of its sources.
@@ -224,6 +225,7 @@ pub(crate) fn packet_copy_plan(request: &CopyRequest) -> Result<CopyPlan, String
             width: request.project.settings.width,
             height: request.project.settings.height,
             codec: request.video_codec,
+            container: request.container,
             color: ColorMetadata::EXPORT,
             output_start: MediaTime::from_ticks(
                 first_shown.ticks() - request.effective_range.start().ticks(),
@@ -356,15 +358,17 @@ impl AudioBlockFeed for ExportAudioFeed {
     }
 }
 
-/// Copies `plan`'s packets to `output` with `feed`'s mix, when there is one,
-/// encoded as `aac` beside them, else the source's audio packets when the
-/// plan copies them. Returns the copy's report and the feed's renderer, which
-/// measured the mix it encoded when the export normalized it.
+/// Copies `plan`'s packets to a `container` file at `output` with `feed`'s
+/// mix, when there is one, encoded as `audio_config` says beside them, else
+/// the source's audio packets when the plan copies them. Returns the copy's
+/// report and the feed's renderer, which measured the mix it encoded when the
+/// export normalized it.
 fn copy_with_audio(
     plan: &PacketCopy,
     output: &Path,
+    container: alpha2_media::Container,
     mut feed: Option<ExportAudioFeed>,
-    aac: AacStreamConfig,
+    audio_config: AudioStreamConfig,
     cancel: &CancelToken,
     reached: &dyn Fn(u64),
 ) -> (
@@ -372,13 +376,17 @@ fn copy_with_audio(
     Option<AudioRenderer>,
 ) {
     let audio = match feed.as_mut() {
-        Some(feed) => CopyAudio::Encode { config: aac, feed },
+        Some(feed) => CopyAudio::Encode {
+            config: audio_config,
+            feed,
+        },
         None if plan.copies_audio() => CopyAudio::Source,
         None => CopyAudio::None,
     };
-    let copied = alpha2_native::copy_packets(plan, output, audio, cancel, &mut |copied| {
-        reached(copied);
-    });
+    let copied =
+        alpha2_native::copy_packets(plan, output, container, audio, cancel, &mut |copied| {
+            reached(copied);
+        });
     (
         copied.map_err(crate::error_message),
         feed.map(|feed| feed.renderer),
@@ -407,7 +415,10 @@ pub(crate) struct CopyExport<'a> {
     pub project: &'a Project,
     pub assets: &'a HashMap<String, PathBuf>,
     pub effective_range: TimeRange,
+    pub container: alpha2_media::Container,
     pub audio_codec: NativeAudioCodec,
+    /// The encoder the mix is encoded with, when the project has audio.
+    pub audio_encoder: Option<String>,
     pub audio_rate: ResolvedAudioRate,
     pub loudness: Option<LoudnessRequest>,
     pub output: &'a Path,
@@ -428,12 +439,6 @@ impl Host {
         let total = plan.video_packets();
         let cancel = crate::termination::export_cancel();
         let encode_reason = export.plan.encode_reason();
-        if encode_reason.is_some() && export.audio_codec != NativeAudioCodec::Aac {
-            return Err(format!(
-                "a copy encodes its audio to AAC, not {}",
-                export.audio_codec.as_str()
-            ));
-        }
         let mut loudness_report = None;
         let feed = match encode_reason {
             Some(_) => {
@@ -452,7 +457,8 @@ impl Host {
             }
             None => None,
         };
-        let aac = AacStreamConfig {
+        let audio_config = AudioStreamConfig {
+            codec: export.audio_codec,
             sample_rate: export.project.settings.sample_rate,
             channels: 2,
             bit_rate: export.audio_rate.bitrate,
@@ -471,8 +477,10 @@ impl Host {
             json!(VideoOutputPath::PacketCopy.as_str()),
         );
         self.failure.note("videoEncoder", Value::Null);
-        self.failure
-            .note("audioEncoder", json!(feed.is_some().then_some("aac")));
+        self.failure.note(
+            "audioEncoder",
+            json!(feed.is_some().then_some(&export.audio_encoder)),
+        );
         self.failure.note("audioStrategy", json!(audio_strategy));
         self.failure.enter(ExportPhase::Encode, Some(0));
         let phase = Cell::new(ExportPhase::Encode);
@@ -480,6 +488,7 @@ impl Host {
         let beat = Arc::clone(&heartbeat);
         let worker_plan = plan.clone();
         let output = export.output.to_owned();
+        let container = export.container;
         let worker_cancel = cancel.clone();
         let copied = run_watched(
             &Watched {
@@ -492,7 +501,15 @@ impl Host {
                 // Every muxer call may never return (an output that stopped answering), so each is
                 // watched.
                 let _watch = alpha2_native::watch_encode_calls(move || beat.beat());
-                copy_with_audio(&worker_plan, &output, feed, aac, &worker_cancel, reached)
+                copy_with_audio(
+                    &worker_plan,
+                    &output,
+                    container,
+                    feed,
+                    audio_config,
+                    &worker_cancel,
+                    reached,
+                )
             },
             &mut |copied| {
                 if copied == total {
@@ -546,13 +563,22 @@ impl Host {
         result["color"] = self.color_pipeline_json(export.project.settings.color);
         result["loudness"] = loudness;
         result["videoRateControl"] = Value::Null;
-        result["audioCodec"] = json!(audio_strategy.map(|_| "aac"));
+        // Copied audio is the source's AAC; an encoded mix is the export's codec.
+        result["audioCodec"] = json!(audio_strategy.map(|_| if encoded {
+            export.audio_codec.as_str()
+        } else {
+            "aac"
+        }));
         result["audioRateControl"] = if encoded {
             export.audio_rate.to_json()
         } else {
             Value::Null
         };
-        result["audioEncoder"] = json!(encoded.then_some("aac"));
+        result["audioEncoder"] = json!(if encoded {
+            export.audio_encoder.as_deref()
+        } else {
+            None
+        });
         result["fps"] = json!(frames_per_second(
             report.video_packets,
             started.elapsed().as_secs_f64()

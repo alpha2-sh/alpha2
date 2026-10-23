@@ -1,11 +1,11 @@
 //! The content tree of a shapes generator: geometry, paints, and modifiers in
 //! the order an After Effects or Lottie shape layer lists them.
 //!
-//! Positions (vertices, tangents, centres, a group's position and anchor) are
-//! normalized as the generator's picture is, `(0, 0)` top-left to `(1, 1)`
-//! bottom-right; lengths (radii, roundness, stroke widths, dashes) are
-//! fractions of the picture's shorter side. Rotation and scale act in pixel
-//! space, so a rotated square stays square on a wide canvas.
+//! Positions (vertices, tangents, centres, a group's position and anchor) and
+//! sizes are normalized as the generator's picture is, `(0, 0)` top-left to
+//! `(1, 1)` bottom-right; lengths (radii, stroke widths, dashes) are fractions
+//! of the picture's shorter side. Rotation and scale act in pixel space, so a
+//! rotated square stays square on a wide canvas.
 
 use crate::animation::{valid_keyframes, valid_point_animation};
 use crate::{Animated, AnimatedPoint, Keyframe, Paint, Vec2};

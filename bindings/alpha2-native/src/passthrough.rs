@@ -33,7 +33,7 @@ use rsmpeg::ffi;
 
 use crate::NativeVideoCodec;
 use crate::convert::{encode_adapter_error, encode_adapter_error_at, tick_base};
-use crate::mux::{AudioStream, Mp4Muxer, VideoStream};
+use crate::mux::{AudioStream, Muxer, VideoStream};
 
 /// The stream an export copies from and what it must match.
 #[derive(Clone, Debug)]
@@ -48,6 +48,9 @@ pub struct PacketCopyRequest<'a> {
     pub height: u32,
     /// The codec the export asked for, which the stream must already be.
     pub codec: NativeVideoCodec,
+    /// The file format the export writes, which must offer the copied
+    /// streams' codecs.
+    pub container: alpha2_media::Container,
     /// The color the output is tagged with when it renders; a copy keeps the
     /// source's tags, so they must already say this.
     pub color: ColorMetadata,
@@ -218,10 +221,10 @@ pub enum CopyAudio<'a> {
     None,
     /// The plan's copied audio packets; see [`PacketCopyPlan::copies_audio`].
     Source,
-    /// The export's mix, encoded to AAC.
+    /// The export's mix, encoded.
     Encode {
         /// The encoder's settings.
-        config: crate::AacStreamConfig,
+        config: crate::AudioStreamConfig,
         /// Where the mix comes from.
         feed: &'a mut dyn AudioBlockFeed,
     },
@@ -490,6 +493,13 @@ fn check_metadata(
             probed.format
         ));
     }
+    if !request.container.offers_video(request.codec.model()) {
+        return Err(format!(
+            "the source's {} is not offered in {}",
+            request.codec.as_str(),
+            request.container
+        ));
+    }
     let video_index = probed
         .selected_video
         .ok_or_else(|| "the source has no video stream".to_owned())?;
@@ -499,7 +509,9 @@ fn check_metadata(
         (request.width, request.height),
         request.color,
     )?;
-    let audio_stream = request.audio.map(|audio| copyable_audio(probed, audio));
+    let audio_stream = request
+        .audio
+        .map(|audio| copyable_audio(probed, audio, request.container));
 
     Ok((video_index, audio_stream))
 }
@@ -713,7 +725,11 @@ fn stream_framing(
 }
 
 /// The source's audio stream, when it is what the export would mix.
-fn copyable_audio(probed: &crate::ProbeResult, audio: PacketCopyAudio) -> Result<usize, String> {
+fn copyable_audio(
+    probed: &crate::ProbeResult,
+    audio: PacketCopyAudio,
+    container: alpha2_media::Container,
+) -> Result<usize, String> {
     let index = probed
         .selected_audio
         .ok_or_else(|| "the source has no audio stream to copy".to_owned())?;
@@ -724,6 +740,9 @@ fn copyable_audio(probed: &crate::ProbeResult, audio: PacketCopyAudio) -> Result
         .ok_or_else(|| "the source's audio stream is missing".to_owned())?;
     if stream.codec != "aac" {
         return Err(format!("the source's audio is {}, not AAC", stream.codec));
+    }
+    if !container.offers_audio(alpha2_media::AudioCodec::Aac) {
+        return Err(format!("the source's aac is not offered in {container}"));
     }
     if stream.sample_rate != Some(audio.sample_rate) || stream.channels != Some(audio.channels) {
         return Err(format!(
@@ -972,8 +991,9 @@ fn check_audio_span(
     Ok(())
 }
 
-/// Writes `copy`'s runs, back to back, into a new MP4 at `output`, with
-/// `audio`.
+/// Writes `copy`'s runs, back to back, into a new `container` file at
+/// `output`, with `audio`. The runs were planned for `container`
+/// ([`PacketCopyRequest::container`]).
 ///
 /// The output is transactional, as every export's is: it is written beside
 /// `output` and renamed into place only when complete, and a failure or a
@@ -987,6 +1007,7 @@ fn check_audio_span(
 pub fn copy_packets(
     copy: &PacketCopy,
     output: &Path,
+    container: alpha2_media::Container,
     audio: CopyAudio<'_>,
     cancel: &CancelToken,
     progress: &mut dyn FnMut(u64),
@@ -1019,7 +1040,7 @@ pub fn copy_packets(
     drop(input);
     let copied_audio = matches!(audio, CopyAudio::Source);
     let mut writer = RunWriter {
-        muxer: Mp4Muxer::open_streams(output, video_stream, audio_stream)?,
+        muxer: Muxer::open_streams(output, container, video_stream, audio_stream)?,
         mix: match audio {
             CopyAudio::Encode { feed, .. } => Some(MixWriter {
                 feed,
@@ -1058,7 +1079,7 @@ pub fn copy_packets(
 
 /// The output a copy writes its runs into, and the mix it interleaves.
 struct RunWriter<'a> {
-    muxer: Mp4Muxer,
+    muxer: Muxer,
     mix: Option<MixWriter<'a>>,
     stages: crate::EncodeStageTimings,
     report: PacketCopyReport,
@@ -1188,7 +1209,7 @@ impl MixWriter<'_> {
     fn write_until(
         &mut self,
         target: i64,
-        muxer: &mut Mp4Muxer,
+        muxer: &mut Muxer,
         stages: &mut crate::EncodeStageTimings,
         report: &mut PacketCopyReport,
     ) -> Result<(), EncodeError> {

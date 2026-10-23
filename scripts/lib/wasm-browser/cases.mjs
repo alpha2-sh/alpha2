@@ -43,6 +43,7 @@ import {
   wasmFeatureProbe,
 } from "./binding.mjs";
 import {
+  exportEveryContainer,
   exportEveryProjectRate,
   exportSchedule,
   exportWaitingFrames,
@@ -103,6 +104,7 @@ export const cases = {
   "audio-speaker-layout": audioSpeakerLayout,
   "fixed-audio-mix": fixedAudioMix,
   "export-every-project-rate": exportEveryProjectRate,
+  "export-every-container": exportEveryContainer,
   "loudness-under-limiter": loudnessUnderLimiter,
   "text-raster-parity": textRasterParity,
   "webgl2-transparent-edges": () => transparentEdges(true),

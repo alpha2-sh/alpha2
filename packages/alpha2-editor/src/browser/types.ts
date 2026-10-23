@@ -184,14 +184,27 @@ export interface BrowserBridgeOptions {
    */
   readonly assetDecisions?: AssetBinding;
 }
-/** Options of `BrowserBridge.startExport`. The file is an MP4. */
+/** Options of `BrowserBridge.startExport`. */
 export interface BrowserExportOptions {
   /**
-   * Default `avc`. Whether this browser encodes it is the browser's to say ({@link
-   * BrowserBridge.videoEncoders}); an export with one it does not is refused before it renders, as
+   * The file format, default `mp4`. It names the file and decides which codecs an export may ask
+   * for (see `alpha2/containers`): `mov` takes no VP9, AV1 or Opus, and `webm` takes only VP9, AV1
+   * and Opus. A codec the container does not offer is refused before the export renders, as
    * `INVALID_INPUT`.
    */
+  readonly container?: "mp4" | "mov" | "mkv" | "webm";
+  /**
+   * Default: the container's (`avc`, or `vp9` for `webm`). Whether this browser encodes it is the
+   * browser's to say ({@link BrowserBridge.videoEncoders}); an export with one it does not is
+   * refused before it renders, as `INVALID_INPUT`.
+   */
   readonly videoCodec?: "avc" | "hevc" | "vp9" | "av1";
+  /**
+   * Default: the first of the container's audio codecs this browser encodes, in the container's
+   * order (AAC, then Opus, for `mp4` and `mkv`; AAC for `mov`; Opus for `webm`). A codec asked for
+   * that this browser cannot encode is refused before the export renders, as `INVALID_INPUT`.
+   */
+  readonly audioCodec?: "aac" | "opus";
   /**
    * One of the engine's quality levels (`very-low`, `low`, `medium`, `high`, `very-high`),
    * default `high`. The engine resolves it to a bitrate for the codec, size, and frame rate,
@@ -202,7 +215,8 @@ export interface BrowserExportOptions {
   readonly audioQuality?: string;
   /**
    * Default `true`. Audio is written only when an audible source is shown. An export with
-   * audio is refused before it renders on a browser that encodes neither AAC nor Opus.
+   * audio is refused before it renders on a browser that encodes none of the container's audio
+   * codecs.
    */
   readonly includeAudio?: boolean;
   /**

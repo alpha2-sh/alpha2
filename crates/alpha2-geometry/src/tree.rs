@@ -101,7 +101,7 @@ pub enum EvaluatedGeometry {
         kind: PolystarKind,
         /// Centre.
         center: Point,
-        /// Points.
+        /// Number of points; a fraction is dropped.
         points: f64,
         /// Points' radius, a fraction of the shorter side.
         outer_radius: f64,

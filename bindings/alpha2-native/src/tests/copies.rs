@@ -21,6 +21,7 @@ fn a_copy_refuses_a_source_whose_carried_display_a_render_would_not_show() {
             color: alpha2_media::ColorMetadata::EXPORT,
             output_start: MediaTime::ZERO,
             audio: None,
+            container: alpha2_media::Container::Mp4,
         })
     };
     plan("h264-bt709-copy.mp4").expect("the stream these are made from is copied");
@@ -182,6 +183,7 @@ fn copied_audio_whose_timestamps_land_outside_the_video_is_not_copied() {
                 sample_rate: 48_000,
                 channels: 2,
             }),
+            container: alpha2_media::Container::Mp4,
         })
         .expect("the video is copied")
     };
@@ -237,6 +239,7 @@ fn copy_plan(
             sample_rate: 48_000,
             channels: 2,
         }),
+        container: alpha2_media::Container::Mp4,
     })
 }
 
@@ -311,6 +314,7 @@ fn a_copy_names_each_refusal_its_correctness_rests_on() {
         color: alpha2_media::ColorMetadata::EXPORT,
         output_start: MediaTime::ZERO,
         audio: None,
+        container: alpha2_media::Container::Mp4,
     })
     .expect_err("25 fps of a 30 fps source");
     assert!(
@@ -353,6 +357,7 @@ fn a_cancelled_copy_leaves_nothing() {
     let error = crate::copy_packets(
         &copy,
         &output,
+        alpha2_media::Container::Mp4,
         crate::CopyAudio::None,
         &cancel,
         &mut progress,
@@ -381,6 +386,7 @@ fn a_planner_reads_each_source_once_and_stops_when_cancelled() {
             color: alpha2_media::ColorMetadata::EXPORT,
             output_start: MediaTime::from_ticks(first * alpha2_time::TICKS_PER_SECOND / 30),
             audio: None,
+            container: alpha2_media::Container::Mp4,
         }
     }
     let opened = || crate::decode::INPUTS_OPENED.with(std::cell::Cell::get);

@@ -97,7 +97,7 @@ fn masks_and_mattes_are_validated() {
     assert!(matches!(wire.masks[0].shape, ShapeGeometry::Ellipse(_)));
     assert_eq!(wire.masks[0].mode, MaskMode::Add);
     assert_eq!(wire.masks[0].fill_rule, FillRule::Nonzero);
-    // An ellipse has no corner radius, and the geometry no longer sits beside the shape.
+    // An ellipse has no corner radius, and a mask's geometry goes inside `shape`, not beside it.
     assert!(
         serde_json::from_str::<ShapeGeometry>(
             r#"{"type":"ellipse","corner_radius":{"mode":"constant","value":1},

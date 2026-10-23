@@ -7,6 +7,7 @@
 //! none of those owns them.
 
 mod color;
+mod container;
 mod ids;
 mod io;
 mod rate_control;
@@ -15,6 +16,7 @@ pub use color::{
     ColorMatrix, ColorMetadata, ColorPrimaries, ColorRange, DynamicRange, TransferFunction,
     YcbcrLevels, YuvEncoding,
 };
+pub use container::{Container, ContainerError, resolve_export_format};
 pub use ids::{IdError, SourceId};
 pub use io::{
     AudioBlock, AudioBlockProvider, AudioBlockSink, AudioSpan, CancelToken, ChromaLocation,

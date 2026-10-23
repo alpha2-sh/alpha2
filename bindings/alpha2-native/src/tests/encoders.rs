@@ -29,10 +29,10 @@ fn assert_final_frame_seek_boundaries(decoder: &mut NativeDecoder, cancel: &Canc
 #[test]
 fn codec_capabilities_report_stable_logical_ids_and_concrete_encoders() {
     let capabilities = codec_capabilities();
-    assert!(capabilities.mp4_video.iter().any(|capability| {
+    assert!(capabilities.video.iter().any(|capability| {
         capability.codec == NativeVideoCodec::Mpeg4Part2 && !capability.encoder_name.is_empty()
     }));
-    assert!(capabilities.mp4_audio.iter().any(|capability| {
+    assert!(capabilities.audio.iter().any(|capability| {
         capability.codec == NativeAudioCodec::Aac && !capability.encoder_name.is_empty()
     }));
     assert_eq!(NativeVideoCodec::H264.as_str(), "h264");
@@ -50,7 +50,7 @@ fn codec_capabilities_report_stable_logical_ids_and_concrete_encoders() {
         NativeVideoCodec::Mpeg4Part2,
     ] {
         let encoders = capabilities
-            .mp4_video
+            .video
             .iter()
             .filter(|capability| capability.codec == codec)
             .collect::<Vec<_>>();
@@ -79,13 +79,13 @@ fn codec_capabilities_report_stable_logical_ids_and_concrete_encoders() {
 
     // An H.264 encoder that refuses this size is rejected by name and reason.
     if let Some(h264) = capabilities
-        .mp4_video
+        .video
         .iter()
         .find(|capability| capability.codec == NativeVideoCodec::H264)
         .filter(|capability| capability.minimum_width > 64 || capability.minimum_height > 36)
     {
         let alternatives = capabilities
-            .mp4_video
+            .video
             .iter()
             .filter(|capability| capability.codec == NativeVideoCodec::H264)
             .filter(|capability| capability.minimum_width <= 64 && capability.minimum_height <= 36)
@@ -102,6 +102,7 @@ fn codec_capabilities_report_stable_logical_ids_and_concrete_encoders() {
                 rate_control: VideoRateControl::bitrate(200_000, BitrateMode::Variable).unwrap(),
                 codec: NativeVideoCodec::H264,
                 display: crate::VideoDisplay::default(),
+                container: alpha2_media::Container::Mp4,
             },
         ) {
             Ok(sink) => {
@@ -146,6 +147,7 @@ fn a_rejected_candidate_falls_through_to_the_next_one() {
             rate_control: VideoRateControl::bitrate(200_000, BitrateMode::Variable).unwrap(),
             codec: NativeVideoCodec::H264,
             display: crate::VideoDisplay::default(),
+            container: alpha2_media::Container::Mp4,
         },
     )
     .expect("a candidate behind the rejected one must open");
@@ -173,7 +175,7 @@ fn a_failed_open_with_options_does_not_free_them_twice() {
     context.set_height(1_080);
     context.set_pix_fmt(ffi::AV_PIX_FMT_YUV420P);
     context.set_time_base(ra(1, 30));
-    let options = video_encoder_options(ColorMetadata::default(), &encoder, true, 1);
+    let options = video_encoder_options(ColorMetadata::default(), &encoder, true, 1, 640);
     let error = alpha2_ffmpeg_bridge::open_codec_context(&mut context, options)
         .expect_err("a software frame format the encoder does not declare must be refused");
     assert!(format!("{error}").contains("Invalid argument"), "{error}");
@@ -190,7 +192,7 @@ fn encoder_candidates_are_ordered_and_a_missing_codec_names_the_runtime() {
         NativeVideoCodec::Mpeg4Part2,
     ] {
         let advertised = capabilities
-            .mp4_video
+            .video
             .iter()
             .filter(|capability| capability.codec == codec)
             .map(|capability| capability.encoder_name.clone())
@@ -390,65 +392,6 @@ fn codec_threading_policy_and_unused_option_guard_are_explicit() {
 }
 
 #[test]
-#[ignore = "requires the hardware/software devices behind optional FFmpeg encoders"]
-fn available_modern_video_codecs_encode_mp4() {
-    let capabilities = codec_capabilities();
-    let cancel = CancelToken::default();
-    let mut tested = Vec::new();
-    for codec in [
-        NativeVideoCodec::Hevc,
-        NativeVideoCodec::Vp9,
-        NativeVideoCodec::Av1,
-    ] {
-        let Some(capability) = capabilities
-            .mp4_video
-            .iter()
-            .find(|capability| capability.codec == codec)
-        else {
-            continue;
-        };
-        let width = capability.minimum_width.next_multiple_of(2);
-        let height = capability.minimum_height.next_multiple_of(2);
-        let path = output_path(codec.as_str());
-        let _ = fs::remove_file(&path);
-        let mut sink = NativeVideoEncodeSink::create(
-            &path,
-            VideoEncodeConfig {
-                width,
-                height,
-                frame_rate: FrameRate::new(30, 1).expect("rate"),
-                color: ColorMetadata::default(),
-                rate_control: VideoRateControl::bitrate(2_000_000, BitrateMode::Variable).unwrap(),
-                codec,
-                display: crate::VideoDisplay::default(),
-            },
-        )
-        .unwrap_or_else(|error| panic!("{} encoder failed: {error:?}", codec.as_str()));
-        sink.write(
-            EncodeEvent::Video(rgba_frame_sized(
-                MediaTime::ZERO,
-                [32, 96, 224, 255],
-                width,
-                height,
-            )),
-            &cancel,
-        )
-        .expect("video frame");
-        sink.finish(&cancel).expect("trailer");
-        let video = probe(&path)
-            .expect("probe output")
-            .streams
-            .into_iter()
-            .find(|stream| stream.kind == StreamKind::Video)
-            .expect("video stream");
-        assert_eq!(video.codec, codec.as_str());
-        fs::remove_file(path).expect("remove output");
-        tested.push(codec.as_str());
-    }
-    eprintln!("verified native MP4 codecs: {}", tested.join(", "));
-}
-
-#[test]
 fn an_encode_sink_reports_each_encoder_and_muxer_call_to_its_thread_watch() {
     // The host judges a worker stuck by how long its current call has run, so a flush must report
     // each of its calls rather than look like one call as long as the whole drain.
@@ -464,6 +407,7 @@ fn an_encode_sink_reports_each_encoder_and_muxer_call_to_its_thread_watch() {
             rate_control: VideoRateControl::bitrate(200_000, BitrateMode::Variable).unwrap(),
             codec: NativeVideoCodec::Mpeg4Part2,
             display: crate::VideoDisplay::default(),
+            container: alpha2_media::Container::Mp4,
         },
     )
     .expect("encoder");
@@ -505,6 +449,7 @@ fn video_encode_mux_round_trip_and_cleanup_are_transactional() {
             rate_control: VideoRateControl::bitrate(200_000, BitrateMode::Variable).unwrap(),
             codec: NativeVideoCodec::Mpeg4Part2,
             display: crate::VideoDisplay::default(),
+            container: alpha2_media::Container::Mp4,
         },
     )
     .expect("encoder");
@@ -572,6 +517,7 @@ fn video_encode_mux_round_trip_and_cleanup_are_transactional() {
             rate_control: VideoRateControl::bitrate(200_000, BitrateMode::Variable).unwrap(),
             codec: NativeVideoCodec::Mpeg4Part2,
             display: crate::VideoDisplay::default(),
+            container: alpha2_media::Container::Mp4,
         },
     )
     .expect("encoder");
@@ -615,6 +561,7 @@ fn encode_one_frame(
                 rate_control,
                 codec: capability.codec,
                 display: crate::VideoDisplay::default(),
+                container: alpha2_media::Container::Mp4,
             },
             &capability.encoder_name,
         )
@@ -643,7 +590,7 @@ fn a_constant_rate_opens_on_every_advertised_encoder() {
     // reporting constant. A hardware refusal of the mode is reported, not failed. Registered
     // encoders may not run here at all (hevc_mf failed every mode with E_FAIL on a Windows runner),
     // so only one that encodes a variable-rate frame is held to constant.
-    for capability in codec_capabilities().mp4_video {
+    for capability in codec_capabilities().video {
         let name = &capability.encoder_name;
         let variable = VideoRateControl::bitrate(500_000, BitrateMode::Variable).expect("rate");
         if let Err((stage, error)) = encode_one_frame(&capability, variable, "variable") {
@@ -827,18 +774,28 @@ fn a_runtime_other_than_the_pinned_sdk_says_why() {
     let identity = |version: &str, configuration: &str| crate::FfmpegRuntimeIdentity {
         version: version.to_owned(),
         configuration: configuration.to_owned(),
-        pinned_sdk_release: "ffmpeg-8.1.3-shared-build1",
+        pinned_sdk_release: "ffmpeg-8.1.3-shared-build3",
     };
-    let pinned = "--disable-gpl --disable-nonfree --disable-autodetect --enable-libdav1d --enable-videotoolbox";
+    let pinned = "--disable-gpl --disable-nonfree --disable-autodetect --enable-libdav1d \
+                  --enable-libopus --enable-libvpx --enable-libsvtav1 --enable-videotoolbox";
     assert_eq!(identity("n8.1.3", pinned).pinned_sdk_mismatch(), None);
     // The same version without libdav1d.
-    let without_dav1d = identity(
+    let without_dav1d = identity("n8.1.3", &pinned.replace(" --enable-libdav1d", ""))
+        .pinned_sdk_mismatch()
+        .expect("an SDK without libdav1d is not the pin");
+    assert_eq!(without_dav1d, "not configured with --enable-libdav1d");
+    // An earlier SDK build, which linked no software VP9, AV1 or Opus encoder.
+    let earlier = identity(
         "n8.1.3",
-        "--disable-gpl --disable-nonfree --disable-autodetect --enable-videotoolbox",
+        "--disable-gpl --disable-nonfree --disable-autodetect --enable-libdav1d",
     )
     .pinned_sdk_mismatch()
-    .expect("an SDK without libdav1d is not the pin");
-    assert_eq!(without_dav1d, "not configured with --enable-libdav1d");
+    .expect("an SDK without the software encoders is not the pin");
+    assert_eq!(
+        earlier,
+        "not configured with --enable-libopus, not configured with --enable-libsvtav1, \
+         not configured with --enable-libvpx"
+    );
     let homebrew = identity(
         "8.1.2",
         "--prefix=/opt/homebrew --enable-gpl --enable-libx264",
@@ -850,10 +807,10 @@ fn a_runtime_other_than_the_pinned_sdk_says_why() {
     assert!(homebrew.contains("--enable-libx264"), "{homebrew}");
     assert!(homebrew.contains("--disable-autodetect"), "{homebrew}");
     // The pinned version built elsewhere: an LGPL system package that found an external encoder.
-    let system = identity("n8.1.3", "--disable-gpl --enable-libsvtav1")
+    let system = identity("n8.1.3", "--disable-gpl --enable-libaom")
         .pinned_sdk_mismatch()
         .expect("a system build of the same version is not the pin");
-    assert!(system.contains("--enable-libsvtav1"), "{system}");
+    assert!(system.contains("--enable-libaom"), "{system}");
     assert!(system.contains("--disable-autodetect"), "{system}");
     assert!(!system.contains("version"), "{system}");
     let version3 = identity("n8.1.3", &format!("{pinned} --enable-version3"))
@@ -901,6 +858,7 @@ fn a_quantizer_the_encoder_cannot_hold_falls_back_to_the_bitrate_and_says_so() {
             },
             codec: NativeVideoCodec::Mpeg4Part2,
             display: crate::VideoDisplay::default(),
+            container: alpha2_media::Container::Mp4,
         },
     )
     .expect("encoder");
@@ -965,6 +923,7 @@ fn the_encoders_take_every_yuv_layout_the_decoders_give() {
                 rate_control: VideoRateControl::bitrate(500_000, BitrateMode::Variable).unwrap(),
                 codec: NativeVideoCodec::Mpeg4Part2,
                 display: crate::VideoDisplay::default(),
+                container: alpha2_media::Container::Mp4,
             },
         )
         .expect("sink");

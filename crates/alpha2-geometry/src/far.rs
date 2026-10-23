@@ -32,8 +32,8 @@ const FLAT: f64 = 1.0 / 64.0;
 const MAX_DEPTH: u32 = 64;
 
 /// `path` as it fills a `width` by `height` canvas: itself when it stays
-/// within [`MAX_DEVICE`] of the canvas, or projected onto the canvas and
-/// [`MARGIN`] around it. Every subpath of the projection is closed, as
+/// within [`MAX_DEVICE`] of the canvas, or projected onto the canvas and a
+/// 64-pixel margin around it. Every subpath of the projection is closed, as
 /// filling closes it. A non-finite coordinate leaves nothing.
 #[must_use]
 pub fn project_far(path: &BezPath, width: u32, height: u32) -> BezPath {
@@ -167,7 +167,7 @@ impl Clip {
         self.line_to(to);
     }
 
-    /// Where `points` (a curve's control points, which hold it) lie.
+    /// Where `points` (a curve's control points, whose hull contains the curve) lie.
     fn side(&self, points: &[Point]) -> Side {
         if points.iter().all(|p| self.inside(*p)) {
             Side::Inside

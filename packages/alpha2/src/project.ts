@@ -3320,8 +3320,8 @@ function validMaskCount(masks: unknown, trackKind: unknown): boolean {
 }
 
 /**
- * Mirrors `validate_masks`: the first mask's problem, its outline checked as geometry is and its
- * feather non-negative.
+ * Mirrors `validate_masks`: the first problem among the masks in order, each outline checked as
+ * geometry is and each feather non-negative.
  */
 function masksIssue(masks: unknown): ShapeIssue | undefined {
   if (!Array.isArray(masks)) return undefined;
@@ -3499,8 +3499,9 @@ export interface LintBinding {
 
 /**
  * A valid project's non-fatal diagnostics, computed by the engine's own
- * `Project::lint`, in a fixed order: sources, then shapes generators (sources',
- * then composition nodes'), then each track's clips, transitions, and cues.
+ * `Project::lint`, in a fixed order: unused sources, then shapes generators
+ * (sources', then composition nodes'), then HDR sources, then each track's
+ * clips, transitions, and cues.
  *
  * Diagnostics never block a load or an export; they flag what is probably a
  * mistake in a project the engine accepts.

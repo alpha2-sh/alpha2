@@ -347,9 +347,9 @@ impl<'a> RenderGraph<'a> {
     ///
     /// # Errors
     /// Returns [`GraphError::InvalidDependency`] unless `source` and every
-    /// input are earlier; [`RenderError::InvalidEffectParams`] for named
-    /// inputs on a built-in drawn as passes, and as
-    /// [`Self::add_effect_with_resources`] does.
+    /// input are earlier, [`RenderError::InvalidEffectParams`] for named
+    /// inputs on a built-in drawn as passes, and otherwise the errors of
+    /// [`Self::add_effect_with_resources`].
     pub fn add_effect_with_inputs(
         &mut self,
         effect: EffectId,
@@ -375,7 +375,7 @@ impl<'a> RenderGraph<'a> {
             return expanded;
         }
         let source_key = self.cache_keys[source.index];
-        // Without named inputs the key is the one an effect always had.
+        // Without named inputs the key is the one `add_effect_with_resources` gives.
         let input_keys: &[RenderCacheKey] = if inputs.is_empty() {
             &[source_key]
         } else {
@@ -924,7 +924,7 @@ mod tests {
             effect_with_inputs(graph, nodes[0], EffectInputs::new()).expect("earlier node")
         });
         assert_ne!(named("map", 1), none);
-        // Without named inputs, the key is the one an effect always had.
+        // Without named inputs, the key is the one `add_effect_with_resources` gives.
         let plain = key(&|graph, nodes| {
             graph
                 .add_effect_with_resources(

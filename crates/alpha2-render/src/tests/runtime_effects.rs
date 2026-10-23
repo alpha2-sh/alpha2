@@ -613,8 +613,8 @@ fn effect_with_inputs(id: &str, inputs: &[&str], wgsl_body: &str) -> EffectDef {
     }
 }
 
-/// Draws `effect` over a white 2x2 source with `inputs`, each a solid texture or one of
-/// the given size and pixels.
+/// Draws `effect` over a white 2x2 source with `inputs`, each a texture of the given size and
+/// pixels.
 fn draw_with_inputs(
     renderer: &Renderer,
     effect: &crate::EffectId,

@@ -62,10 +62,13 @@ fn an_export_survives_a_hardware_session_that_fails_on_its_first_packet() {
                 12_000,
                 RateRequest { num: 30, den: 1 },
                 false,
-                NativeVideoCodec::Mpeg4Part2,
+                crate::protocol::ResolvedFormat {
+                    container: alpha2_media::Container::Mp4,
+                    video: NativeVideoCodec::Mpeg4Part2,
+                    audio: NativeAudioCodec::Aac,
+                },
                 None,
                 VideoQualityRequest::Level(QualityLevel::High),
-                NativeAudioCodec::Aac,
                 AudioQualityRequest::Level(QualityLevel::High),
                 None,
                 &output,
@@ -142,10 +145,13 @@ fn imported_frames_reuse_their_vulkan_import_tickets() {
                 second,
                 RateRequest { num: 30, den: 1 },
                 false,
-                codec,
+                crate::protocol::ResolvedFormat {
+                    container: alpha2_media::Container::Mp4,
+                    video: codec,
+                    audio: NativeAudioCodec::Aac,
+                },
                 None,
                 VideoQualityRequest::Level(QualityLevel::High),
-                NativeAudioCodec::Aac,
                 AudioQualityRequest::Level(QualityLevel::High),
                 None,
                 &directory.join(name),
@@ -226,10 +232,13 @@ fn a_resident_host_exports_again_after_a_gpu_resident_export_fails_midway() {
             end,
             RateRequest { num: 30, den: 1 },
             false,
-            NativeVideoCodec::H264,
+            crate::protocol::ResolvedFormat {
+                container: alpha2_media::Container::Mp4,
+                video: NativeVideoCodec::H264,
+                audio: NativeAudioCodec::Aac,
+            },
             None,
             VideoQualityRequest::Level(QualityLevel::High),
-            NativeAudioCodec::Aac,
             AudioQualityRequest::Level(QualityLevel::High),
             None,
             &directory.join(name),
@@ -335,10 +344,13 @@ fn a_software_decoded_export_still_encodes_on_the_gpu() {
             end,
             RateRequest { num: 30, den: 1 },
             false,
-            NativeVideoCodec::H264,
+            crate::protocol::ResolvedFormat {
+                container: alpha2_media::Container::Mp4,
+                video: NativeVideoCodec::H264,
+                audio: NativeAudioCodec::Aac,
+            },
             None,
             VideoQualityRequest::Level(QualityLevel::High),
-            NativeAudioCodec::Aac,
             AudioQualityRequest::Level(QualityLevel::High),
             None,
             &directory.join("out.mp4"),
@@ -414,10 +426,13 @@ fn a_generated_source_exports_without_an_asset() {
             end_ticks,
             RateRequest { num: 30, den: 1 },
             false,
-            NativeVideoCodec::Mpeg4Part2,
+            crate::protocol::ResolvedFormat {
+                container: alpha2_media::Container::Mp4,
+                video: NativeVideoCodec::Mpeg4Part2,
+                audio: NativeAudioCodec::Aac,
+            },
             None,
             VideoQualityRequest::Level(QualityLevel::High),
-            NativeAudioCodec::Aac,
             AudioQualityRequest::Level(QualityLevel::High),
             None,
             &output,
@@ -516,10 +531,13 @@ fn an_untouched_clip_is_transcoded_from_its_decoded_planes() {
                 end,
                 RateRequest { num: 30, den: 1 },
                 false,
-                NativeVideoCodec::H264,
+                crate::protocol::ResolvedFormat {
+                    container: alpha2_media::Container::Mp4,
+                    video: NativeVideoCodec::H264,
+                    audio: NativeAudioCodec::Aac,
+                },
                 None,
                 VideoQualityRequest::Level(QualityLevel::VeryHigh),
-                NativeAudioCodec::Aac,
                 AudioQualityRequest::Level(QualityLevel::High),
                 None,
                 &output,
@@ -721,10 +739,13 @@ fn a_rendered_gpu_resident_export_carries_each_frames_colors_into_its_chroma() {
             end,
             RateRequest { num: 30, den: 1 },
             false,
-            NativeVideoCodec::H264,
+            crate::protocol::ResolvedFormat {
+                container: alpha2_media::Container::Mp4,
+                video: NativeVideoCodec::H264,
+                audio: NativeAudioCodec::Aac,
+            },
             None,
             VideoQualityRequest::Level(QualityLevel::VeryHigh),
-            NativeAudioCodec::Aac,
             AudioQualityRequest::Level(QualityLevel::High),
             None,
             &output,
@@ -1041,10 +1062,13 @@ fn a_d3d12va_decoded_export_renders_copies_of_its_surfaces_as_software_decode_wo
                 end,
                 RateRequest { num: 30, den: 1 },
                 false,
-                NativeVideoCodec::Mpeg4Part2,
+                crate::protocol::ResolvedFormat {
+                    container: alpha2_media::Container::Mp4,
+                    video: NativeVideoCodec::Mpeg4Part2,
+                    audio: NativeAudioCodec::Aac,
+                },
                 None,
                 VideoQualityRequest::Level(QualityLevel::VeryHigh),
-                NativeAudioCodec::Aac,
                 AudioQualityRequest::Level(QualityLevel::High),
                 None,
                 &output,
@@ -1088,6 +1112,114 @@ fn a_d3d12va_decoded_export_renders_copies_of_its_surfaces_as_software_decode_wo
             difference < samples,
             "frame {index} differs by {difference} over {samples} samples"
         );
+    }
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos", target_os = "windows"),
+    feature = "hwencode"
+))]
+#[test]
+fn a_gpu_resident_export_writes_every_container_that_offers_its_codec() {
+    use alpha2_media::Container;
+    let _gpu = gpu_test_lock();
+    let Some((mut host, capability)) = gpu_output_host(VideoDecodePolicy::Software) else {
+        return;
+    };
+    let directory = scratch_directory("gpu-resident-containers");
+    let second = alpha2_time::TICKS_PER_SECOND;
+    let project = json!({
+        "schema_version": 1,
+        "id": "gpu-resident-containers",
+        "name": "GPU-resident containers",
+        "settings": {
+            "width": 640,
+            "height": 360,
+            "frame_rate": {"num": 30, "den": 1},
+            "sample_rate": 48000
+        },
+        "sources": [
+            {"id": "video", "locator": "fixture://video", "kind": "video"},
+            {"id": "audio", "locator": "fixture://audio", "kind": "audio"}
+        ],
+        "timeline": {"tracks": [
+            {"id": "v", "name": "V", "kind": "video", "clips": [{
+                "id": "clip", "source_id": "video",
+                "timeline_range": {"start": 0, "end": second},
+                "source_range": {"start": 0, "end": second}
+            }]},
+            {"id": "a", "name": "A", "kind": "audio", "clips": [{
+                "id": "tone", "source_id": "audio",
+                "timeline_range": {"start": 0, "end": second},
+                "source_range": {"start": 0, "end": second}
+            }]}
+        ]}
+    });
+    let assets = HashMap::from([
+        ("video".to_owned(), corpus("h264-long-gop.mp4")),
+        ("audio".to_owned(), corpus("audio-only-aac-priming.m4a")),
+    ]);
+    let opus = alpha2_native::codec_capabilities()
+        .audio
+        .iter()
+        .any(|entry| entry.codec == NativeAudioCodec::Opus);
+    let mut cases = vec![
+        (Container::Mov, capability.codec, NativeAudioCodec::Aac),
+        (Container::Mkv, capability.codec, NativeAudioCodec::Aac),
+    ];
+    if opus {
+        cases.push((Container::Mkv, capability.codec, NativeAudioCodec::Opus));
+    }
+    for (container, video, audio) in cases {
+        if !container.offers_video(video.model()) {
+            continue;
+        }
+        let output = directory.join(format!(
+            "resident-{}.{}",
+            audio.as_str(),
+            container.extensions()[0]
+        ));
+        let result = host
+            .export(
+                &project.to_string(),
+                &assets,
+                &HashMap::new(),
+                Vec::new(),
+                0,
+                second,
+                RateRequest { num: 30, den: 1 },
+                true,
+                crate::protocol::ResolvedFormat {
+                    container,
+                    video,
+                    audio,
+                },
+                None,
+                VideoQualityRequest::Level(QualityLevel::High),
+                AudioQualityRequest::Level(QualityLevel::High),
+                None,
+                &output,
+                &mut |_| Ok(()),
+            )
+            .unwrap_or_else(|error| panic!("{container} {}: {error}", audio.as_str()));
+        assert_eq!(result["videoOutputPath"], json!("gpu-resident"), "{result}");
+        assert_eq!(result["container"], json!(container.as_str()));
+        assert_eq!(result["audioCodec"], json!(audio.as_str()));
+        let probed = alpha2_native::probe(&output).expect("probe");
+        let matroska = container == Container::Mkv;
+        assert_eq!(
+            probed.format.contains("matroska"),
+            matroska,
+            "{}",
+            probed.format
+        );
+        assert_eq!(
+            probed.selected_audio_stream().expect("audio").codec,
+            audio.as_str()
+        );
+        let video_stream = probed.selected_video_stream().expect("video");
+        assert_eq!(video_stream.codec, video.as_str());
     }
     let _ = std::fs::remove_dir_all(directory);
 }

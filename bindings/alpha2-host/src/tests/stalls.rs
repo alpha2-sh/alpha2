@@ -860,6 +860,7 @@ fn dropping_an_encode_worker_stuck_in_a_call_returns_when_no_stall_was_reported(
             .expect("rate control"),
             codec: NativeVideoCodec::Mpeg4Part2,
             display: alpha2_native::VideoDisplay::default(),
+            container: alpha2_media::Container::Mp4,
         },
     )
     .expect("sink");

@@ -198,6 +198,7 @@ fn audio_video_sink_interleaves_both_streams_transactionally() {
                 rate_control: VideoRateControl::bitrate(200_000, BitrateMode::Variable).unwrap(),
                 codec: NativeVideoCodec::Mpeg4Part2,
                 display: crate::VideoDisplay::default(),
+                container: alpha2_media::Container::Mp4,
             },
             audio_sample_rate: 48_000,
             audio_channels: 2,
@@ -274,6 +275,7 @@ fn audio_video_sink_rejects_non_interleaved_input() {
                 rate_control: VideoRateControl::bitrate(200_000, BitrateMode::Variable).unwrap(),
                 codec: NativeVideoCodec::Mpeg4Part2,
                 display: crate::VideoDisplay::default(),
+                container: alpha2_media::Container::Mp4,
             },
             audio_sample_rate: 48_000,
             audio_channels: 1,
@@ -318,6 +320,7 @@ fn audio_only_use_of_av_sink_keeps_packet_queues_bounded() {
                 rate_control: VideoRateControl::bitrate(200_000, BitrateMode::Variable).unwrap(),
                 codec: NativeVideoCodec::Mpeg4Part2,
                 display: crate::VideoDisplay::default(),
+                container: alpha2_media::Container::Mp4,
             },
             audio_sample_rate: 48_000,
             audio_channels: 1,
@@ -362,6 +365,7 @@ fn the_audio_thread_does_not_change_the_container_interleave() {
                         .unwrap(),
                     codec: NativeVideoCodec::Mpeg4Part2,
                     display: crate::VideoDisplay::default(),
+                    container: alpha2_media::Container::Mp4,
                 },
                 audio_sample_rate: 48_000,
                 audio_channels: 2,
@@ -1003,8 +1007,9 @@ fn write_silent_audio(path: &Path, encoder: &std::ffi::CStr, rate: i32, samples:
         }
     };
     for index in 0..frames {
-        let planar = alpha2_ffmpeg_bridge::audio_frame_f32p(
+        let planar = alpha2_ffmpeg_bridge::audio_frame(
             &[vec![0.0; usize::try_from(samples).expect("positive")]],
+            ffi::AV_SAMPLE_FMT_FLTP,
             rate,
             index * i64::from(samples),
         )

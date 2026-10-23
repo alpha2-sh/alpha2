@@ -1,6 +1,6 @@
 # alpha2-native
 
-Native media input and output for alpha2, on FFmpeg 8: probing, decoding video and audio (on the GPU where the `hwdecode` feature and the device allow), and encoding and muxing MP4. Its types are alpha2's own (`alpha2-media`); no FFmpeg type is part of its API. The `timeline` feature adds mixing a project's audio, and `hwencode` encoding frames the renderer packs on the GPU.
+Native media input and output for alpha2, on FFmpeg 8: probing, decoding video and audio (on the GPU where the `hwdecode` feature and the device allow), and encoding and muxing MP4, MOV, Matroska and WebM. Its types are alpha2's own (`alpha2-media`); no FFmpeg type is part of its API. The `timeline` feature adds mixing a project's audio, and `hwencode` encoding frames the renderer packs on the GPU.
 
 The crate also builds `alpha2`, a command for one media file at a time: `probe`, `thumbnail`, `transcode`, `export-audio` and `waveform`.
 

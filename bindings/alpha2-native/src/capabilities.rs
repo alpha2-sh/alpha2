@@ -29,17 +29,17 @@ pub struct AvEncodeConfig {
     pub audio_bit_rate: u32,
 }
 
-/// MP4 video codecs implemented by the native encode sinks.
+/// Video codecs implemented by the native encode sinks.
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub enum NativeVideoCodec {
     /// H.264/AVC, preferred for broad browser, Windows, and Apple playback.
     H264,
-    /// H.265/HEVC in MP4.
+    /// H.265/HEVC.
     Hevc,
-    /// VP9 in MP4 when the linked `FFmpeg` build provides a VP9 encoder.
+    /// VP9, when the linked `FFmpeg` build provides a VP9 encoder.
     Vp9,
-    /// AV1 in MP4 when the linked `FFmpeg` build provides an AV1 encoder.
+    /// AV1, when the linked `FFmpeg` build provides an AV1 encoder.
     Av1,
     /// MPEG-4 Part 2, retained for compatibility with existing alpha2 hosts.
     Mpeg4Part2,
@@ -73,6 +73,18 @@ impl NativeVideoCodec {
         }
     }
 
+    /// The native codec for the engine's `codec`.
+    #[must_use]
+    pub const fn from_model(codec: alpha2_media::VideoCodec) -> Self {
+        match codec {
+            alpha2_media::VideoCodec::H264 => Self::H264,
+            alpha2_media::VideoCodec::Hevc => Self::Hevc,
+            alpha2_media::VideoCodec::Vp9 => Self::Vp9,
+            alpha2_media::VideoCodec::Av1 => Self::Av1,
+            alpha2_media::VideoCodec::Mpeg4Part2 => Self::Mpeg4Part2,
+        }
+    }
+
     pub(crate) const fn codec_id(self) -> ffi::AVCodecID {
         match self {
             Self::H264 => ffi::AV_CODEC_ID_H264,
@@ -84,20 +96,26 @@ impl NativeVideoCodec {
     }
 }
 
-/// MP4 audio codecs implemented by the native audio/video sink.
+/// Audio codecs implemented by the native encode sinks.
 #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
 #[non_exhaustive]
 pub enum NativeAudioCodec {
-    /// AAC-LC compatible audio.
+    /// AAC-LC compatible audio, through `FFmpeg`'s `aac`.
     Aac,
+    /// Opus, through `libopus`.
+    Opus,
 }
 
 impl NativeAudioCodec {
+    /// Every codec, in the order the engine lists them.
+    pub const ALL: [Self; 2] = [Self::Aac, Self::Opus];
+
     /// Stable identifier suitable for an application protocol or settings file.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Aac => "aac",
+            Self::Opus => "opus",
         }
     }
 
@@ -106,14 +124,36 @@ impl NativeAudioCodec {
     pub const fn model(self) -> alpha2_media::AudioCodec {
         match self {
             Self::Aac => alpha2_media::AudioCodec::Aac,
+            Self::Opus => alpha2_media::AudioCodec::Opus,
         }
     }
 
-    pub(crate) const fn codec_id(self) -> ffi::AVCodecID {
-        match self {
-            Self::Aac => ffi::AV_CODEC_ID_AAC,
+    /// The native codec for the engine's `codec`.
+    #[must_use]
+    pub const fn from_model(codec: alpha2_media::AudioCodec) -> Self {
+        match codec {
+            alpha2_media::AudioCodec::Aac => Self::Aac,
+            alpha2_media::AudioCodec::Opus => Self::Opus,
         }
     }
+
+    /// The one encoder alpha2 opens for the codec: `FFmpeg`'s `aac`, and the
+    /// reference `libopus` for Opus. `FFmpeg`'s own `opus` encoder is
+    /// experimental and is never a candidate.
+    pub(crate) const fn encoder_name(self) -> &'static std::ffi::CStr {
+        match self {
+            Self::Aac => c"aac",
+            Self::Opus => c"libopus",
+        }
+    }
+}
+
+/// The encoder this runtime opens for `codec`, or `None` when it links none,
+/// or only one marked experimental.
+pub(crate) fn audio_encoder(codec: NativeAudioCodec) -> Option<AVCodecRef<'static>> {
+    AVCodec::find_encoder_by_name(codec.encoder_name()).filter(|encoder| {
+        u32::try_from(encoder.capabilities).unwrap_or(0) & ffi::AV_CODEC_CAP_EXPERIMENTAL == 0
+    })
 }
 
 /// How a concrete encoder executes, as the linked runtime declares it.
@@ -254,7 +294,7 @@ pub struct NativeVideoEncoderSelection {
     pub software_threads: Option<i64>,
 }
 
-/// One linked video encoder available to the MP4 sink.
+/// One linked video encoder available to the native sinks.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NativeVideoEncoderCapability {
     /// Stable logical codec requested through [`VideoEncodeConfig`].
@@ -274,7 +314,7 @@ pub struct NativeVideoEncoderCapability {
     pub minimum_height: u32,
 }
 
-/// One linked audio encoder available to the MP4 sink.
+/// One linked audio encoder available to the native sinks.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NativeAudioEncoderCapability {
     /// Stable logical codec requested through [`AvEncodeConfig`].
@@ -283,17 +323,22 @@ pub struct NativeAudioEncoderCapability {
     pub encoder_name: String,
 }
 
-/// Runtime codec inventory for the native MP4 sinks.
+/// Runtime codec inventory for the native sinks.
+///
+/// Which containers offer which codec is the engine's policy
+/// ([`alpha2_media::Container`]), the same on every runtime; this says which
+/// of those codecs this runtime can encode.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NativeCodecCapabilities {
     /// Video encoders accepted by [`NativeVideoEncodeSink`](crate::NativeVideoEncodeSink) and
     /// [`NativeAvEncodeSink`](crate::NativeAvEncodeSink).
-    pub mp4_video: Vec<NativeVideoEncoderCapability>,
-    /// Audio encoders accepted by [`NativeAvEncodeSink`](crate::NativeAvEncodeSink).
-    pub mp4_audio: Vec<NativeAudioEncoderCapability>,
+    pub video: Vec<NativeVideoEncoderCapability>,
+    /// Audio encoders accepted by [`NativeAvEncodeSink`](crate::NativeAvEncodeSink) and the
+    /// GPU-resident and packet-copy exports.
+    pub audio: Vec<NativeAudioEncoderCapability>,
 }
 
-/// Reports the linked `FFmpeg` encoders usable by alpha2's native MP4 sinks.
+/// Reports the linked `FFmpeg` encoders usable by alpha2's native sinks.
 ///
 /// A logical codec may have multiple entries, and a hybrid encoder one per
 /// way it runs. Hardware entries appear first when they accept the native
@@ -301,7 +346,7 @@ pub struct NativeCodecCapabilities {
 /// codec is marked preferred.
 #[must_use]
 pub fn codec_capabilities() -> NativeCodecCapabilities {
-    let mp4_video = [
+    let video = [
         NativeVideoCodec::H264,
         NativeVideoCodec::Hevc,
         NativeVideoCodec::Vp9,
@@ -329,20 +374,17 @@ pub fn codec_capabilities() -> NativeCodecCapabilities {
             })
     })
     .collect();
-    let mp4_audio = [NativeAudioCodec::Aac]
+    let audio = NativeAudioCodec::ALL
         .into_iter()
         .filter_map(|codec| {
-            let encoder = AVCodec::find_encoder(codec.codec_id())?;
+            let encoder = audio_encoder(codec)?;
             Some(NativeAudioEncoderCapability {
                 codec,
                 encoder_name: encoder.name().to_string_lossy().into_owned(),
             })
         })
         .collect();
-    NativeCodecCapabilities {
-        mp4_video,
-        mp4_audio,
-    }
+    NativeCodecCapabilities { video, audio }
 }
 
 /// One codec's hardware decode registration for this platform's backend.
@@ -651,7 +693,7 @@ const fn hardware_device_node(_name: &str) -> Option<bool> {
 fn unavailable_codec_error(codec: NativeVideoCodec) -> EncodeError {
     let identity = crate::ffmpeg_runtime_identity();
     let inventory = codec_capabilities()
-        .mp4_video
+        .video
         .iter()
         .map(|capability| format!("{}:{}", capability.codec.as_str(), capability.encoder_name))
         .collect::<Vec<_>>()
@@ -715,7 +757,7 @@ pub(crate) fn select_video_encoder(
             )));
         }
         if !codec_capabilities()
-            .mp4_video
+            .video
             .iter()
             .any(|capability| capability.codec == codec && capability.encoder_name == name)
         {
@@ -727,7 +769,7 @@ pub(crate) fn select_video_encoder(
     }
 
     let capability = codec_capabilities()
-        .mp4_video
+        .video
         .into_iter()
         .find(|capability| capability.codec == codec)
         .ok_or_else(|| unavailable_codec_error(codec))?;
@@ -953,6 +995,7 @@ fn open_video_encoder_context(
         &candidate.encoder,
         candidate.on_hardware,
         threads,
+        request.config.width,
     );
     let options = match quantized {
         Some(quantized) => quantized.dictionary(base),
@@ -1170,16 +1213,15 @@ pub struct NativeRateControlProbe {
     pub device: Option<String>,
 }
 
-/// A quantizer in the middle of `codec`'s scale, for a probe open.
-pub(crate) const fn probe_quantizer(
-    codec: NativeVideoCodec,
-    encoder_name_is_libavcodec: bool,
-) -> u32 {
+/// A quantizer every encoder of `codec` accepts, for a probe open: the
+/// software VP9 and AV1 encoders (`libvpx-vp9`, `libsvtav1`) take `crf` on
+/// 0-63, the hardware ones a QP on 0-255.
+pub(crate) const fn probe_quantizer(codec: NativeVideoCodec, software: bool) -> u32 {
     match codec {
         NativeVideoCodec::H264 | NativeVideoCodec::Hevc => 26,
         NativeVideoCodec::Av1 | NativeVideoCodec::Vp9 => {
-            if encoder_name_is_libavcodec {
-                10
+            if software {
+                32
             } else {
                 100
             }
@@ -1308,7 +1350,7 @@ pub fn probe_video_encoders(width: u32, height: u32) -> Vec<NativeVideoEncoderPr
             class: encoder_class(encoder),
             hardware_accelerated: candidate.on_hardware,
             capability_bits: u32::try_from(encoder.capabilities).unwrap_or(0),
-            advertised: advertised.mp4_video.iter().any(|capability| {
+            advertised: advertised.video.iter().any(|capability| {
                 capability.codec == codec
                     && capability.encoder_name == encoder_name
                     && capability.hardware_accelerated == candidate.on_hardware
@@ -1391,7 +1433,13 @@ fn probe_software_encode(
     context.set_bit_rate(request.map_or(2_000_000, |request| request.bit_rate));
     context.set_gop_size(12);
     context.set_max_b_frames(encoder_max_b_frames(name));
-    let options = video_encoder_options(ColorMetadata::EXPORT, encoder, candidate.on_hardware, 1);
+    let options = video_encoder_options(
+        ColorMetadata::EXPORT,
+        encoder,
+        candidate.on_hardware,
+        1,
+        width,
+    );
     let options = match request {
         Some(request) => request.dictionary(options),
         None => options,

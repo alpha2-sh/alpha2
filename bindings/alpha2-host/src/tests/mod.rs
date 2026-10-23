@@ -21,8 +21,8 @@ use crate::encode::{EncodeChannelDepth, EncodeCommand, PipelineFailure};
 use crate::memory::InFlightBudget;
 use crate::metrics::{ExportMetrics, add_stage_split_metrics, export_pipeline_limits};
 use crate::protocol::{
-    AudioCodecRequest, AudioQualityRequest, HostError, LoudnessRequest, RateRequest, Request,
-    VideoCodecRequest, VideoQualityRequest, parse_request, request_id_from_line,
+    AudioQualityRequest, HostError, LoudnessRequest, RateRequest, Request, VideoQualityRequest,
+    parse_request, request_id_from_line,
 };
 use crate::trace::{AudioBlockTrace, ExportTrace, VideoFrameTrace};
 use alpha2_engine::{ExportFrameNeeds, ExportStepTimings};

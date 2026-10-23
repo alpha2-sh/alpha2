@@ -7,7 +7,9 @@ use crate::PROTOCOL_VERSION;
 use crate::assets::ProxyRequest;
 use crate::effect_request::EffectRequest;
 use alpha2_assets::MediaPurpose;
-use alpha2_media::{BitrateMode, QualityLevel, VideoRateControl};
+use alpha2_media::{
+    AudioCodec, BitrateMode, Container, ContainerError, QualityLevel, VideoCodec, VideoRateControl,
+};
 use alpha2_native::{
     NativeAudioCodec, NativeVideoCodec, codec_capabilities, hardware_decode_capabilities,
 };
@@ -108,8 +110,12 @@ pub struct ExportRequest {
     /// @alpha2-sh/node, and the browser exporter default to.
     #[serde(rename = "includeAudio", default = "include_audio_by_default")]
     pub include_audio: bool,
+    /// The file format to write; absent: the one `output`'s extension names.
+    #[serde(default)]
+    pub container: Option<Container>,
+    /// Absent: the container's default.
     #[serde(rename = "videoCodec", default)]
-    pub video_codec: VideoCodecRequest,
+    pub video_codec: Option<VideoCodec>,
     #[serde(rename = "videoEncoder", default)]
     pub video_encoder: Option<String>,
     /// Whether the encoder may, must, or must not take its frames on the GPU.
@@ -120,8 +126,9 @@ pub struct ExportRequest {
     pub strategy: crate::config::ExportStrategy,
     #[serde(rename = "videoQuality", default)]
     pub video_quality: VideoQualityRequest,
+    /// Absent: the container's default.
     #[serde(rename = "audioCodec", default)]
-    pub audio_codec: AudioCodecRequest,
+    pub audio_codec: Option<AudioCodec>,
     #[serde(rename = "audioQuality", default)]
     pub audio_quality: AudioQualityRequest,
     /// Absent: the mix is exported at its own loudness.
@@ -144,15 +151,145 @@ impl ExportRequest {
     ///
     /// # Errors
     /// `INVALID_INPUT` naming the rule: loudness normalizes the export's
-    /// audio, so it needs `includeAudio`.
+    /// audio, so it needs `includeAudio`; and the container and codecs must
+    /// resolve ([`Self::format`]).
     pub fn check(&self) -> Result<(), HostError> {
         if self.loudness.is_some() && !self.include_audio {
             return Err(HostError::invalid_input(
                 "loudness normalizes the export's audio and needs includeAudio: true",
             ));
         }
-        Ok(())
+        self.format().map(|_| ())
     }
+
+    /// The container and codecs this export writes: `container`, or the one
+    /// `output`'s extension names, which must agree with it; and each codec
+    /// the request names, which the container must offer, or else the
+    /// container's default.
+    ///
+    /// # Errors
+    /// `INVALID_INPUT` naming what does not resolve.
+    pub fn format(&self) -> Result<ResolvedFormat, HostError> {
+        ResolvedFormat::resolve(
+            self.container,
+            &self.output,
+            self.video_codec,
+            self.audio_codec,
+        )
+    }
+}
+
+/// An export's container and codecs, resolved once at the host's edge from
+/// the engine's container policy ([`alpha2_media::resolve_export_format`]).
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedFormat {
+    pub container: Container,
+    pub video: NativeVideoCodec,
+    pub audio: NativeAudioCodec,
+}
+
+impl ResolvedFormat {
+    /// Resolves a request's `container`, `videoCodec` and `audioCodec`
+    /// against the file it writes.
+    ///
+    /// # Errors
+    /// `INVALID_INPUT` with the policy's reason.
+    pub fn resolve(
+        container: Option<Container>,
+        output: &std::path::Path,
+        video: Option<VideoCodec>,
+        audio: Option<AudioCodec>,
+    ) -> Result<Self, HostError> {
+        let extension = output
+            .extension()
+            .map_or(Some(""), std::ffi::OsStr::to_str)
+            .ok_or_else(|| HostError::invalid_input("output path is not UTF-8"))?;
+        let (container, video, audio) =
+            alpha2_media::resolve_export_format(container, Some(extension), video, audio)
+                .map_err(|error| HostError::invalid_input(container_message(&error)))?;
+        Ok(Self {
+            container,
+            video: NativeVideoCodec::from_model(video),
+            audio: NativeAudioCodec::from_model(audio),
+        })
+    }
+}
+
+/// What an export request is told when its container or codecs do not
+/// resolve: the policy's reason, naming the request field.
+fn container_message(error: &ContainerError) -> String {
+    match error {
+        ContainerError::Unknown(_) => format!("container: {error}"),
+        ContainerError::UnknownExtension(_) | ContainerError::ExtensionMismatch { .. } => {
+            format!("output: {error}")
+        }
+        ContainerError::VideoCodecNotOffered { .. } => format!("videoCodec: {error}"),
+        ContainerError::AudioCodecNotOffered { .. } => format!("audioCodec: {error}"),
+    }
+}
+
+/// Checks the export settings parsed on their own before the typed parse,
+/// so a bad value is reported as the caller's input (`INVALID_INPUT`),
+/// naming the field, rather than as a malformed request. `setting` reads
+/// one field.
+fn check_export_settings(
+    setting: &dyn Fn(&str) -> Result<Option<Value>, HostError>,
+) -> Result<(), HostError> {
+    if let Some(quality) = setting("videoQuality")? {
+        VideoQualityRequest::from_json(&quality).map_err(HostError::invalid_input)?;
+    }
+    if let Some(quality) = setting("audioQuality")? {
+        AudioQualityRequest::from_json(&quality).map_err(HostError::invalid_input)?;
+    }
+    if let Some(cache) = setting("renderCache")?.filter(|value| !value.is_null()) {
+        crate::render_cache::RenderCacheRequest::from_json(&cache)
+            .map_err(HostError::invalid_input)?;
+    }
+    if let Some(loudness) = setting("loudness")?.filter(|value| !value.is_null()) {
+        LoudnessRequest::from_json(&loudness).map_err(HostError::invalid_input)?;
+    }
+    // A budget the caller sets is its input too: a misspelled or mistyped field names itself.
+    if let Some(memory) = setting("memory")? {
+        serde_json::from_value::<crate::memory::MemoryRequest>(memory)
+            .map_err(|error| HostError::invalid_input(format!("memory: {error}")))?;
+    }
+    check_format_names(setting)
+}
+
+/// Refuses a `container`, `videoCodec` or `audioCodec` an export request
+/// spells as nothing the engine knows, naming the field, as the caller's
+/// input rather than a malformed request. `setting` reads one field.
+fn check_format_names(
+    setting: &dyn Fn(&str) -> Result<Option<Value>, HostError>,
+) -> Result<(), HostError> {
+    if let Some(container) = setting("container")?.filter(|value| !value.is_null()) {
+        serde_json::from_value::<Container>(container.clone()).map_err(|_| {
+            HostError::invalid_input(format!(
+                "container: {}",
+                ContainerError::Unknown(container.to_string().trim_matches('"').to_owned())
+            ))
+        })?;
+    }
+    for (field, names) in [
+        ("videoCodec", "h264, hevc, vp9, av1, mpeg4-part2"),
+        ("audioCodec", "aac, opus"),
+    ] {
+        if let Some(codec) = setting(field)?.filter(|value| !value.is_null()) {
+            let known = codec.as_str().is_some_and(|name| {
+                if field == "videoCodec" {
+                    name.parse::<VideoCodec>().is_ok()
+                } else {
+                    name.parse::<AudioCodec>().is_ok()
+                }
+            });
+            if !known {
+                return Err(HostError::invalid_input(format!(
+                    "{field}: unknown codec {codec}; expected one of {names}"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Which media a purpose would read for each source, and what blocks it,
@@ -302,27 +439,7 @@ pub fn parse_request(line: &str) -> Result<Request, HostError> {
             }
         }
         Some("export") => {
-            // Rate-control fields are checked before the typed parse so a bad value is reported as
-            // the caller's input, naming the field, rather than as a malformed request.
-            if let Some(quality) = setting("videoQuality")? {
-                VideoQualityRequest::from_json(&quality).map_err(HostError::invalid_input)?;
-            }
-            if let Some(quality) = setting("audioQuality")? {
-                AudioQualityRequest::from_json(&quality).map_err(HostError::invalid_input)?;
-            }
-            if let Some(cache) = setting("renderCache")?.filter(|value| !value.is_null()) {
-                crate::render_cache::RenderCacheRequest::from_json(&cache)
-                    .map_err(HostError::invalid_input)?;
-            }
-            if let Some(loudness) = setting("loudness")?.filter(|value| !value.is_null()) {
-                LoudnessRequest::from_json(&loudness).map_err(HostError::invalid_input)?;
-            }
-            // A budget the caller sets is its input too: a misspelled or mistyped field names
-            // itself.
-            if let Some(memory) = setting("memory")? {
-                serde_json::from_value::<crate::memory::MemoryRequest>(memory)
-                    .map_err(|error| HostError::invalid_input(format!("memory: {error}")))?;
-            }
+            check_export_settings(&setting)?;
             let export: ExportRequest = serde_json::from_str(line).map_err(invalid)?;
             export.check()?;
             Request::Export(Box::new(export))
@@ -679,34 +796,6 @@ pub struct RateRequest {
     pub den: u32,
 }
 
-/// Video codec an export asks for.
-///
-/// H.264 is the default. Every shipped platform runtime registers an H.264
-/// encoder, so a caller that names no codec gets one its output plays back
-/// on. `mpeg4-part2` is a compatibility choice a caller can name.
-#[derive(Copy, Clone, Default, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum VideoCodecRequest {
-    #[default]
-    H264,
-    Hevc,
-    Vp9,
-    Av1,
-    Mpeg4Part2,
-}
-
-impl VideoCodecRequest {
-    pub const fn into_native(self) -> NativeVideoCodec {
-        match self {
-            Self::H264 => NativeVideoCodec::H264,
-            Self::Hevc => NativeVideoCodec::Hevc,
-            Self::Vp9 => NativeVideoCodec::Vp9,
-            Self::Av1 => NativeVideoCodec::Av1,
-            Self::Mpeg4Part2 => NativeVideoCodec::Mpeg4Part2,
-        }
-    }
-}
-
 /// Largest quantizer any codec alpha2 encodes has: AV1's scale on NVENC and
 /// Vulkan runs to 255. A value past the chosen codec's own scale is the
 /// encoder's to refuse, and then the bitrate fallback runs.
@@ -976,21 +1065,6 @@ impl<'de> Deserialize<'de> for AudioQualityRequest {
     }
 }
 
-#[derive(Copy, Clone, Default, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum AudioCodecRequest {
-    #[default]
-    Aac,
-}
-
-impl AudioCodecRequest {
-    pub const fn into_native(self) -> NativeAudioCodec {
-        match self {
-            Self::Aac => NativeAudioCodec::Aac,
-        }
-    }
-}
-
 /// Reports the decode mode, backend, and per-codec hardware registration.
 ///
 /// `deviceReady` says a shared decode context exists for this run, which is
@@ -1018,13 +1092,22 @@ pub fn decode_capabilities_json(
     })
 }
 
-/// Reports the MP4 video and audio encoders this runtime registers, for the
-/// `capabilities` answer.
+/// Reports the containers an export can write, which codecs each offers,
+/// and the video and audio encoders this runtime registers, for the
+/// `capabilities` answer. The containers are the engine's policy, the same
+/// on every runtime; the encoders say which of those codecs this one encodes.
 pub fn codec_capabilities_json() -> Value {
     let capabilities = codec_capabilities();
     json!({
-        "container": "mp4",
-        "video": capabilities.mp4_video.into_iter().map(|capability| json!({
+        "containers": Container::ALL.into_iter().map(|container| json!({
+            "id": container.as_str(),
+            "extensions": container.extensions(),
+            "video": container.video_codecs().iter().map(|codec| codec.as_str()).collect::<Vec<_>>(),
+            "audio": container.audio_codecs().iter().map(|codec| codec.as_str()).collect::<Vec<_>>(),
+            "defaultVideoCodec": container.default_video_codec().as_str(),
+            "defaultAudioCodec": container.default_audio_codec().as_str(),
+        })).collect::<Vec<_>>(),
+        "video": capabilities.video.into_iter().map(|capability| json!({
             "id": capability.codec.as_str(),
             "encoder": capability.encoder_name,
             "encoderClass": capability.class.as_str(),
@@ -1033,7 +1116,7 @@ pub fn codec_capabilities_json() -> Value {
             "minimumWidth": capability.minimum_width,
             "minimumHeight": capability.minimum_height,
         })).collect::<Vec<_>>(),
-        "audio": capabilities.mp4_audio.into_iter().map(|capability| json!({
+        "audio": capabilities.audio.into_iter().map(|capability| json!({
             "id": capability.codec.as_str(),
             "encoder": capability.encoder_name,
         })).collect::<Vec<_>>(),

@@ -8,9 +8,9 @@ use std::env;
 use std::process::ExitCode;
 
 use alpha2_media::{
-    AudioBlock, BitrateMode, CancelToken, ColorMatrix, ColorMetadata, ColorRange, DecodeEvent,
-    DecodeRequest, DecodeRequestKind, DecodedVideoFrame, Decoder, EncodeEvent, EncodeSink,
-    PixelFormat, Rotation, SourceId, VideoRateControl,
+    AudioBlock, BitrateMode, CancelToken, ColorMatrix, ColorMetadata, ColorRange, Container,
+    DecodeEvent, DecodeRequest, DecodeRequestKind, DecodedVideoFrame, Decoder, EncodeEvent,
+    EncodeSink, PixelFormat, Rotation, SourceId, VideoRateControl,
 };
 #[cfg(all(target_os = "linux", feature = "hwdecode"))]
 use alpha2_native::probe_vulkan_decode;
@@ -715,7 +715,12 @@ fn transcode(
     let frame_rate = stream
         .frame_rate
         .ok_or_else(|| "missing frame rate".to_owned())?;
-    let codec = transcode_codec(requested_codec.as_deref())?;
+    let container = std::path::Path::new(&output)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .and_then(Container::from_extension)
+        .ok_or_else(|| "the output must end in .mp4, .m4v, .mov, .mkv or .webm".to_owned())?;
+    let codec = transcode_codec(requested_codec.as_deref(), container)?;
     let mut decoder = decoding.video(path)?;
     let mut sink = NativeVideoEncodeSink::create(
         &output,
@@ -734,6 +739,7 @@ fn transcode(
                 orientation: stream.orientation,
                 sample_aspect_ratio: stream.sample_aspect_ratio,
             },
+            container,
         },
     )
     .map_err(|error| format!("{error:?}"))?;
@@ -781,30 +787,39 @@ fn transcode(
     Ok(())
 }
 
-/// The codec `transcode` writes: the one asked for by its id, else H.264,
-/// else the first this runtime encodes.
-fn transcode_codec(requested: Option<&str>) -> Result<NativeVideoCodec, String> {
+/// The codec `transcode` writes into `container`: the one asked for by its
+/// id, else the container's default, else the first this runtime encodes
+/// that the container offers.
+fn transcode_codec(
+    requested: Option<&str>,
+    container: Container,
+) -> Result<NativeVideoCodec, String> {
     let capabilities = codec_capabilities();
-    let available = || {
+    let offered = || {
         capabilities
-            .mp4_video
+            .video
             .iter()
+            .filter(|capability| container.offers_video(capability.codec.model()))
+    };
+    let available = || {
+        offered()
             .map(|capability| capability.codec.as_str())
             .collect::<Vec<_>>()
             .join(", ")
     };
     let chosen = match requested {
-        Some(id) => capabilities
-            .mp4_video
-            .iter()
+        Some(id) => offered()
             .find(|capability| capability.codec.as_str() == id)
-            .ok_or_else(|| format!("this runtime encodes no {id}; it encodes: {}", available()))?,
-        None => capabilities
-            .mp4_video
-            .iter()
-            .find(|capability| capability.codec == NativeVideoCodec::H264)
-            .or_else(|| capabilities.mp4_video.first())
-            .ok_or_else(|| "no native MP4 video encoder is available".to_owned())?,
+            .ok_or_else(|| {
+                format!(
+                    "this runtime encodes no {id} into {container}; it encodes: {}",
+                    available()
+                )
+            })?,
+        None => offered()
+            .find(|capability| capability.codec.model() == container.default_video_codec())
+            .or_else(|| offered().next())
+            .ok_or_else(|| format!("no native video encoder writes {container} here"))?,
     };
     Ok(chosen.codec)
 }

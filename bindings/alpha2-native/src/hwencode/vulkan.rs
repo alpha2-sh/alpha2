@@ -24,7 +24,7 @@ use super::{
 use crate::NativeVideoCodec;
 use crate::convert::{encode_adapter_error, tick_base};
 use crate::encode::{EncodeStageTimings, timed};
-use crate::mux::Mp4Muxer;
+use crate::mux::Muxer;
 
 /// What one Vulkan encode session turned out to require and produce.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -362,8 +362,14 @@ pub(super) fn open(
         images: HashSet::new(),
     };
     // From here on a failure is the export's rather than a refusal: the partial output exists.
-    let muxer = Mp4Muxer::open(request.output, &context, time_base, request.audio)
-        .map_err(HardwareEncodeOpenError::Failed)?;
+    let muxer = Muxer::open(
+        request.output,
+        request.container,
+        &context,
+        time_base,
+        request.audio,
+    )
+    .map_err(HardwareEncodeOpenError::Failed)?;
     Ok((
         VulkanEncodeSession {
             context,
@@ -522,7 +528,7 @@ fn open_encoder(
 pub(super) struct VulkanEncodeSession {
     context: AVCodecContext,
     time_base: AVRational,
-    muxer: Mp4Muxer,
+    muxer: Muxer,
     stages: EncodeStageTimings,
     selection: crate::NativeVideoEncoderSelection,
     generation: u64,

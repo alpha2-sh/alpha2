@@ -446,7 +446,7 @@ fn named_effect_inputs_round_trip_in_name_order_and_are_omitted_when_empty() {
     let text = serde_json::to_string(&project).expect("serializes");
     assert!(text.find("\"glow\"") < text.find("\"map\""), "{text}");
     assert_eq!(Project::from_json(&text).expect("round trip"), project);
-    // An effect without named inputs writes none, as it always has.
+    // An effect without named inputs writes no `inputs` field.
     let plain = serde_json::to_value(&project.compositions[0].nodes[1]).expect("serializes");
     assert!(plain["op"].get("inputs").is_none(), "{plain}");
     assert_eq!(

@@ -30,7 +30,7 @@ Standard error carries human-readable diagnostics, not protocol messages.
 
 ## `capabilities`
 
-Takes no other fields. The result reports what this host can do: `status: "ready"`, `capabilities` (the GPU and its tier, `decode`: the decode mode and the hardware decoders, `encode`: the MP4 video and audio encoders and the GPU-resident encode path, and `features`), `effectCatalog` (the built-in effects and transitions), and the adapter and FFmpeg versions. The result is typed as `HostCapabilities` in `@alpha2-sh/node`.
+Takes no other fields. The result reports what this host can do: `status: "ready"`, `capabilities` (the GPU and its tier, `decode`: the decode mode and the hardware decoders, `encode`: the containers an export can write with the codecs each offers, the video and audio encoders, and the GPU-resident encode path, and `features`), `effectCatalog` (the built-in effects and transitions), and the adapter and FFmpeg versions. The result is typed as `HostCapabilities` in `@alpha2-sh/node`.
 
 ## `conform`
 
@@ -48,7 +48,7 @@ The result is `{ "catalog": ..., "report": ... }`: what the host found for each 
 
 ## `export`
 
-Renders a range of a project and encodes it into an MP4 file.
+Renders a range of a project and encodes it into an MP4, MOV, Matroska or WebM file.
 
 | Field | Type | Default | |
 | --- | --- | --- | --- |
@@ -56,7 +56,8 @@ Renders a range of a project and encodes it into an MP4 file.
 | `assets` | `{ "<source-id>": "<path>" }` | required | The file of each source the export reads. |
 | `startTicks`, `endTicks` | integers | required | The timeline range, in ticks (120,000 a second), widened to the frame grid. |
 | `frameRate` | `{ "num", "den" }` | required | The output frame rate. |
-| `output` | path | required | The MP4 file to write. It must not exist. |
+| `output` | path | required | The file to write. It must not exist. Its extension (`.mp4` or `.m4v`, `.mov`, `.mkv`, `.webm`, in any case) names the container unless `container` does, and must match it. |
+| `container` | `mp4`, `mov`, `mkv`, `webm` | the output's extension's | |
 | `proxies`, `frames` | as for `conform` | `{}` | |
 | `media` | `original`, `proxies` | `original` | `proxies` reads fresh proxies where there are some, and originals elsewhere. |
 | `resources` | `{ "<source-id>": { "<locator>": "<path>" } }` | `{}` | Files an SVG source's `<image href>` or a Lottie source's image assets name, by the locator the source writes. |
@@ -64,16 +65,27 @@ Renders a range of a project and encodes it into an MP4 file.
 | `fonts` | `["<path>", ...]` | `[]` | Font files for captions, text and SVG text, in fallback order. A project that shows text needs them. |
 | `effects` | effect definitions | `[]` | Runtime effects the project uses besides the built-in ones (`EffectDefinition` in `alpha2/effects`). An effect's `inputs` names the images it samples besides its source, which an effect node connects under `inputs`. |
 | `includeAudio` | boolean | `true` | Whether the output has an audio track. |
-| `videoCodec` | `h264`, `hevc`, `vp9`, `av1`, `mpeg4-part2` | `h264` | |
+| `videoCodec` | `h264`, `hevc`, `vp9`, `av1`, `mpeg4-part2` | the container's | One the container offers (below). |
 | `videoEncoder` | FFmpeg encoder name | chosen by the host | An encoder `capabilities` reports for the codec, in `encode.video` or as the GPU-resident path's. |
 | `videoQuality` | a level, or `{ "bitrate", "mode"?, "quantizer"? }` | `high` | Levels are `very-low`, `low`, `medium`, `high`, `very-high`; the host turns a level into a rate for the codec, size and frame rate. `bitrate` is in bits per second, `mode` is `constant` or `variable`. |
-| `audioCodec` | `aac` | `aac` | |
+| `audioCodec` | `aac`, `opus` | the container's | One the container offers (below). |
 | `audioQuality` | a level, or `{ "bitrate" }` | `high` | |
 | `loudness` | `{ "targetLufs", "truePeakCeilingDbtp" }` | none | Normalizes the audio to an integrated loudness (-60 to 0 LUFS) under a true-peak ceiling (-20 to 0 dBTP). Needs `includeAudio`. |
 | `inputPolicy` | `auto`, `gpu-required`, `cpu-readback` | `auto` | How frames reach the encoder: `auto` stays on the GPU where the host can and reads back otherwise; `gpu-required` fails with `GPU_OUTPUT_UNAVAILABLE` instead; `cpu-readback` always reads back. |
 | `strategy` | `render`, `prefer-copy`, `require-copy` | `render` | `prefer-copy` copies the sources' compressed packets instead of rendering when the range shows them untouched, and renders otherwise; `require-copy` fails with `COPY_INELIGIBLE` instead. |
 | `renderCache` | `{ "directory", "quotaBytes"?, "backlog"? }` | none | A directory to keep rendered frames in, so a later export of the same project, files and effects by the same host build on the same GPU takes them instead of rendering them again. `quotaBytes` is 4 GiB by default; `backlog` is `skip` (default) or `wait`. |
 | `memory` | `{ "inFlightBytes"?, "decodeQueueBytes"?, "reverseCacheBytes"?, "audioWindowBytes"?, "providerSourceBytes"?, "scale"? }` | host defaults | Byte budgets for the export. An export whose smallest working set does not fit fails with `RESOURCE_LIMIT` before it renders. |
+
+Each container offers only the codecs its mainstream players decode there; the first of each is the default:
+
+| Container | Video | Audio |
+| --- | --- | --- |
+| `mp4` | `h264`, `hevc`, `vp9`, `av1`, `mpeg4-part2` | `aac`, `opus` |
+| `mov` | `h264`, `hevc`, `mpeg4-part2` | `aac` |
+| `mkv` | `h264`, `hevc`, `vp9`, `av1`, `mpeg4-part2` | `aac`, `opus` |
+| `webm` | `vp9`, `av1` | `opus` |
+
+An unknown container, an extension that names none or disagrees with `container`, and a codec the container does not offer are refused with `INVALID_INPUT` before anything opens, as is a codec this host's FFmpeg cannot encode. `capabilities` reports the same table as `encode.containers` (`[{ "id", "extensions", "video", "audio", "defaultVideoCodec", "defaultAudioCodec" }]`), beside the encoders this host has (`encode.video`, `encode.audio`). Matroska and WebM store each frame's time to the millisecond, so their frames sit on the frame grid only to within half a millisecond.
 
 The fields and the result are typed and described one by one in `@alpha2-sh/node` (`ExportProjectRequest`, `NativeExportResult`). The result reports, among others, the frames, the encoder and rate control used, the output path (`videoOutputPath`), what each source read (`media`) and timing (`renderMs`, `fps`).
 

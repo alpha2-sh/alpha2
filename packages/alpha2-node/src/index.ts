@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { constants, existsSync, statSync } from "node:fs";
 import { access } from "node:fs/promises";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { delimiter, dirname, extname, join, resolve } from "node:path";
 import { createInterface, type Interface } from "node:readline";
 import type { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -13,6 +13,10 @@ import type {
   Selection,
 } from "alpha2/assets";
 import type { CapabilityReport } from "alpha2";
+import {
+  ExportFormatError,
+  resolveEngineExportFormat,
+} from "alpha2/containers";
 import type { ExportFailure, ExportPhase } from "alpha2/export-failure";
 import { failureForCode } from "alpha2/export-failure";
 import type { BuiltinEffectCatalog, EffectDefinition } from "alpha2/effects";
@@ -167,6 +171,8 @@ export type ExportProgressCallback = (
 
 /** Successful metadata returned by the native host after an export. */
 export interface NativeExportResult {
+  /** The container the file was written in. */
+  readonly container: ExportContainer;
   readonly renderMs: number;
   readonly frames: number;
   readonly audio: boolean;
@@ -194,8 +200,8 @@ export interface NativeExportResult {
   readonly copyIneligible: string | null;
   /**
    * A copy's audio: `copy` when the mix is the source's own audio, untouched, over the whole file,
-   * so its packets are copied; `encode` when it is mixed as a render mixes it and encoded to AAC
-   * beside the copied video; `null` without audio. Absent on rendered exports.
+   * so its packets are copied; `encode` when it is mixed as a render mixes it and encoded with the
+   * export's audio codec beside the copied video; `null` without audio. Absent on rendered exports.
    */
   readonly audioStrategy?: "copy" | "encode" | null;
   /** Why a copy's audio was encoded rather than copied. Absent on rendered exports. */
@@ -489,7 +495,14 @@ export interface ExportProjectRequest {
   readonly frameRate: FrameRate;
   /** Whether the output has an audio track. Defaults to `true`. */
   readonly includeAudio?: boolean;
-  /** Defaults to `h264`. */
+  /**
+   * The file format to write. Defaults to the one `output`'s extension names (`.mp4` or `.m4v`,
+   * `.mov`, `.mkv`, `.webm`); when both are given they must agree. A container offers only some
+   * codecs: see `capabilities.encode.containers`. The host refuses anything else with
+   * `INVALID_INPUT` before it opens a device.
+   */
+  readonly container?: ExportContainer;
+  /** Defaults to the container's: `h264`, or `vp9` for WebM. */
   readonly videoCodec?: "h264" | "hevc" | "vp9" | "av1" | "mpeg4-part2";
   /**
    * Concrete FFmpeg encoder short name: one of `capabilities.encode.video`, or the GPU path's
@@ -521,15 +534,15 @@ export interface ExportProjectRequest {
    *
    * A copy's audio, if any, is copied when it is the only sound the render hears and the source's
    * own, untouched, over the whole file; otherwise it is mixed as a render mixes it (silence
-   * included) and encoded to AAC beside the copied video. `videoQuality` does not apply to a copy,
-   * which keeps the source's encoding. When the range does not qualify, `prefer-copy` renders and
-   * says why in `copyIneligible`; `require-copy` fails with `COPY_INELIGIBLE` instead.
+   * included) and encoded with `audioCodec` beside the copied video. `videoQuality` does not apply
+   * to a copy, which keeps the source's encoding. When the range does not qualify, `prefer-copy`
+   * renders and says why in `copyIneligible`; `require-copy` fails with `COPY_INELIGIBLE` instead.
    */
   readonly strategy?: ExportStrategy;
   /** Output video quality. Defaults to `high`. */
   readonly videoQuality?: VideoQuality;
-  /** Defaults to `aac`. */
-  readonly audioCodec?: "aac";
+  /** Defaults to the container's: `aac`, or `opus` for WebM. */
+  readonly audioCodec?: "aac" | "opus";
   /** Output audio quality. Defaults to `high`. */
   readonly audioQuality?: AudioQuality;
   /**
@@ -558,7 +571,10 @@ export interface ExportProjectRequest {
   readonly memory?: ExportMemoryBudget;
   /** Overrides the client's decode mode for this export. */
   readonly videoDecode?: VideoDecodeMode;
-  /** The MP4 file to write. */
+  /**
+   * The file to write. Its extension (`.mp4`, `.m4v`, `.mov`, `.mkv` or `.webm`) names the
+   * container, and must be one of `container`'s when that is given.
+   */
   readonly output: string;
   /**
    * Cancels the export: the host removes its partial file and exits, and the promise rejects with
@@ -728,9 +744,26 @@ export interface DecodeCodecCapability {
   readonly softwareDecoder: string | null;
 }
 
+/** A container an export can write. */
+export type ExportContainer = "mp4" | "mov" | "mkv" | "webm";
+
+/**
+ * Which codecs one container offers: the engine's policy, the same on every host. Whether this host
+ * can encode an offered codec is in {@link HostEncodeCapabilities} `video` and `audio`.
+ */
+export interface ContainerCapability {
+  readonly id: ExportContainer;
+  /** Lowercase file extensions without the dot; the first is the usual one. */
+  readonly extensions: readonly string[];
+  readonly video: readonly string[];
+  readonly audio: readonly string[];
+  readonly defaultVideoCodec: string;
+  readonly defaultAudioCodec: string;
+}
+
 /** What a native host encodes. */
 export interface HostEncodeCapabilities {
-  readonly container: "mp4";
+  readonly containers: readonly ContainerCapability[];
   /** Encoders the host's software sinks can feed. */
   readonly video: readonly EncodeCapability[];
   readonly audio: readonly EncodeCapability[];
@@ -1152,12 +1185,20 @@ export class Alpha2NodeClient {
             endTicks: request.endTicks,
             frameRate: request.frameRate,
             includeAudio: request.includeAudio ?? true,
-            videoCodec: request.videoCodec ?? "h264",
+            // The host resolves what is not named from the container, so there is one rule.
+            ...(request.container === undefined
+              ? {}
+              : { container: request.container }),
+            ...(request.videoCodec === undefined
+              ? {}
+              : { videoCodec: request.videoCodec }),
             videoEncoder: request.videoEncoder,
             inputPolicy: request.inputPolicy ?? "auto",
             strategy: request.strategy ?? "render",
             videoQuality: request.videoQuality,
-            audioCodec: request.audioCodec ?? "aac",
+            ...(request.audioCodec === undefined
+              ? {}
+              : { audioCodec: request.audioCodec }),
             audioQuality: request.audioQuality,
             loudness: request.loudness,
             renderCache: request.renderCache,
@@ -1388,6 +1429,37 @@ function validateExportRequest(request: ExportProjectRequest): void {
     throw new Alpha2HostError("INVALID_INPUT", "output must not be empty");
   }
   checkVideoDecode("videoDecode", request.videoDecode);
+  // The engine's container policy, which the host applies to the same request: a container the
+  // output's extension contradicts, or a codec the container does not offer, never starts a host.
+  for (const field of ["container", "videoCodec", "audioCodec"] as const) {
+    const value = request[field];
+    if (
+      value !== undefined &&
+      (typeof value !== "string" || value.length === 0)
+    )
+      throw new Alpha2HostError(
+        "INVALID_INPUT",
+        `${field} must be a non-empty string`,
+      );
+  }
+  try {
+    resolveEngineExportFormat({
+      extension: extname(request.output).slice(1),
+      ...(request.container === undefined
+        ? {}
+        : { container: request.container }),
+      ...(request.videoCodec === undefined
+        ? {}
+        : { videoCodec: request.videoCodec }),
+      ...(request.audioCodec === undefined
+        ? {}
+        : { audioCodec: request.audioCodec }),
+    });
+  } catch (error) {
+    if (error instanceof ExportFormatError)
+      throw new Alpha2HostError("INVALID_INPUT", error.message);
+    throw error;
+  }
   if (
     request.videoEncoder !== undefined &&
     (typeof request.videoEncoder !== "string" ||

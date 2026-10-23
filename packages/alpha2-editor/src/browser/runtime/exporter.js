@@ -2,9 +2,14 @@
 // frame schedule, so no swapchain race can duplicate a frame and a missing source retries in place.
 
 import {
+  ExportFormatError,
+  offeredAudioCodecs,
+  resolveExportFormat,
+} from "alpha2/containers";
+import {
   audioEncoderSampleRate,
   canEncodeVideoTrack,
-  MediabunnyMp4Sink,
+  MediabunnySink,
 } from "alpha2/mediabunny";
 import {
   engineVideoCodec,
@@ -102,7 +107,8 @@ export async function probeEncoders(
  * opened output (not yet finished), and the export report. Any failure discards the output and is
  * rethrown as an `ExportFailureError` with the phase it happened in; a cancellation rethrows the
  * abort reason. `createSink(options)` makes the muxer the frames and audio are written to, a
- * `MediabunnyMp4Sink` unless a test supplies another.
+ * `MediabunnySink` unless a test supplies another. `openOutput` receives the export's container
+ * beside the size estimate, so the file is named and typed for it.
  */
 export async function exportTimeline({
   supplyFrame,
@@ -118,7 +124,7 @@ export async function exportTimeline({
   openOutput,
   onProgress,
   signal,
-  createSink = (sinkOptions) => new MediabunnyMp4Sink(sinkOptions),
+  createSink = (sinkOptions) => new MediabunnySink(sinkOptions),
 }) {
   const started = performance.now();
   const diagnosticsBefore = rendererDiagnostics(engine);
@@ -133,13 +139,20 @@ export async function exportTimeline({
   const audio = project ? audibleSources(project, library) : [];
   const wantsAudio =
     options.includeAudio !== false && audio.length > 0 && engine != null;
+  // The container's defaults fill what the options leave out; the audio codec is settled below,
+  // by what this browser encodes.
+  const format = exportFormat(options);
+  const container = format.container;
   const audioQuality = options.audioQuality ?? "high";
   const audioEncoding = wantsAudio
-    ? await chooseAudioCodec(settings.sampleRate, audioQuality)
+    ? await chooseAudioCodec(settings.sampleRate, audioQuality, {
+        container,
+        codec: options.audioCodec,
+      })
     : undefined;
   const audioCodec = audioEncoding?.codec;
 
-  const videoCodec = options.videoCodec ?? "avc";
+  const videoCodec = format.videoCodec;
   const videoQuality = options.videoQuality ?? "high";
   // Resolved by the engine, so `high` costs the same here as on the native path.
   const videoRateControl = resolvedVideoRate({
@@ -162,11 +175,13 @@ export async function exportTimeline({
   };
   // Before anything renders: refused here when the destination cannot hold the estimated file.
   const output = await openOutput({
+    container,
     durationSeconds: end - start,
     videoBitrate: videoRateControl.bitrate,
     audioBitrate: audioBitrate ?? 0,
   });
   const sink = createSink({
+    container,
     videoCodec,
     audioCodec,
     videoRateControl,
@@ -475,6 +490,7 @@ export async function exportTimeline({
       renderMs,
       frames: produced,
       audio: wantsAudio,
+      container,
       videoCodec,
       // Named like the native host's result for native-versus-Wasm comparison.
       videoRateControl: {
@@ -855,23 +871,59 @@ async function i420VideoFrame(step, timestamp, duration) {
   });
 }
 
-/** The audio codecs an export may write, in the order they are preferred, with their names. */
+/** The audio codecs an export may write, with their names. */
 const AUDIO_CODECS = { aac: "AAC", opus: "Opus" };
 
 /**
+ * The export's container and video codec, with the container's defaults for what `options` leave
+ * out: `mp4` and its `avc`. A container that does not offer a requested codec (`webm` with `avc`,
+ * `mov` with `opus`) is refused before anything renders, as `INVALID_INPUT`.
+ */
+export function exportFormat(options) {
+  try {
+    return resolveExportFormat({
+      container: options.container ?? "mp4",
+      ...(options.videoCodec === undefined
+        ? {}
+        : { videoCodec: options.videoCodec }),
+      ...(options.audioCodec === undefined
+        ? {}
+        : { audioCodec: options.audioCodec }),
+    });
+  } catch (error) {
+    if (!(error instanceof ExportFormatError)) throw error;
+    throw new ExportFailureError({
+      code: "INVALID_INPUT",
+      message: `${error.message}.`,
+      origin: "browser",
+      operation: "export",
+      backend: "unknown",
+      phase: "prepare",
+      resource: "unknown",
+    });
+  }
+}
+
+/**
  * The audio codec this browser encodes the export's audio with, and the rate its encoder is given:
- * AAC where it can, else Opus, each at the project rate where the encoder takes it and otherwise at
- * the rate a native host would convert to (`audioEncoderSampleRate` in `alpha2/mediabunny`), so
- * every project rate exports. A browser that encodes neither at any rate (Safari before 26 has a
- * VideoEncoder but no AudioEncoder) is refused here, before anything renders, as `INVALID_INPUT`:
- * a retry would meet the same browser.
+ * `codec` when one is asked for, else the first of the container's codecs this browser encodes, in
+ * the container's order (AAC, then Opus, in MP4 and MKV; AAC only in MOV; Opus only in WebM), each
+ * at the project rate where the encoder takes it and otherwise at the rate a native host would
+ * convert to (`audioEncoderSampleRate` in `alpha2/mediabunny`), so every project rate exports. A
+ * browser that encodes none of them at any rate (Safari before 26 has a VideoEncoder but no
+ * AudioEncoder; Firefox on Linux has no AAC encoder for a MOV) is refused here, before anything
+ * renders, as `INVALID_INPUT`: a retry would meet the same browser.
  *
  * @returns {Promise<{ codec: "aac" | "opus", sampleRate: number }>}
  */
-export async function chooseAudioCodec(sampleRate, audioQuality) {
-  for (const codec of /** @type {("aac" | "opus")[]} */ (
-    Object.keys(AUDIO_CODECS)
-  )) {
+export async function chooseAudioCodec(
+  sampleRate,
+  audioQuality,
+  { container = "mp4", codec: requested } = {},
+) {
+  const candidates =
+    requested === undefined ? offeredAudioCodecs(container) : [requested];
+  for (const codec of candidates) {
     const encoderRate = await audioEncoderSampleRate(codec, {
       sampleRate,
       numberOfChannels: 2,
@@ -881,7 +933,7 @@ export async function chooseAudioCodec(sampleRate, audioQuality) {
   }
   throw new ExportFailureError({
     code: "INVALID_INPUT",
-    message: `This browser cannot encode audio (${Object.values(AUDIO_CODECS).join(" or ")}, stereo) at ${sampleRate} Hz or at any rate it could be converted to. Export without audio, or use the native exporter.`,
+    message: `This browser cannot encode audio for ${container} (${candidates.map((codec) => AUDIO_CODECS[codec]).join(" or ")}, stereo) at ${sampleRate} Hz or at any rate it could be converted to. ${requested === undefined ? "Export without audio, choose another container" : "Choose another audio codec, export without audio"}, or use the native exporter.`,
     origin: "browser",
     operation: "export",
     backend: "unknown",

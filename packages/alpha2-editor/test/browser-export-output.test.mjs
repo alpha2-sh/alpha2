@@ -137,6 +137,48 @@ test("a storage estimate that says the origin is nearly full does not refuse an 
   assert.equal(exports.files.size, 0);
 });
 
+test("the temporary file and the artifact are named and typed for the export's container", async () => {
+  const exports = memoryDirectory();
+  page(exports, {});
+  const output = await openExportOutput({
+    ...LONG_EXPORT,
+    name: "Project.webm",
+    container: "webm",
+  });
+  const [temporary] = [...exports.files.keys()];
+  assert.match(temporary, /^\d+-job\.webm$/);
+  const artifact = await finished(output);
+  assert.equal(artifact.name, "Project.webm");
+  assert.equal(artifact.file.type, "video/webm");
+  await artifact.release();
+
+  const memory = await openExportOutput({
+    jobId: "small",
+    name: "Project.mov",
+    container: "mov",
+    target: { kind: "memory" },
+    durationSeconds: 1,
+    videoBitrate: 1_000_000,
+    audioBitrate: 0,
+  });
+  const blob = await memory.finish({
+    kind: "memory",
+    buffer: new ArrayBuffer(3),
+  });
+  assert.equal(blob.blob.type, "video/quicktime");
+  // Without a container the file is an MP4.
+  const plain = await openExportOutput({
+    ...LONG_EXPORT,
+    target: { kind: "memory" },
+    durationSeconds: 1,
+  });
+  assert.equal(
+    (await plain.finish({ kind: "memory", buffer: new ArrayBuffer(1) })).blob
+      .type,
+    "video/mp4",
+  );
+});
+
 test("an estimate with room is reported as such, and a page without one reports none", async () => {
   page(memoryDirectory(), { quota: 150 * GB, usage: 1 * GB });
   const roomy = await openExportOutput(LONG_EXPORT);
@@ -212,6 +254,55 @@ test("AAC is chosen where the browser encodes it, Opus where it encodes only Opu
       codec: "opus",
       sampleRate: 44_100,
     });
+  } finally {
+    audioEncoder(null);
+  }
+});
+
+test("the audio codec is chosen among the container's, or is the one asked for", async () => {
+  try {
+    audioEncoder(["mp4a", "opus"]);
+    for (const [container, codec] of [
+      ["mp4", "aac"],
+      ["mkv", "aac"],
+      ["mov", "aac"],
+      ["webm", "opus"],
+    ])
+      assert.equal(
+        (await chooseAudioCodec(48_000, freshBitrate(), { container })).codec,
+        codec,
+        container,
+      );
+    assert.equal(
+      (
+        await chooseAudioCodec(48_000, freshBitrate(), {
+          container: "mp4",
+          codec: "opus",
+        })
+      ).codec,
+      "opus",
+    );
+    // Firefox on Linux: no AAC encoder. MKV falls back to Opus; MOV offers nothing else, and an
+    // AAC asked for by name is not swapped for another codec.
+    audioEncoder(["opus"]);
+    assert.equal(
+      (await chooseAudioCodec(48_000, freshBitrate(), { container: "mkv" }))
+        .codec,
+      "opus",
+    );
+    for (const request of [
+      { container: "mov" },
+      { container: "mp4", codec: "aac" },
+    ])
+      await assert.rejects(
+        chooseAudioCodec(48_000, freshBitrate(), request),
+        (error) =>
+          error.failure?.code === "INVALID_INPUT" &&
+          error.failure.phase === "prepare" &&
+          new RegExp(
+            `cannot encode audio for ${request.container} \\(AAC,`,
+          ).test(error.failure.message),
+      );
   } finally {
     audioEncoder(null);
   }

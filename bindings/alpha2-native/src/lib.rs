@@ -10,8 +10,9 @@
 // `alpha2_os::diagnostic!` instead of `eprintln!`.
 #![cfg_attr(not(test), warn(clippy::print_stderr))]
 
-mod aac;
 mod audio_host;
+mod audio_input;
+pub use audio_input::AudioStreamConfig;
 mod audio_timeline;
 mod bitstream;
 mod capabilities;
@@ -26,7 +27,6 @@ pub use recovery::{
 mod encode;
 mod mux;
 mod partial;
-pub use mux::AacStreamConfig;
 pub use partial::{PARTIAL_OUTPUT_IN_USE, remove_stale_partial_output, write_replacing};
 #[cfg(any(
     test,
@@ -211,7 +211,12 @@ const PINNED_SDK_SOURCE_TAG: &str = "n8.1.3";
 /// The `--enable-lib*` flags in `required_configure` of
 /// `release/ffmpeg-lgpl/manifest.toml`: the external libraries the pinned SDK
 /// links.
-const PINNED_SDK_EXTERNAL_LIBRARIES: &[&str] = &["--enable-libdav1d"];
+const PINNED_SDK_EXTERNAL_LIBRARIES: &[&str] = &[
+    "--enable-libdav1d",
+    "--enable-libopus",
+    "--enable-libsvtav1",
+    "--enable-libvpx",
+];
 
 /// Returns the loaded `FFmpeg` identity together with the release SDK pin.
 #[must_use]
@@ -219,6 +224,6 @@ pub fn ffmpeg_runtime_identity() -> FfmpegRuntimeIdentity {
     FfmpegRuntimeIdentity {
         version: alpha2_ffmpeg_bridge::runtime_version(),
         configuration: alpha2_ffmpeg_bridge::runtime_configuration(),
-        pinned_sdk_release: "ffmpeg-8.1.3-shared-build1",
+        pinned_sdk_release: "ffmpeg-8.1.3-shared-build3",
     }
 }

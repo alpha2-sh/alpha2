@@ -34,7 +34,7 @@ use alpha2_engine::{
 };
 use alpha2_media::{ColorMetadata, EncodeEvent};
 use alpha2_native::{
-    AacStreamConfig, HardwareEncodeCapability, HardwareEncodeDevice, HardwareEncodeOpenError,
+    AudioStreamConfig, HardwareEncodeCapability, HardwareEncodeDevice, HardwareEncodeOpenError,
     HardwareEncodeRequest, NativeAudioCodec,
 };
 use alpha2_render::RenderSize;
@@ -309,6 +309,7 @@ impl Host {
         rate: FrameRate,
         has_audio: bool,
         video_rate: crate::config::ResolvedVideoRate,
+        container: alpha2_media::Container,
         audio_codec: NativeAudioCodec,
         audio_rate: ResolvedAudioRate,
         loudness: Option<LoudnessRequest>,
@@ -353,7 +354,9 @@ impl Host {
                 rate_control: video_rate.control,
                 color: ColorMetadata::EXPORT,
                 output,
-                audio: has_audio.then_some(AacStreamConfig {
+                container,
+                audio: has_audio.then_some(AudioStreamConfig {
+                    codec: audio_codec,
                     sample_rate: project.settings.sample_rate,
                     channels: 2,
                     bit_rate: audio_rate.bitrate,

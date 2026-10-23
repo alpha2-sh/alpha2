@@ -654,8 +654,8 @@ export function inputOf(
 }
 
 /**
- * Whether `op` has input `key`, or can take it: an effect node takes any well-named `inputs.<name>`,
- * which its definition may declare.
+ * Whether `op` has input `key`, or can take it: an effect node takes any well-named
+ * `inputs.<name>`, whether or not its definition declares it.
  */
 export function acceptsInput(
   op: CompositionNode["op"],

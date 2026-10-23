@@ -74,7 +74,7 @@ pub enum LintIssue {
     EmptySubpath {
         /// The shapes generator.
         owner: ShapeLintOwner,
-        /// The path, like `items[0].path`, and the subpath in a keyframe.
+        /// The empty subpath, like `items[0].path.subpaths[1]`.
         at: String,
     },
     /// A fill or stroke with no geometry before it in its group, which
@@ -146,9 +146,9 @@ pub enum LintEdge {
 
 impl Project {
     /// Diagnostics that do not stop the project rendering, in a fixed order:
-    /// sources, then shapes generators (sources', then composition nodes'),
-    /// then tracks in order and each track's clips, transitions, and cues in
-    /// order.
+    /// unused sources, then shapes generators (sources', then composition
+    /// nodes'), then HDR sources, then tracks in order and each track's clips,
+    /// transitions, and cues in order.
     #[must_use]
     pub fn lint(&self) -> Vec<LintIssue> {
         let mut issues = Vec::new();

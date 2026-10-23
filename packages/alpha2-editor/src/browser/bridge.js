@@ -6,6 +6,7 @@ import {
 } from "../core/document.js";
 import { captionsAsset } from "../core/captions.js";
 import { MAX_CAPTION_FILE_BYTES } from "alpha2/project";
+import { containerPolicy } from "alpha2/containers";
 import { drawnEffectResources, shownSources } from "../core/compositions.js";
 import { ResourceRegistry } from "./resources.js";
 import { ExportJob, requireExportFrameRate } from "./jobs.js";
@@ -1931,7 +1932,6 @@ export function createBrowserBridge(options) {
               "export",
             );
           const settings = project.settings;
-          const name = `${project.name}.mp4`;
           const { written, output, result } = await exportTimeline({
             engine: renderer.wasm,
             project,
@@ -1948,10 +1948,11 @@ export function createBrowserBridge(options) {
             audioSupplier: audio,
             range: { start: range.start / 120000, end: range.end / 120000 },
             options: attemptOptions(options, attempt, project.settings),
-            openOutput: (estimate) =>
+            openOutput: ({ container, ...estimate }) =>
               openExportOutput({
                 jobId: attempt.id.replace(/[^\w-]/g, "_"),
-                name,
+                name: `${project.name}.${containerPolicy(container).extensions[0]}`,
+                container,
                 target: options.output,
                 ...estimate,
               }),

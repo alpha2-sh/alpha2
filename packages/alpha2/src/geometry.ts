@@ -6,6 +6,10 @@
  * Positions are normalized as the project document's are, `(0, 0)` top-left to `(1, 1)`
  * bottom-right of a `width` by `height` picture; lengths and distances are in its pixels. Times
  * are ticks, as keyframe times are.
+ *
+ * Every function throws an `INVALID_INPUT` error for a picture outside 1 to 16384 pixels a side, a
+ * time that is not a whole number of ticks, or input the model rejects (a content tree or geometry
+ * that is not valid, a path point or tangent that is not finite).
  */
 
 import type {
@@ -174,7 +178,8 @@ export function pathLength(
 
 /**
  * The part of `path` a trim item keeps: from `start` to `end` (fractions of its pixel length, all
- * subpaths end to end), shifted by `offset` turns. Nothing when `start` is not before `end`.
+ * subpaths end to end, clamped to `0..=1`), shifted by `offset` turns. Nothing when `start` is not
+ * before `end`.
  */
 export function trimPath(
   binding: GeometryBinding,
@@ -197,8 +202,12 @@ export function trimPath(
 }
 
 /**
- * `path` with `vertexCounts[i]` vertices on subpath `i`, evenly along its length: two paths made
- * alike in structure, so their keyframes can morph. The engine never resamples on its own.
+ * `path` with `vertexCounts[i]` vertices on subpath `i`, evenly along its length, so two paths can
+ * be given the same structure and their keyframes can morph. The engine never resamples on its
+ * own. A subpath whose count is missing, below 2 (3 when closed), or that has no length is kept as
+ * it is.
+ *
+ * @throws When a count is over `MAX_PATH_VERTICES`.
  */
 export function resamplePath(
   binding: GeometryBinding,

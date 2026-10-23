@@ -221,7 +221,7 @@
       },
       "level": "high",
       "expected": {
-        "bitrate": 6500000,
+        "bitrate": 7500000,
         "mode": "variable",
         "quantizer": null
       }
@@ -236,7 +236,7 @@
       },
       "level": "medium",
       "expected": {
-        "bitrate": 6960000,
+        "bitrate": 8400000,
         "mode": "variable",
         "quantizer": null
       }

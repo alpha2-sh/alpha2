@@ -9,14 +9,30 @@ use super::*;
 fn hevc_is_written_as_hvc1_and_a_copy_keeps_its_entry() {
     let tag = |name: &[u8; 4]| u32::from_le_bytes(*name);
     let hevc = ffi::AV_CODEC_ID_HEVC;
-    assert_eq!(crate::convert::mp4_codec_tag(hevc, 0, false), tag(b"hvc1"));
-    assert_eq!(crate::convert::mp4_codec_tag(hevc, 0, true), tag(b"hvc1"));
     assert_eq!(
-        crate::convert::mp4_codec_tag(ffi::AV_CODEC_ID_H264, tag(b"avc1"), true),
+        crate::convert::container_codec_tag(alpha2_media::Container::Mp4, hevc, 0, false),
+        tag(b"hvc1")
+    );
+    assert_eq!(
+        crate::convert::container_codec_tag(alpha2_media::Container::Mp4, hevc, 0, true),
+        tag(b"hvc1")
+    );
+    assert_eq!(
+        crate::convert::container_codec_tag(
+            alpha2_media::Container::Mp4,
+            ffi::AV_CODEC_ID_H264,
+            tag(b"avc1"),
+            true
+        ),
         0
     );
     assert_eq!(
-        crate::convert::mp4_codec_tag(ffi::AV_CODEC_ID_MPEG4, 7, false),
+        crate::convert::container_codec_tag(
+            alpha2_media::Container::Mp4,
+            ffi::AV_CODEC_ID_MPEG4,
+            7,
+            false
+        ),
         7
     );
     for (source, entry) in [("hevc-topleft.mp4", b"hev1"), ("hevc-hvc1.mp4", b"hvc1")] {
@@ -27,8 +43,9 @@ fn hevc_is_written_as_hvc1_and_a_copy_keeps_its_entry() {
         };
         let path = output_path(&format!("copy-{source}"));
         let _ = fs::remove_file(&path);
-        let mut muxer = crate::mux::Mp4Muxer::open_streams(
+        let mut muxer = crate::mux::Muxer::open_streams(
             &path,
+            alpha2_media::Container::Mp4,
             crate::mux::VideoStream {
                 parameters,
                 time_base,
@@ -283,11 +300,13 @@ fn mux_in_band(name: &str, color: ColorMetadata, audio: usize, audio_first: usiz
     let mut filter =
         crate::bitstream::EncodedVideoFilter::new(&encoder.extract_codecpar(), color, time_base)
             .expect("filter");
-    let mut muxer = crate::mux::Mp4Muxer::open_deferred(
+    let mut muxer = crate::mux::Muxer::open_deferred(
         &path,
+        alpha2_media::Container::Mp4,
         &encoder,
         time_base,
-        (audio > 0).then_some(AacStreamConfig {
+        (audio > 0).then_some(crate::AudioStreamConfig {
+            codec: crate::NativeAudioCodec::Aac,
             sample_rate: 48_000,
             channels: 2,
             bit_rate: 128_000,
@@ -300,7 +319,7 @@ fn mux_in_band(name: &str, color: ColorMetadata, audio: usize, audio_first: usiz
     );
     let mut stages = crate::EncodeStageTimings::default();
     let mut written = 0_usize;
-    let mut write_audio = |muxer: &mut crate::mux::Mp4Muxer, until: usize| {
+    let mut write_audio = |muxer: &mut crate::mux::Muxer, until: usize| {
         while written < until.min(audio) {
             let count = (until.min(audio) - written).min(1_600);
             let block = tone_block(i64::try_from(written).expect("small"), count, 48_000);
@@ -309,7 +328,7 @@ fn mux_in_band(name: &str, color: ColorMetadata, audio: usize, audio_first: usiz
         }
     };
     write_audio(&mut muxer, audio_first);
-    let write = |muxer: &mut crate::mux::Mp4Muxer, packets: Vec<rsmpeg::avcodec::AVPacket>| {
+    let write = |muxer: &mut crate::mux::Muxer, packets: Vec<rsmpeg::avcodec::AVPacket>| {
         for mut packet in packets {
             muxer.write_video(&mut packet, time_base).expect("video");
         }
@@ -470,7 +489,8 @@ fn audio_before_a_deferred_header_waits_and_is_interleaved() {
 fn a_deferred_header_that_never_comes_leaves_no_file() {
     let (encoder, _, time_base) =
         in_band_encoder_output("h264-bt709-copy.mp4", ColorMetadata::EXPORT);
-    let audio = Some(AacStreamConfig {
+    let audio = Some(crate::AudioStreamConfig {
+        codec: crate::NativeAudioCodec::Aac,
         sample_rate: 48_000,
         channels: 2,
         bit_rate: 128_000,
@@ -479,8 +499,14 @@ fn a_deferred_header_that_never_comes_leaves_no_file() {
     for close in [false, true] {
         let path = output_path(&format!("deferred-no-video-{close}"));
         let _ = fs::remove_file(&path);
-        let mut muxer =
-            crate::mux::Mp4Muxer::open_deferred(&path, &encoder, time_base, audio).expect("muxer");
+        let mut muxer = crate::mux::Muxer::open_deferred(
+            &path,
+            alpha2_media::Container::Mp4,
+            &encoder,
+            time_base,
+            audio,
+        )
+        .expect("muxer");
         assert!(
             partial_beside(&path).exists(),
             "the partial file exists from the open"

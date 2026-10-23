@@ -104,9 +104,9 @@ pub enum PaintKind {
     Solid,
     /// Along the line from `a` to `b`.
     Linear,
-    /// Around `a`, offset 1 at radius `b.x` (a fraction of the shorter side).
+    /// Around `a`, offset 1 at radius `b[0]` (a fraction of the shorter side).
     Radial,
-    /// Around `a`, from angle `b.x` radians clockwise from up.
+    /// Around `a`, from angle `b[0]` radians clockwise from up.
     Conic,
 }
 
@@ -176,9 +176,9 @@ pub struct VectorScene {
     pub ops: Vec<VectorOp>,
     /// The device pixels any of them can cover.
     pub bounds: IRect,
-    /// The canvas it is drawn on.
+    /// Width of the canvas it is drawn on.
     pub width: u32,
-    /// The canvas it is drawn on.
+    /// Height of the canvas it is drawn on.
     pub height: u32,
     /// A key that changes with any of the above: equal keys draw equal
     /// pictures.

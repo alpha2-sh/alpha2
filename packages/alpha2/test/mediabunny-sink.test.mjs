@@ -1,4 +1,4 @@
-// MediabunnyMp4Sink as the SDK's runners use it: a stream destination is committed only when the
+// MediabunnySink as the SDK's runners use it: a stream destination is committed only when the
 // file finished, and two runners can share one file.
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -16,7 +16,7 @@ import {
 import { renderOfflineAudio } from "../dist/audio.js";
 import { WritableFileDestination } from "../dist/export-destination.js";
 import { Alpha2Exporter, exportToSink } from "../dist/exporter.js";
-import { MediabunnyMp4Sink } from "../dist/mediabunny.js";
+import { MediabunnySink } from "../dist/mediabunny.js";
 
 /** Enough of a `VideoFrame` for mediabunny to wrap it in a sample. */
 class TestVideoFrame {
@@ -48,6 +48,10 @@ class TestVideoFrame {
  */
 const encoders = { failFlush: false, stall: null, delayMs: 0, configs: [] };
 const STALL_MS = 500;
+
+const AVC_CONFIG = new Uint8Array([
+  1, 0x64, 0, 0x1e, 0xff, 0xe1, 0, 4, 0x67, 0x64, 0, 0x1e, 1, 0, 2, 0x68, 0xce,
+]);
 
 /** Encodes each sample as a three-byte keyframe at the sample's own time. */
 class StampEncoder extends CustomVideoEncoder {
@@ -82,6 +86,9 @@ class StampEncoder extends CustomVideoEncoder {
             codec: this.config.codec,
             codedWidth: 2,
             codedHeight: 2,
+            // Without an AVCDecoderConfigurationRecord the muxer takes an AVC track to be Annex B,
+            // so give it one with a stub SPS and PPS.
+            ...(this.codec === "avc" ? { description: AVC_CONFIG } : {}),
           },
         };
     this.configured = true;
@@ -114,6 +121,11 @@ class StampAudioEncoder extends CustomAudioEncoder {
             codec: this.config.codec,
             numberOfChannels: this.config.numberOfChannels,
             sampleRate: this.config.sampleRate,
+            // Without an AudioSpecificConfig the muxer takes an AAC track to be ADTS, so give it
+            // one: AAC-LC, 48 kHz, stereo.
+            ...(this.codec === "aac"
+              ? { description: new Uint8Array([0x11, 0x90]) }
+              : {}),
           },
         };
     this.configured = true;
@@ -193,7 +205,8 @@ function exporter(frames, failAt, onBegin = () => {}) {
 }
 
 function streamSink(file, tracks = { video: true }, options = {}) {
-  return new MediabunnyMp4Sink({
+  return new MediabunnySink({
+    container: "mp4",
     ...options,
     ...(tracks.video
       ? {
@@ -356,6 +369,86 @@ test("a runner that fails discards the file the other runner shares", async () =
   assert.equal(file.aborted, true);
 });
 
+test("each container writes its own file through a stream destination", async () => {
+  const cases = [
+    { container: "mp4", video: "vp9", audio: "opus", format: "MP4" },
+    {
+      container: "mov",
+      video: "avc",
+      audio: "aac",
+      format: "QuickTime File Format",
+    },
+    { container: "mkv", video: "avc", audio: "aac", format: "Matroska" },
+    { container: "webm", video: "vp9", audio: "opus", format: "WebM" },
+  ];
+  for (const { container, video, audio, format } of cases) {
+    const file = swapFile();
+    const sink = new MediabunnySink({
+      container,
+      videoCodec: video,
+      videoRateControl: { bitrate: 1_000_000, bitrateMode: "variable" },
+      frameRate: { num: 30, den: 1 },
+      audioCodec: audio,
+      audioBitrate: 128_000,
+      destination: {
+        kind: "stream",
+        writable: new WritableFileDestination(file).writable,
+      },
+    });
+    await Promise.all([
+      exportToSink(exporter(30), sink.videoTrack, async () => {}),
+      audioRun(sink.audioTrack),
+    ]);
+    assert.ok(file.committed !== null, container);
+    const input = new Input({
+      source: new BufferSource(file.committed),
+      formats: ALL_FORMATS,
+    });
+    try {
+      assert.equal((await input.getFormat()).name, format, container);
+      const codecs = (await input.getTracks()).map((track) => track.codec);
+      assert.deepEqual(codecs.sort(), [audio, video].sort(), container);
+    } finally {
+      input.dispose();
+    }
+  }
+});
+
+test("a codec the container does not offer is refused before the destination is touched", () => {
+  for (const [container, tracks, message] of [
+    ["webm", { videoCodec: "avc" }, /webm does not offer video codec h264/],
+    ["mov", { audioCodec: "opus" }, /mov does not offer audio codec opus/],
+    ["mov", { videoCodec: "vp9" }, /mov does not offer video codec vp9/],
+  ]) {
+    const writable = new WritableFileDestination(swapFile()).writable;
+    assert.throws(
+      () =>
+        new MediabunnySink({
+          container,
+          ...tracks,
+          videoRateControl: { bitrate: 1_000_000, bitrateMode: "variable" },
+          audioBitrate: 128_000,
+          destination: { kind: "stream", writable },
+        }),
+      (error) =>
+        error instanceof RangeError &&
+        error.name === "ExportFormatError" &&
+        message.test(error.message),
+    );
+    assert.equal(writable.locked, false, container);
+  }
+  assert.throws(
+    () =>
+      new MediabunnySink({
+        container: "avi",
+        audioCodec: "aac",
+        audioBitrate: 128_000,
+        destination: { kind: "memory", maxBytes: 1 << 20 },
+      }),
+    /unknown container "avi"/,
+  );
+});
+
 test("a track that is not configured has no sink", () => {
   const sink = streamSink(swapFile(), { video: true });
   assert.throws(() => sink.audioTrack, RangeError);
@@ -411,7 +504,8 @@ test("the sink's video track keeps one sample duration at every rate it declares
     { num: 30, den: 1 },
   ]) {
     const frames = 600;
-    const sink = new MediabunnyMp4Sink({
+    const sink = new MediabunnySink({
+      container: "mp4",
       videoCodec: "vp9",
       videoRateControl: { bitrate: 1_000_000, bitrateMode: "variable" },
       frameRate: { num, den },
@@ -505,8 +599,8 @@ test("an encoder whose flush puts nothing out fails the finish", async () => {
 
 test("a slow encoder that keeps putting frames out is not taken to be stalled", async () => {
   const file = swapFile();
-  // The whole export (12 x 30 ms) outlasts the timeout, while each output lands well inside it, even
-  // on a loaded machine's coarse timers.
+  // The whole export (12 x 30 ms) outlasts the timeout, while each output lands well inside it,
+  // even on a loaded machine's coarse timers.
   const sink = streamSink(file, { video: true }, { stallTimeoutMs: 150 });
   await withEncoders({ delayMs: 30 }, () =>
     exportToSink(exporter(12), sink, async () => {}),

@@ -32,7 +32,8 @@ export interface NativeAsset {
 }
 /**
  * Export settings for a native job: the browser export's options, plus the MPEG-4 Part 2 codec the
- * host can encode.
+ * host can encode. `container`, `videoCodec` and `audioCodec` go to the host as given; an absent
+ * one is the container's default there, as in the browser.
  */
 export interface NativeExportOptions extends Omit<
   BrowserExportOptions,

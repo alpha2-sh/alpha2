@@ -15,8 +15,8 @@ use crate::partial::PartialOutput;
 use alpha2_ffmpeg_bridge::OutputFile;
 use alpha2_ffmpeg_bridge::Yuv420pFrameBuffer;
 use alpha2_media::{
-    CancelToken, ColorMatrix, ColorMetadata, DecodedVideoFrame, EncodeError, EncodeEvent,
-    EncodeSink, Orientation, PixelFormat, SampleAspectRatio, VideoRateControl,
+    CancelToken, ColorMatrix, ColorMetadata, Container, DecodedVideoFrame, EncodeError,
+    EncodeEvent, EncodeSink, Orientation, PixelFormat, SampleAspectRatio, VideoRateControl,
 };
 use alpha2_time::{FrameRate, MediaTime};
 use rsmpeg::avcodec::AVCodecContext;
@@ -43,6 +43,8 @@ pub struct VideoEncodeConfig {
     pub codec: NativeVideoCodec,
     /// How the pictures are shown, which the container says beside them.
     pub display: VideoDisplay,
+    /// The file format the output is written in, which must offer `codec`.
+    pub container: Container,
 }
 
 /// How encoded pictures are shown: what a container records beside them
@@ -59,6 +61,13 @@ pub struct VideoDisplay {
 /// Refuses an output this sink cannot write, saying which condition fails.
 pub(crate) fn check_video_config(config: &VideoEncodeConfig) -> Result<(), EncodeError> {
     let refuse = |reason: String| Err(EncodeError::Adapter(reason));
+    if !config.container.offers_video(config.codec.model()) {
+        return refuse(format!(
+            "{} does not offer video codec {}",
+            config.container,
+            config.codec.as_str()
+        ));
+    }
     if config.width == 0
         || config.height == 0
         || !config.width.is_multiple_of(2)
@@ -94,12 +103,13 @@ pub(crate) fn check_video_config(config: &VideoEncodeConfig) -> Result<(), Encod
     Ok(())
 }
 
-/// Writes what a container says beside an encoder's pictures on its stream:
-/// the display matrix, the pixel aspect ratio, and the sample entry.
+/// Writes what `container` says beside an encoder's pictures on its stream:
+/// the display matrix, the pixel aspect ratio, and the codec tag.
 pub(crate) fn describe_output_stream(
     stream: &mut rsmpeg::avformat::AVStreamMut<'_>,
     encoder: &AVCodecContext,
     display: VideoDisplay,
+    container: Container,
 ) -> Result<(), EncodeError> {
     let sar = display.sample_aspect_ratio;
     if sar != SampleAspectRatio::default() {
@@ -112,7 +122,12 @@ pub(crate) fn describe_output_stream(
         alpha2_ffmpeg_bridge::set_stream_display_matrix(stream, matrix)
             .map_err(encode_adapter_error)?;
     }
-    let tag = crate::convert::mp4_codec_tag(encoder.codec_id, stream.codecpar().codec_tag, false);
+    let tag = crate::convert::container_codec_tag(
+        container,
+        encoder.codec_id,
+        stream.codecpar().codec_tag,
+        false,
+    );
     alpha2_ffmpeg_bridge::set_stream_codec_tag(stream, tag);
     Ok(())
 }
@@ -145,7 +160,7 @@ pub struct NativeVideoEncodeSink {
 }
 
 impl NativeVideoEncodeSink {
-    /// Creates the requested encoder in a container inferred from `path`.
+    /// Creates a sink that encodes `config.codec` into a `config.container` file at `path`.
     ///
     /// # Errors
     /// Returns an adapter failure for invalid dimensions, paths, codecs, or muxers.
@@ -202,7 +217,7 @@ impl NativeVideoEncodeSink {
         let final_path = path.as_ref().to_owned();
         let partial = PartialOutput::claim(&final_path)?;
         let partial_path = partial.path().to_owned();
-        let mut output = partial.open_muxer()?;
+        let mut output = partial.open_muxer(config.container)?;
         let width = i32::try_from(config.width)
             .map_err(|_| EncodeError::Adapter("width is out of range".into()))?;
         let height = i32::try_from(config.height)
@@ -227,11 +242,11 @@ impl NativeVideoEncodeSink {
             stream.set_time_base(stream_time_base);
             let parameters = encoder.extract_codecpar();
             stream.set_codecpar(parameters);
-            describe_output_stream(&mut stream, &encoder, config.display)?;
+            describe_output_stream(&mut stream, &encoder, config.display, config.container)?;
             stream_index = stream.index;
         }
         output
-            .write_header(&mut None)
+            .write_header(&mut crate::convert::muxer_header_options(config.container))
             .map_err(encode_adapter_error)?;
         stream_time_base = output.streams()[usize::try_from(stream_index).unwrap_or(0)].time_base;
         let mut scaler = SwsContext::get_context(
@@ -299,7 +314,7 @@ impl NativeVideoEncodeSink {
                     timed(&mut self.stages.video_mux_write, || {
                         output.interleaved_write_frame(&mut packet)
                     })
-                    .map_err(|error| encode_adapter_error_at("MP4 packet write failed", error))?;
+                    .map_err(|error| encode_adapter_error_at("packet write failed", error))?;
                 }
                 Err(RsmpegError::EncoderDrainError) if !flushing => return Ok(()),
                 Err(RsmpegError::EncoderFlushedError | RsmpegError::EncoderDrainError)

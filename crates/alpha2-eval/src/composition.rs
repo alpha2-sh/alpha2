@@ -862,7 +862,7 @@ fn shape_items_bytes(items: &[alpha2_model::ShapeItem]) -> usize {
         .sum()
 }
 
-/// A generator step: a shapes generator with its plan.
+/// A generator step, with a plan when the generator is a shapes generator.
 fn generator_step(generator: Generator, start: MediaTime) -> StepOp {
     let shapes = match &generator {
         Generator::Shapes { items } => Some(Arc::new(ShapesPlan::new(items))),

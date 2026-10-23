@@ -16,10 +16,7 @@ import {
 } from "mediabunny";
 
 import { renderOfflineAudio } from "../dist/audio.js";
-import {
-  audioEncoderSampleRate,
-  MediabunnyMp4Sink,
-} from "../dist/mediabunny.js";
+import { audioEncoderSampleRate, MediabunnySink } from "../dist/mediabunny.js";
 
 const wasmDirectory = join(resolve(import.meta.dirname, ".."), "wasm");
 
@@ -124,7 +121,8 @@ function tone(rate, start, frames) {
  */
 async function exportTone(projectRate, total, sizes, sinkOptions) {
   given.length = 0;
-  const sink = new MediabunnyMp4Sink({
+  const sink = new MediabunnySink({
+    container: "mp4",
     audioCodec: "aac",
     audioBitrate: BITRATE,
     destination: { kind: "memory", maxBytes: 1 << 24 },
@@ -261,7 +259,8 @@ test(
       channels: tone(22_050, startSample, frames),
     });
     const sink = (options) =>
-      new MediabunnyMp4Sink({
+      new MediabunnySink({
+        container: "mp4",
         audioCodec: "aac",
         audioBitrate: BITRATE,
         audioSampleRate: 44_100,

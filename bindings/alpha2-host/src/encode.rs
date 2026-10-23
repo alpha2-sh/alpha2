@@ -895,7 +895,7 @@ thread_local! {
 /// What a muxer write on a full disk reports, as the sink words it.
 #[cfg(test)]
 pub const INJECTED_WRITE_FAILURE: &str =
-    "native encode failed while writing media: MP4 packet write failed: No space left on device";
+    "native encode failed while writing media: packet write failed: No space left on device";
 
 impl EncodeWorker {
     /// Starts the encode worker on its own thread, which owns `sink` from

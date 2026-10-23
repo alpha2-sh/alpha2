@@ -287,8 +287,8 @@ pub fn resample_path(path: &EvaluatedPath, size: CanvasSize, counts: &[usize]) -
             if count < minimum || total <= 0.0 {
                 return original.clone();
             }
-            // A closed subpath's last vertex is its first again, so its vertices split it into
-            // `count` spans; an open one's into `count - 1`.
+            // A closed subpath closes back to its first vertex, so its `count` vertices split it
+            // into `count` spans; an open one's into `count - 1`.
             let spans = if original.closed { count } else { count - 1 };
             #[allow(clippy::cast_precision_loss)]
             let spacing = total / spans as f64;
@@ -348,7 +348,7 @@ fn direction(segment: &PathSeg, t: f64) -> Vec2 {
     }
 }
 
-/// Records of every item, for queries that need them all.
+/// Every item's [`ItemPath`] (place in the tree, device path, and bounds), in document order.
 #[must_use]
 pub fn items(items: &[EvaluatedItem], size: CanvasSize) -> Vec<ItemPath> {
     crate::item_paths(items, size)

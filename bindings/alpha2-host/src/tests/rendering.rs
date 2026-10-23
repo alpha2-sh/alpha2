@@ -32,10 +32,13 @@ fn a_reversed_clip_exports_its_frames_in_reverse_order() {
             end_ticks,
             RateRequest { num: 30, den: 1 },
             false,
-            NativeVideoCodec::Mpeg4Part2,
+            crate::protocol::ResolvedFormat {
+                container: alpha2_media::Container::Mp4,
+                video: NativeVideoCodec::Mpeg4Part2,
+                audio: NativeAudioCodec::Aac,
+            },
             None,
             VideoQualityRequest::Level(QualityLevel::VeryHigh),
-            NativeAudioCodec::Aac,
             AudioQualityRequest::Level(QualityLevel::High),
             None,
             &output,
@@ -176,10 +179,13 @@ fn reversed_and_looped_sound_exports_as_mapped() {
             2 * seconds,
             RateRequest { num: 30, den: 1 },
             true,
-            NativeVideoCodec::Mpeg4Part2,
+            crate::protocol::ResolvedFormat {
+                container: alpha2_media::Container::Mp4,
+                video: NativeVideoCodec::Mpeg4Part2,
+                audio: NativeAudioCodec::Aac,
+            },
             None,
             VideoQualityRequest::Level(QualityLevel::High),
-            NativeAudioCodec::Aac,
             AudioQualityRequest::Level(QualityLevel::VeryHigh),
             None,
             &output,
@@ -239,10 +245,13 @@ fn a_fast_reversed_clip_exports_from_the_media_its_needs_name() {
         2 * seconds,
         RateRequest { num: 30, den: 1 },
         true,
-        NativeVideoCodec::Mpeg4Part2,
+        crate::protocol::ResolvedFormat {
+            container: alpha2_media::Container::Mp4,
+            video: NativeVideoCodec::Mpeg4Part2,
+            audio: NativeAudioCodec::Aac,
+        },
         None,
         VideoQualityRequest::Level(QualityLevel::High),
-        NativeAudioCodec::Aac,
         AudioQualityRequest::Level(QualityLevel::VeryHigh),
         None,
         &output,
@@ -304,10 +313,13 @@ fn text_exports_with_the_requested_fonts() {
             second / 10,
             RateRequest { num: 30, den: 1 },
             false,
-            NativeVideoCodec::Mpeg4Part2,
+            crate::protocol::ResolvedFormat {
+                container: alpha2_media::Container::Mp4,
+                video: NativeVideoCodec::Mpeg4Part2,
+                audio: NativeAudioCodec::Aac,
+            },
             None,
             VideoQualityRequest::Level(QualityLevel::VeryHigh),
-            NativeAudioCodec::Aac,
             AudioQualityRequest::Level(QualityLevel::High),
             None,
             &directory.join(name),
@@ -778,8 +790,8 @@ fn export_look(
 }
 
 /// An image asset reaches an effect as a named input through a media node, decoded and
-/// converted as any media node's: white times the image draws what the image does through an
-/// effect that passes its source.
+/// converted like any media node: a white clip multiplied by the image exports the same frames
+/// as the image passed through an effect that returns its source.
 #[test]
 fn an_export_draws_an_image_through_a_named_input() {
     let _gpu = gpu_test_lock();
