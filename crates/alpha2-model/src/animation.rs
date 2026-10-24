@@ -139,7 +139,9 @@ pub struct PointKeyframe {
 #[cfg_attr(feature = "schema", schemars(rename = "Keyframe_{T}"))]
 pub struct Keyframe<T> {
     /// Timestamp of this value: timeline time, except in a composition
-    /// node's settings, which are keyed in composition time.
+    /// node's settings, which are keyed in composition time, and in a
+    /// shapes or layout generator's tree, which is keyed in its picture's
+    /// time.
     pub time: alpha2_time::MediaTime,
     /// Value at `time`.
     pub value: T,

@@ -893,3 +893,63 @@ report({
 });
 `;
 }
+
+/**
+ * A layout generator drawn end to end in the browser: boxes placed by flexbox, a group faded as
+ * one, a clipped child, and text laid out with a registered font.
+ */
+export function layout(webgl) {
+  return `
+${webgl ? 'Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });' : 'if (!navigator.gpu) throw new Error("this browser offers no WebGPU");'}
+const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+await init();
+const engine = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(160, 90));
+engine.addFont("Alpha2 Fixture", new Uint8Array(await (await fetch("/tests/fonts/Alpha2Fixture.ttf")).arrayBuffer()), 0);
+const constant = (value) => ({ mode: "constant", value });
+const white = constant({ type: "solid", color: { red: 1, green: 1, blue: 1, alpha: 1 } });
+const length = (value) => constant({ type: "length", value });
+const at = (left, top, side, extra = {}) => ({ position: "absolute",
+  inset: { left: length(left), top: length(top) }, width: length(side), height: length(side), ...extra });
+const root = { children: [
+  // A white square: pixels 9..27 on both axes (0.1 and 0.3 of the 90 px shorter side).
+  at(0.1, 0.1, 0.2, { background: white }),
+  // Two white squares faded as one group, 45..72 and 58..85 across: where they overlap it is as
+  // bright as where one lies alone.
+  { position: "absolute", inset: { left: length(0.5), top: length(0.1) }, width: length(0.6), height: length(0.3),
+    opacity: constant(0.5), children: [at(0, 0, 0.3, { background: white }), at(0.15, 0, 0.3, { background: white })] },
+  // A box that clips a white child twice its size.
+  { position: "absolute", inset: { left: length(0.1), top: length(0.5) }, width: length(0.3), height: length(0.3),
+    overflow: "hidden", children: [{ width: length(0.6), height: length(0.6), flex_shrink: constant(0), background: white }] },
+  // Text right of the clipped box, from (54, 49).
+  { position: "absolute", inset: { left: length(0.6), top: length(0.55) },
+    children: [{ text: { content: constant("Hi"), font_size: constant(0.3) } }] },
+] };
+engine.loadProject(JSON.stringify({
+  schema_version: 1, id: "layout", name: "Layout",
+  settings: { width: 160, height: 90, frame_rate: { num: 30, den: 1 }, sample_rate: 48000 },
+  sources: [{ id: "layout", kind: "generated", generator: { type: "layout", root } }],
+  timeline: { tracks: [{ id: "t", name: "T", kind: "video", clips: [{ id: "c", source_id: "layout",
+    timeline_range: { start: 0, end: 120000 }, source_range: { start: 0, end: 120000 } }] }] },
+}));
+const ticket = engine.beginExportAt(0n, "h264");
+const rendered = ticket.kind === "rendered" ? await ticket.readback : ticket;
+if (rendered.kind !== "rendered") throw new Error("the frame did not render: " + rendered.kind);
+const [{ offset, stride }] = rendered.layout;
+const y = (x, row) => rendered.pixels[offset + row * stride + x];
+let text = 0;
+for (let row = 45; row < 88; row++) for (let x = 54; x < 110; x++) text = Math.max(text, y(x, row));
+const luma = {
+  square: y(18, 18), outside: y(4, 4), faded: y(50, 18), overlap: y(65, 18),
+  clipped: y(18, 54), pastClip: y(40, 54), text,
+};
+const gpu = JSON.parse(engine.diagnostics()).gpu;
+const uncaptured = gpu.events.filter((event) => event.event === "uncaptured-error");
+report({
+  ok: luma.square > 200 && luma.outside < 40 && luma.faded > 100 && luma.faded < 210
+    && Math.abs(luma.overlap - luma.faded) <= 3 && luma.clipped > 200 && luma.pastClip < 40
+    && luma.text > 200 && uncaptured.length === 0 && !engine.deviceLost,
+  luma,
+  ...(uncaptured.length ? { uncaptured } : {}),
+});
+`;
+}

@@ -146,6 +146,98 @@ pub struct TextMeasure {
     pub line_count: u32,
 }
 
+/// A request's text shaped once, for layout: its lines at any wrapping
+/// width, broken as [`TextRasterizer::rasterize`] breaks them, without
+/// shaping again ([`TextRasterizer::shape`]).
+#[derive(Clone, Debug)]
+pub struct ShapedText {
+    /// Each paragraph's clusters, in logical order.
+    paragraphs: Vec<Vec<Cluster>>,
+    font_size: f32,
+    line_advance: f32,
+}
+
+/// Lines of a shaped text at one wrapping width ([`ShapedText::lines_at`]).
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct LineMetrics {
+    /// Number of lines, as [`TextMeasure::line_count`] counts them.
+    pub line_count: u32,
+    /// The widest line's advance, trailing spaces left out.
+    pub widest: f32,
+    /// Every line's em box, unrounded: the rasterizer's box height before it
+    /// is rounded up.
+    pub height: f32,
+}
+
+impl ShapedText {
+    /// The widest run between line-break opportunities, trailing spaces
+    /// left out (CSS min-content).
+    #[must_use]
+    pub fn min_content_width(&self) -> f32 {
+        let mut widest = 0.0_f32;
+        for clusters in &self.paragraphs {
+            let mut start = 0;
+            for index in 1..=clusters.len() {
+                if index == clusters.len() || clusters[index].break_before {
+                    widest = widest.max(advance(&clusters[start..index]));
+                    start = index;
+                }
+            }
+        }
+        widest
+    }
+
+    /// The widest paragraph unwrapped, trailing spaces left out (CSS
+    /// max-content).
+    #[must_use]
+    pub fn max_content_width(&self) -> f32 {
+        self.paragraphs
+            .iter()
+            .map(|clusters| advance(clusters))
+            .fold(0.0, f32::max)
+    }
+
+    /// The lines at `max_width`, as [`TextRasterizer::rasterize`] breaks
+    /// them; a non-positive width does not wrap.
+    #[must_use]
+    pub fn lines_at(&self, max_width: f32) -> LineMetrics {
+        let (mut count, mut kept, mut widest) = (0_u32, 1_u32, 0.0_f32);
+        for clusters in &self.paragraphs {
+            for range in break_lines(clusters, max_width) {
+                count = count.saturating_add(1);
+                if !range.is_empty() {
+                    kept = count;
+                }
+                widest = widest.max(advance(&clusters[range]));
+            }
+        }
+        LineMetrics {
+            line_count: kept,
+            widest,
+            height: box_height(kept, self.line_advance, self.font_size),
+        }
+    }
+}
+
+/// The pen advance over `clusters` in logical order, as [`break_lines`]
+/// sums it, up to the last that does not hang.
+fn advance(clusters: &[Cluster]) -> f32 {
+    let end = clusters
+        .iter()
+        .rposition(|cluster| !cluster.hangs)
+        .map_or(0, |last| last + 1);
+    clusters[..end]
+        .iter()
+        .fold(0.0, |width, cluster| width + cluster.width)
+}
+
+/// Every line's nominal em box: the last one's too when lines are closer
+/// than an em.
+#[allow(clippy::cast_precision_loss)]
+fn box_height(line_count: u32, line_advance: f32, font_size: f32) -> f32 {
+    line_count.saturating_sub(1) as f32 * line_advance + line_advance.max(font_size)
+}
+
 /// Typed text-host failure.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -509,6 +601,54 @@ impl TextRasterizer {
         })
     }
 
+    /// Shapes `request`'s text as [`Self::rasterize`] would, for layout: its
+    /// lines at any wrapping width come from the result without shaping
+    /// again. The request's `max_width`, color, outline, background and
+    /// content version are ignored.
+    ///
+    /// # Errors
+    /// Returns [`TextRasterError::NoFonts`] without fonts, and
+    /// [`TextRasterError::InvalidRequest`] for a size, line height or text
+    /// [`Self::rasterize`] rejects.
+    pub fn shape(&self, request: &TextRasterRequest) -> Result<ShapedText, TextRasterError> {
+        validate_request(&TextRasterRequest {
+            text: String::new(),
+            max_width: 0.0,
+            content_version: 1,
+            outline: None,
+            background: None,
+            ..request.clone()
+        })?;
+        if request.text.len() > MAX_TEXT_BYTES {
+            return Err(TextRasterError::InvalidRequest);
+        }
+        if self.fonts.is_empty() {
+            return Err(TextRasterError::NoFonts);
+        }
+        let faces = Faces::new(&self.fonts)?;
+        let order = self.font_order(request.font_family.as_deref());
+        let paragraphs = normalize(&request.text, request.emoji_policy)
+            .split('\n')
+            .map(|paragraph| {
+                let bidi = ParagraphBidiInfo::new(paragraph, None);
+                let glyphs = shape_paragraph(
+                    &faces,
+                    paragraph,
+                    &bidi,
+                    request.font_size,
+                    &order,
+                    request.emoji_policy,
+                );
+                clusters(&glyphs, paragraph)
+            })
+            .collect();
+        Ok(ShapedText {
+            paragraphs,
+            font_size: request.font_size,
+            line_advance: request.font_size * request.line_height,
+        })
+    }
+
     /// `request`'s lines, broken and placed in its layout box.
     #[allow(clippy::cast_precision_loss)]
     fn lay_out(
@@ -545,9 +685,7 @@ impl TextRasterizer {
             lines.iter().map(|line| line.width).fold(0.0, f32::max)
         }
         .max(1.0);
-        // Every line's nominal em box fits, the last one's too when lines are closer than an em.
-        let height =
-            ((line_count - 1) as f32 * line_advance + line_advance.max(request.font_size)).max(1.0);
+        let height = box_height(line_count, line_advance, request.font_size).max(1.0);
         Ok(Layout {
             box_width: checked_dimension(width)?,
             box_height: checked_dimension(height)?,

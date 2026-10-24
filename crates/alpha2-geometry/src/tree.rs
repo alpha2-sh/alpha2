@@ -315,13 +315,39 @@ type Chunks = Vec<Vec<(VectorOp, String)>>;
 /// The scene `items` draw on a picture of `size`.
 #[must_use]
 pub fn build_scene(items: &[EvaluatedItem], size: CanvasSize) -> VectorScene {
-    let mut builder = Builder::new(size, false, false);
-    let (_, chunks) = builder.group(items, Affine::IDENTITY, "");
-    let ops = back_to_front(chunks)
+    let ops = build_scene_in(items, size, kurbo::Vec2::ZERO, size);
+    VectorScene::new(ops, size.width, size.height)
+}
+
+/// The operations `items` draw on a picture of `space` whose top-left
+/// corner lies at `origin` on a canvas of `canvas`, as an SVG viewBox
+/// places its picture: positions are normalized to `space`, lengths are
+/// fractions of its shorter side, and paints are in it. What they cover is
+/// clipped to `canvas`. [`build_scene`] is the case `space == canvas` at the
+/// origin.
+#[must_use]
+pub fn build_scene_in(
+    items: &[EvaluatedItem],
+    space: CanvasSize,
+    origin: kurbo::Vec2,
+    canvas: CanvasSize,
+) -> Vec<VectorOp> {
+    let mut builder = Builder::new(space, false, false);
+    builder.canvas = canvas_rect(canvas);
+    let (_, chunks) = builder.group(items, Affine::translate(origin), "");
+    back_to_front(chunks)
         .into_iter()
         .map(|(op, _)| op)
-        .collect();
-    VectorScene::new(ops, size.width, size.height)
+        .collect()
+}
+
+fn canvas_rect(size: CanvasSize) -> IRect {
+    IRect::new(
+        0,
+        0,
+        i32::try_from(size.width).unwrap_or(i32::MAX),
+        i32::try_from(size.height).unwrap_or(i32::MAX),
+    )
 }
 
 /// The scene `items` draw, with the item each of its operations was drawn
@@ -352,18 +378,18 @@ fn back_to_front(chunks: Chunks) -> Vec<(VectorOp, String)> {
 
 impl Builder {
     fn new(size: CanvasSize, named: bool, records: bool) -> Self {
-        let canvas = IRect::new(
-            0,
-            0,
-            i32::try_from(size.width).unwrap_or(i32::MAX),
-            i32::try_from(size.height).unwrap_or(i32::MAX),
-        );
         Self {
             size,
-            canvas,
+            canvas: canvas_rect(size),
             named,
             records: records.then(Vec::new),
         }
+    }
+
+    /// The pixel size of the space positions are normalized in.
+    #[allow(clippy::cast_precision_loss)]
+    fn space(&self) -> [f32; 2] {
+        [self.size.width as f32, self.size.height as f32]
     }
 
     fn record(&mut self, at: &str, path: BezPath, rule: FillRule, paint: bool) {
@@ -558,7 +584,7 @@ impl Builder {
         Some(VectorOp::Fill {
             path: Arc::new(path),
             rule,
-            paint: scene_paint(paint, to_device.inverse()),
+            paint: scene_paint(paint, to_device.inverse(), self.space()),
             opacity,
             bounds,
         })
@@ -607,9 +633,10 @@ fn trim_entries(
     result
 }
 
-/// `paint` as the scene paints it, through `inverse` from device pixels.
+/// `paint` as the scene paints it, through `inverse` from device pixels into
+/// a paint space of `space` pixels.
 #[must_use]
-pub fn scene_paint(paint: &Paint, inverse: Affine) -> ScenePaint {
+pub fn scene_paint(paint: &Paint, inverse: Affine, space: [f32; 2]) -> ScenePaint {
     let color = |value: alpha2_model::Rgba| [value.red, value.green, value.blue, value.alpha];
     let stops = |list: &[alpha2_model::GradientStop]| {
         list.iter()
@@ -635,6 +662,7 @@ pub fn scene_paint(paint: &Paint, inverse: Affine) -> ScenePaint {
                 color: color(*value),
             }],
             inverse,
+            space,
         },
         Paint::LinearGradient {
             start,
@@ -648,6 +676,7 @@ pub fn scene_paint(paint: &Paint, inverse: Affine) -> ScenePaint {
             spread: spread(*mode),
             stops: stops(list),
             inverse,
+            space,
         },
         Paint::RadialGradient {
             center,
@@ -661,6 +690,7 @@ pub fn scene_paint(paint: &Paint, inverse: Affine) -> ScenePaint {
             spread: spread(*mode),
             stops: stops(list),
             inverse,
+            space,
         },
         Paint::ConicGradient {
             center,
@@ -673,6 +703,7 @@ pub fn scene_paint(paint: &Paint, inverse: Affine) -> ScenePaint {
             spread: 0,
             stops: stops(list),
             inverse,
+            space,
         },
     }
 }

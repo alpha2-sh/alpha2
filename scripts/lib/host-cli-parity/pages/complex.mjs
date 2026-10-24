@@ -2,8 +2,9 @@ import { PEAK_CODES } from "../../parity-tolerance.mjs";
 
 // Renders every frame of a project with the packaged engine and compares it with the native
 // export's encoded frame. Frame needs are answered as a host must: the last frame at or before
-// each requested time, uploaded under the requested time.
-export function complexPage(projectUrl) {
+// each requested time, uploaded under the requested time. `fonts` are registered in order, as the
+// native export's `--font`s are.
+export function complexPage(projectUrl, fonts = []) {
   return `<!doctype html>
 <html><head><title>pending</title></head><body><script type="module">
 import init, { WebEffectRegistry } from "/packages/alpha2/wasm/alpha2_wasm.js";
@@ -22,10 +23,14 @@ try {
   surface.height = height;
   document.body.append(surface);
   const engine = await WebEffectRegistry.createForHtmlCanvas(surface);
+  for (const font of ${JSON.stringify(fonts)})
+    engine.addFont(font, new Uint8Array(await fetch(font).then((response) => response.arrayBuffer())), 0);
   for (const resource of project.effect_resources ?? [])
     engine.registerLut3d(resource.id, await fetch(\`/tests/corpus/\${resource.locator.replace("fixture://", "")}.cube\`).then((response) => response.text()));
   engine.loadProject(JSON.stringify(project));
-  engine.uploadRgbaImage("still", width, height, await pixels("/tests/corpus/parity-image.png"));
+  // At its own size, as the native host decodes it: a project may be larger than the still.
+  const still = await image("/tests/corpus/parity-image.png");
+  engine.uploadRgbaImage("still", still.width, still.height, still.data);
   const catalog = JSON.parse(engine.builtinCatalog());
   const used = new Set([
     ...(project.compositions ?? []).flatMap((composition) => composition.nodes.map((node) => node.op.effect?.id)),
@@ -100,13 +105,16 @@ try {
 // Straight RGBA as stored in the PNG, with no colour management: the native
 // side decodes the same bytes.
 async function pixels(url) {
+  return (await image(url)).data;
+}
+async function image(url) {
   const blob = await fetch(url).then((response) => response.blob());
   const bitmap = await createImageBitmap(blob, { colorSpaceConversion: "none", premultiplyAlpha: "none" });
   const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
   const context = canvas.getContext("2d", { colorSpace: "srgb" });
   context.drawImage(bitmap, 0, 0);
   bitmap.close();
-  return context.getImageData(0, 0, canvas.width, canvas.height).data;
+  return context.getImageData(0, 0, canvas.width, canvas.height);
 }
 function parseY4m(bytes, width, height) {
   let at = bytes.indexOf(10) + 1;

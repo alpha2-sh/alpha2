@@ -53,6 +53,11 @@ import {
   MAX_POLYSTAR_POINTS,
   MAX_SHAPE_DEPTH,
   MAX_SHAPE_ITEMS,
+  MAX_LAYOUT_DEPTH,
+  MAX_LAYOUT_FONT_SIZE,
+  MAX_LAYOUT_ISOLATED,
+  MAX_LAYOUT_NODES,
+  MAX_LAYOUT_TEXTS,
   MIN_POLYSTAR_POINTS,
   MAX_CLIPS,
   MAX_CLIPS_PER_TRACK,
@@ -421,8 +426,11 @@ function catalogOf(
       problems.push(`source ${sourceId} is not a valid composition source`);
     } else if (source.kind === "generated") {
       const issue = generatorShapeIssue(source.generator);
+      const layout = generatorLayoutIssue(source.generator);
       if (issue) {
         problems.push(shapeProblem(`source ${sourceId}`, issue));
+      } else if (layout) {
+        problems.push(layoutProblem(`source ${sourceId}`, layout));
       } else if (
         !validGenerator(source.generator) ||
         text(source.locator).length > 0 ||
@@ -2379,13 +2387,15 @@ function positive(value: unknown): boolean {
  * ordered stops, a linear gradient's ends distinct, a radial radius positive. Or shapes whose
  * content tree is valid ({@link shapeItemsIssue}). Or text: non-empty, at most
  * {@link MAX_TEXT_CONTENT_BYTES} bytes, in a valid style whose font size is at most
- * {@link MAX_TEXT_GENERATOR_FONT_SIZE}.
+ * {@link MAX_TEXT_GENERATOR_FONT_SIZE}. Or a layout whose tree is valid ({@link layoutIssue}).
  */
 function validGenerator(generator: unknown): boolean {
   if (!isRecord(generator)) return false;
   if (generator.type === "fill") return validPaint(generator.paint);
   if (generator.type === "shapes")
     return shapeItemsIssue(generator.items) === undefined;
+  if (generator.type === "layout")
+    return layoutIssue(generator.root) === undefined;
   if (generator.type === "text")
     return (
       typeof generator.text === "string" &&
@@ -2425,6 +2435,407 @@ function generatorShapeIssue(generator: unknown): ShapeIssue | undefined {
 /** `issue` as a problem of `owner` (`source s`, `clip c`, `node n of composition g`). */
 function shapeProblem(owner: string, issue: ShapeIssue): string {
   return `${owner} has an invalid shape: ${issue.at} ${issue.problem}`;
+}
+
+/** Mirrors `LayoutProblem`'s wording. */
+const LAYOUT_PROBLEM = {
+  tooManyNodes: "has more nodes than a layout may hold",
+  tooDeep: "nests nodes too deeply",
+  tooManyTexts: "has more text nodes than a layout may hold",
+  tooManyIsolated:
+    "has more nodes with opacity, transforms, or hidden overflow than a layout may hold",
+  mixedContent: "has more than one of children, text, and shape",
+  containerFieldOnLeaf:
+    "sets a flex container field on a node with text or shape content",
+  rootItemField:
+    "sets a size, margin, position, or flex item field on the root",
+  invalidKeyframes: "has invalid keyframes",
+  outOfRange: "has a value out of range",
+  lengthKeyframesDiffer: "has size keyframes that differ in kind",
+  paintKeyframesDiffer: "has paint keyframes that differ in kind or stops",
+  textKeyframesInterpolate: "has text keyframes that do not hold",
+} as const;
+
+/**
+ * Where in a layout tree a problem lies. A problem in a shape node's items (`shape` set) is
+ * reported as a shape problem, as the engine reports it.
+ */
+interface LayoutIssue extends ShapeIssue {
+  readonly shape?: boolean;
+}
+
+/** A generator's layout problem, if it is a layout generator with one. */
+function generatorLayoutIssue(generator: unknown): LayoutIssue | undefined {
+  return isRecord(generator) && generator.type === "layout"
+    ? layoutIssue(generator.root)
+    : undefined;
+}
+
+/** `issue` as a problem of `owner`, worded as the engine words it. */
+function layoutProblem(owner: string, issue: LayoutIssue): string {
+  return issue.shape === true
+    ? shapeProblem(owner, issue)
+    : `${owner} has an invalid layout: ${issue.at} ${issue.problem}`;
+}
+
+const LAYOUT_CONTAINER_FIELDS = [
+  "flex_direction",
+  "flex_wrap",
+  "gap",
+  "justify_content",
+  "align_items",
+] as const;
+
+const LAYOUT_ITEM_FIELDS = [
+  "width",
+  "height",
+  "min_width",
+  "min_height",
+  "max_width",
+  "max_height",
+  "aspect_ratio",
+  "margin",
+  "flex_grow",
+  "flex_shrink",
+  "flex_basis",
+  "align_self",
+  "position",
+  "inset",
+] as const;
+
+const LAYOUT_SIZE_FIELDS = [
+  "width",
+  "height",
+  "min_width",
+  "min_height",
+  "max_width",
+  "max_height",
+] as const;
+
+const LAYOUT_VISUAL_FIELDS = [
+  "opacity",
+  "translate",
+  "scale",
+  "rotation_degrees",
+] as const;
+
+/** Whether an optional field is present: the model reads `null` as absent. */
+function present(value: unknown): boolean {
+  return value !== undefined && value !== null;
+}
+
+/**
+ * Mirrors `validate_layout`: the first problem of a layout tree in preorder. Its limits
+ * ({@link MAX_LAYOUT_NODES} nodes, {@link MAX_LAYOUT_DEPTH} deep, {@link MAX_LAYOUT_TEXTS} texts,
+ * {@link MAX_LAYOUT_ISOLATED} isolated nodes, {@link MAX_SHAPE_ITEMS} shape items over every shape
+ * node), its structure, every value's range, and keyframes alike in kind.
+ */
+function layoutIssue(root: unknown): LayoutIssue | undefined {
+  const node = isRecord(root) ? root : {};
+  if (LAYOUT_ITEM_FIELDS.some((field) => present(node[field]))) {
+    return { at: "root", problem: LAYOUT_PROBLEM.rootItemField };
+  }
+  const counts = { nodes: 0, texts: 0, isolated: 0, shapes: { count: 0 } };
+  return layoutNodeIssue(root, "root", 1, counts);
+}
+
+function layoutNodeIssue(
+  value: unknown,
+  at: string,
+  depth: number,
+  counts: {
+    nodes: number;
+    texts: number;
+    isolated: number;
+    shapes: { count: number };
+  },
+): LayoutIssue | undefined {
+  const issue = (problem: string): LayoutIssue => ({ at, problem });
+  const node = isRecord(value) ? value : {};
+  counts.nodes += 1;
+  if (counts.nodes > MAX_LAYOUT_NODES)
+    return issue(LAYOUT_PROBLEM.tooManyNodes);
+  if (depth > MAX_LAYOUT_DEPTH) return issue(LAYOUT_PROBLEM.tooDeep);
+  const children = Array.isArray(node.children)
+    ? (node.children as readonly unknown[])
+    : [];
+  const text = present(node.text);
+  const shape = present(node.shape);
+  if (Number(children.length > 0) + Number(text) + Number(shape) > 1) {
+    return issue(LAYOUT_PROBLEM.mixedContent);
+  }
+  if (
+    (text || shape) &&
+    LAYOUT_CONTAINER_FIELDS.some((field) => present(node[field]))
+  ) {
+    return issue(LAYOUT_PROBLEM.containerFieldOnLeaf);
+  }
+  if (text) {
+    counts.texts += 1;
+    if (counts.texts > MAX_LAYOUT_TEXTS)
+      return issue(LAYOUT_PROBLEM.tooManyTexts);
+  }
+  if (
+    LAYOUT_VISUAL_FIELDS.some((field) => present(node[field])) ||
+    node.overflow === "hidden"
+  ) {
+    counts.isolated += 1;
+    if (counts.isolated > MAX_LAYOUT_ISOLATED) {
+      return issue(LAYOUT_PROBLEM.tooManyIsolated);
+    }
+  }
+  const fields = layoutFieldsIssue(node, at);
+  if (fields) return fields;
+  if (text) {
+    const textIssue = layoutTextIssue(node.text, `${at}.text`);
+    if (textIssue) return textIssue;
+  }
+  if (shape) {
+    const items = isRecord(node.shape) ? node.shape.items : undefined;
+    const shapeIssue = shapeGroupIssue(
+      items,
+      `${at}.shape.items`,
+      1,
+      counts.shapes,
+    );
+    if (shapeIssue) return { ...shapeIssue, shape: true };
+  }
+  for (const [index, child] of children.entries()) {
+    const childIssue = layoutNodeIssue(
+      child,
+      `${at}.children[${index}]`,
+      depth + 1,
+      counts,
+    );
+    if (childIssue) return childIssue;
+  }
+  return undefined;
+}
+
+/** An animated value's problem, as `checks::animated` finds it: keyframes, then values. */
+function layoutAnimatedIssue(
+  animation: unknown,
+  at: string,
+  check: (value: unknown) => boolean,
+): LayoutIssue | undefined {
+  if (!present(animation)) return undefined;
+  const values = animationValues<unknown>(animation);
+  if (values === undefined)
+    return { at, problem: LAYOUT_PROBLEM.invalidKeyframes };
+  return values.every(check)
+    ? undefined
+    : { at, problem: LAYOUT_PROBLEM.outOfRange };
+}
+
+function layoutScalarIssue(
+  animation: unknown,
+  at: string,
+  check: (value: number) => boolean,
+): LayoutIssue | undefined {
+  return layoutAnimatedIssue(
+    animation,
+    at,
+    (value) => finiteNumber(value) && check(value),
+  );
+}
+
+function layoutInsetsIssue(
+  animation: unknown,
+  at: string,
+  check: (value: number) => boolean,
+): LayoutIssue | undefined {
+  return layoutAnimatedIssue(
+    animation,
+    at,
+    (value) =>
+      isRecord(value) &&
+      (["top", "right", "bottom", "left"] as const).every((side) => {
+        const length = value[side] ?? 0;
+        return finiteNumber(length) && check(length);
+      }),
+  );
+}
+
+/** A size or inset: its values, then its keyframes one kind (`length` or `percent`). */
+function layoutLengthIssue(
+  animation: unknown,
+  at: string,
+  check: (value: number) => boolean,
+): LayoutIssue | undefined {
+  const issue = layoutAnimatedIssue(
+    animation,
+    at,
+    (value) =>
+      isRecord(value) &&
+      (value.type === "length" || value.type === "percent") &&
+      finiteNumber(value.value) &&
+      check(value.value),
+  );
+  if (issue || !present(animation)) return issue;
+  const kinds = new Set(
+    (animationValues<Record<string, unknown>>(animation) ?? []).map(
+      (value) => value.type,
+    ),
+  );
+  return kinds.size > 1
+    ? { at, problem: LAYOUT_PROBLEM.lengthKeyframesDiffer }
+    : undefined;
+}
+
+function layoutPaintIssue(
+  animation: unknown,
+  at: string,
+): LayoutIssue | undefined {
+  if (!present(animation)) return undefined;
+  const issue = animatedPaintIssue(animation, at);
+  if (issue === undefined) return undefined;
+  const problem =
+    issue.problem === SHAPE_PROBLEM.invalidKeyframes
+      ? LAYOUT_PROBLEM.invalidKeyframes
+      : issue.problem === SHAPE_PROBLEM.paintKeyframesDiffer
+        ? LAYOUT_PROBLEM.paintKeyframesDiffer
+        : LAYOUT_PROBLEM.outOfRange;
+  return { at: issue.at, problem };
+}
+
+/** Mirrors `layout::validate_fields`, field by field in the same order. */
+function layoutFieldsIssue(
+  node: Record<string, unknown>,
+  at: string,
+): LayoutIssue | undefined {
+  const field = (name: string) => `${at}.${name}`;
+  const border = isRecord(node.border) ? node.border : undefined;
+  const first =
+    layoutScalarIssue(node.gap, field("gap"), nonNegativeValue) ??
+    layoutInsetsIssue(node.padding, field("padding"), nonNegativeValue) ??
+    layoutPaintIssue(node.background, field("background")) ??
+    (border
+      ? (layoutScalarIssue(
+          border.width,
+          field("border.width"),
+          nonNegativeValue,
+        ) ?? layoutPaintIssue(border.paint, field("border.paint")))
+      : undefined) ??
+    layoutScalarIssue(
+      node.border_radius,
+      field("border_radius"),
+      nonNegativeValue,
+    );
+  if (first) return first;
+  for (const name of LAYOUT_SIZE_FIELDS) {
+    const issue = layoutLengthIssue(node[name], field(name), nonNegativeValue);
+    if (issue) return issue;
+  }
+  if (
+    present(node.aspect_ratio) &&
+    !(finiteNumber(node.aspect_ratio) && node.aspect_ratio > 0)
+  ) {
+    return { at: field("aspect_ratio"), problem: LAYOUT_PROBLEM.outOfRange };
+  }
+  const item =
+    layoutInsetsIssue(node.margin, field("margin"), anyValue) ??
+    layoutScalarIssue(node.flex_grow, field("flex_grow"), nonNegativeValue) ??
+    layoutScalarIssue(
+      node.flex_shrink,
+      field("flex_shrink"),
+      nonNegativeValue,
+    ) ??
+    layoutLengthIssue(node.flex_basis, field("flex_basis"), nonNegativeValue);
+  if (item) return item;
+  if (isRecord(node.inset)) {
+    for (const side of ["left", "top", "right", "bottom"] as const) {
+      const issue = layoutLengthIssue(
+        node.inset[side],
+        field(`inset.${side}`),
+        anyValue,
+      );
+      if (issue) return issue;
+    }
+  }
+  return (
+    layoutScalarIssue(node.opacity, field("opacity"), unitValue) ??
+    layoutAnimatedIssue(node.translate, field("translate"), validVec2) ??
+    layoutAnimatedIssue(node.scale, field("scale"), validVec2) ??
+    layoutScalarIssue(
+      node.rotation_degrees,
+      field("rotation_degrees"),
+      anyValue,
+    )
+  );
+}
+
+/** Mirrors `layout::validate_text`. */
+function layoutTextIssue(value: unknown, at: string): LayoutIssue | undefined {
+  const text = isRecord(value) ? value : {};
+  const contentAt = `${at}.content`;
+  const outOfRange = (name: string): LayoutIssue => ({
+    at: `${at}.${name}`,
+    problem: LAYOUT_PROBLEM.outOfRange,
+  });
+  const content = layoutAnimatedIssue(text.content, contentAt, () => true);
+  if (content) return content;
+  if (
+    isRecord(text.content) &&
+    text.content.mode === "keyframes" &&
+    (text.content.keyframes as readonly unknown[]).some(
+      (keyframe) =>
+        !isRecord(keyframe) ||
+        !isRecord(keyframe.interpolation) ||
+        keyframe.interpolation.type !== "hold",
+    )
+  ) {
+    return { at: contentAt, problem: LAYOUT_PROBLEM.textKeyframesInterpolate };
+  }
+  const tooLong = layoutAnimatedIssue(
+    text.content,
+    contentAt,
+    (content) =>
+      typeof content === "string" &&
+      new TextEncoder().encode(content).length <= MAX_TEXT_CONTENT_BYTES,
+  );
+  if (tooLong) return tooLong;
+  const family = text.font_family;
+  if (
+    present(family) &&
+    !(
+      typeof family === "string" &&
+      family.length > 0 &&
+      new TextEncoder().encode(family).length <= MAX_FONT_FAMILY_BYTES
+    )
+  ) {
+    return outOfRange("font_family");
+  }
+  const size = layoutScalarIssue(
+    text.font_size,
+    `${at}.font_size`,
+    (size) => size > 0 && size <= MAX_LAYOUT_FONT_SIZE,
+  );
+  if (size) return size;
+  if (text.color !== undefined && !validRgba(text.color)) {
+    return outOfRange("color");
+  }
+  const lineHeight = text.line_height ?? 1.2;
+  if (
+    !finiteNumber(lineHeight) ||
+    lineHeight < MIN_LINE_HEIGHT ||
+    lineHeight > MAX_LINE_HEIGHT
+  ) {
+    return outOfRange("line_height");
+  }
+  const outline = text.outline;
+  if (
+    present(outline) &&
+    !(
+      isRecord(outline) &&
+      validRgba(outline.color) &&
+      finiteNumber(outline.width) &&
+      outline.width > 0 &&
+      outline.width <= MAX_TEXT_OUTLINE_WIDTH
+    )
+  ) {
+    return outOfRange("outline");
+  }
+  return undefined;
 }
 
 /**
@@ -3188,9 +3599,14 @@ function compositionProblems(
       }
       case "generator": {
         const issue = generatorShapeIssue(op.generator);
+        const layout = generatorLayoutIssue(op.generator);
         if (issue) {
           problems.push(
             shapeProblem(`node ${nodeId} of composition ${id}`, issue),
+          );
+        } else if (layout) {
+          problems.push(
+            layoutProblem(`node ${nodeId} of composition ${id}`, layout),
           );
         } else if (!validGenerator(op.generator)) {
           invalid();

@@ -88,6 +88,7 @@ For preview, `alpha2/audio-timeline` moves the mixed blocks to the audio thread 
 | `alpha2/edit` | Editing operations on a project: split, trim, ripple, roll, slip, slide, retime, insert, overwrite, append, move. |
 | `alpha2/captions` | SRT and WebVTT import into caption tracks. |
 | `alpha2/geometry` | Shape geometry for editors, from the engine's own code: item bounds, hit tests, nearest points, path lengths, trims, resampling, convert to path, motion paths. |
+| `alpha2/layout` | Layout generators: `measureLayout` (where every box lies and what overflows, laid out with the engine's fonts) and a builder from CSS-like shorthands. See [docs/layout.md](https://github.com/alpha2-sh/alpha2/blob/main/docs/layout.md). |
 | `alpha2/effects` | Effect definitions and the built-in catalog's types; `RuntimeEffectRegistry`, a typed wrapper for registering WGSL effects and effect resources at run time. |
 | `alpha2/extensions`, `alpha2/extensions-wasm` | SVG, animated image, Lottie, OpenEXR and image sequence sources, from their own WebAssembly module (`loadExtensions`). |
 | `alpha2/text` | Text rasterizers: `WasmTextRasterizer` (the engine's, the same pixels as a native export) and `OffscreenTextRasterizer` (the browser's). |

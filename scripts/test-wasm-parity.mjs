@@ -259,3 +259,40 @@ assert.equal(hitTest(wasm, filled, 0, size, { x: 0.1, y: 0.5 }), undefined);
 console.log(
   `verified ${Object.keys(geometryGolden).length} geometry queries answer the same in wasm and natively`,
 );
+
+// Layout: the browser module lays out the pinned layouts with the fixture font to the same bits
+// as natively, through the typed wrapper too.
+const layoutGolden = JSON.parse(
+  await readFile(join(root, "tests", "golden", "layout_measure.json"), "utf8"),
+);
+const { measureLayout } = await import(
+  pathToFileURL(join(packageRoot, "dist", "layout.js")).href
+);
+const measurer = new wasm.WasmTextMeasurer();
+measurer.addFont(
+  "Alpha2 Fixture",
+  await readFile(join(root, layoutGolden.font)),
+  0,
+);
+for (const layoutCase of layoutGolden.cases) {
+  const picture = { width: layoutCase.width, height: layoutCase.height };
+  assert.equal(
+    measurer.measureLayout(
+      JSON.stringify(layoutCase.generator),
+      picture.width,
+      picture.height,
+      layoutCase.time,
+    ),
+    layoutCase.expected,
+    layoutCase.name,
+  );
+  assert.deepEqual(
+    measureLayout(measurer, layoutCase.generator, picture, layoutCase.time),
+    JSON.parse(layoutCase.expected),
+    layoutCase.name,
+  );
+}
+measurer.free();
+console.log(
+  `verified ${layoutGolden.cases.length} layouts measure the same in wasm and natively`,
+);

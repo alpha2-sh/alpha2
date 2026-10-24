@@ -2672,9 +2672,10 @@ impl WebEffectRegistry {
         })
     }
 
-    /// Appends an OpenType font to the fallback stack caption tracks and
-    /// text generators draw with. Give it the same font files as the export
-    /// host, and preview text matches exported text pixel for pixel.
+    /// Appends an OpenType font to the fallback stack caption tracks, text
+    /// generators and layouts draw and lay out with. Give it the same font
+    /// files as the export host, and preview text matches exported text pixel
+    /// for pixel.
     ///
     /// # Errors
     /// Returns an error for malformed font bytes.

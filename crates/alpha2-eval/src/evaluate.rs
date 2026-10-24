@@ -134,7 +134,7 @@ fn active_clip(
         matte: entry.matte.as_ref(),
         is_matte: entry.is_matte,
         generator: entry.generator.as_ref(),
-        shapes: entry.shapes.as_deref(),
+        plan: entry.plan.as_deref(),
         source_composition: active_source_composition(entry, source_time)?,
     })
 }

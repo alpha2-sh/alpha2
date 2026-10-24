@@ -27,8 +27,8 @@ pub enum RenderError {
     EffectResourceKindMismatch,
     /// A transition invocation omitted its second texture.
     MissingEffectInput,
-    /// A frame shows a caption or a text generator its host did not prepare
-    /// at the frame's size.
+    /// A frame shows a caption, text generator or layout its host did not
+    /// prepare at the frame's size.
     MissingText,
     /// RGBA input byte length does not match the declared image size.
     InvalidImageData,

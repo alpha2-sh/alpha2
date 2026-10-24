@@ -24432,5 +24432,2690 @@
         ]
       }
     }
+  },
+  {
+    "name": "generated-layout-lower-third-ok",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "flex_direction": "column",
+              "justify_content": "end",
+              "align_items": "start",
+              "padding": {
+                "mode": "constant",
+                "value": {
+                  "top": 0.06,
+                  "right": 0.06,
+                  "bottom": 0.08,
+                  "left": 0.06
+                }
+              },
+              "children": [
+                {
+                  "flex_direction": "row",
+                  "gap": {
+                    "mode": "constant",
+                    "value": 0.016
+                  },
+                  "padding": {
+                    "mode": "constant",
+                    "value": {
+                      "top": 0.022,
+                      "right": 0.03,
+                      "bottom": 0.022,
+                      "left": 0.022
+                    }
+                  },
+                  "background": {
+                    "mode": "constant",
+                    "value": {
+                      "type": "solid",
+                      "color": {
+                        "red": 0.06,
+                        "green": 0.07,
+                        "blue": 0.09,
+                        "alpha": 0.92
+                      }
+                    }
+                  },
+                  "border_radius": {
+                    "mode": "constant",
+                    "value": 0.012
+                  },
+                  "max_width": {
+                    "mode": "constant",
+                    "value": {
+                      "type": "percent",
+                      "value": 60
+                    }
+                  },
+                  "opacity": {
+                    "mode": "keyframes",
+                    "keyframes": [
+                      {
+                        "time": 0,
+                        "value": 0,
+                        "interpolation": {
+                          "type": "cubic_bezier",
+                          "x1": 0.2,
+                          "y1": 0.0,
+                          "x2": 0.0,
+                          "y2": 1.0
+                        }
+                      },
+                      {
+                        "time": 36000,
+                        "value": 1,
+                        "interpolation": {
+                          "type": "hold"
+                        }
+                      }
+                    ]
+                  },
+                  "translate": {
+                    "mode": "keyframes",
+                    "keyframes": [
+                      {
+                        "time": 0,
+                        "value": {
+                          "x": 0,
+                          "y": 0.03
+                        },
+                        "interpolation": {
+                          "type": "cubic_bezier",
+                          "x1": 0.2,
+                          "y1": 0.0,
+                          "x2": 0.0,
+                          "y2": 1.0
+                        }
+                      },
+                      {
+                        "time": 36000,
+                        "value": {
+                          "x": 0,
+                          "y": 0
+                        },
+                        "interpolation": {
+                          "type": "hold"
+                        }
+                      }
+                    ]
+                  },
+                  "children": [
+                    {
+                      "width": {
+                        "mode": "constant",
+                        "value": {
+                          "type": "length",
+                          "value": 0.005
+                        }
+                      },
+                      "flex_shrink": {
+                        "mode": "constant",
+                        "value": 0
+                      },
+                      "background": {
+                        "mode": "constant",
+                        "value": {
+                          "type": "solid",
+                          "color": {
+                            "red": 1,
+                            "green": 0.62,
+                            "blue": 0.1,
+                            "alpha": 1
+                          }
+                        }
+                      },
+                      "border_radius": {
+                        "mode": "constant",
+                        "value": 0.0025
+                      }
+                    },
+                    {
+                      "flex_direction": "column",
+                      "gap": {
+                        "mode": "constant",
+                        "value": 0.006
+                      },
+                      "children": [
+                        {
+                          "text": {
+                            "content": {
+                              "mode": "constant",
+                              "value": "Ada Lovelace"
+                            },
+                            "font_size": {
+                              "mode": "constant",
+                              "value": 0.042
+                            },
+                            "font_family": "Inter"
+                          }
+                        },
+                        {
+                          "text": {
+                            "content": {
+                              "mode": "constant",
+                              "value": "Wrote the first published algorithm for a machine, 1843"
+                            },
+                            "font_size": {
+                              "mode": "constant",
+                              "value": 0.026
+                            },
+                            "font_family": "Inter",
+                            "color": {
+                              "red": 0.8,
+                              "green": 0.82,
+                              "blue": 0.86,
+                              "alpha": 1.0
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "composition-layout-node-ok",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "width": {
+                    "mode": "constant",
+                    "value": {
+                      "type": "length",
+                      "value": 0.1
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "composition": {
+                  "id": "g"
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "compositions": [
+        {
+          "id": "g",
+          "nodes": [
+            {
+              "id": "n",
+              "op": {
+                "type": "generator",
+                "generator": {
+                  "type": "layout",
+                  "root": {
+                    "flex_direction": "column",
+                    "justify_content": "end",
+                    "align_items": "start",
+                    "padding": {
+                      "mode": "constant",
+                      "value": {
+                        "top": 0.06,
+                        "right": 0.06,
+                        "bottom": 0.08,
+                        "left": 0.06
+                      }
+                    },
+                    "children": [
+                      {
+                        "flex_direction": "row",
+                        "gap": {
+                          "mode": "constant",
+                          "value": 0.016
+                        },
+                        "padding": {
+                          "mode": "constant",
+                          "value": {
+                            "top": 0.022,
+                            "right": 0.03,
+                            "bottom": 0.022,
+                            "left": 0.022
+                          }
+                        },
+                        "background": {
+                          "mode": "constant",
+                          "value": {
+                            "type": "solid",
+                            "color": {
+                              "red": 0.06,
+                              "green": 0.07,
+                              "blue": 0.09,
+                              "alpha": 0.92
+                            }
+                          }
+                        },
+                        "border_radius": {
+                          "mode": "constant",
+                          "value": 0.012
+                        },
+                        "max_width": {
+                          "mode": "constant",
+                          "value": {
+                            "type": "percent",
+                            "value": 60
+                          }
+                        },
+                        "opacity": {
+                          "mode": "keyframes",
+                          "keyframes": [
+                            {
+                              "time": 0,
+                              "value": 0,
+                              "interpolation": {
+                                "type": "cubic_bezier",
+                                "x1": 0.2,
+                                "y1": 0.0,
+                                "x2": 0.0,
+                                "y2": 1.0
+                              }
+                            },
+                            {
+                              "time": 36000,
+                              "value": 1,
+                              "interpolation": {
+                                "type": "hold"
+                              }
+                            }
+                          ]
+                        },
+                        "translate": {
+                          "mode": "keyframes",
+                          "keyframes": [
+                            {
+                              "time": 0,
+                              "value": {
+                                "x": 0,
+                                "y": 0.03
+                              },
+                              "interpolation": {
+                                "type": "cubic_bezier",
+                                "x1": 0.2,
+                                "y1": 0.0,
+                                "x2": 0.0,
+                                "y2": 1.0
+                              }
+                            },
+                            {
+                              "time": 36000,
+                              "value": {
+                                "x": 0,
+                                "y": 0
+                              },
+                              "interpolation": {
+                                "type": "hold"
+                              }
+                            }
+                          ]
+                        },
+                        "children": [
+                          {
+                            "width": {
+                              "mode": "constant",
+                              "value": {
+                                "type": "length",
+                                "value": 0.005
+                              }
+                            },
+                            "flex_shrink": {
+                              "mode": "constant",
+                              "value": 0
+                            },
+                            "background": {
+                              "mode": "constant",
+                              "value": {
+                                "type": "solid",
+                                "color": {
+                                  "red": 1,
+                                  "green": 0.62,
+                                  "blue": 0.1,
+                                  "alpha": 1
+                                }
+                              }
+                            },
+                            "border_radius": {
+                              "mode": "constant",
+                              "value": 0.0025
+                            }
+                          },
+                          {
+                            "flex_direction": "column",
+                            "gap": {
+                              "mode": "constant",
+                              "value": 0.006
+                            },
+                            "children": [
+                              {
+                                "text": {
+                                  "content": {
+                                    "mode": "constant",
+                                    "value": "Ada Lovelace"
+                                  },
+                                  "font_size": {
+                                    "mode": "constant",
+                                    "value": 0.042
+                                  },
+                                  "font_family": "Inter"
+                                }
+                              },
+                              {
+                                "text": {
+                                  "content": {
+                                    "mode": "constant",
+                                    "value": "Wrote the first published algorithm for a machine, 1843"
+                                  },
+                                  "font_size": {
+                                    "mode": "constant",
+                                    "value": 0.026
+                                  },
+                                  "font_family": "Inter",
+                                  "color": {
+                                    "red": 0.8,
+                                    "green": 0.82,
+                                    "blue": 0.86,
+                                    "alpha": 1.0
+                                  }
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          ],
+          "output": "n"
+        }
+      ]
+    }
+  },
+  {
+    "name": "generated-layout-shape-node-ok",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "width": {
+                    "mode": "constant",
+                    "value": {
+                      "type": "length",
+                      "value": 0.1
+                    }
+                  },
+                  "aspect_ratio": 1.0,
+                  "shape": {
+                    "items": [
+                      {
+                        "type": "ellipse",
+                        "center": {
+                          "mode": "constant",
+                          "value": {
+                            "x": 0.5,
+                            "y": 0.5
+                          }
+                        },
+                        "size": {
+                          "mode": "constant",
+                          "value": {
+                            "x": 1,
+                            "y": 1
+                          }
+                        }
+                      },
+                      {
+                        "type": "fill",
+                        "paint": {
+                          "mode": "constant",
+                          "value": {
+                            "type": "solid",
+                            "color": {
+                              "red": 1,
+                              "green": 0,
+                              "blue": 0,
+                              "alpha": 1
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "generated-layout-empty-text-ok",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "text": {
+                    "content": {
+                      "mode": "constant",
+                      "value": ""
+                    },
+                    "font_size": {
+                      "mode": "constant",
+                      "value": 0.05
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "generated-layout-deepest-ok",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "children": [
+                            {
+                              "children": [
+                                {
+                                  "children": [
+                                    {
+                                      "children": [
+                                        {
+                                          "children": [
+                                            {
+                                              "children": [
+                                                {
+                                                  "children": [
+                                                    {
+                                                      "children": [
+                                                        {
+                                                          "children": [
+                                                            {
+                                                              "children": [
+                                                                {
+                                                                  "children": [
+                                                                    {
+                                                                      "children": [
+                                                                        {}
+                                                                      ]
+                                                                    }
+                                                                  ]
+                                                                }
+                                                              ]
+                                                            }
+                                                          ]
+                                                        }
+                                                      ]
+                                                    }
+                                                  ]
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "generated-layout-root-item-field",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root sets a size, margin, position, or flex item field on the root"
+    ],
+    "error": "source g1 has an invalid layout: root sets a size, margin, position, or flex item field on the root",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "width": {
+                "mode": "constant",
+                "value": {
+                  "type": "length",
+                  "value": 0.5
+                }
+              }
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "generated-layout-mixed-content",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[0] has more than one of children, text, and shape"
+    ],
+    "error": "source g1 has an invalid layout: root.children[0] has more than one of children, text, and shape",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "text": {
+                    "content": {
+                      "mode": "constant",
+                      "value": "a"
+                    },
+                    "font_size": {
+                      "mode": "constant",
+                      "value": 0.05
+                    }
+                  },
+                  "children": [
+                    {}
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "generated-layout-container-field-on-leaf",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[0] sets a flex container field on a node with text or shape content"
+    ],
+    "error": "source g1 has an invalid layout: root.children[0] sets a flex container field on a node with text or shape content",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "text": {
+                    "content": {
+                      "mode": "constant",
+                      "value": "a"
+                    },
+                    "font_size": {
+                      "mode": "constant",
+                      "value": 0.05
+                    }
+                  },
+                  "gap": {
+                    "mode": "constant",
+                    "value": 0.01
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "generated-layout-too-many-nodes",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[255] has more nodes than a layout may hold"
+    ],
+    "error": "source g1 has an invalid layout: root.children[255] has more nodes than a layout may hold",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "$repeat": 256,
+                  "item": {}
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "generated-layout-too-deep",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[0].children[0].children[0].children[0].children[0].children[0].children[0].children[0].children[0].children[0].children[0].children[0].children[0].children[0].children[0].children[0] nests nodes too deeply"
+    ],
+    "error": "source g1 has an invalid layout: root.children[0].children[0].children[0].children[0].children[0].children[0].children[0].children[0].children[0].children[0].children[0].children[0].children[0].children[0].children[0].children[0] nests nodes too deeply",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "children": [
+                            {
+                              "children": [
+                                {
+                                  "children": [
+                                    {
+                                      "children": [
+                                        {
+                                          "children": [
+                                            {
+                                              "children": [
+                                                {
+                                                  "children": [
+                                                    {
+                                                      "children": [
+                                                        {
+                                                          "children": [
+                                                            {
+                                                              "children": [
+                                                                {
+                                                                  "children": [
+                                                                    {
+                                                                      "children": [
+                                                                        {
+                                                                          "children": [
+                                                                            {}
+                                                                          ]
+                                                                        }
+                                                                      ]
+                                                                    }
+                                                                  ]
+                                                                }
+                                                              ]
+                                                            }
+                                                          ]
+                                                        }
+                                                      ]
+                                                    }
+                                                  ]
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "generated-layout-too-many-texts",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[64] has more text nodes than a layout may hold"
+    ],
+    "error": "source g1 has an invalid layout: root.children[64] has more text nodes than a layout may hold",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "$repeat": 65,
+                  "item": {
+                    "text": {
+                      "content": {
+                        "mode": "constant",
+                        "value": "t{i}"
+                      },
+                      "font_size": {
+                        "mode": "constant",
+                        "value": 0.05
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "generated-layout-too-many-isolated",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[16] has more nodes with opacity, transforms, or hidden overflow than a layout may hold"
+    ],
+    "error": "source g1 has an invalid layout: root.children[16] has more nodes with opacity, transforms, or hidden overflow than a layout may hold",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "$repeat": 17,
+                  "item": {
+                    "opacity": {
+                      "mode": "constant",
+                      "value": 0.5
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "generated-layout-padding-negative",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[0].padding has a value out of range"
+    ],
+    "error": "source g1 has an invalid layout: root.children[0].padding has a value out of range",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "padding": {
+                    "mode": "constant",
+                    "value": {
+                      "left": -0.01
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "generated-layout-opacity-keyframes-out-of-order",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[0].opacity has invalid keyframes"
+    ],
+    "error": "source g1 has an invalid layout: root.children[0].opacity has invalid keyframes",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "opacity": {
+                    "mode": "keyframes",
+                    "keyframes": [
+                      {
+                        "time": 1000,
+                        "value": 0,
+                        "interpolation": {
+                          "type": "linear"
+                        }
+                      },
+                      {
+                        "time": 0,
+                        "value": 1,
+                        "interpolation": {
+                          "type": "linear"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "generated-layout-length-keyframes-differ",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[0].width has size keyframes that differ in kind"
+    ],
+    "error": "source g1 has an invalid layout: root.children[0].width has size keyframes that differ in kind",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "width": {
+                    "mode": "keyframes",
+                    "keyframes": [
+                      {
+                        "time": 0,
+                        "value": {
+                          "type": "length",
+                          "value": 0.1
+                        },
+                        "interpolation": {
+                          "type": "linear"
+                        }
+                      },
+                      {
+                        "time": 1000,
+                        "value": {
+                          "type": "percent",
+                          "value": 50
+                        },
+                        "interpolation": {
+                          "type": "linear"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "generated-layout-paint-keyframes-differ",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[0].background has paint keyframes that differ in kind or stops"
+    ],
+    "error": "source g1 has an invalid layout: root.children[0].background has paint keyframes that differ in kind or stops",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "background": {
+                    "mode": "keyframes",
+                    "keyframes": [
+                      {
+                        "time": 0,
+                        "value": {
+                          "type": "solid",
+                          "color": {
+                            "red": 1,
+                            "green": 0,
+                            "blue": 0,
+                            "alpha": 1
+                          }
+                        },
+                        "interpolation": {
+                          "type": "linear"
+                        }
+                      },
+                      {
+                        "time": 1000,
+                        "value": {
+                          "type": "linear_gradient",
+                          "start": {
+                            "x": 0,
+                            "y": 0
+                          },
+                          "end": {
+                            "x": 1,
+                            "y": 1
+                          },
+                          "stops": [
+                            {
+                              "offset": 0,
+                              "color": {
+                                "red": 1,
+                                "green": 0,
+                                "blue": 0,
+                                "alpha": 1
+                              }
+                            },
+                            {
+                              "offset": 1,
+                              "color": {
+                                "red": 0,
+                                "green": 0,
+                                "blue": 1,
+                                "alpha": 1
+                              }
+                            }
+                          ]
+                        },
+                        "interpolation": {
+                          "type": "linear"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "generated-layout-text-keyframes-interpolate",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[0].text.content has text keyframes that do not hold"
+    ],
+    "error": "source g1 has an invalid layout: root.children[0].text.content has text keyframes that do not hold",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "text": {
+                    "content": {
+                      "mode": "keyframes",
+                      "keyframes": [
+                        {
+                          "time": 0,
+                          "value": "a",
+                          "interpolation": {
+                            "type": "linear"
+                          }
+                        },
+                        {
+                          "time": 1000,
+                          "value": "b",
+                          "interpolation": {
+                            "type": "hold"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "generated-layout-font-size-out-of-range",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[0].text.font_size has a value out of range"
+    ],
+    "error": "source g1 has an invalid layout: root.children[0].text.font_size has a value out of range",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "text": {
+                    "content": {
+                      "mode": "constant",
+                      "value": "a"
+                    },
+                    "font_size": {
+                      "mode": "constant",
+                      "value": 1.5
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "generated-layout-aspect-ratio-zero",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[0].aspect_ratio has a value out of range"
+    ],
+    "error": "source g1 has an invalid layout: root.children[0].aspect_ratio has a value out of range",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "aspect_ratio": 0.0
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "generated-layout-inset-percent-keyframes-differ",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[0].inset.top has size keyframes that differ in kind"
+    ],
+    "error": "source g1 has an invalid layout: root.children[0].inset.top has size keyframes that differ in kind",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "position": "absolute",
+                  "inset": {
+                    "top": {
+                      "mode": "keyframes",
+                      "keyframes": [
+                        {
+                          "time": 0,
+                          "value": {
+                            "type": "percent",
+                            "value": 10
+                          },
+                          "interpolation": {
+                            "type": "linear"
+                          }
+                        },
+                        {
+                          "time": 1000,
+                          "value": {
+                            "type": "length",
+                            "value": 0.1
+                          },
+                          "interpolation": {
+                            "type": "linear"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "generated-layout-shape-item-out-of-range",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid shape: root.children[0].shape.items[0].size has a value out of range"
+    ],
+    "error": "source g1 has an invalid shape: root.children[0].shape.items[0].size has a value out of range",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "shape": {
+                    "items": [
+                      {
+                        "type": "rectangle",
+                        "center": {
+                          "mode": "constant",
+                          "value": {
+                            "x": 0.5,
+                            "y": 0.5
+                          }
+                        },
+                        "size": {
+                          "mode": "constant",
+                          "value": {
+                            "x": -1,
+                            "y": 1
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "composition-layout-node-root-item-field",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "node n of composition g has an invalid layout: root sets a size, margin, position, or flex item field on the root"
+    ],
+    "error": "composition g node n has an invalid layout: root sets a size, margin, position, or flex item field on the root",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "width": {
+                    "mode": "constant",
+                    "value": {
+                      "type": "length",
+                      "value": 0.1
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "composition": {
+                  "id": "g"
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "compositions": [
+        {
+          "id": "g",
+          "nodes": [
+            {
+              "id": "n",
+              "op": {
+                "type": "generator",
+                "generator": {
+                  "type": "layout",
+                  "root": {
+                    "margin": {
+                      "mode": "constant",
+                      "value": {
+                        "left": 0.1
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "output": "n"
+        }
+      ]
+    }
+  },
+  {
+    "name": "generated-layout-unknown-css-field",
+    "valid": false,
+    "rejected_by": "schema",
+    "problems": [
+      "project.sources[1].generator.root has unknown field \"display\""
+    ],
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "display": "grid"
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "generated-layout-unknown-keyword",
+    "valid": false,
+    "rejected_by": "schema",
+    "problems": [
+      "project.sources[1].generator.root.justify_content must be one of \"start\", \"center\", \"end\", \"space_between\", \"space_around\", \"space_evenly\""
+    ],
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "justify_content": "flex_start"
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
   }
 ]

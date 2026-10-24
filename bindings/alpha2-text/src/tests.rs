@@ -1807,3 +1807,134 @@ fn a_measure_refuses_what_a_raster_refuses() {
         Err(TextRasterError::InvalidRequest)
     );
 }
+
+#[test]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn shaped_lines_break_as_the_rasterizer_breaks_them() {
+    let mut rasterizer = color_stack();
+    rasterizer.add_font(hangul()).expect("hangul");
+    let cases = [
+        request("Qgo&@ jy", 64.0),
+        TextRasterRequest {
+            max_width: 300.0,
+            align: TextAlign::Center,
+            ..request("Wrapped onto several lines of text", 48.0)
+        },
+        TextRasterRequest {
+            max_width: 400.0,
+            ..request(
+                "\u{5e9}\u{5dc}\u{5d5}\u{5dd} abc \u{5e9}\u{5dc}\u{5d5}\u{5dd}",
+                40.0,
+            )
+        },
+        TextRasterRequest {
+            max_width: 120.0,
+            ..request(
+                "\u{d55c}\u{ae00} text \u{d55c}\u{ae00}\u{d55c}\u{ae00}",
+                50.0,
+            )
+        },
+        request("a\u{2764}\u{fe0f}b", 60.0),
+        request("blank lines\n\nkept\n\n\n", 30.0),
+        TextRasterRequest {
+            line_height: 0.6,
+            max_width: 90.0,
+            ..request("tight lines wrap here", 30.0)
+        },
+        TextRasterRequest {
+            max_width: 40.0,
+            ..request("Supercalifragilistic", 30.0)
+        },
+    ];
+    for request in cases {
+        let measure = rasterizer.measure(&request).expect("measures");
+        let lines = rasterizer
+            .shape(&request)
+            .expect("shapes")
+            .lines_at(request.max_width);
+        assert_eq!(lines.line_count, measure.line_count, "{:?}", request.text);
+        assert_eq!(
+            lines.height.max(1.0).ceil() as u32,
+            measure.box_height,
+            "{:?}",
+            request.text
+        );
+    }
+}
+
+#[test]
+fn min_content_is_the_widest_run_between_opportunities() {
+    let clusters = |text: &str| {
+        let characters = text.chars().collect::<Vec<_>>();
+        characters
+            .iter()
+            .enumerate()
+            .map(|(index, &character)| Cluster {
+                glyphs: index..index + 1,
+                start: index,
+                width: if character == 'W' { 25.0 } else { 10.0 },
+                hangs: character == ' ',
+                break_before: index > 0 && characters[index - 1] == ' ',
+            })
+            .collect::<Vec<_>>()
+    };
+    let shaped = |paragraphs: &[&str]| ShapedText {
+        paragraphs: paragraphs.iter().map(|text| clusters(text)).collect(),
+        font_size: 10.0,
+        line_advance: 12.0,
+    };
+    let text = shaped(&["I WW  "]);
+    // The run `WW`, not one `W` the breaker could fall back to; trailing spaces hang.
+    assert_eq!(text.min_content_width(), 50.0);
+    assert_eq!(text.max_content_width(), 70.0);
+    assert_eq!(text.lines_at(0.0).line_count, 1);
+    assert_eq!(text.lines_at(70.0).line_count, 1);
+    assert_eq!(text.lines_at(50.0).line_count, 2);
+    assert_eq!(text.lines_at(50.0).widest, 50.0);
+    // Each paragraph is a line of its own; the widest sets max-content.
+    let text = shaped(&["aa", "aaaa a", ""]);
+    assert_eq!(text.max_content_width(), 60.0);
+    assert_eq!(text.min_content_width(), 40.0);
+    let lines = text.lines_at(0.0);
+    // The blank last paragraph takes no room, as in the rasterizer.
+    assert_eq!(lines.line_count, 2);
+    assert_eq!(lines.height, 24.0);
+}
+
+#[test]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn text_at_its_max_content_width_never_wraps() {
+    let rasterizer = fixture();
+    for text in [
+        "Ada Lovelace",
+        "Wrote the first published algorithm for a machine, 1843",
+        "a b",
+        "two\nparagraphs here",
+    ] {
+        let request = request(text, 37.3);
+        let shaped = rasterizer.shape(&request).expect("shapes");
+        let unwrapped = shaped.lines_at(0.0);
+        let at_max = shaped.lines_at(shaped.max_content_width() + 1.0 / 64.0);
+        assert_eq!(at_max.line_count, unwrapped.line_count, "{text}");
+        let measure = rasterizer.measure(&request).expect("measures");
+        assert_eq!(
+            shaped.max_content_width().max(1.0).ceil() as u32,
+            measure.box_width,
+            "{text}"
+        );
+        // At min-content the text breaks at every opportunity and splits no word.
+        let at_min = shaped.lines_at(shaped.min_content_width() + 1.0 / 64.0);
+        assert!(
+            at_min.widest <= shaped.min_content_width() + 1.0 / 64.0,
+            "{text}"
+        );
+    }
+    assert_eq!(
+        TextRasterizer::empty().shape(&request("a", 10.0)).err(),
+        Some(TextRasterError::NoFonts)
+    );
+    assert_eq!(
+        rasterizer.shape(&request("a", f32::NAN)).err(),
+        Some(TextRasterError::InvalidRequest)
+    );
+}

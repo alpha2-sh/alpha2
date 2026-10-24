@@ -17,6 +17,7 @@ mod error_code;
 mod exporter;
 mod frame;
 mod generated;
+mod layout;
 mod passthrough;
 mod playback;
 mod player;
@@ -44,6 +45,7 @@ pub use frame::{
     FrameGraph, FrameNv12Render, FrameProvider, FrameRender, FrameRenderer, FrameYuv420pRender,
     RenderReport,
 };
+pub use layout::{LAYOUT_WRAP_SLACK, LayoutBounds, NodeBounds, PreparedLayout, measure_layout};
 pub use passthrough::{PassthroughAudio, PassthroughPlan, PassthroughSegment, passthrough_plan};
 pub use playback::{ClockStep, PlaybackClock, PlaybackPolicy};
 pub use player::{PlaybackFrame, Player};
@@ -51,6 +53,6 @@ pub use policy::{MissingFramePolicy, color_policy};
 pub use quality::QualityProfile;
 pub use snapshot::EngineProject;
 pub use text::{
-    CanvasRect, FramesWithText, TextBounds, TextError, TextTexture, TextTextures, measure_text,
-    text_key,
+    CanvasRect, FramesWithText, TextBounds, TextError, TextTexture, TextTextures, layout_key,
+    measure_text, text_key,
 };

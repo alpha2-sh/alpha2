@@ -15,6 +15,8 @@ alpha2-extensions = { path = "../extensions" }
 alpha2-geometry = { path = "../crates/alpha2-geometry" }
 alpha2-media = { path = "../crates/alpha2-media" }
 alpha2-model = { path = "../crates/alpha2-model" }
+alpha2-render = { path = "../crates/alpha2-render" }
+alpha2-text = { path = "../bindings/alpha2-text" }
 alpha2-time = { path = "../crates/alpha2-time" }
 libfuzzer-sys = "0.4"
 serde_json = "1.0.149"
@@ -96,6 +98,13 @@ members = ["."]
 [[bin]]
 name = "vector_raster"
 path = "fuzz_targets/vector_raster.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "layout_resolve"
+path = "fuzz_targets/layout_resolve.rs"
 test = false
 doc = false
 bench = false

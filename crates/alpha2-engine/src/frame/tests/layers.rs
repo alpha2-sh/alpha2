@@ -43,7 +43,7 @@ fn the_project_blend_space_decides_how_a_frame_blends() {
         matte: None,
         is_matte: false,
         generator: None,
-        shapes: None,
+        plan: None,
         source_composition: None,
     };
     let render = |blend_space| {
@@ -111,7 +111,7 @@ fn a_track_matte_keeps_its_clip_where_the_matte_says_and_is_never_drawn() {
             matte,
             is_matte,
             generator: None,
-            shapes: None,
+            plan: None,
             source_composition: None,
         };
         let target = clip(
@@ -214,7 +214,7 @@ fn clip_masks_are_applied_after_its_effects_in_source_space() {
             matte: None,
             is_matte: false,
             generator: None,
-            shapes: None,
+            plan: None,
             source_composition: None,
         }],
         audio: Vec::new(),
@@ -297,7 +297,7 @@ fn stacked_clips_keep_their_own_source_across_repeated_frames() {
                 matte: None,
                 is_matte: false,
                 generator: None,
-                shapes: None,
+                plan: None,
                 source_composition: None,
             })
             .collect(),
@@ -386,7 +386,7 @@ fn a_transformed_top_layer_never_samples_another_track_across_many_frames() {
         matte: None,
         is_matte: false,
         generator: None,
-        shapes: None,
+        plan: None,
         source_composition: None,
     };
     let faint = |opacity: f32| EvaluatedVisual {
@@ -498,7 +498,7 @@ fn two_effected_clips_do_not_share_an_intermediate_texture() {
         matte: None,
         is_matte: false,
         generator: None,
-        shapes: None,
+        plan: None,
         source_composition: None,
     };
     let faint = |opacity: f32| EvaluatedVisual {
@@ -587,7 +587,7 @@ fn stacked_effect_frame(sources: &[SourceId]) -> FrameDesc<'static> {
         matte: None,
         is_matte: false,
         generator: None,
-        shapes: None,
+        plan: None,
         source_composition: None,
     };
     FrameDesc {
@@ -754,7 +754,7 @@ fn a_matte_is_drawn_once_where_it_is_named_and_mask_and_matte_keep_their_cache_k
         }),
         is_matte,
         generator: None,
-        shapes: None,
+        plan: None,
         source_composition: None,
     };
     let frame = |time: i64, visual: Vec<ActiveClip<'static>>| FrameDesc {

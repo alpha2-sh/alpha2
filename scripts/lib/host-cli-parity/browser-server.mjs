@@ -27,6 +27,10 @@ export async function browserParity(
       complexPage("/tests/cases/host-parity-complex-project.json"),
     "/shapes": () =>
       complexPage("/tests/cases/host-parity-shapes-project.json"),
+    "/layout": () =>
+      complexPage("/tests/cases/host-parity-layout-project.json", [
+        "/tests/fonts/Alpha2Fixture.ttf",
+      ]),
     "/effects": () =>
       complexPage("/tests/cases/host-parity-effects-project.json"),
     "/hdr": hdrPage,

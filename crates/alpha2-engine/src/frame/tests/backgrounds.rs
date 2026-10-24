@@ -16,7 +16,7 @@ fn white_clip(opacity: f32, scale: Vec2) -> ActiveClip<'static> {
         matte: None,
         is_matte: false,
         generator: None,
-        shapes: None,
+        plan: None,
         source_composition: None,
     }
 }
@@ -199,7 +199,7 @@ fn an_odd_canvas_previews_even_though_it_cannot_be_exported() {
             matte: None,
             is_matte: false,
             generator: None,
-            shapes: None,
+            plan: None,
             source_composition: None,
         }],
         audio: Vec::new(),

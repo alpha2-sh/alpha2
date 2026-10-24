@@ -20,6 +20,7 @@ import {
 import {
   bitmapUploads,
   layers,
+  layout,
   namedInputs,
   shapes,
   smoke,
@@ -117,6 +118,8 @@ export const cases = {
   "webgl2-named-inputs": () => namedInputs(true),
   "webgpu-shapes": () => shapes(false),
   "webgl2-shapes": () => shapes(true),
+  "webgpu-layout": () => layout(false),
+  "webgl2-layout": () => layout(true),
   "webgl2-effect-texture-budget": webgl2EffectTextureBudget,
   "webgl2-without-float-color-buffers": webgl2WithoutFloatColorBuffers,
   "webgpu-video-frame-rejected": () => transparentEdges(false, true),

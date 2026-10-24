@@ -15,6 +15,7 @@ export async function browserChecks(
     nativeFrame,
     complexFrames,
     shapesFrames,
+    layoutFrames,
     effectsFrames,
     hdrFrames,
     orientationFrames,
@@ -96,6 +97,35 @@ export async function browserChecks(
   );
   console.log(
     "verified wasm/native parity on every frame of the shapes project",
+  );
+  // Layouts: the same layout from the same font on both sides; text, fills and composites held to
+  // the shapes project's bounds.
+  const layouts = await browserParity(chrome, nativeFrame, "/layout", {
+    "/native.y4m": layoutFrames,
+  });
+  console.log(`layout project parity metrics: ${JSON.stringify(layouts)}`);
+  assert.equal(layouts.frames, 36, "every frame of the layout project");
+  const layoutPeak = peakExcess({
+    max: Math.max(layouts.y.max, layouts.u.max, layouts.v.max),
+    outliers: layouts.outliers,
+  });
+  assert.equal(layoutPeak, null, `layout project: ${layoutPeak}`);
+  for (const plane of ["y", "u", "v"]) {
+    assert.ok(
+      layouts[plane].mean <= 0.25,
+      `layout ${plane} mean code error ${layouts[plane].mean} exceeds 0.25`,
+    );
+  }
+  const layoutSamples = layouts.histogram.reduce(
+    (sum, count) => sum + count,
+    0,
+  );
+  assert.ok(
+    layouts.histogram[2] + layouts.histogram[3] <= layoutSamples / 1_000,
+    `layout: more than 1 in 1000 samples are over a code apart: ${JSON.stringify(layouts.histogram)}`,
+  );
+  console.log(
+    "verified wasm/native parity on every frame of the layout project",
   );
   const effects = await browserParity(chrome, nativeFrame, "/effects", {
     "/native.y4m": effectsFrames,

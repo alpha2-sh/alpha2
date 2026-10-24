@@ -172,6 +172,69 @@ pub(crate) fn measure_json(
     .to_string())
 }
 
+/// Where each node of the layout generator `generator_json`, as a project
+/// holds it, lies on a `width` by `height` picture at picture time `ticks`
+/// ([`alpha2_engine::measure_layout`]), as the JSON
+/// `WasmTextMeasurer.measureLayout` returns.
+pub(crate) fn measure_layout_json(
+    rasterizer: &TextRasterizer,
+    generator_json: &str,
+    width: u32,
+    height: u32,
+    ticks: f64,
+) -> Result<String, MeasureError> {
+    let generator: alpha2_model::Generator = serde_json::from_str(generator_json)
+        .map_err(|error| MeasureError::Input(format!("invalid layout generator: {error}")))?;
+    if let Err(issue) = generator.validate() {
+        return Err(MeasureError::Input(match issue {
+            alpha2_model::GeneratorIssue::Layout(issue) => {
+                format!("the layout generator {} {}", issue.at, issue.problem)
+            }
+            alpha2_model::GeneratorIssue::Shape(issue) => {
+                format!(
+                    "the layout generator's shape {} {}",
+                    issue.at, issue.problem
+                )
+            }
+            alpha2_model::GeneratorIssue::Invalid => {
+                "the layout generator has a field out of range".into()
+            }
+        }));
+    }
+    let alpha2_model::Generator::Layout { root } = &generator else {
+        return Err(MeasureError::Input(
+            "only a layout generator lays out boxes".into(),
+        ));
+    };
+    let size = alpha2_render::RenderSize::new(width, height)
+        .map_err(|error| MeasureError::Input(format!("invalid canvas size: {error}")))?;
+    let time = crate::geometry::time(ticks).map_err(MeasureError::Input)?;
+    let bounds =
+        alpha2_engine::measure_layout(rasterizer, root, time, size).map_err(MeasureError::Text)?;
+    let rect = |rect: alpha2_engine::CanvasRect| {
+        serde_json::json!({
+            "left": rect.left,
+            "top": rect.top,
+            "right": rect.right,
+            "bottom": rect.bottom,
+        })
+    };
+    let nodes = bounds
+        .nodes
+        .into_iter()
+        .map(|node| {
+            serde_json::json!({
+                "at": node.at,
+                "border": rect(node.border),
+                "content": rect(node.content),
+                "overflow": node.overflow,
+                "lineCount": node.line_count,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({ "nodes": nodes }).to_string())
+}
+
 pub(crate) fn font(family: String, bytes: Vec<u8>, face_index: u32) -> TextFont {
     TextFont {
         family,
@@ -186,7 +249,7 @@ mod web {
 
     use super::{
         MeasureError, TextRasterResult, TextRasterizer, TextRequestWire, descriptor_json, font,
-        measure_json,
+        measure_json, measure_layout_json,
     };
     use wasm_bindgen::prelude::*;
     use web_sys::js_sys::Uint8Array;
@@ -364,6 +427,36 @@ mod web {
             measure_json(&self.inner, generator_json, width, height).map_err(|error| match error {
                 MeasureError::Input(message) => invalid_input(message),
                 MeasureError::Text(error) => typed_error(&error),
+            })
+        }
+
+        /// Where each node of the layout generator `generator_json`
+        /// (`{ "type": "layout", "root" }`, as a project holds it) lies on a
+        /// `width` by `height` picture at picture time `time` (ticks), laid
+        /// out with these fonts as a frame lays it out, as JSON `{ nodes }`:
+        /// each node in preorder as `{ at, border, content, overflow,
+        /// lineCount }`, its boxes `{ left, top, right, bottom }` in fractions
+        /// of the picture, before its clip's transform and node visuals.
+        /// `lineCount` is `null` for a node without text. Measure at the size
+        /// the picture is drawn at.
+        ///
+        /// # Errors
+        /// Rejects JSON that is no valid layout generator, an empty canvas, a
+        /// time that is not whole ticks, and a measurer without fonts for a
+        /// layout with text.
+        #[wasm_bindgen(js_name = measureLayout)]
+        pub fn measure_layout(
+            &self,
+            generator_json: &str,
+            width: u32,
+            height: u32,
+            time: f64,
+        ) -> Result<String, JsValue> {
+            measure_layout_json(&self.inner, generator_json, width, height, time).map_err(|error| {
+                match error {
+                    MeasureError::Input(message) => invalid_input(message),
+                    MeasureError::Text(error) => typed_error(&error),
+                }
             })
         }
     }

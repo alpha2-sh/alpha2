@@ -7,7 +7,7 @@
 
 use alpha2_eval::{
     ActiveClip, ActiveComposition, ActiveEffect, ActiveTransition, EvaluatedVisual, FrameDesc,
-    ShapesPlan, StepOp, sample_scalar, sample_visual,
+    GeneratorPlan, ShapesPlan, StepOp, sample_scalar, sample_visual,
 };
 use alpha2_media::{SourceId, YuvEncoding};
 use alpha2_model::{
@@ -24,6 +24,7 @@ use alpha2_render::{
 use alpha2_time::MediaTime;
 
 use crate::TextTexture;
+use crate::layout::draw::LaidOut;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use web_time::Instant;
@@ -75,6 +76,14 @@ pub trait FrameProvider {
     /// holds none: a frame that shows text then fails with
     /// [`RenderError::MissingText`].
     fn text(&self, _key: u64) -> Option<TextTexture<'_>> {
+        None
+    }
+
+    /// Returns the layout [`crate::layout_key`] names, resolved and drawn
+    /// by the host's [`crate::TextTextures`], whose texts [`Self::text`]
+    /// lends. The default holds none: a frame that shows a layout then fails
+    /// with [`RenderError::MissingText`].
+    fn layout(&self, _key: u128) -> Option<std::sync::Arc<crate::PreparedLayout>> {
         None
     }
 }
@@ -511,12 +520,14 @@ impl<'t> PlacedText<'t> {
 }
 
 /// What one composition step draws from outside the graph.
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 enum StepFrame<'t> {
     /// A media step's host-supplied frame.
     Media(Frame<'t>),
     /// A text generator step's text.
     Text(PlacedText<'t>),
+    /// A layout generator step's prepared layout.
+    Layout(LaidOut<'t>),
 }
 
 /// The host-supplied frames one visual clip draws.
@@ -532,6 +543,8 @@ struct ClipFrames<'t> {
     source: Option<Frame<'t>>,
     /// The text of the clip's text generator source, once prepared.
     text: Option<PlacedText<'t>>,
+    /// The clip's layout generator source, once prepared.
+    layout: Option<LaidOut<'t>>,
     /// Each media step's frame and each text generator step's text, by step
     /// index; `None` for other steps.
     media: Vec<Option<StepFrame<'t>>>,
@@ -594,14 +607,19 @@ fn available_textures<'frame, 'eval, 'texture>(
     (report, available)
 }
 
-/// Each available clip's text generators with their prepared text, the
-/// clip's own source and its compositions' steps. Text `frames` does not
-/// hold is left out, for the graph to report.
+/// Each available clip's text and layout generators with their prepared
+/// text and layouts, the clip's own source and its compositions' steps. What
+/// `frames` does not hold is left out, for the graph to report.
 fn attach_texts<'t>(
     available: &mut [(&ActiveClip<'_>, ClipFrames<'t>)],
     frames: &'t dyn FrameProvider,
     size: RenderSize,
 ) {
+    let laid_out = |plan: Option<&GeneratorPlan>, time: MediaTime| {
+        let plan = plan?.layout()?;
+        let layout = frames.layout(crate::layout_key(plan.evaluate(time).key, size))?;
+        LaidOut::attach(layout, frames)
+    };
     let lookup = |generator: &Generator| match generator {
         Generator::Text { text, style } => {
             frames
@@ -615,6 +633,7 @@ fn attach_texts<'t>(
     };
     for (clip, textures) in available {
         textures.text = clip.generator.and_then(lookup);
+        textures.layout = laid_out(clip.plan, clip.source_time);
         for (composition, media) in [
             (clip.composition, &mut textures.media),
             (clip.source_composition, &mut textures.source_media),
@@ -623,8 +642,23 @@ fn attach_texts<'t>(
                 continue;
             };
             for (step, slot) in composition.plan().steps.iter().zip(media.iter_mut()) {
-                if let StepOp::Generator { generator, .. } = &step.op {
-                    *slot = lookup(generator).map(StepFrame::Text);
+                match &step.op {
+                    StepOp::Generator {
+                        generator: Generator::Layout { .. },
+                        start,
+                        plan,
+                    } => {
+                        let time = MediaTime(
+                            step.time(composition.time())
+                                .ticks()
+                                .saturating_add(start.ticks()),
+                        );
+                        *slot = laid_out(plan.as_deref(), time).map(StepFrame::Layout);
+                    }
+                    StepOp::Generator { generator, .. } => {
+                        *slot = lookup(generator).map(StepFrame::Text);
+                    }
+                    _ => {}
                 }
             }
         }
@@ -955,8 +989,16 @@ fn clip_picture<'a>(
         (Some(Generator::Text { .. }), _) => {
             textures.text.ok_or(RenderError::MissingText)?.add_to(graph)
         }
+        (Some(Generator::Layout { .. }), _) => textures
+            .layout
+            .as_ref()
+            .ok_or(RenderError::MissingText)?
+            .add_to(graph),
         (Some(Generator::Shapes { .. }), _) => {
-            let plan = clip.shapes.ok_or(RenderError::InvalidGraph)?;
+            let plan = clip
+                .plan
+                .and_then(GeneratorPlan::shapes)
+                .ok_or(RenderError::InvalidGraph)?;
             Ok(shapes_node(graph, plan, clip.source_time))
         }
         (Some(generator), _) => Ok(generator_node(graph, generator, runtime)),
@@ -1023,15 +1065,22 @@ fn plan_node<'a>(
                     *picture.insert(clip_picture(renderer, graph, clip, textures, runtime)?)
                 }
             }
-            StepOp::Media { .. } => match media.get(index).copied().flatten() {
+            StepOp::Media { .. } => match media.get(index).and_then(Option::as_ref) {
                 Some(StepFrame::Media(frame)) => frame.add_to(graph),
                 _ => return Err(RenderError::InvalidGraph),
             },
             StepOp::Generator {
                 generator: Generator::Text { .. },
                 ..
-            } => match media.get(index).copied().flatten() {
+            } => match media.get(index).and_then(Option::as_ref) {
                 Some(StepFrame::Text(text)) => text.add_to(graph)?,
+                _ => return Err(RenderError::MissingText),
+            },
+            StepOp::Generator {
+                generator: Generator::Layout { .. },
+                ..
+            } => match media.get(index).and_then(Option::as_ref) {
+                Some(StepFrame::Layout(layout)) => layout.add_to(graph)?,
                 _ => return Err(RenderError::MissingText),
             },
             op => step_node(renderer, graph, op, &built, at, step_runtime)?,
@@ -1064,9 +1113,12 @@ fn step_node<'a>(
         StepOp::Generator {
             generator: Generator::Shapes { .. },
             start,
-            shapes,
+            plan,
         } => {
-            let plan = shapes.as_deref().ok_or(RenderError::InvalidGraph)?;
+            let plan = plan
+                .as_deref()
+                .and_then(GeneratorPlan::shapes)
+                .ok_or(RenderError::InvalidGraph)?;
             let at = MediaTime(time.ticks().saturating_add(start.ticks()));
             shapes_node(graph, plan, at)
         }
@@ -1184,9 +1236,8 @@ fn mask_node(
     if shown.is_empty() {
         return Ok(source);
     }
-    let mut inputs = EffectInputs::new();
-    let mut params = EffectParams::with_capacity(shown.len() * 2);
-    for (mask, names) in shown.iter().zip(MASK_COMBINE_NAMES) {
+    let mut coverages = Vec::with_capacity(shown.len());
+    for mask in shown {
         let outline = alpha2_eval::evaluate_geometry(&mask.shape, time, aspect);
         let items = [
             alpha2_geometry::EvaluatedItem::Geometry(outline),
@@ -1204,11 +1255,36 @@ fn mask_node(
         let coverage = graph
             .add_gaussian_pixels(coverage, sigma, timeless(runtime))
             .map_err(GraphError::into_render_error)?;
+        coverages.push((coverage, mask.invert, mask.mode));
+    }
+    coverage_mask(graph, source, &coverages)
+}
+
+/// `source` kept by `coverages`, pictures on the same canvas whose alpha
+/// says where: each inverted or not, combined in order by its mode, in one
+/// pass. At most [`MAX_SHAPE_MASKS`].
+pub(crate) fn coverage_mask(
+    graph: &mut RenderGraph<'_>,
+    source: RenderNodeId,
+    coverages: &[(RenderNodeId, bool, MaskMode)],
+) -> Result<RenderNodeId, RenderError> {
+    if coverages.is_empty() || coverages.len() > MAX_SHAPE_MASKS {
+        return Err(RenderError::InvalidGraph);
+    }
+    let size = graph.size();
+    #[allow(clippy::cast_precision_loss)]
+    let runtime = EffectRuntime {
+        ratio: size.width as f32 / size.height as f32,
+        ..EffectRuntime::default()
+    };
+    let mut inputs = EffectInputs::new();
+    let mut params = EffectParams::with_capacity(coverages.len() * 2);
+    for (&(coverage, invert, mode), names) in coverages.iter().zip(MASK_COMBINE_NAMES) {
         inputs.insert(names.input, coverage);
-        params.insert(names.invert, ParamValue::Bool(mask.invert));
+        params.insert(names.invert, ParamValue::Bool(invert));
         params.insert(
             names.mode,
-            ParamValue::Enum(match mask.mode {
+            ParamValue::Enum(match mode {
                 MaskMode::Add => 0,
                 MaskMode::Subtract => 1,
                 MaskMode::Intersect => 2,
@@ -1217,12 +1293,12 @@ fn mask_node(
     }
     graph
         .add_effect_with_inputs(
-            EffectId::from_static(MASK_COMBINE_EFFECT_IDS[shown.len() - 1], 1),
+            EffectId::from_static(MASK_COMBINE_EFFECT_IDS[coverages.len() - 1], 1),
             source,
             inputs,
             params,
             EffectResources::new(),
-            timeless(runtime),
+            runtime,
         )
         .map_err(GraphError::into_render_error)
 }

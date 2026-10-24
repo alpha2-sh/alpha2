@@ -39,7 +39,8 @@ pub use scene::{IRect, PaintKind, ScenePaint, SceneStop, VectorOp, VectorScene};
 pub use stroke::{StrokeStyle, stroke_outline};
 pub use tree::{
     EvaluatedGeometry, EvaluatedItem, EvaluatedPath, EvaluatedSubpath, EvaluatedTransform,
-    EvaluatedVertex, ItemPath, build_scene, build_scene_with_items, item_paths, scene_paint,
+    EvaluatedVertex, ItemPath, build_scene, build_scene_in, build_scene_with_items, item_paths,
+    scene_paint,
 };
 
 /// The size, in device pixels, of the picture a content tree is drawn on:

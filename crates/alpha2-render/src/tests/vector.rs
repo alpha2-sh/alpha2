@@ -724,3 +724,92 @@ fn vector_pictures_match_their_golden() {
     };
     assert_rgba8_golden(name, size, &pixels, 2);
 }
+
+#[test]
+fn a_paint_in_a_box_spans_the_box_not_the_canvas() {
+    use alpha2_geometry::kurbo::Affine;
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let size = RenderSize::new(128, 64).expect("size");
+    let canvas = alpha2_geometry::IRect::new(0, 0, 128, 64);
+    // A box 64 x 32 pixels at (40, 16): the paint's points are fractions of it.
+    let boxed = |paint: Paint| {
+        let path = alpha2_geometry::shapes::rectangle(
+            Point::new(72.0, 32.0),
+            Vec2::new(64.0, 32.0),
+            0.0,
+            0.0,
+        );
+        let bounds = alpha2_geometry::IRect::covering(&path, canvas);
+        VectorScene::new(
+            vec![alpha2_geometry::VectorOp::Fill {
+                path: Arc::new(path),
+                rule: FillRule::Nonzero,
+                paint: alpha2_geometry::scene_paint(
+                    &paint,
+                    Affine::translate((-40.0, -16.0)),
+                    [64.0, 32.0],
+                ),
+                opacity: 1.0,
+                bounds,
+            }],
+            128,
+            64,
+        )
+    };
+    let stops = vec![
+        GradientStop {
+            offset: 0.0,
+            color: Rgba::new(0.0, 0.0, 0.0, 1.0),
+        },
+        GradientStop {
+            offset: 1.0,
+            color: Rgba::new(1.0, 1.0, 1.0, 1.0),
+        },
+    ];
+    let linear = Paint::LinearGradient {
+        start: alpha2_model::Vec2::new(0.0, 0.5),
+        end: alpha2_model::Vec2::new(1.0, 0.5),
+        stops: stops.clone(),
+        spread: Spread::Pad,
+    };
+    // Gradients mix in linear light: the sRGB byte of the fraction `t` of white.
+    let expected = |t: f32| {
+        let t = t.clamp(0.0, 1.0);
+        let encoded = if t <= 0.003_130_8 {
+            12.92 * t
+        } else {
+            1.055 * t.powf(1.0 / 2.4) - 0.055
+        };
+        encoded * 255.0
+    };
+    let near = |actual: u8, t: f32| {
+        assert!(
+            (f32::from(actual) - expected(t)).abs() <= 4.0,
+            "{actual} for {t}"
+        );
+    };
+    let rgba = draw_scene(&renderer, size, boxed(linear), BlendSpace::SrgbEncoded);
+    // From black at the box's left edge to white at its right, not across the canvas.
+    for x in [40_u16, 56, 72, 88, 103] {
+        near(
+            pixel(&rgba, 128, u32::from(x), 32)[0],
+            (f32::from(x) + 0.5 - 40.0) / 64.0,
+        );
+    }
+    assert_eq!(pixel(&rgba, 128, 39, 32), [0; 4]);
+    // A radius of 0.5 is half the box's shorter side, 16 px, wherever the box lies.
+    let radial = Paint::RadialGradient {
+        center: alpha2_model::Vec2::new(0.5, 0.5),
+        radius: 0.5,
+        stops,
+        spread: Spread::Pad,
+    };
+    let rgba = draw_scene(&renderer, size, boxed(radial), BlendSpace::SrgbEncoded);
+    for x in [72_u16, 76, 80, 84, 89] {
+        near(
+            pixel(&rgba, 128, u32::from(x), 32)[0],
+            (f32::from(x) + 0.5 - 72.0).hypot(0.5) / 16.0,
+        );
+    }
+}

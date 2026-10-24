@@ -20,7 +20,7 @@ fn availability_pass_deduplicates_missing_sources() {
         matte: None,
         is_matte: false,
         generator: None,
-        shapes: None,
+        plan: None,
         source_composition: None,
     };
     let frame = FrameDesc {
@@ -58,7 +58,7 @@ fn evaluated_frame_render_is_atomic_on_missing_inputs() {
             matte: None,
             is_matte: false,
             generator: None,
-            shapes: None,
+            plan: None,
             source_composition: None,
         }],
         audio: Vec::new(),

@@ -8,6 +8,7 @@ mod audio;
 mod audio_load;
 mod caption;
 mod caption_import;
+mod checks;
 mod composition;
 mod easing;
 mod effect;
@@ -15,6 +16,7 @@ mod error;
 mod fingerprint;
 mod generator;
 mod ids;
+mod layout;
 mod lint;
 mod mask;
 mod project;
@@ -57,6 +59,12 @@ pub use error::{ModelError, ProjectLoadError, ShapeOwner};
 pub use fingerprint::{AudioStreamShape, MediaFingerprint, StreamTopology, VideoStreamShape};
 pub use generator::{Generator, GradientStop, MAX_GRADIENT_STOPS, Paint, Rgba, Spread};
 pub use ids::{ClipId, CompositionId, EffectResourceId, NodeId, ProjectId, TrackId};
+pub use layout::{
+    AlignItems, FlexDirection, FlexWrap, GeneratorIssue, Insets, JustifyContent, LayoutBorder,
+    LayoutInset, LayoutIssue, LayoutLength, LayoutNode, LayoutProblem, LayoutShape, LayoutText,
+    MAX_LAYOUT_DEPTH, MAX_LAYOUT_FONT_SIZE, MAX_LAYOUT_ISOLATED, MAX_LAYOUT_NODES,
+    MAX_LAYOUT_TEXTS, Overflow, Position,
+};
 pub use lint::{LintEdge, LintIssue, LintOwner, ShapeLintOwner};
 pub use mask::{MAX_CLIP_MASKS, MaskMode, Matte, MatteMode, ShapeMask};
 pub use project::{

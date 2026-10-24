@@ -33,7 +33,7 @@ fn aspect(size: CanvasSize) -> f64 {
 /// Ticks as a time: a JavaScript number that is whole and within the
 /// safe-integer range (magnitude at most 2^53 - 1).
 #[allow(clippy::cast_possible_truncation)]
-fn time(ticks: f64) -> Result<MediaTime, String> {
+pub(crate) fn time(ticks: f64) -> Result<MediaTime, String> {
     if !ticks.is_finite() || ticks.fract() != 0.0 || ticks.abs() > 9.007_199_254_740_991e15 {
         return Err(format!("a time is a whole number of ticks, not {ticks}"));
     }

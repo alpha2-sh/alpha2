@@ -96,9 +96,9 @@ pub struct ActiveClip<'a> {
     /// What the engine draws for a generated source, which needs no frame
     /// from the host. It is drawn at the clip's `source_time`.
     pub generator: Option<&'a Generator>,
-    /// A shapes generator's tree, its fixed parts evaluated once: evaluate
-    /// it at `source_time`.
-    pub shapes: Option<&'a crate::ShapesPlan>,
+    /// A shapes or layout generator's tree, its fixed parts evaluated once:
+    /// evaluate it at `source_time`.
+    pub plan: Option<&'a crate::GeneratorPlan>,
     /// For a composition source, its composition at the clip's source time:
     /// the clip's picture, which the host supplies no frame for.
     pub source_composition: Option<crate::ActiveComposition<'a>>,

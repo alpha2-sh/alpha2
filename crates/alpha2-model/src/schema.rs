@@ -120,6 +120,11 @@ pub fn project_limits_json() -> Value {
         ("MAX_PATH_VERTICES", json!(crate::MAX_PATH_VERTICES)),
         ("MAX_PATH_SUBPATHS", json!(crate::MAX_PATH_SUBPATHS)),
         ("MAX_DASH_ENTRIES", json!(crate::MAX_DASH_ENTRIES)),
+        ("MAX_LAYOUT_NODES", json!(crate::MAX_LAYOUT_NODES)),
+        ("MAX_LAYOUT_DEPTH", json!(crate::MAX_LAYOUT_DEPTH)),
+        ("MAX_LAYOUT_TEXTS", json!(crate::MAX_LAYOUT_TEXTS)),
+        ("MAX_LAYOUT_ISOLATED", json!(crate::MAX_LAYOUT_ISOLATED)),
+        ("MAX_LAYOUT_FONT_SIZE", json!(crate::MAX_LAYOUT_FONT_SIZE)),
         ("MIN_POLYSTAR_POINTS", json!(crate::MIN_POLYSTAR_POINTS)),
         ("MAX_POLYSTAR_POINTS", json!(crate::MAX_POLYSTAR_POINTS)),
         (

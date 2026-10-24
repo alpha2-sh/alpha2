@@ -1,0 +1,665 @@
+{
+  "schema_version": 1,
+  "id": "host-parity-layout",
+  "name": "Host parity: layout generators, animated groups, clipped text, shape nodes, and a layout generator node (the still is uploaded, not drawn)",
+  "settings": {
+    "width": 192,
+    "height": 108,
+    "frame_rate": {
+      "num": 24,
+      "den": 1
+    },
+    "sample_rate": 48000
+  },
+  "sources": [
+    {
+      "id": "still",
+      "kind": "image",
+      "locator": "fixture://still"
+    },
+    {
+      "id": "backdrop",
+      "kind": "generated",
+      "generator": {
+        "type": "fill",
+        "paint": {
+          "type": "linear_gradient",
+          "start": {
+            "x": 0,
+            "y": 0
+          },
+          "end": {
+            "x": 1,
+            "y": 1
+          },
+          "stops": [
+            {
+              "offset": 0,
+              "color": {
+                "red": 0.1,
+                "green": 0.15,
+                "blue": 0.35,
+                "alpha": 1
+              }
+            },
+            {
+              "offset": 0.5,
+              "color": {
+                "red": 0.8,
+                "green": 0.3,
+                "blue": 0.2,
+                "alpha": 1
+              }
+            },
+            {
+              "offset": 1,
+              "color": {
+                "red": 0.1,
+                "green": 0.5,
+                "blue": 0.3,
+                "alpha": 1
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "third",
+      "kind": "generated",
+      "generator": {
+        "type": "layout",
+        "root": {
+          "flex_direction": "column",
+          "justify_content": "end",
+          "align_items": "start",
+          "padding": {
+            "mode": "constant",
+            "value": {
+              "top": 0.06,
+              "right": 0.06,
+              "bottom": 0.08,
+              "left": 0.06
+            }
+          },
+          "children": [
+            {
+              "flex_direction": "row",
+              "gap": {
+                "mode": "constant",
+                "value": 0.016
+              },
+              "padding": {
+                "mode": "constant",
+                "value": {
+                  "top": 0.022,
+                  "right": 0.03,
+                  "bottom": 0.022,
+                  "left": 0.022
+                }
+              },
+              "background": {
+                "mode": "constant",
+                "value": {
+                  "type": "solid",
+                  "color": {
+                    "red": 0.06,
+                    "green": 0.07,
+                    "blue": 0.09,
+                    "alpha": 0.92
+                  }
+                }
+              },
+              "border_radius": {
+                "mode": "constant",
+                "value": 0.012
+              },
+              "max_width": {
+                "mode": "constant",
+                "value": {
+                  "type": "percent",
+                  "value": 60
+                }
+              },
+              "opacity": {
+                "mode": "keyframes",
+                "keyframes": [
+                  {
+                    "time": 0,
+                    "value": 0,
+                    "interpolation": {
+                      "type": "cubic_bezier",
+                      "x1": 0.2,
+                      "y1": 0.0,
+                      "x2": 0.0,
+                      "y2": 1.0
+                    }
+                  },
+                  {
+                    "time": 36000,
+                    "value": 1,
+                    "interpolation": {
+                      "type": "hold"
+                    }
+                  }
+                ]
+              },
+              "translate": {
+                "mode": "keyframes",
+                "keyframes": [
+                  {
+                    "time": 0,
+                    "value": {
+                      "x": 0,
+                      "y": 0.03
+                    },
+                    "interpolation": {
+                      "type": "cubic_bezier",
+                      "x1": 0.2,
+                      "y1": 0.0,
+                      "x2": 0.0,
+                      "y2": 1.0
+                    }
+                  },
+                  {
+                    "time": 36000,
+                    "value": {
+                      "x": 0,
+                      "y": 0
+                    },
+                    "interpolation": {
+                      "type": "hold"
+                    }
+                  }
+                ]
+              },
+              "children": [
+                {
+                  "width": {
+                    "mode": "constant",
+                    "value": {
+                      "type": "length",
+                      "value": 0.01
+                    }
+                  },
+                  "flex_shrink": {
+                    "mode": "constant",
+                    "value": 0
+                  },
+                  "background": {
+                    "mode": "constant",
+                    "value": {
+                      "type": "solid",
+                      "color": {
+                        "red": 1,
+                        "green": 0.62,
+                        "blue": 0.1,
+                        "alpha": 1
+                      }
+                    }
+                  },
+                  "border_radius": {
+                    "mode": "constant",
+                    "value": 0.005
+                  }
+                },
+                {
+                  "flex_direction": "column",
+                  "gap": {
+                    "mode": "constant",
+                    "value": 0.006
+                  },
+                  "children": [
+                    {
+                      "text": {
+                        "content": {
+                          "mode": "constant",
+                          "value": "Ada Lovelace"
+                        },
+                        "font_size": {
+                          "mode": "constant",
+                          "value": 0.09
+                        }
+                      }
+                    },
+                    {
+                      "text": {
+                        "content": {
+                          "mode": "constant",
+                          "value": "Wrote the first published algorithm for a machine, 1843"
+                        },
+                        "font_size": {
+                          "mode": "constant",
+                          "value": 0.055
+                        },
+                        "color": {
+                          "red": 0.8,
+                          "green": 0.82,
+                          "blue": 0.86,
+                          "alpha": 1
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "panel",
+      "kind": "generated",
+      "generator": {
+        "type": "layout",
+        "root": {
+          "justify_content": "end",
+          "align_items": "start",
+          "padding": {
+            "mode": "constant",
+            "value": {
+              "top": 0.05,
+              "right": 0.05,
+              "bottom": 0.05,
+              "left": 0.05
+            }
+          },
+          "children": [
+            {
+              "width": {
+                "mode": "constant",
+                "value": {
+                  "type": "length",
+                  "value": 0.8
+                }
+              },
+              "flex_direction": "row",
+              "gap": {
+                "mode": "constant",
+                "value": 0.03
+              },
+              "align_items": "center",
+              "padding": {
+                "mode": "constant",
+                "value": {
+                  "top": 0.03,
+                  "right": 0.03,
+                  "bottom": 0.03,
+                  "left": 0.03
+                }
+              },
+              "background": {
+                "mode": "constant",
+                "value": {
+                  "type": "linear_gradient",
+                  "start": {
+                    "x": 0,
+                    "y": 0
+                  },
+                  "end": {
+                    "x": 1,
+                    "y": 0
+                  },
+                  "stops": [
+                    {
+                      "offset": 0,
+                      "color": {
+                        "red": 1,
+                        "green": 1,
+                        "blue": 1,
+                        "alpha": 0.95
+                      }
+                    },
+                    {
+                      "offset": 1,
+                      "color": {
+                        "red": 0.8,
+                        "green": 0.9,
+                        "blue": 1,
+                        "alpha": 0.95
+                      }
+                    }
+                  ]
+                }
+              },
+              "border": {
+                "width": {
+                  "mode": "constant",
+                  "value": 0.008
+                },
+                "paint": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "solid",
+                    "color": {
+                      "red": 0.1,
+                      "green": 0.2,
+                      "blue": 0.5,
+                      "alpha": 1
+                    }
+                  }
+                }
+              },
+              "border_radius": {
+                "mode": "constant",
+                "value": 0.04
+              },
+              "children": [
+                {
+                  "width": {
+                    "mode": "constant",
+                    "value": {
+                      "type": "length",
+                      "value": 0.12
+                    }
+                  },
+                  "aspect_ratio": 1.0,
+                  "flex_shrink": {
+                    "mode": "constant",
+                    "value": 0
+                  },
+                  "shape": {
+                    "items": [
+                      {
+                        "type": "ellipse",
+                        "center": {
+                          "mode": "constant",
+                          "value": {
+                            "x": 0.5,
+                            "y": 0.5
+                          }
+                        },
+                        "size": {
+                          "mode": "constant",
+                          "value": {
+                            "x": 1,
+                            "y": 1
+                          }
+                        }
+                      },
+                      {
+                        "type": "fill",
+                        "paint": {
+                          "mode": "constant",
+                          "value": {
+                            "type": "radial_gradient",
+                            "center": {
+                              "x": 0.5,
+                              "y": 0.5
+                            },
+                            "radius": 0.5,
+                            "stops": [
+                              {
+                                "offset": 0,
+                                "color": {
+                                  "red": 1,
+                                  "green": 0.9,
+                                  "blue": 0.2,
+                                  "alpha": 1
+                                }
+                              },
+                              {
+                                "offset": 1,
+                                "color": {
+                                  "red": 1,
+                                  "green": 0.4,
+                                  "blue": 0,
+                                  "alpha": 1
+                                }
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "flex_grow": {
+                    "mode": "constant",
+                    "value": 1
+                  },
+                  "height": {
+                    "mode": "constant",
+                    "value": {
+                      "type": "length",
+                      "value": 0.16
+                    }
+                  },
+                  "overflow": "hidden",
+                  "children": [
+                    {
+                      "text": {
+                        "content": {
+                          "mode": "constant",
+                          "value": "A paragraph wraps the same in preview and export, and the box clips what does not fit."
+                        },
+                        "font_size": {
+                          "mode": "constant",
+                          "value": 0.06
+                        },
+                        "color": {
+                          "red": 0.05,
+                          "green": 0.05,
+                          "blue": 0.1,
+                          "alpha": 1
+                        },
+                        "text_align": "end",
+                        "line_height": 1.1
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "compositions": [
+    {
+      "id": "badge",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "card",
+          "op": {
+            "type": "generator",
+            "generator": {
+              "type": "layout",
+              "root": {
+                "justify_content": "center",
+                "align_items": "start",
+                "padding": {
+                  "mode": "constant",
+                  "value": {
+                    "top": 0.05,
+                    "left": 0.05
+                  }
+                },
+                "children": [
+                  {
+                    "padding": {
+                      "mode": "constant",
+                      "value": {
+                        "top": 0.02,
+                        "right": 0.04,
+                        "bottom": 0.02,
+                        "left": 0.04
+                      }
+                    },
+                    "background": {
+                      "mode": "constant",
+                      "value": {
+                        "type": "solid",
+                        "color": {
+                          "red": 0.85,
+                          "green": 0.1,
+                          "blue": 0.25,
+                          "alpha": 0.9
+                        }
+                      }
+                    },
+                    "border_radius": {
+                      "mode": "constant",
+                      "value": 0.5
+                    },
+                    "rotation_degrees": {
+                      "mode": "keyframes",
+                      "keyframes": [
+                        {
+                          "time": 0,
+                          "value": -10,
+                          "interpolation": {
+                            "type": "linear"
+                          }
+                        },
+                        {
+                          "time": 120000,
+                          "value": 10,
+                          "interpolation": {
+                            "type": "hold"
+                          }
+                        }
+                      ]
+                    },
+                    "scale": {
+                      "mode": "keyframes",
+                      "keyframes": [
+                        {
+                          "time": 0,
+                          "value": {
+                            "x": 0.8,
+                            "y": 0.8
+                          },
+                          "interpolation": {
+                            "type": "cubic_bezier",
+                            "x1": 0.2,
+                            "y1": 0.0,
+                            "x2": 0.0,
+                            "y2": 1.0
+                          }
+                        },
+                        {
+                          "time": 60000,
+                          "value": {
+                            "x": 1.1,
+                            "y": 1.0
+                          },
+                          "interpolation": {
+                            "type": "hold"
+                          }
+                        }
+                      ]
+                    },
+                    "children": [
+                      {
+                        "text": {
+                          "content": {
+                            "mode": "constant",
+                            "value": "LIVE"
+                          },
+                          "font_size": {
+                            "mode": "constant",
+                            "value": 0.08
+                          },
+                          "font_family": "Alpha2 Fixture"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": "top",
+          "op": {
+            "type": "merge",
+            "layers": [
+              {
+                "input": "clip"
+              },
+              {
+                "input": "card"
+              }
+            ]
+          }
+        }
+      ],
+      "output": "top"
+    }
+  ],
+  "timeline": {
+    "tracks": [
+      {
+        "id": "back",
+        "name": "Back",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "backdrop-clip",
+            "source_id": "backdrop",
+            "timeline_range": {
+              "start": 0,
+              "end": 180000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 180000
+            }
+          }
+        ]
+      },
+      {
+        "id": "panels",
+        "name": "Panels",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "panel-clip",
+            "source_id": "panel",
+            "timeline_range": {
+              "start": 0,
+              "end": 180000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 180000
+            },
+            "composition": {
+              "id": "badge"
+            }
+          }
+        ]
+      },
+      {
+        "id": "titles",
+        "name": "Titles",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "third-clip",
+            "source_id": "third",
+            "timeline_range": {
+              "start": 0,
+              "end": 180000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 180000
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

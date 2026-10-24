@@ -4,6 +4,14 @@
 /** The project schema's shape rules, without its documentation. */
 export const PROJECT_SHAPE: unknown = {
   $defs: {
+    AlignItems: {
+      oneOf: [
+        { const: "start", type: "string" },
+        { const: "center", type: "string" },
+        { const: "end", type: "string" },
+        { const: "stretch", type: "string" },
+      ],
+    },
     AnimatedPoint: {
       oneOf: [
         {
@@ -45,6 +53,56 @@ export const PROJECT_SHAPE: unknown = {
           properties: {
             keyframes: {
               items: { $ref: "#/$defs/Keyframe_EffectValue" },
+              type: "array",
+            },
+            mode: { const: "keyframes", type: "string" },
+          },
+          required: ["mode", "keyframes"],
+          type: "object",
+        },
+      ],
+    },
+    Animated_Insets: {
+      oneOf: [
+        {
+          additionalProperties: false,
+          properties: {
+            mode: { const: "constant", type: "string" },
+            value: { $ref: "#/$defs/Insets" },
+          },
+          required: ["mode", "value"],
+          type: "object",
+        },
+        {
+          additionalProperties: false,
+          properties: {
+            keyframes: {
+              items: { $ref: "#/$defs/Keyframe_Insets" },
+              type: "array",
+            },
+            mode: { const: "keyframes", type: "string" },
+          },
+          required: ["mode", "keyframes"],
+          type: "object",
+        },
+      ],
+    },
+    Animated_LayoutLength: {
+      oneOf: [
+        {
+          additionalProperties: false,
+          properties: {
+            mode: { const: "constant", type: "string" },
+            value: { $ref: "#/$defs/LayoutLength" },
+          },
+          required: ["mode", "value"],
+          type: "object",
+        },
+        {
+          additionalProperties: false,
+          properties: {
+            keyframes: {
+              items: { $ref: "#/$defs/Keyframe_LayoutLength" },
               type: "array",
             },
             mode: { const: "keyframes", type: "string" },
@@ -145,6 +203,31 @@ export const PROJECT_SHAPE: unknown = {
           properties: {
             keyframes: {
               items: { $ref: "#/$defs/Keyframe_float" },
+              type: "array",
+            },
+            mode: { const: "keyframes", type: "string" },
+          },
+          required: ["mode", "keyframes"],
+          type: "object",
+        },
+      ],
+    },
+    Animated_string: {
+      oneOf: [
+        {
+          additionalProperties: false,
+          properties: {
+            mode: { const: "constant", type: "string" },
+            value: { type: "string" },
+          },
+          required: ["mode", "value"],
+          type: "object",
+        },
+        {
+          additionalProperties: false,
+          properties: {
+            keyframes: {
+              items: { $ref: "#/$defs/Keyframe_string" },
               type: "array",
             },
             mode: { const: "keyframes", type: "string" },
@@ -603,6 +686,20 @@ export const PROJECT_SHAPE: unknown = {
         { const: "evenodd", type: "string" },
       ],
     },
+    FlexDirection: {
+      oneOf: [
+        { const: "row", type: "string" },
+        { const: "column", type: "string" },
+        { const: "row_reverse", type: "string" },
+        { const: "column_reverse", type: "string" },
+      ],
+    },
+    FlexWrap: {
+      oneOf: [
+        { const: "nowrap", type: "string" },
+        { const: "wrap", type: "string" },
+      ],
+    },
     FrameRate: {
       additionalProperties: false,
       properties: {
@@ -652,6 +749,15 @@ export const PROJECT_SHAPE: unknown = {
           required: ["type", "text"],
           type: "object",
         },
+        {
+          additionalProperties: false,
+          properties: {
+            root: { $ref: "#/$defs/LayoutNode" },
+            type: { const: "layout", type: "string" },
+          },
+          required: ["type", "root"],
+          type: "object",
+        },
       ],
     },
     GradientStop: {
@@ -668,6 +774,16 @@ export const PROJECT_SHAPE: unknown = {
         { const: "tone_map", type: "string" },
         { const: "reject", type: "string" },
       ],
+    },
+    Insets: {
+      additionalProperties: false,
+      properties: {
+        bottom: { format: "float", type: "number" },
+        left: { format: "float", type: "number" },
+        right: { format: "float", type: "number" },
+        top: { format: "float", type: "number" },
+      },
+      type: "object",
     },
     Interpolation: {
       oneOf: [
@@ -697,12 +813,42 @@ export const PROJECT_SHAPE: unknown = {
         },
       ],
     },
+    JustifyContent: {
+      oneOf: [
+        { const: "start", type: "string" },
+        { const: "center", type: "string" },
+        { const: "end", type: "string" },
+        { const: "space_between", type: "string" },
+        { const: "space_around", type: "string" },
+        { const: "space_evenly", type: "string" },
+      ],
+    },
     Keyframe_EffectValue: {
       additionalProperties: false,
       properties: {
         interpolation: { $ref: "#/$defs/Interpolation" },
         time: { $ref: "#/$defs/MediaTime" },
         value: { $ref: "#/$defs/EffectValue" },
+      },
+      required: ["time", "value", "interpolation"],
+      type: "object",
+    },
+    Keyframe_Insets: {
+      additionalProperties: false,
+      properties: {
+        interpolation: { $ref: "#/$defs/Interpolation" },
+        time: { $ref: "#/$defs/MediaTime" },
+        value: { $ref: "#/$defs/Insets" },
+      },
+      required: ["time", "value", "interpolation"],
+      type: "object",
+    },
+    Keyframe_LayoutLength: {
+      additionalProperties: false,
+      properties: {
+        interpolation: { $ref: "#/$defs/Interpolation" },
+        time: { $ref: "#/$defs/MediaTime" },
+        value: { $ref: "#/$defs/LayoutLength" },
       },
       required: ["time", "value", "interpolation"],
       type: "object",
@@ -745,6 +891,164 @@ export const PROJECT_SHAPE: unknown = {
         value: { format: "float", type: "number" },
       },
       required: ["time", "value", "interpolation"],
+      type: "object",
+    },
+    Keyframe_string: {
+      additionalProperties: false,
+      properties: {
+        interpolation: { $ref: "#/$defs/Interpolation" },
+        time: { $ref: "#/$defs/MediaTime" },
+        value: { type: "string" },
+      },
+      required: ["time", "value", "interpolation"],
+      type: "object",
+    },
+    LayoutBorder: {
+      additionalProperties: false,
+      properties: {
+        paint: { $ref: "#/$defs/Animated_Paint" },
+        width: { $ref: "#/$defs/Animated_float" },
+      },
+      required: ["width", "paint"],
+      type: "object",
+    },
+    LayoutInset: {
+      additionalProperties: false,
+      properties: {
+        bottom: {
+          anyOf: [{ $ref: "#/$defs/Animated_LayoutLength" }, { type: "null" }],
+        },
+        left: {
+          anyOf: [{ $ref: "#/$defs/Animated_LayoutLength" }, { type: "null" }],
+        },
+        right: {
+          anyOf: [{ $ref: "#/$defs/Animated_LayoutLength" }, { type: "null" }],
+        },
+        top: {
+          anyOf: [{ $ref: "#/$defs/Animated_LayoutLength" }, { type: "null" }],
+        },
+      },
+      type: "object",
+    },
+    LayoutLength: {
+      oneOf: [
+        {
+          additionalProperties: false,
+          properties: {
+            type: { const: "length", type: "string" },
+            value: { format: "float", type: "number" },
+          },
+          required: ["type", "value"],
+          type: "object",
+        },
+        {
+          additionalProperties: false,
+          properties: {
+            type: { const: "percent", type: "string" },
+            value: { format: "float", type: "number" },
+          },
+          required: ["type", "value"],
+          type: "object",
+        },
+      ],
+    },
+    LayoutNode: {
+      additionalProperties: false,
+      properties: {
+        align_items: {
+          anyOf: [{ $ref: "#/$defs/AlignItems" }, { type: "null" }],
+        },
+        align_self: {
+          anyOf: [{ $ref: "#/$defs/AlignItems" }, { type: "null" }],
+        },
+        aspect_ratio: { format: "float", type: ["number", "null"] },
+        background: {
+          anyOf: [{ $ref: "#/$defs/Animated_Paint" }, { type: "null" }],
+        },
+        border: { anyOf: [{ $ref: "#/$defs/LayoutBorder" }, { type: "null" }] },
+        border_radius: {
+          anyOf: [{ $ref: "#/$defs/Animated_float" }, { type: "null" }],
+        },
+        children: { items: { $ref: "#/$defs/LayoutNode" }, type: "array" },
+        flex_basis: {
+          anyOf: [{ $ref: "#/$defs/Animated_LayoutLength" }, { type: "null" }],
+        },
+        flex_direction: {
+          anyOf: [{ $ref: "#/$defs/FlexDirection" }, { type: "null" }],
+        },
+        flex_grow: {
+          anyOf: [{ $ref: "#/$defs/Animated_float" }, { type: "null" }],
+        },
+        flex_shrink: {
+          anyOf: [{ $ref: "#/$defs/Animated_float" }, { type: "null" }],
+        },
+        flex_wrap: { anyOf: [{ $ref: "#/$defs/FlexWrap" }, { type: "null" }] },
+        gap: { anyOf: [{ $ref: "#/$defs/Animated_float" }, { type: "null" }] },
+        height: {
+          anyOf: [{ $ref: "#/$defs/Animated_LayoutLength" }, { type: "null" }],
+        },
+        inset: { anyOf: [{ $ref: "#/$defs/LayoutInset" }, { type: "null" }] },
+        justify_content: {
+          anyOf: [{ $ref: "#/$defs/JustifyContent" }, { type: "null" }],
+        },
+        margin: {
+          anyOf: [{ $ref: "#/$defs/Animated_Insets" }, { type: "null" }],
+        },
+        max_height: {
+          anyOf: [{ $ref: "#/$defs/Animated_LayoutLength" }, { type: "null" }],
+        },
+        max_width: {
+          anyOf: [{ $ref: "#/$defs/Animated_LayoutLength" }, { type: "null" }],
+        },
+        min_height: {
+          anyOf: [{ $ref: "#/$defs/Animated_LayoutLength" }, { type: "null" }],
+        },
+        min_width: {
+          anyOf: [{ $ref: "#/$defs/Animated_LayoutLength" }, { type: "null" }],
+        },
+        opacity: {
+          anyOf: [{ $ref: "#/$defs/Animated_float" }, { type: "null" }],
+        },
+        overflow: { anyOf: [{ $ref: "#/$defs/Overflow" }, { type: "null" }] },
+        padding: {
+          anyOf: [{ $ref: "#/$defs/Animated_Insets" }, { type: "null" }],
+        },
+        position: { anyOf: [{ $ref: "#/$defs/Position" }, { type: "null" }] },
+        rotation_degrees: {
+          anyOf: [{ $ref: "#/$defs/Animated_float" }, { type: "null" }],
+        },
+        scale: { anyOf: [{ $ref: "#/$defs/Animated_Vec2" }, { type: "null" }] },
+        shape: { anyOf: [{ $ref: "#/$defs/LayoutShape" }, { type: "null" }] },
+        text: { anyOf: [{ $ref: "#/$defs/LayoutText" }, { type: "null" }] },
+        translate: {
+          anyOf: [{ $ref: "#/$defs/Animated_Vec2" }, { type: "null" }],
+        },
+        width: {
+          anyOf: [{ $ref: "#/$defs/Animated_LayoutLength" }, { type: "null" }],
+        },
+      },
+      type: "object",
+    },
+    LayoutShape: {
+      additionalProperties: false,
+      properties: {
+        items: { items: { $ref: "#/$defs/ShapeItem" }, type: "array" },
+      },
+      required: ["items"],
+      type: "object",
+    },
+    LayoutText: {
+      additionalProperties: false,
+      properties: {
+        color: { $ref: "#/$defs/Rgba" },
+        content: { $ref: "#/$defs/Animated_string" },
+        font_family: { type: ["string", "null"] },
+        font_size: { $ref: "#/$defs/Animated_float" },
+        line_height: { format: "float", type: "number" },
+        outline: { anyOf: [{ $ref: "#/$defs/TextOutline" }, { type: "null" }] },
+        text_align: { $ref: "#/$defs/TextAlign" },
+      },
+      required: ["content"],
       type: "object",
     },
     Limiter: {
@@ -1020,6 +1324,12 @@ export const PROJECT_SHAPE: unknown = {
         },
       ],
     },
+    Overflow: {
+      oneOf: [
+        { const: "visible", type: "string" },
+        { const: "hidden", type: "string" },
+      ],
+    },
     Paint: {
       oneOf: [
         {
@@ -1102,6 +1412,12 @@ export const PROJECT_SHAPE: unknown = {
       oneOf: [
         { const: "star", type: "string" },
         { const: "polygon", type: "string" },
+      ],
+    },
+    Position: {
+      oneOf: [
+        { const: "relative", type: "string" },
+        { const: "absolute", type: "string" },
       ],
     },
     ProjectId: { minLength: 1, type: "string" },

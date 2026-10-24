@@ -138,6 +138,11 @@ pub struct ScenePaint {
     /// Device pixels to the paint space's pixels: the inverse of the
     /// transforms of the groups the paint is in.
     pub inverse: Affine,
+    /// The size in pixels of the paint's space: its normalized points are
+    /// fractions of it, and a radial radius a fraction of its shorter side.
+    /// A shapes generator's paints are in its canvas; a layout box's in the
+    /// box.
+    pub space: [f32; 2],
 }
 
 /// One drawing operation of a [`VectorScene`].
@@ -267,4 +272,6 @@ fn hash_paint(hash: &mut StableHash, paint: &ScenePaint) {
     for coefficient in paint.inverse.as_coeffs() {
         hash.f64(coefficient);
     }
+    hash.f32(paint.space[0]);
+    hash.f32(paint.space[1]);
 }

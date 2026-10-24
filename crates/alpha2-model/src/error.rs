@@ -2,14 +2,15 @@ use crate::{ClipId, CompositionId, EffectResourceId, NodeId, TrackId};
 use alpha2_media::SourceId;
 use std::fmt;
 
-/// What holds a shape a [`ModelError::InvalidShape`] names.
+/// What holds a shape or a layout a [`ModelError::InvalidShape`] or
+/// [`ModelError::InvalidLayout`] names.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ShapeOwner {
-    /// A generated source's shapes generator.
+    /// A generated source's shapes or layout generator.
     Source(SourceId),
     /// A clip's masks.
     Clip(ClipId),
-    /// A composition node's shapes generator or masks.
+    /// A composition node's shapes or layout generator, or its masks.
     Node {
         /// The composition.
         composition: CompositionId,
@@ -94,6 +95,16 @@ pub enum ModelError {
         at: String,
         /// What is wrong there.
         problem: crate::ShapeProblem,
+    },
+    /// A layout generator's tree breaks a limit or its structure rules, has
+    /// a value out of range, or has keyframes that cannot interpolate.
+    InvalidLayout {
+        /// What holds the layout.
+        owner: ShapeOwner,
+        /// Where in it the problem lies, like `root.children[2].padding`.
+        at: String,
+        /// What is wrong there.
+        problem: crate::LayoutProblem,
     },
     /// An effect resource locator was empty.
     EmptyEffectResourceLocator {
@@ -500,6 +511,9 @@ impl fmt::Display for ModelError {
             }
             Self::InvalidShape { owner, at, problem } => {
                 write!(formatter, "{owner} has an invalid shape: {at} {problem}")
+            }
+            Self::InvalidLayout { owner, at, problem } => {
+                write!(formatter, "{owner} has an invalid layout: {at} {problem}")
             }
             Self::ContradictoryColor { source } => write!(
                 formatter,

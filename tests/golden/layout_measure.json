@@ -1,0 +1,896 @@
+{
+  "cases": [
+    {
+      "expected": "{\"nodes\":[{\"at\":\"root\",\"border\":{\"bottom\":1.0,\"left\":0.0,\"right\":1.0,\"top\":0.0},\"content\":{\"bottom\":0.9203703999519348,\"left\":0.0338541679084301,\"right\":0.9661458134651184,\"top\":0.06018518656492233},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[0]\",\"border\":{\"bottom\":0.9203703999519348,\"left\":0.0338541679084301,\"right\":0.4833333194255829,\"top\":0.7879629731178284},\"content\":{\"bottom\":0.8981481194496155,\"left\":0.04635416716337204,\"right\":0.4661458432674408,\"top\":0.8101851940155029},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[0].children[0]\",\"border\":{\"bottom\":0.8981481194496155,\"left\":0.04635416716337204,\"right\":0.04895833507180214,\"top\":0.8101851940155029},\"content\":{\"bottom\":0.8981481194496155,\"left\":0.04635416716337204,\"right\":0.04895833507180214,\"top\":0.8101851940155029},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[0].children[1]\",\"border\":{\"bottom\":0.8981481194496155,\"left\":0.05781250074505806,\"right\":0.4661458432674408,\"top\":0.8101851940155029},\"content\":{\"bottom\":0.8981481194496155,\"left\":0.05781250074505806,\"right\":0.4661458432674408,\"top\":0.8101851940155029},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[0].children[1].children[0]\",\"border\":{\"bottom\":0.8611111044883728,\"left\":0.05781250074505806,\"right\":0.4661458432674408,\"top\":0.8101851940155029},\"content\":{\"bottom\":0.8611111044883728,\"left\":0.05781250074505806,\"right\":0.4661458432674408,\"top\":0.8101851940155029},\"lineCount\":1,\"overflow\":false},{\"at\":\"root.children[0].children[1].children[1]\",\"border\":{\"bottom\":0.8981481194496155,\"left\":0.05781250074505806,\"right\":0.4661458432674408,\"top\":0.8666666746139526},\"content\":{\"bottom\":0.8981481194496155,\"left\":0.05781250074505806,\"right\":0.4661458432674408,\"top\":0.8666666746139526},\"lineCount\":1,\"overflow\":false}]}",
+      "generator": {
+        "root": {
+          "align_items": "start",
+          "children": [
+            {
+              "background": {
+                "mode": "constant",
+                "value": {
+                  "color": {
+                    "alpha": 0.92,
+                    "blue": 0.09,
+                    "green": 0.07,
+                    "red": 0.06
+                  },
+                  "type": "solid"
+                }
+              },
+              "border_radius": {
+                "mode": "constant",
+                "value": 0.012
+              },
+              "children": [
+                {
+                  "background": {
+                    "mode": "constant",
+                    "value": {
+                      "color": {
+                        "alpha": 1,
+                        "blue": 0.1,
+                        "green": 0.62,
+                        "red": 1
+                      },
+                      "type": "solid"
+                    }
+                  },
+                  "border_radius": {
+                    "mode": "constant",
+                    "value": 0.0025
+                  },
+                  "flex_shrink": {
+                    "mode": "constant",
+                    "value": 0
+                  },
+                  "width": {
+                    "mode": "constant",
+                    "value": {
+                      "type": "length",
+                      "value": 0.005
+                    }
+                  }
+                },
+                {
+                  "children": [
+                    {
+                      "text": {
+                        "content": {
+                          "mode": "constant",
+                          "value": "Ada Lovelace"
+                        },
+                        "font_size": {
+                          "mode": "constant",
+                          "value": 0.042
+                        }
+                      }
+                    },
+                    {
+                      "text": {
+                        "color": {
+                          "alpha": 1.0,
+                          "blue": 0.86,
+                          "green": 0.82,
+                          "red": 0.8
+                        },
+                        "content": {
+                          "mode": "constant",
+                          "value": "Wrote the first published algorithm for a machine, 1843"
+                        },
+                        "font_size": {
+                          "mode": "constant",
+                          "value": 0.026
+                        }
+                      }
+                    }
+                  ],
+                  "flex_direction": "column",
+                  "gap": {
+                    "mode": "constant",
+                    "value": 0.006
+                  }
+                }
+              ],
+              "flex_direction": "row",
+              "gap": {
+                "mode": "constant",
+                "value": 0.016
+              },
+              "max_width": {
+                "mode": "constant",
+                "value": {
+                  "type": "percent",
+                  "value": 60
+                }
+              },
+              "opacity": {
+                "keyframes": [
+                  {
+                    "interpolation": {
+                      "type": "cubic_bezier",
+                      "x1": 0.2,
+                      "x2": 0.0,
+                      "y1": 0.0,
+                      "y2": 1.0
+                    },
+                    "time": 0,
+                    "value": 0
+                  },
+                  {
+                    "interpolation": {
+                      "type": "hold"
+                    },
+                    "time": 36000,
+                    "value": 1
+                  }
+                ],
+                "mode": "keyframes"
+              },
+              "padding": {
+                "mode": "constant",
+                "value": {
+                  "bottom": 0.022,
+                  "left": 0.022,
+                  "right": 0.03,
+                  "top": 0.022
+                }
+              },
+              "translate": {
+                "keyframes": [
+                  {
+                    "interpolation": {
+                      "type": "cubic_bezier",
+                      "x1": 0.2,
+                      "x2": 0.0,
+                      "y1": 0.0,
+                      "y2": 1.0
+                    },
+                    "time": 0,
+                    "value": {
+                      "x": 0,
+                      "y": 0.03
+                    }
+                  },
+                  {
+                    "interpolation": {
+                      "type": "hold"
+                    },
+                    "time": 36000,
+                    "value": {
+                      "x": 0,
+                      "y": 0
+                    }
+                  }
+                ],
+                "mode": "keyframes"
+              }
+            }
+          ],
+          "flex_direction": "column",
+          "justify_content": "end",
+          "padding": {
+            "mode": "constant",
+            "value": {
+              "bottom": 0.08,
+              "left": 0.06,
+              "right": 0.06,
+              "top": 0.06
+            }
+          }
+        },
+        "type": "layout"
+      },
+      "height": 1080,
+      "name": "lower-third-start",
+      "time": 0,
+      "width": 1920
+    },
+    {
+      "expected": "{\"nodes\":[{\"at\":\"root\",\"border\":{\"bottom\":1.0,\"left\":0.0,\"right\":1.0,\"top\":0.0},\"content\":{\"bottom\":0.9203703999519348,\"left\":0.0338541679084301,\"right\":0.9661458134651184,\"top\":0.06018518656492233},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[0]\",\"border\":{\"bottom\":0.9203703999519348,\"left\":0.0338541679084301,\"right\":0.4833333194255829,\"top\":0.7879629731178284},\"content\":{\"bottom\":0.8981481194496155,\"left\":0.04635416716337204,\"right\":0.4661458432674408,\"top\":0.8101851940155029},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[0].children[0]\",\"border\":{\"bottom\":0.8981481194496155,\"left\":0.04635416716337204,\"right\":0.04895833507180214,\"top\":0.8101851940155029},\"content\":{\"bottom\":0.8981481194496155,\"left\":0.04635416716337204,\"right\":0.04895833507180214,\"top\":0.8101851940155029},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[0].children[1]\",\"border\":{\"bottom\":0.8981481194496155,\"left\":0.05781250074505806,\"right\":0.4661458432674408,\"top\":0.8101851940155029},\"content\":{\"bottom\":0.8981481194496155,\"left\":0.05781250074505806,\"right\":0.4661458432674408,\"top\":0.8101851940155029},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[0].children[1].children[0]\",\"border\":{\"bottom\":0.8611111044883728,\"left\":0.05781250074505806,\"right\":0.4661458432674408,\"top\":0.8101851940155029},\"content\":{\"bottom\":0.8611111044883728,\"left\":0.05781250074505806,\"right\":0.4661458432674408,\"top\":0.8101851940155029},\"lineCount\":1,\"overflow\":false},{\"at\":\"root.children[0].children[1].children[1]\",\"border\":{\"bottom\":0.8981481194496155,\"left\":0.05781250074505806,\"right\":0.4661458432674408,\"top\":0.8666666746139526},\"content\":{\"bottom\":0.8981481194496155,\"left\":0.05781250074505806,\"right\":0.4661458432674408,\"top\":0.8666666746139526},\"lineCount\":1,\"overflow\":false}]}",
+      "generator": {
+        "root": {
+          "align_items": "start",
+          "children": [
+            {
+              "background": {
+                "mode": "constant",
+                "value": {
+                  "color": {
+                    "alpha": 0.92,
+                    "blue": 0.09,
+                    "green": 0.07,
+                    "red": 0.06
+                  },
+                  "type": "solid"
+                }
+              },
+              "border_radius": {
+                "mode": "constant",
+                "value": 0.012
+              },
+              "children": [
+                {
+                  "background": {
+                    "mode": "constant",
+                    "value": {
+                      "color": {
+                        "alpha": 1,
+                        "blue": 0.1,
+                        "green": 0.62,
+                        "red": 1
+                      },
+                      "type": "solid"
+                    }
+                  },
+                  "border_radius": {
+                    "mode": "constant",
+                    "value": 0.0025
+                  },
+                  "flex_shrink": {
+                    "mode": "constant",
+                    "value": 0
+                  },
+                  "width": {
+                    "mode": "constant",
+                    "value": {
+                      "type": "length",
+                      "value": 0.005
+                    }
+                  }
+                },
+                {
+                  "children": [
+                    {
+                      "text": {
+                        "content": {
+                          "mode": "constant",
+                          "value": "Ada Lovelace"
+                        },
+                        "font_size": {
+                          "mode": "constant",
+                          "value": 0.042
+                        }
+                      }
+                    },
+                    {
+                      "text": {
+                        "color": {
+                          "alpha": 1.0,
+                          "blue": 0.86,
+                          "green": 0.82,
+                          "red": 0.8
+                        },
+                        "content": {
+                          "mode": "constant",
+                          "value": "Wrote the first published algorithm for a machine, 1843"
+                        },
+                        "font_size": {
+                          "mode": "constant",
+                          "value": 0.026
+                        }
+                      }
+                    }
+                  ],
+                  "flex_direction": "column",
+                  "gap": {
+                    "mode": "constant",
+                    "value": 0.006
+                  }
+                }
+              ],
+              "flex_direction": "row",
+              "gap": {
+                "mode": "constant",
+                "value": 0.016
+              },
+              "max_width": {
+                "mode": "constant",
+                "value": {
+                  "type": "percent",
+                  "value": 60
+                }
+              },
+              "opacity": {
+                "keyframes": [
+                  {
+                    "interpolation": {
+                      "type": "cubic_bezier",
+                      "x1": 0.2,
+                      "x2": 0.0,
+                      "y1": 0.0,
+                      "y2": 1.0
+                    },
+                    "time": 0,
+                    "value": 0
+                  },
+                  {
+                    "interpolation": {
+                      "type": "hold"
+                    },
+                    "time": 36000,
+                    "value": 1
+                  }
+                ],
+                "mode": "keyframes"
+              },
+              "padding": {
+                "mode": "constant",
+                "value": {
+                  "bottom": 0.022,
+                  "left": 0.022,
+                  "right": 0.03,
+                  "top": 0.022
+                }
+              },
+              "translate": {
+                "keyframes": [
+                  {
+                    "interpolation": {
+                      "type": "cubic_bezier",
+                      "x1": 0.2,
+                      "x2": 0.0,
+                      "y1": 0.0,
+                      "y2": 1.0
+                    },
+                    "time": 0,
+                    "value": {
+                      "x": 0,
+                      "y": 0.03
+                    }
+                  },
+                  {
+                    "interpolation": {
+                      "type": "hold"
+                    },
+                    "time": 36000,
+                    "value": {
+                      "x": 0,
+                      "y": 0
+                    }
+                  }
+                ],
+                "mode": "keyframes"
+              }
+            }
+          ],
+          "flex_direction": "column",
+          "justify_content": "end",
+          "padding": {
+            "mode": "constant",
+            "value": {
+              "bottom": 0.08,
+              "left": 0.06,
+              "right": 0.06,
+              "top": 0.06
+            }
+          }
+        },
+        "type": "layout"
+      },
+      "height": 1080,
+      "name": "lower-third-mid",
+      "time": 18000,
+      "width": 1920
+    },
+    {
+      "expected": "{\"nodes\":[{\"at\":\"root\",\"border\":{\"bottom\":1.0,\"left\":0.0,\"right\":1.0,\"top\":0.0},\"content\":{\"bottom\":0.9194444417953491,\"left\":0.03437500074505806,\"right\":0.965624988079071,\"top\":0.06111111119389534},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[0]\",\"border\":{\"bottom\":0.9194444417953491,\"left\":0.03437500074505806,\"right\":0.4828124940395355,\"top\":0.7888888716697693},\"content\":{\"bottom\":0.8972222208976746,\"left\":0.046875,\"right\":0.46562498807907104,\"top\":0.8111110925674438},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[0].children[0]\",\"border\":{\"bottom\":0.8972222208976746,\"left\":0.046875,\"right\":0.04843749850988388,\"top\":0.8111110925674438},\"content\":{\"bottom\":0.8972222208976746,\"left\":0.046875,\"right\":0.04843749850988388,\"top\":0.8111110925674438},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[0].children[1]\",\"border\":{\"bottom\":0.8972222208976746,\"left\":0.05781250074505806,\"right\":0.46562498807907104,\"top\":0.8111110925674438},\"content\":{\"bottom\":0.8972222208976746,\"left\":0.05781250074505806,\"right\":0.46562498807907104,\"top\":0.8111110925674438},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[0].children[1].children[0]\",\"border\":{\"bottom\":0.8611111044883728,\"left\":0.05781250074505806,\"right\":0.46562498807907104,\"top\":0.8111110925674438},\"content\":{\"bottom\":0.8611111044883728,\"left\":0.05781250074505806,\"right\":0.46562498807907104,\"top\":0.8111110925674438},\"lineCount\":1,\"overflow\":false},{\"at\":\"root.children[0].children[1].children[1]\",\"border\":{\"bottom\":0.8972222208976746,\"left\":0.05781250074505806,\"right\":0.46562498807907104,\"top\":0.8666666746139526},\"content\":{\"bottom\":0.8972222208976746,\"left\":0.05781250074505806,\"right\":0.46562498807907104,\"top\":0.8666666746139526},\"lineCount\":1,\"overflow\":false}]}",
+      "generator": {
+        "root": {
+          "align_items": "start",
+          "children": [
+            {
+              "background": {
+                "mode": "constant",
+                "value": {
+                  "color": {
+                    "alpha": 0.92,
+                    "blue": 0.09,
+                    "green": 0.07,
+                    "red": 0.06
+                  },
+                  "type": "solid"
+                }
+              },
+              "border_radius": {
+                "mode": "constant",
+                "value": 0.012
+              },
+              "children": [
+                {
+                  "background": {
+                    "mode": "constant",
+                    "value": {
+                      "color": {
+                        "alpha": 1,
+                        "blue": 0.1,
+                        "green": 0.62,
+                        "red": 1
+                      },
+                      "type": "solid"
+                    }
+                  },
+                  "border_radius": {
+                    "mode": "constant",
+                    "value": 0.0025
+                  },
+                  "flex_shrink": {
+                    "mode": "constant",
+                    "value": 0
+                  },
+                  "width": {
+                    "mode": "constant",
+                    "value": {
+                      "type": "length",
+                      "value": 0.005
+                    }
+                  }
+                },
+                {
+                  "children": [
+                    {
+                      "text": {
+                        "content": {
+                          "mode": "constant",
+                          "value": "Ada Lovelace"
+                        },
+                        "font_size": {
+                          "mode": "constant",
+                          "value": 0.042
+                        }
+                      }
+                    },
+                    {
+                      "text": {
+                        "color": {
+                          "alpha": 1.0,
+                          "blue": 0.86,
+                          "green": 0.82,
+                          "red": 0.8
+                        },
+                        "content": {
+                          "mode": "constant",
+                          "value": "Wrote the first published algorithm for a machine, 1843"
+                        },
+                        "font_size": {
+                          "mode": "constant",
+                          "value": 0.026
+                        }
+                      }
+                    }
+                  ],
+                  "flex_direction": "column",
+                  "gap": {
+                    "mode": "constant",
+                    "value": 0.006
+                  }
+                }
+              ],
+              "flex_direction": "row",
+              "gap": {
+                "mode": "constant",
+                "value": 0.016
+              },
+              "max_width": {
+                "mode": "constant",
+                "value": {
+                  "type": "percent",
+                  "value": 60
+                }
+              },
+              "opacity": {
+                "keyframes": [
+                  {
+                    "interpolation": {
+                      "type": "cubic_bezier",
+                      "x1": 0.2,
+                      "x2": 0.0,
+                      "y1": 0.0,
+                      "y2": 1.0
+                    },
+                    "time": 0,
+                    "value": 0
+                  },
+                  {
+                    "interpolation": {
+                      "type": "hold"
+                    },
+                    "time": 36000,
+                    "value": 1
+                  }
+                ],
+                "mode": "keyframes"
+              },
+              "padding": {
+                "mode": "constant",
+                "value": {
+                  "bottom": 0.022,
+                  "left": 0.022,
+                  "right": 0.03,
+                  "top": 0.022
+                }
+              },
+              "translate": {
+                "keyframes": [
+                  {
+                    "interpolation": {
+                      "type": "cubic_bezier",
+                      "x1": 0.2,
+                      "x2": 0.0,
+                      "y1": 0.0,
+                      "y2": 1.0
+                    },
+                    "time": 0,
+                    "value": {
+                      "x": 0,
+                      "y": 0.03
+                    }
+                  },
+                  {
+                    "interpolation": {
+                      "type": "hold"
+                    },
+                    "time": 36000,
+                    "value": {
+                      "x": 0,
+                      "y": 0
+                    }
+                  }
+                ],
+                "mode": "keyframes"
+              }
+            }
+          ],
+          "flex_direction": "column",
+          "justify_content": "end",
+          "padding": {
+            "mode": "constant",
+            "value": {
+              "bottom": 0.08,
+              "left": 0.06,
+              "right": 0.06,
+              "top": 0.06
+            }
+          }
+        },
+        "type": "layout"
+      },
+      "height": 360,
+      "name": "lower-third-small",
+      "time": 36000,
+      "width": 640
+    },
+    {
+      "expected": "{\"nodes\":[{\"at\":\"root\",\"border\":{\"bottom\":1.0,\"left\":0.0,\"right\":1.0,\"top\":0.0},\"content\":{\"bottom\":0.9597222208976746,\"left\":0.02265625074505806,\"right\":0.977343738079071,\"top\":0.04027777910232544},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[0]\",\"border\":{\"bottom\":0.17638888955116272,\"left\":0.02265625074505806,\"right\":0.789843738079071,\"top\":0.04027777910232544},\"content\":{\"bottom\":0.15555556118488312,\"left\":0.03359375149011612,\"right\":0.778124988079071,\"top\":0.05972222238779068},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[0].children[0]\",\"border\":{\"bottom\":0.15555556118488312,\"left\":0.03359375149011612,\"right\":0.778124988079071,\"top\":0.05972222238779068},\"content\":{\"bottom\":0.15555556118488312,\"left\":0.03359375149011612,\"right\":0.778124988079071,\"top\":0.05972222238779068},\"lineCount\":2,\"overflow\":false},{\"at\":\"root.children[1]\",\"border\":{\"bottom\":0.46388888359069824,\"left\":0.8062499761581421,\"right\":0.977343738079071,\"top\":0.04027777910232544},\"content\":{\"bottom\":0.46388888359069824,\"left\":0.8062499761581421,\"right\":0.977343738079071,\"top\":0.04027777910232544},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[2]\",\"border\":{\"bottom\":0.949999988079071,\"left\":0.921875,\"right\":0.989062488079071,\"top\":0.8902778029441833},\"content\":{\"bottom\":0.949999988079071,\"left\":0.921875,\"right\":0.989062488079071,\"top\":0.8902778029441833},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[2].children[0]\",\"border\":{\"bottom\":0.949999988079071,\"left\":0.921875,\"right\":0.989062488079071,\"top\":0.8902778029441833},\"content\":{\"bottom\":0.949999988079071,\"left\":0.921875,\"right\":0.989062488079071,\"top\":0.8902778029441833},\"lineCount\":1,\"overflow\":false}]}",
+      "generator": {
+        "root": {
+          "align_items": "start",
+          "children": [
+            {
+              "background": {
+                "mode": "constant",
+                "value": {
+                  "color": {
+                    "alpha": 1,
+                    "blue": 1,
+                    "green": 1,
+                    "red": 1
+                  },
+                  "type": "solid"
+                }
+              },
+              "children": [
+                {
+                  "text": {
+                    "content": {
+                      "mode": "constant",
+                      "value": "Layout resolves where text is drawn, so a paragraph wraps the same in preview and export."
+                    },
+                    "font_size": {
+                      "mode": "constant",
+                      "value": 0.04
+                    },
+                    "text_align": "center"
+                  }
+                }
+              ],
+              "flex_grow": {
+                "mode": "constant",
+                "value": 1
+              },
+              "padding": {
+                "mode": "constant",
+                "value": {
+                  "bottom": 0.02,
+                  "left": 0.02,
+                  "right": 0.02,
+                  "top": 0.02
+                }
+              }
+            },
+            {
+              "aspect_ratio": 1.0,
+              "shape": {
+                "items": [
+                  {
+                    "center": {
+                      "mode": "constant",
+                      "value": {
+                        "x": 0.5,
+                        "y": 0.5
+                      }
+                    },
+                    "size": {
+                      "mode": "constant",
+                      "value": {
+                        "x": 1,
+                        "y": 1
+                      }
+                    },
+                    "type": "ellipse"
+                  },
+                  {
+                    "paint": {
+                      "mode": "constant",
+                      "value": {
+                        "color": {
+                          "alpha": 1,
+                          "blue": 0,
+                          "green": 0,
+                          "red": 1
+                        },
+                        "type": "solid"
+                      }
+                    },
+                    "type": "fill"
+                  }
+                ]
+              },
+              "width": {
+                "mode": "constant",
+                "value": {
+                  "type": "percent",
+                  "value": 25
+                }
+              }
+            },
+            {
+              "children": [
+                {
+                  "text": {
+                    "content": {
+                      "mode": "constant",
+                      "value": "NEW"
+                    },
+                    "font_size": {
+                      "mode": "constant",
+                      "value": 0.05
+                    }
+                  }
+                }
+              ],
+              "inset": {
+                "bottom": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "percent",
+                    "value": 5
+                  }
+                },
+                "right": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "length",
+                    "value": 0.02
+                  }
+                }
+              },
+              "position": "absolute"
+            }
+          ],
+          "flex_direction": "row",
+          "gap": {
+            "mode": "constant",
+            "value": 0.03
+          },
+          "padding": {
+            "mode": "constant",
+            "value": {
+              "bottom": 0.04,
+              "left": 0.04,
+              "right": 0.04,
+              "top": 0.04
+            }
+          }
+        },
+        "type": "layout"
+      },
+      "height": 720,
+      "name": "panel",
+      "time": 0,
+      "width": 1280
+    },
+    {
+      "expected": "{\"nodes\":[{\"at\":\"root\",\"border\":{\"bottom\":1.0,\"left\":0.0,\"right\":1.0,\"top\":0.0},\"content\":{\"bottom\":0.9437500238418579,\"left\":0.05000000074505806,\"right\":0.949999988079071,\"top\":0.05624999850988388},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[0]\",\"border\":{\"bottom\":0.1979166716337204,\"left\":0.05000000074505806,\"right\":0.949999988079071,\"top\":0.05624999850988388},\"content\":{\"bottom\":0.1979166716337204,\"left\":0.05000000074505806,\"right\":0.949999988079071,\"top\":0.05624999850988388},\"lineCount\":3,\"overflow\":false},{\"at\":\"root.children[1]\",\"border\":{\"bottom\":0.5067708492279053,\"left\":0.1398148089647293,\"right\":0.8601852059364319,\"top\":0.33802083134651184},\"content\":{\"bottom\":0.5067708492279053,\"left\":0.1398148089647293,\"right\":0.8601852059364319,\"top\":0.33802083134651184},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[2]\",\"border\":{\"bottom\":0.770312488079071,\"left\":0.05000000074505806,\"right\":0.949999988079071,\"top\":0.6463541388511658},\"content\":{\"bottom\":0.770312488079071,\"left\":0.05000000074505806,\"right\":0.949999988079071,\"top\":0.6463541388511658},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[2].children[0]\",\"border\":{\"bottom\":0.7026041746139526,\"left\":0.05000000074505806,\"right\":0.30000001192092896,\"top\":0.6463541388511658},\"content\":{\"bottom\":0.7026041746139526,\"left\":0.05000000074505806,\"right\":0.30000001192092896,\"top\":0.6463541388511658},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[2].children[1]\",\"border\":{\"bottom\":0.7026041746139526,\"left\":0.3203703761100769,\"right\":0.5703703761100769,\"top\":0.6463541388511658},\"content\":{\"bottom\":0.7026041746139526,\"left\":0.3203703761100769,\"right\":0.5703703761100769,\"top\":0.6463541388511658},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[2].children[2]\",\"border\":{\"bottom\":0.7026041746139526,\"left\":0.5898148417472839,\"right\":0.8398148417472839,\"top\":0.6463541388511658},\"content\":{\"bottom\":0.7026041746139526,\"left\":0.5898148417472839,\"right\":0.8398148417472839,\"top\":0.6463541388511658},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[2].children[3]\",\"border\":{\"bottom\":0.770312488079071,\"left\":0.05000000074505806,\"right\":0.30000001192092896,\"top\":0.714062511920929},\"content\":{\"bottom\":0.770312488079071,\"left\":0.05000000074505806,\"right\":0.30000001192092896,\"top\":0.714062511920929},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[2].children[4]\",\"border\":{\"bottom\":0.770312488079071,\"left\":0.3203703761100769,\"right\":0.5703703761100769,\"top\":0.714062511920929},\"content\":{\"bottom\":0.770312488079071,\"left\":0.3203703761100769,\"right\":0.5703703761100769,\"top\":0.714062511920929},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[3]\",\"border\":{\"bottom\":0.9437500238418579,\"left\":0.4749999940395355,\"right\":0.5249999761581421,\"top\":0.9098958373069763},\"content\":{\"bottom\":0.9437500238418579,\"left\":0.4749999940395355,\"right\":0.5249999761581421,\"top\":0.9098958373069763},\"lineCount\":null,\"overflow\":true},{\"at\":\"root.children[3].children[0]\",\"border\":{\"bottom\":0.9437500238418579,\"left\":0.4749999940395355,\"right\":0.9351851940155029,\"top\":0.9098958373069763},\"content\":{\"bottom\":0.9437500238418579,\"left\":0.4749999940395355,\"right\":0.9351851940155029,\"top\":0.9098958373069763},\"lineCount\":1,\"overflow\":false}]}",
+      "generator": {
+        "root": {
+          "align_items": "center",
+          "children": [
+            {
+              "text": {
+                "content": {
+                  "mode": "constant",
+                  "value": "Top title that wraps across the narrow portrait picture"
+                },
+                "font_size": {
+                  "mode": "constant",
+                  "value": 0.07
+                },
+                "text_align": "center"
+              }
+            },
+            {
+              "background": {
+                "mode": "constant",
+                "value": {
+                  "color": {
+                    "alpha": 1,
+                    "blue": 0.9,
+                    "green": 0.3,
+                    "red": 0.2
+                  },
+                  "type": "solid"
+                }
+              },
+              "height": {
+                "mode": "constant",
+                "value": {
+                  "type": "length",
+                  "value": 0.3
+                }
+              },
+              "width": {
+                "mode": "constant",
+                "value": {
+                  "type": "percent",
+                  "value": 80
+                }
+              }
+            },
+            {
+              "children": [
+                {
+                  "height": {
+                    "mode": "constant",
+                    "value": {
+                      "type": "length",
+                      "value": 0.1
+                    }
+                  },
+                  "width": {
+                    "mode": "constant",
+                    "value": {
+                      "type": "length",
+                      "value": 0.25
+                    }
+                  }
+                },
+                {
+                  "height": {
+                    "mode": "constant",
+                    "value": {
+                      "type": "length",
+                      "value": 0.1
+                    }
+                  },
+                  "width": {
+                    "mode": "constant",
+                    "value": {
+                      "type": "length",
+                      "value": 0.25
+                    }
+                  }
+                },
+                {
+                  "height": {
+                    "mode": "constant",
+                    "value": {
+                      "type": "length",
+                      "value": 0.1
+                    }
+                  },
+                  "width": {
+                    "mode": "constant",
+                    "value": {
+                      "type": "length",
+                      "value": 0.25
+                    }
+                  }
+                },
+                {
+                  "height": {
+                    "mode": "constant",
+                    "value": {
+                      "type": "length",
+                      "value": 0.1
+                    }
+                  },
+                  "width": {
+                    "mode": "constant",
+                    "value": {
+                      "type": "length",
+                      "value": 0.25
+                    }
+                  }
+                },
+                {
+                  "height": {
+                    "mode": "constant",
+                    "value": {
+                      "type": "length",
+                      "value": 0.1
+                    }
+                  },
+                  "width": {
+                    "mode": "constant",
+                    "value": {
+                      "type": "length",
+                      "value": 0.25
+                    }
+                  }
+                }
+              ],
+              "flex_direction": "row",
+              "flex_wrap": "wrap",
+              "gap": {
+                "mode": "constant",
+                "value": 0.02
+              }
+            },
+            {
+              "children": [
+                {
+                  "text": {
+                    "content": {
+                      "mode": "constant",
+                      "value": "Supercalifragilistic"
+                    },
+                    "font_size": {
+                      "mode": "constant",
+                      "value": 0.05
+                    }
+                  }
+                }
+              ],
+              "width": {
+                "mode": "constant",
+                "value": {
+                  "type": "length",
+                  "value": 0.05
+                }
+              }
+            }
+          ],
+          "flex_direction": "column",
+          "justify_content": "space_between",
+          "padding": {
+            "mode": "constant",
+            "value": {
+              "bottom": 0.1,
+              "left": 0.05,
+              "right": 0.05,
+              "top": 0.1
+            }
+          }
+        },
+        "type": "layout"
+      },
+      "height": 1920,
+      "name": "portrait",
+      "time": 0,
+      "width": 1080
+    }
+  ],
+  "font": "tests/fonts/Alpha2Fixture.ttf"
+}

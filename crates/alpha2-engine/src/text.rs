@@ -7,18 +7,22 @@
 //! beside its frame provider, calls [`TextTextures::prepare`] for each frame
 //! before rendering it, and answers [`crate::FrameProvider::text`] from it.
 //! A caption is composited as a layer between tracks; a text generator's
-//! texture is placed on the transparent picture the generator draws.
+//! texture is placed on the transparent picture the generator draws. A
+//! layout generator is resolved here too, with the same fonts, and its
+//! texts rasterized beside the others ([`crate::layout`]).
 
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use alpha2_eval::{FrameDesc, StepOp};
+use alpha2_eval::{FrameDesc, GeneratorPlan, LayoutPlan, StepOp};
 use alpha2_media::EmojiPolicy;
 use alpha2_model::{Generator, Rgba, TextAlign, TextStyle};
 use alpha2_render::{RenderCacheKey, RenderError, RenderSize, Renderer, SourceView, UploadTexture};
-use alpha2_text::{TextFont, TextRasterError, TextRasterRequest, TextRasterizer};
+use alpha2_text::{ShapedText, TextFont, TextRasterError, TextRasterRequest, TextRasterizer};
+
+use crate::layout::PreparedLayout;
 
 /// The high 64 bits of a text's result cache key, before its font set is
 /// mixed in: font sets are counted from 1 and stay far below this, so those
@@ -35,9 +39,17 @@ static NEXT_FONT_SET: AtomicU64 = AtomicU64::new(1);
 /// frame's are kept however many it shows.
 const RETAINED_TEXTS: usize = 16;
 
+/// How many resolved layouts a host keeps between frames; the current
+/// frame's are kept however many it shows.
+const RETAINED_LAYOUTS: usize = 8;
+
+/// How many shaped texts a host keeps for layout, least recently used
+/// first out.
+const RETAINED_SHAPED: usize = 256;
+
 /// The largest font, outline, and padding the text host draws, in pixels.
-const MAX_FONT_PIXELS: f32 = 2_048.0;
-const MAX_OUTLINE_PIXELS: f32 = 64.0;
+pub(crate) const MAX_FONT_PIXELS: f32 = 2_048.0;
+pub(crate) const MAX_OUTLINE_PIXELS: f32 = 64.0;
 const MAX_PADDING_PIXELS: f32 = 256.0;
 
 /// One prepared text: its texture, pixel size, and where its layout box
@@ -132,6 +144,22 @@ struct TextEntry {
     width: u32,
     height: u32,
     margin: [u32; 2],
+    /// Where the layout box's top-left corner lies in the texture.
+    corner: [u32; 2],
+    last_used: u64,
+}
+
+/// A layout resolved at one size, with the requests of its texts, to
+/// rasterize again one the text store has let go.
+struct LayoutEntry {
+    prepared: Arc<PreparedLayout>,
+    requests: Vec<(u64, TextRasterRequest)>,
+    last_used: u64,
+}
+
+/// A text shaped for layout, and when it was last asked for.
+struct ShapedEntry {
+    shaped: Arc<ShapedText>,
     last_used: u64,
 }
 
@@ -143,6 +171,12 @@ pub struct TextTextures {
     /// [`NEXT_FONT_SET`].
     font_set: u64,
     entries: HashMap<u64, TextEntry>,
+    /// Resolved layouts by [`layout_key`].
+    layouts: HashMap<u128, LayoutEntry>,
+    /// Texts shaped for layout, by [`shaped_key`].
+    shaped: HashMap<u64, ShapedEntry>,
+    /// How many layouts have been resolved: a static layout resolves once.
+    resolves: u64,
     frame: u64,
 }
 
@@ -152,6 +186,7 @@ impl fmt::Debug for TextTextures {
             .debug_struct("TextTextures")
             .field("fonts", &self.rasterizer.font_count())
             .field("texts", &self.entries.len())
+            .field("layouts", &self.layouts.len())
             .finish_non_exhaustive()
     }
 }
@@ -170,6 +205,9 @@ impl TextTextures {
             rasterizer: TextRasterizer::empty(),
             font_set: NEXT_FONT_SET.fetch_add(1, Ordering::Relaxed),
             entries: HashMap::new(),
+            layouts: HashMap::new(),
+            shaped: HashMap::new(),
+            resolves: 0,
             frame: 0,
         }
     }
@@ -193,6 +231,8 @@ impl TextTextures {
             })
             .map_err(TextError::Raster)?;
         self.entries.clear();
+        self.layouts.clear();
+        self.shaped.clear();
         // The same text may now draw other glyphs.
         self.font_set = NEXT_FONT_SET.fetch_add(1, Ordering::Relaxed);
         Ok(())
@@ -206,7 +246,9 @@ impl TextTextures {
 
     /// Rasterizes and uploads every text `frame` shows at `size` that is not
     /// already held: its captions and the text generators its clips draw.
-    /// Forgets the least recently shown beyond a small number.
+    /// Resolves every layout it draws that is not already held, and
+    /// rasterizes its texts. Forgets the least recently shown beyond a small
+    /// number.
     ///
     /// # Errors
     /// Returns [`TextError`] when a text cannot be rasterized or uploaded;
@@ -225,35 +267,22 @@ impl TextTextures {
                 continue;
             }
             let request = text_request(text, style, size, key);
-            let raster = self
-                .rasterizer
-                .rasterize(&request)
-                .map_err(TextError::Raster)?;
-            // Each text is rasterized once per key; keep no copy.
-            self.rasterizer.invalidate(key);
-            let texture_size = &raster.descriptor.texture;
-            // The anchor places the decorated text; the margin, which holds only ink reaching past
-            // it, takes no part in placement.
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let margin = [raster.descriptor.layout_x, raster.descriptor.layout_y]
-                .map(|margin| (margin as u32).saturating_sub(request.decoration_margin()));
-            let texture = renderer
-                .upload_rgba8(
-                    RenderSize::new(texture_size.width, texture_size.height)
-                        .map_err(TextError::Render)?,
-                    &raster.pixels.rgba8,
-                )
-                .map_err(TextError::Render)?;
-            self.entries.insert(
-                key,
-                TextEntry {
-                    texture,
-                    width: texture_size.width,
-                    height: texture_size.height,
-                    margin,
-                    last_used: self.frame,
-                },
-            );
+            self.rasterize(renderer, key, &request)?;
+        }
+        for (plan, time) in frame_layouts(frame) {
+            self.prepare_layout(renderer, plan, time, size)?;
+        }
+        while self.layouts.len() > RETAINED_LAYOUTS {
+            let Some(oldest) = self
+                .layouts
+                .iter()
+                .filter(|(_, entry)| entry.last_used < self.frame)
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(key, _)| *key)
+            else {
+                break;
+            };
+            self.layouts.remove(&oldest);
         }
         while self.entries.len() > RETAINED_TEXTS {
             let Some(oldest) = self
@@ -268,6 +297,171 @@ impl TextTextures {
             self.entries.remove(&oldest);
         }
         Ok(())
+    }
+
+    /// Rasterizes `request` and uploads it as the text with `key`.
+    fn rasterize(
+        &mut self,
+        renderer: &Renderer,
+        key: u64,
+        request: &TextRasterRequest,
+    ) -> Result<(), TextError> {
+        let raster = self
+            .rasterizer
+            .rasterize(request)
+            .map_err(TextError::Raster)?;
+        // Each text is rasterized once per key; keep no copy.
+        self.rasterizer.invalidate(key);
+        let texture_size = &raster.descriptor.texture;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let corner =
+            [raster.descriptor.layout_x, raster.descriptor.layout_y].map(|corner| corner as u32);
+        // The anchor places the decorated text; the margin, which holds only ink reaching past
+        // it, takes no part in placement.
+        let margin = corner.map(|corner| corner.saturating_sub(request.decoration_margin()));
+        let texture = renderer
+            .upload_rgba8(
+                RenderSize::new(texture_size.width, texture_size.height)
+                    .map_err(TextError::Render)?,
+                &raster.pixels.rgba8,
+            )
+            .map_err(TextError::Render)?;
+        self.entries.insert(
+            key,
+            TextEntry {
+                texture,
+                width: texture_size.width,
+                height: texture_size.height,
+                margin,
+                corner,
+                last_used: self.frame,
+            },
+        );
+        Ok(())
+    }
+
+    /// Resolves `plan` at picture time `time` and `size`, and rasterizes its
+    /// texts, unless that layout is already held: then only texts the store
+    /// let go are rasterized again.
+    fn prepare_layout(
+        &mut self,
+        renderer: &Renderer,
+        plan: &LayoutPlan,
+        time: alpha2_time::MediaTime,
+        size: RenderSize,
+    ) -> Result<(), TextError> {
+        let evaluated = plan.evaluate(time);
+        let key = layout_key(evaluated.key, size);
+        if let Some(entry) = self.layouts.get_mut(&key) {
+            entry.last_used = self.frame;
+            let requests = entry.requests.clone();
+            for (text, request) in &requests {
+                match self.entries.get_mut(text) {
+                    Some(held) => held.last_used = self.frame,
+                    None => self.rasterize(renderer, *text, request)?,
+                }
+            }
+            return Ok(());
+        }
+        self.resolves += 1;
+        let frame = self.frame;
+        let shaped =
+            crate::layout::shape_texts(&evaluated, size, |request| self.shape(request, frame))?;
+        let resolved = crate::layout::resolve(&evaluated, size, &shaped);
+        let (texts, requests) = crate::layout::layout_texts(&evaluated, &resolved, size);
+        let mut boxes = Vec::with_capacity(texts.len());
+        for text in &texts {
+            boxes.push(match text {
+                None => None,
+                Some(text_key) => {
+                    let request = &requests
+                        .iter()
+                        .find(|(key, _)| key == text_key)
+                        .expect("a request per text")
+                        .1;
+                    match self.entries.get_mut(text_key) {
+                        Some(held) => held.last_used = self.frame,
+                        None => self.rasterize(renderer, *text_key, request)?,
+                    }
+                    let entry = &self.entries[text_key];
+                    Some(crate::layout::paint::TextBox {
+                        corner: entry.corner,
+                        size: [entry.width, entry.height],
+                    })
+                }
+            });
+        }
+        let items = crate::layout::paint::paint_list(&evaluated, &resolved, size, &boxes);
+        self.layouts.insert(
+            key,
+            LayoutEntry {
+                prepared: Arc::new(PreparedLayout { items, texts }),
+                requests,
+                last_used: self.frame,
+            },
+        );
+        Ok(())
+    }
+
+    /// `request`'s text shaped for layout, from the cache when it holds it.
+    fn shape(
+        &mut self,
+        request: &TextRasterRequest,
+        frame: u64,
+    ) -> Result<Arc<ShapedText>, TextRasterError> {
+        let key = shaped_key(request);
+        if let Some(entry) = self.shaped.get_mut(&key) {
+            entry.last_used = frame;
+            return Ok(Arc::clone(&entry.shaped));
+        }
+        let shaped = Arc::new(self.rasterizer.shape(request)?);
+        if self.shaped.len() >= RETAINED_SHAPED
+            && let Some(oldest) = self
+                .shaped
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(key, _)| *key)
+        {
+            self.shaped.remove(&oldest);
+        }
+        self.shaped.insert(
+            key,
+            ShapedEntry {
+                shaped: Arc::clone(&shaped),
+                last_used: frame,
+            },
+        );
+        Ok(shaped)
+    }
+
+    /// How many layouts have been resolved, held or not.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) const fn layout_resolves(&self) -> u64 {
+        self.resolves
+    }
+
+    /// The prepared layout with `key`, as [`layout_key`] names it.
+    #[must_use]
+    pub fn layout(&self, key: u128) -> Option<Arc<PreparedLayout>> {
+        self.layouts
+            .get(&key)
+            .map(|entry| Arc::clone(&entry.prepared))
+    }
+
+    /// Where each node of `root` lies on a picture of `size` at picture
+    /// time `time`, laid out with these fonts: [`crate::measure_layout`].
+    ///
+    /// # Errors
+    /// Returns [`TextError::Raster`] as [`Self::prepare`] would for its
+    /// texts.
+    pub fn measure_layout(
+        &self,
+        root: &alpha2_model::LayoutNode,
+        time: alpha2_time::MediaTime,
+        size: RenderSize,
+    ) -> Result<crate::LayoutBounds, TextError> {
+        crate::measure_layout(&self.rasterizer, root, time, size)
     }
 
     /// [`Self::prepare`] for the frame of `project` at `time`, rendered at
@@ -404,6 +598,135 @@ impl crate::FrameProvider for FramesWithText<'_> {
     fn text(&self, key: u64) -> Option<TextTexture<'_>> {
         self.texts.get(key)
     }
+
+    fn layout(&self, key: u128) -> Option<Arc<PreparedLayout>> {
+        self.texts.layout(key)
+    }
+}
+
+/// Every layout `frame` may draw, with its picture time: each drawn clip's
+/// layout source at its source time, then each layout step of its
+/// compositions at the step's time plus its start.
+pub(crate) fn frame_layouts<'f>(
+    frame: &'f FrameDesc<'_>,
+) -> impl Iterator<Item = (&'f LayoutPlan, alpha2_time::MediaTime)> {
+    frame
+        .visual
+        .iter()
+        .filter(|clip| frame.draws(clip))
+        .flat_map(|clip| {
+            let own = clip
+                .plan
+                .and_then(GeneratorPlan::layout)
+                .map(|plan| (plan, clip.source_time));
+            let steps = clip
+                .composition
+                .iter()
+                .chain(&clip.source_composition)
+                .flat_map(|composition| {
+                    let time = composition.time();
+                    composition
+                        .plan()
+                        .steps
+                        .iter()
+                        .filter_map(move |step| match &step.op {
+                            StepOp::Generator {
+                                plan: Some(plan),
+                                start,
+                                ..
+                            } => plan.layout().map(|plan| {
+                                (
+                                    plan,
+                                    alpha2_time::MediaTime(
+                                        step.time(time).ticks().saturating_add(start.ticks()),
+                                    ),
+                                )
+                            }),
+                            _ => None,
+                        })
+                });
+            own.into_iter().chain(steps)
+        })
+}
+
+/// A layout's identity at a render size: its evaluated key and the size.
+/// Equal keys lay out and draw alike with the same fonts.
+#[must_use]
+pub fn layout_key(evaluated: u128, size: RenderSize) -> u128 {
+    let mut hash = alpha2_geometry::StableHash::new();
+    hash.bytes(b"layout");
+    hash.bytes(&evaluated.to_le_bytes());
+    hash.u32(size.width);
+    hash.u32(size.height);
+    hash.finish()
+}
+
+/// A layout text's raster request as a text store key: FNV-1a over a domain
+/// byte and every field of the request. Never zero.
+pub(crate) fn layout_text_key(request: &TextRasterRequest) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    let mut feed = |bytes: &[u8]| {
+        for byte in bytes {
+            hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    };
+    // Layout texts take keys apart from captions' and text generators'.
+    feed(&[0x4c]);
+    feed_request(&mut feed, request);
+    hash.max(1)
+}
+
+/// What a request is shaped from, as a shaped-text cache key.
+fn shaped_key(request: &TextRasterRequest) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    let mut feed = |bytes: &[u8]| {
+        for byte in bytes {
+            hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    };
+    feed(request.text.as_bytes());
+    feed(&[0xff]);
+    feed(
+        request
+            .font_family
+            .as_deref()
+            .unwrap_or_default()
+            .as_bytes(),
+    );
+    feed(&[0xff, u8::from(request.font_family.is_some())]);
+    feed(&request.font_size.to_bits().to_le_bytes());
+    feed(&request.line_height.to_bits().to_le_bytes());
+    hash
+}
+
+fn feed_request(feed: &mut impl FnMut(&[u8]), request: &TextRasterRequest) {
+    feed(request.text.as_bytes());
+    feed(&[0xff]);
+    feed(
+        request
+            .font_family
+            .as_deref()
+            .unwrap_or_default()
+            .as_bytes(),
+    );
+    feed(&[0xff, u8::from(request.font_family.is_some())]);
+    for value in [request.font_size, request.max_width, request.line_height] {
+        feed(&value.to_bits().to_le_bytes());
+    }
+    feed(&request.color);
+    feed(&[match request.align {
+        alpha2_media::TextAlign::Start => 0,
+        alpha2_media::TextAlign::Center => 1,
+        alpha2_media::TextAlign::End => 2,
+    }]);
+    match request.outline {
+        Some(outline) => {
+            feed(&[1]);
+            feed(&outline.color);
+            feed(&outline.width.to_bits().to_le_bytes());
+        }
+        None => feed(&[0]),
+    }
 }
 
 /// A text's identity at a render size: the text, its style, and the size,
@@ -502,7 +825,7 @@ pub fn measure_text(
 
 /// A straight, sRGB-encoded color as bytes.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn rgba8(color: Rgba) -> [u8; 4] {
+pub(crate) fn rgba8(color: Rgba) -> [u8; 4] {
     [color.red, color.green, color.blue, color.alpha]
         .map(|value| (value.clamp(0.0, 1.0) * 255.0).round() as u8)
 }

@@ -98,6 +98,21 @@ export const MAX_HDR_PEAK_NITS = 10000;
 /** Mirrors `alpha2_model::MAX_INLINED_NODES`. */
 export const MAX_INLINED_NODES = 65536;
 
+/** Mirrors `alpha2_model::MAX_LAYOUT_DEPTH`. */
+export const MAX_LAYOUT_DEPTH = 16;
+
+/** Mirrors `alpha2_model::MAX_LAYOUT_FONT_SIZE`. */
+export const MAX_LAYOUT_FONT_SIZE = 1;
+
+/** Mirrors `alpha2_model::MAX_LAYOUT_ISOLATED`. */
+export const MAX_LAYOUT_ISOLATED = 16;
+
+/** Mirrors `alpha2_model::MAX_LAYOUT_NODES`. */
+export const MAX_LAYOUT_NODES = 256;
+
+/** Mirrors `alpha2_model::MAX_LAYOUT_TEXTS`. */
+export const MAX_LAYOUT_TEXTS = 64;
+
 /** Mirrors `alpha2_model::MAX_LINE_HEIGHT`. */
 export const MAX_LINE_HEIGHT = 3;
 
@@ -185,6 +200,14 @@ export const REVERB_DELAY_MS = 160;
 /** Mirrors `alpha2_model::TICKS_PER_SECOND`. */
 export const TICKS_PER_SECOND = 120000;
 
+/** Every {@link AlignItems}, in the model's order. */
+export const ALIGN_ITEMS_VALUES: readonly AlignItems[] = [
+  "start",
+  "center",
+  "end",
+  "stretch",
+];
+
 /** Every {@link BlendSpace}, in the model's order. */
 export const BLEND_SPACE_VALUES: readonly BlendSpace[] = [
   "linear_light",
@@ -260,8 +283,29 @@ export const FADE_SHAPE_VALUES: readonly FadeShape[] = [
 /** Every {@link FillRule}, in the model's order. */
 export const FILL_RULE_VALUES: readonly FillRule[] = ["nonzero", "evenodd"];
 
+/** Every {@link FlexDirection}, in the model's order. */
+export const FLEX_DIRECTION_VALUES: readonly FlexDirection[] = [
+  "row",
+  "column",
+  "row_reverse",
+  "column_reverse",
+];
+
+/** Every {@link FlexWrap}, in the model's order. */
+export const FLEX_WRAP_VALUES: readonly FlexWrap[] = ["nowrap", "wrap"];
+
 /** Every {@link HdrSources}, in the model's order. */
 export const HDR_SOURCES_VALUES: readonly HdrSources[] = ["tone_map", "reject"];
+
+/** Every {@link JustifyContent}, in the model's order. */
+export const JUSTIFY_CONTENT_VALUES: readonly JustifyContent[] = [
+  "start",
+  "center",
+  "end",
+  "space_between",
+  "space_around",
+  "space_evenly",
+];
 
 /** Every {@link LineCap}, in the model's order. */
 export const LINE_CAP_VALUES: readonly LineCap[] = ["butt", "round", "square"];
@@ -316,11 +360,17 @@ export const MISSING_FRAMES_VALUES: readonly MissingFrames[] = [
   "blank",
 ];
 
+/** Every {@link Overflow}, in the model's order. */
+export const OVERFLOW_VALUES: readonly Overflow[] = ["visible", "hidden"];
+
 /** Every {@link PolystarKind}, in the model's order. */
 export const POLYSTAR_KIND_VALUES: readonly PolystarKind[] = [
   "star",
   "polygon",
 ];
+
+/** Every {@link Position}, in the model's order. */
+export const POSITION_VALUES: readonly Position[] = ["relative", "absolute"];
 
 /** Every {@link Spread}, in the model's order. */
 export const SPREAD_VALUES: readonly Spread[] = ["pad", "repeat", "reflect"];
@@ -403,6 +453,11 @@ export interface Project {
    */
   readonly timeline: Timeline;
 }
+
+/**
+ * Where children lie across a flex container's main axis.
+ */
+export type AlignItems = "start" | "center" | "end" | "stretch";
 
 /**
  * A value that is either constant or controlled by sorted keyframes.
@@ -1178,6 +1233,16 @@ export type FadeShape = "linear" | "equal_power";
 export type FillRule = "nonzero" | "evenodd";
 
 /**
+ * The main axis of a flex container.
+ */
+export type FlexDirection = "row" | "column" | "row_reverse" | "column_reverse";
+
+/**
+ * Whether a flex container's children wrap.
+ */
+export type FlexWrap = "nowrap" | "wrap";
+
+/**
  * A positive rational frame rate in reduced form, at most one frame per tick
  * (120 000 frames per second).
  */
@@ -1200,7 +1265,7 @@ export interface FrameRate {
  * top-left to `(1, 1)` bottom-right; lengths (radii, stroke widths) are
  * fractions of its shorter side, so the picture is the same at any render
  * resolution. A fill or text does not change over time (a clip animates it
- * with its transform, effects, and masks); shapes may.
+ * with its transform, effects, and masks); shapes and layouts may.
  */
 export type Generator =
   | {
@@ -1244,6 +1309,19 @@ export type Generator =
        * the fonts its host registered.
        */
       readonly type: "text";
+    }
+  | {
+      /**
+       * The root box: the whole picture.
+       */
+      readonly root: LayoutNode;
+      /**
+       * Boxes laid out by CSS flexbox around their text and shapes. Its
+       * picture changes over time when any value in the tree is keyframed,
+       * in the picture's time. The engine lays it out with the fonts it
+       * draws with. See `LayoutNode`.
+       */
+      readonly type: "layout";
     };
 
 /**
@@ -1264,6 +1342,36 @@ export interface GradientStop {
  * What a project does with HDR sources.
  */
 export type HdrSources = "tone_map" | "reject";
+
+/**
+ * A length on each side of a box. Missing sides are 0.
+ */
+export interface Insets {
+  /**
+   * Bottom side.
+   *
+   * @defaultValue `0`
+   */
+  readonly bottom?: number;
+  /**
+   * Left side.
+   *
+   * @defaultValue `0`
+   */
+  readonly left?: number;
+  /**
+   * Right side.
+   *
+   * @defaultValue `0`
+   */
+  readonly right?: number;
+  /**
+   * Top side.
+   *
+   * @defaultValue `0`
+   */
+  readonly top?: number;
+}
 
 /**
  * Interpolation from one keyframe to the next.
@@ -1309,6 +1417,17 @@ export type Interpolation =
     };
 
 /**
+ * Where children lie along a flex container's main axis.
+ */
+export type JustifyContent =
+  | "start"
+  | "center"
+  | "end"
+  | "space_between"
+  | "space_around"
+  | "space_evenly";
+
+/**
  * One timestamped control value.
  */
 export interface Keyframe<T> {
@@ -1318,13 +1437,287 @@ export interface Keyframe<T> {
   readonly interpolation: Interpolation;
   /**
    * Timestamp of this value: timeline time, except in a composition
-   * node's settings, which are keyed in composition time.
+   * node's settings, which are keyed in composition time, and in a
+   * shapes or layout generator's tree, which is keyed in its picture's
+   * time.
    */
   readonly time: MediaTime;
   /**
    * Value at `time`.
    */
   readonly value: T;
+}
+
+/**
+ * A border inside the border box, as wide on every side.
+ */
+export interface LayoutBorder {
+  /**
+   * What covers the border. Positions are normalized to the border box.
+   */
+  readonly paint: Animated<Paint>;
+  /**
+   * Width. At least 0.
+   */
+  readonly width: Animated<number>;
+}
+
+/**
+ * Where an absolute box lies in its parent's padding box. A missing side is
+ * auto: with neither `left` nor `right`, the box keeps its place in the
+ * flow on that axis.
+ */
+export interface LayoutInset {
+  /**
+   * Distance from the parent's bottom padding edge.
+   */
+  readonly bottom?: Animated<LayoutLength> | null;
+  /**
+   * Distance from the parent's left padding edge.
+   */
+  readonly left?: Animated<LayoutLength> | null;
+  /**
+   * Distance from the parent's right padding edge.
+   */
+  readonly right?: Animated<LayoutLength> | null;
+  /**
+   * Distance from the parent's top padding edge.
+   */
+  readonly top?: Animated<LayoutLength> | null;
+}
+
+/**
+ * A size or an inset.
+ */
+export type LayoutLength =
+  | {
+      /**
+       * A fraction of the layout picture's shorter side.
+       */
+      readonly type: "length";
+      /**
+       * The fraction.
+       */
+      readonly value: number;
+    }
+  | {
+      /**
+       * Percent (0 to 100 is 0% to 100%) of the parent's content box, along
+       * the field's axis.
+       */
+      readonly type: "percent";
+      /**
+       * The percent.
+       */
+      readonly value: number;
+    };
+
+/**
+ * One box of a layout tree, laid out by CSS flexbox.
+ *
+ * A box is a flex container when it has children, a leaf when it has text
+ * or shape content, and empty otherwise (a spacer or a decoration). Per
+ * box, its background is drawn first, then its border, then its content.
+ * Boxes are drawn in document order; a reversed direction moves them, not
+ * their order.
+ */
+export interface LayoutNode {
+  /**
+   * Where children lie across the main axis. Default `stretch`.
+   */
+  readonly align_items?: AlignItems | null;
+  /**
+   * Where the box lies across its parent's main axis. `None` follows the
+   * parent's `align_items`.
+   */
+  readonly align_self?: AlignItems | null;
+  /**
+   * Width over height. Positive.
+   */
+  readonly aspect_ratio?: number | null;
+  /**
+   * What covers the border box, rounded by `border_radius`. Positions
+   * are normalized to the border box.
+   */
+  readonly background?: Animated<Paint> | null;
+  /**
+   * A border inside the border box.
+   */
+  readonly border?: LayoutBorder | null;
+  /**
+   * The corner radius of the border box. At least 0; default 0. A radius
+   * past half the box's shorter side is capped.
+   */
+  readonly border_radius?: Animated<number> | null;
+  /**
+   * Boxes laid out in this one, in document (and paint) order. Not with
+   * `text` or `shape`.
+   */
+  readonly children?: readonly LayoutNode[];
+  /**
+   * The main size before growing and shrinking. `None` is auto.
+   */
+  readonly flex_basis?: Animated<LayoutLength> | null;
+  /**
+   * The main axis of the box's children. Default `row`. Not on a box
+   * with text or shape content, as every flex container field.
+   */
+  readonly flex_direction?: FlexDirection | null;
+  /**
+   * How much of the free space the box takes. At least 0; default 0.
+   */
+  readonly flex_grow?: Animated<number> | null;
+  /**
+   * How much the box gives up when space runs short. At least 0; default
+   * 1.
+   */
+  readonly flex_shrink?: Animated<number> | null;
+  /**
+   * Whether children wrap onto more lines. Default `nowrap`.
+   */
+  readonly flex_wrap?: FlexWrap | null;
+  /**
+   * Space between children, on both axes. At least 0; default 0.
+   */
+  readonly gap?: Animated<number> | null;
+  /**
+   * Border-box height. `None` is auto.
+   */
+  readonly height?: Animated<LayoutLength> | null;
+  /**
+   * Where an `absolute` box lies in its parent's padding box.
+   */
+  readonly inset?: LayoutInset | null;
+  /**
+   * Where children lie along the main axis. Default `start`.
+   */
+  readonly justify_content?: JustifyContent | null;
+  /**
+   * Space outside the border. Sides may be negative; there is no `auto`.
+   */
+  readonly margin?: Animated<Insets> | null;
+  /**
+   * Largest height. `None` is none.
+   */
+  readonly max_height?: Animated<LayoutLength> | null;
+  /**
+   * Largest width. `None` is none.
+   */
+  readonly max_width?: Animated<LayoutLength> | null;
+  /**
+   * Smallest height. `None` is auto.
+   */
+  readonly min_height?: Animated<LayoutLength> | null;
+  /**
+   * Smallest width. `None` is auto, the CSS automatic minimum size.
+   */
+  readonly min_width?: Animated<LayoutLength> | null;
+  /**
+   * Opacity of the box and everything in it, as one group, in `0..=1`.
+   * Drawn after layout; it never moves a box.
+   */
+  readonly opacity?: Animated<number> | null;
+  /**
+   * Whether content past the padding box is drawn. Default `visible`.
+   */
+  readonly overflow?: Overflow | null;
+  /**
+   * Space inside the border. Sides at least 0; default 0.
+   */
+  readonly padding?: Animated<Insets> | null;
+  /**
+   * Whether the box is in its parent's flow. Default `relative`.
+   */
+  readonly position?: Position | null;
+  /**
+   * Clockwise rotation of the box and everything in it about its
+   * border-box centre, in degrees, after layout.
+   */
+  readonly rotation_degrees?: Animated<number> | null;
+  /**
+   * Per-axis scale of the box and everything in it about its border-box
+   * centre, after layout.
+   */
+  readonly scale?: Animated<Vec2> | null;
+  /**
+   * Shapes drawn on a picture the size of the box's content box. Not with
+   * `children` or `text`.
+   */
+  readonly shape?: LayoutShape | null;
+  /**
+   * The box's text, wrapped at its content width. Not with `children` or
+   * `shape`.
+   */
+  readonly text?: LayoutText | null;
+  /**
+   * Offset of the box and everything in it, after layout.
+   */
+  readonly translate?: Animated<Vec2> | null;
+  /**
+   * Border-box width. `None` is auto. Not on the root, as every flex item
+   * field.
+   */
+  readonly width?: Animated<LayoutLength> | null;
+}
+
+/**
+ * A box's shapes, drawn as a shapes generator draws its items on a picture
+ * the size of the box's content box: positions normalized to that box,
+ * lengths fractions of its shorter side. A shape box has no size of its
+ * own.
+ */
+export interface LayoutShape {
+  /**
+   * The content tree, front first.
+   */
+  readonly items: readonly ShapeItem[];
+}
+
+/**
+ * A box's text: one paragraph style, wrapped at the box's content width.
+ *
+ * The text fills the content width, its lines aligned in it by
+ * `text_align`; its first line starts at the content box's top.
+ */
+export interface LayoutText {
+  /**
+   * Text color.
+   *
+   * @defaultValue `{"alpha":1,"blue":1,"green":1,"red":1}`
+   */
+  readonly color?: Rgba;
+  /**
+   * The text; `\n` starts a line. At most `MAX_TEXT_CONTENT_BYTES`
+   * bytes per value; may be empty. Its keyframes all `hold`.
+   */
+  readonly content: Animated<string>;
+  /**
+   * The family the text draws in, as a text style's `font_family`.
+   */
+  readonly font_family?: string | null;
+  /**
+   * Font size as a fraction of the picture's shorter side: positive, at
+   * most `MAX_LAYOUT_FONT_SIZE`.
+   *
+   * @defaultValue `{"mode":"constant","value":0.05}`
+   */
+  readonly font_size?: Animated<number>;
+  /**
+   * Baseline-to-baseline distance in font sizes, in `[0.5, 3]`.
+   *
+   * @defaultValue `1.2`
+   */
+  readonly line_height?: number;
+  /**
+   * A band around the glyphs; its width a fraction of the font size.
+   */
+  readonly outline?: TextOutline | null;
+  /**
+   * How lines align within the content width. Default `start`.
+   *
+   * @defaultValue `"start"`
+   */
+  readonly text_align?: TextAlign;
 }
 
 /**
@@ -1767,6 +2160,11 @@ export type NodeOp =
     };
 
 /**
+ * Whether content past a box's padding box is drawn.
+ */
+export type Overflow = "visible" | "hidden";
+
+/**
  * A color or gradient.
  *
  * Gradients interpolate between stops premultiplied, in linear light: the
@@ -1923,6 +2321,11 @@ export interface PointKeyframe {
  * What kind of figure a polystar is.
  */
 export type PolystarKind = "star" | "polygon";
+
+/**
+ * Whether a box is in its parent's flow.
+ */
+export type Position = "relative" | "absolute";
 
 /**
  * A stable project identifier.

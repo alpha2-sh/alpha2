@@ -263,12 +263,17 @@ impl Project {
     }
 
     /// Whether anything in the project may draw text: a caption track, or a
-    /// text generator in a source or a composition. A host whose project
-    /// draws none needs no fonts and prepares no text.
+    /// text or layout generator in a source or a composition. A host whose
+    /// project draws none needs no fonts and prepares no text. A layout is
+    /// resolved by the text host, with or without text.
     #[must_use]
     pub fn draws_text(&self) -> bool {
-        let is_text =
-            |generator: &crate::Generator| matches!(generator, crate::Generator::Text { .. });
+        let is_text = |generator: &crate::Generator| {
+            matches!(
+                generator,
+                crate::Generator::Text { .. } | crate::Generator::Layout { .. }
+            )
+        };
         self.timeline
             .tracks
             .iter()
@@ -962,12 +967,23 @@ fn validate_source_content(source: &MediaSource) -> Result<(), ModelError> {
         });
     }
     if source.kind == MediaKind::Generated {
-        if let Some(Err(Some(issue))) = source.generator.as_ref().map(Generator::validate) {
-            return Err(ModelError::InvalidShape {
-                owner: crate::ShapeOwner::Source(source.id.clone()),
-                at: issue.at,
-                problem: issue.problem,
-            });
+        let owner = || crate::ShapeOwner::Source(source.id.clone());
+        match source.generator.as_ref().map(Generator::validate) {
+            Some(Err(crate::GeneratorIssue::Shape(issue))) => {
+                return Err(ModelError::InvalidShape {
+                    owner: owner(),
+                    at: issue.at,
+                    problem: issue.problem,
+                });
+            }
+            Some(Err(crate::GeneratorIssue::Layout(issue))) => {
+                return Err(ModelError::InvalidLayout {
+                    owner: owner(),
+                    at: issue.at,
+                    problem: issue.problem,
+                });
+            }
+            _ => {}
         }
         let valid = source.generator.as_ref().is_some_and(Generator::is_valid)
             && source.locator.is_empty()

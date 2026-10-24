@@ -126,8 +126,8 @@ pub(crate) struct IndexedClip {
     pub(crate) audio: alpha2_model::AudioProperties,
     pub(crate) source_is_audible: bool,
     pub(crate) generator: Option<alpha2_model::Generator>,
-    /// A shapes generator's tree, planned once per source.
-    pub(crate) shapes: Option<std::sync::Arc<crate::ShapesPlan>>,
+    /// A shapes or layout generator's tree, planned once per source.
+    pub(crate) plan: Option<std::sync::Arc<crate::GeneratorPlan>>,
     /// For a composition source, its composition compiled to draw it.
     pub(crate) source_composition: Option<(alpha2_model::CompositionId, crate::index::PlanSlot)>,
     pub(crate) track_order: usize,

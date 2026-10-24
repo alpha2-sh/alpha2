@@ -16,6 +16,9 @@ import {
   extensionsProjectPath,
   hdrAssets,
   hdrProjectPath,
+  layoutAssets,
+  layoutFont,
+  layoutProjectPath,
   mediaExecutable,
   orientationAssets,
   orientationProjectPath,
@@ -69,6 +72,28 @@ export async function nativeFrames(scratch, cliOutput) {
       "--no-audio",
     ],
     { ALPHA2_EXPORT_FRAMES_Y4M: shapesFrames },
+  );
+  const layoutFrames = join(scratch, "layout.y4m");
+  await run(
+    executable,
+    [
+      "export",
+      "--project",
+      layoutProjectPath,
+      ...Object.entries(layoutAssets).flatMap(([id, path]) => [
+        "--asset",
+        `${id}=${path}`,
+      ]),
+      "--font",
+      layoutFont,
+      "--out",
+      join(scratch, "layout.mp4"),
+      "--video-codec",
+      "mpeg4-part2",
+      ...PINNED_RATE_ARGUMENTS,
+      "--no-audio",
+    ],
+    { ALPHA2_EXPORT_FRAMES_Y4M: layoutFrames },
   );
   const effectsFrames = join(scratch, "effects.y4m");
   await run(
@@ -244,6 +269,7 @@ export async function nativeFrames(scratch, cliOutput) {
     nativeFrame,
     complexFrames,
     shapesFrames,
+    layoutFrames,
     effectsFrames,
     hdrFrames,
     orientationFrames,

@@ -578,3 +578,62 @@ fn coverage_and_outlines_match_the_pinned_hashes() {
     }
     assert_eq!(actual, pinned);
 }
+
+#[test]
+fn a_scene_in_a_box_is_the_canvas_scene_moved_there_with_its_paints() {
+    let items = [
+        rectangle(0.5, 0.5, 0.5, 0.25),
+        fill(),
+        EvaluatedItem::Geometry(EvaluatedGeometry::Ellipse {
+            center: Point::new(0.25, 0.75),
+            size: Vec2::new(0.2, 0.2),
+            rotation_degrees: 0.0,
+        }),
+        stroke(0.05),
+    ];
+    let space = CanvasSize::new(40, 30);
+    let alone = build_scene(&items, space);
+    let canvas = CanvasSize::new(200, 100);
+    let moved = crate::build_scene_in(&items, space, Vec2::new(70.0, 20.0), canvas);
+    assert_eq!(moved.len(), alone.ops.len());
+    for (moved, alone) in moved.iter().zip(&alone.ops) {
+        let (
+            VectorOp::Fill {
+                path: moved_path,
+                paint: moved_paint,
+                bounds: moved_bounds,
+                ..
+            },
+            VectorOp::Fill {
+                path,
+                paint,
+                bounds,
+                ..
+            },
+        ) = (moved, alone)
+        else {
+            panic!("fills");
+        };
+        assert_eq!(
+            **moved_path,
+            Affine::translate((70.0, 20.0)) * (**path).clone()
+        );
+        assert_eq!(moved_paint.space, [40.0, 30.0]);
+        assert_eq!(paint.space, [40.0, 30.0]);
+        assert_eq!(
+            moved_paint.inverse,
+            paint.inverse * Affine::translate((-70.0, -20.0))
+        );
+        assert_eq!(
+            (moved_bounds.x0, moved_bounds.y0),
+            (bounds.x0 + 70, bounds.y0 + 20)
+        );
+    }
+    // Clipped to the canvas, not the box: a scene past the canvas edge covers no more of it.
+    let past = crate::build_scene_in(&items, space, Vec2::new(190.0, 90.0), canvas);
+    for op in &past {
+        if let VectorOp::Fill { bounds, .. } = op {
+            assert!(bounds.x1 <= 200 && bounds.y1 <= 100, "{bounds:?}");
+        }
+    }
+}

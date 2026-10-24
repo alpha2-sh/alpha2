@@ -25,6 +25,7 @@ mod composition;
 mod effects_and_transitions;
 mod export_steps;
 mod layers;
+mod layout;
 mod missing_sources;
 mod player;
 mod shapes;

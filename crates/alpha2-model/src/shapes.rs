@@ -7,8 +7,11 @@
 //! of the picture's shorter side. Rotation and scale act in pixel space, so a
 //! rotated square stays square on a wide canvas.
 
-use crate::animation::{valid_keyframes, valid_point_animation};
-use crate::{Animated, AnimatedPoint, Keyframe, Paint, Vec2};
+use crate::animation::valid_keyframes;
+use crate::checks::{
+    ValueIssue, ValueProblem, any, non_negative, point, scalar, unit, validate_paint, vec2,
+};
+use crate::{Animated, AnimatedPoint, Paint, Vec2};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -447,6 +450,19 @@ pub struct ShapeIssue {
     pub problem: ShapeProblem,
 }
 
+impl From<ValueIssue> for ShapeIssue {
+    fn from(issue: ValueIssue) -> Self {
+        Self::new(
+            issue.at,
+            match issue.problem {
+                ValueProblem::InvalidKeyframes => ShapeProblem::InvalidKeyframes,
+                ValueProblem::OutOfRange => ShapeProblem::OutOfRange,
+                ValueProblem::PaintKeyframesDiffer => ShapeProblem::PaintKeyframesDiffer,
+            },
+        )
+    }
+}
+
 impl ShapeIssue {
     fn new(at: impl Into<String>, problem: ShapeProblem) -> Self {
         Self {
@@ -468,7 +484,12 @@ pub fn validate_shape_items(items: &[ShapeItem]) -> Result<(), ShapeIssue> {
     validate_items(items, "items", 1, &mut count)
 }
 
-fn validate_items(items: &[ShapeItem], at: &str, depth: usize, count: &mut usize) -> Checked {
+pub(crate) fn validate_items(
+    items: &[ShapeItem],
+    at: &str,
+    depth: usize,
+    count: &mut usize,
+) -> Checked {
     if depth > MAX_SHAPE_DEPTH {
         return Err(ShapeIssue::new(at, ShapeProblem::TooDeep));
     }
@@ -518,67 +539,6 @@ impl ShapeGeometry {
     }
 }
 
-fn unit(value: f32) -> bool {
-    (0.0..=1.0).contains(&value)
-}
-
-fn non_negative(value: f32) -> bool {
-    value >= 0.0
-}
-
-fn any(_: f32) -> bool {
-    true
-}
-
-fn scalar(animation: &Animated<f32>, at: &str, check: fn(f32) -> bool) -> Checked {
-    let valid = |value: f32| value.is_finite() && check(value);
-    let values_valid = match animation {
-        Animated::Constant { value } => valid(*value),
-        Animated::Keyframes { keyframes } => {
-            if !valid_keyframes(keyframes) {
-                return Err(ShapeIssue::new(at, ShapeProblem::InvalidKeyframes));
-            }
-            keyframes.iter().all(|keyframe| valid(keyframe.value))
-        }
-    };
-    values_valid
-        .then_some(())
-        .ok_or_else(|| ShapeIssue::new(at, ShapeProblem::OutOfRange))
-}
-
-fn vec2(animation: &Animated<Vec2>, at: &str, check: fn(Vec2) -> bool) -> Checked {
-    let valid = |value: Vec2| value.x.is_finite() && value.y.is_finite() && check(value);
-    let values_valid = match animation {
-        Animated::Constant { value } => valid(*value),
-        Animated::Keyframes { keyframes } => {
-            if !valid_keyframes(keyframes) {
-                return Err(ShapeIssue::new(at, ShapeProblem::InvalidKeyframes));
-            }
-            keyframes.iter().all(|keyframe| valid(keyframe.value))
-        }
-    };
-    values_valid
-        .then_some(())
-        .ok_or_else(|| ShapeIssue::new(at, ShapeProblem::OutOfRange))
-}
-
-fn point(animation: &AnimatedPoint, at: &str) -> Checked {
-    if let AnimatedPoint::Keyframes { keyframes } = animation
-        && (keyframes.is_empty()
-            || keyframes
-                .windows(2)
-                .any(|pair| pair[0].time >= pair[1].time)
-            || !keyframes
-                .iter()
-                .all(|keyframe| keyframe.interpolation.is_valid()))
-    {
-        return Err(ShapeIssue::new(at, ShapeProblem::InvalidKeyframes));
-    }
-    valid_point_animation(animation)
-        .then_some(())
-        .ok_or_else(|| ShapeIssue::new(at, ShapeProblem::OutOfRange))
-}
-
 fn sizes(value: Vec2) -> bool {
     value.x >= 0.0 && value.y >= 0.0
 }
@@ -595,7 +555,8 @@ fn validate_rectangle(geometry: &RectangleGeometry, at: &str) -> Checked {
         &geometry.rotation_degrees,
         &format!("{at}.rotation_degrees"),
         any,
-    )
+    )?;
+    Ok(())
 }
 
 fn validate_ellipse(geometry: &EllipseGeometry, at: &str) -> Checked {
@@ -605,7 +566,8 @@ fn validate_ellipse(geometry: &EllipseGeometry, at: &str) -> Checked {
         &geometry.rotation_degrees,
         &format!("{at}.rotation_degrees"),
         any,
-    )
+    )?;
+    Ok(())
 }
 
 fn validate_polystar(geometry: &PolystarGeometry, at: &str) -> Checked {
@@ -637,7 +599,8 @@ fn validate_polystar(geometry: &PolystarGeometry, at: &str) -> Checked {
         &geometry.rotation_degrees,
         &format!("{at}.rotation_degrees"),
         any,
-    )
+    )?;
+    Ok(())
 }
 
 fn validate_transform(transform: &ShapeTransform, at: &str) -> Checked {
@@ -649,7 +612,8 @@ fn validate_transform(transform: &ShapeTransform, at: &str) -> Checked {
         &format!("{at}.rotation_degrees"),
         any,
     )?;
-    scalar(&transform.opacity, &format!("{at}.opacity"), unit)
+    scalar(&transform.opacity, &format!("{at}.opacity"), unit)?;
+    Ok(())
 }
 
 fn validate_stroke(stroke: &StrokeItem, at: &str) -> Checked {
@@ -734,40 +698,6 @@ fn validate_path(path: &Animated<Path>, at: &str) -> Checked {
             }
             Ok(())
         }
-    }
-}
-
-fn validate_paint(paint: &Animated<Paint>, at: &str) -> Checked {
-    let invalid = || ShapeIssue::new(at, ShapeProblem::OutOfRange);
-    match paint {
-        Animated::Constant { value } => value.is_valid().then_some(()).ok_or_else(invalid),
-        Animated::Keyframes { keyframes } => {
-            if !valid_keyframes(keyframes) {
-                return Err(ShapeIssue::new(at, ShapeProblem::InvalidKeyframes));
-            }
-            if !keyframes.iter().all(|keyframe| keyframe.value.is_valid()) {
-                return Err(invalid());
-            }
-            let first = paint_structure(&keyframes[0]);
-            if keyframes[1..]
-                .iter()
-                .any(|keyframe| paint_structure(keyframe) != first)
-            {
-                return Err(ShapeIssue::new(at, ShapeProblem::PaintKeyframesDiffer));
-            }
-            Ok(())
-        }
-    }
-}
-
-/// What two paint keyframes must share to interpolate: kind, stop count, and
-/// spread.
-fn paint_structure(keyframe: &Keyframe<Paint>) -> (u8, usize, Option<crate::Spread>) {
-    match &keyframe.value {
-        Paint::Solid { .. } => (0, 1, None),
-        Paint::LinearGradient { stops, spread, .. } => (1, stops.len(), Some(*spread)),
-        Paint::RadialGradient { stops, spread, .. } => (2, stops.len(), Some(*spread)),
-        Paint::ConicGradient { stops, .. } => (3, stops.len(), None),
     }
 }
 

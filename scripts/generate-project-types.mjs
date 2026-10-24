@@ -36,6 +36,7 @@ const PRIMITIVE_ARGUMENTS = new Map([
   ["int64", "number"],
   ["uint32", "number"],
   ["uint64", "number"],
+  ["string", "string"],
 ]);
 
 const schema = JSON.parse(readFileSync(schemaPath, "utf8"));
@@ -164,7 +165,10 @@ function render(node, generic) {
   if (
     generic !== undefined &&
     !(generic.argument in defs) &&
-    node.format === generic.argument
+    (node.format === generic.argument ||
+      (generic.argument === "string" &&
+        node.type === "string" &&
+        node.format === undefined))
   ) {
     return "T";
   }

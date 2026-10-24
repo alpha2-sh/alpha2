@@ -60,7 +60,7 @@ fn frame(source: &SourceId, cache: CacheIntent, opacity: f32) -> FrameDesc<'stat
             matte: None,
             is_matte: false,
             generator: None,
-            shapes: None,
+            plan: None,
             source_composition: None,
         }],
         audio: Vec::new(),

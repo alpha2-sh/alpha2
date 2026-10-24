@@ -1,7 +1,7 @@
 use crate::EvaluatedVisual;
 use alpha2_model::{
-    Animated, AnimatedPoint, EffectValue, GradientStop, Keyframe, Paint, Path, PointKeyframe, Vec2,
-    VisualProperties,
+    Animated, AnimatedPoint, EffectValue, GradientStop, Insets, Keyframe, LayoutLength, Paint,
+    Path, PointKeyframe, Vec2, VisualProperties,
 };
 use alpha2_time::MediaTime;
 
@@ -461,4 +461,61 @@ fn interpolation_amount(start: MediaTime, end: MediaTime, time: MediaTime) -> f6
 fn interpolate_f32(start: f32, end: f32, amount: f64) -> f32 {
     (f64::from(start) + (f64::from(end) - f64::from(start)) * amount)
         .clamp(f64::from(f32::MIN), f64::from(f32::MAX)) as f32
+}
+
+/// Samples per-side lengths; each side as [`sample_scalar`] samples a value.
+#[must_use]
+pub fn sample_insets(animation: &Animated<Insets>, time: MediaTime) -> Insets {
+    match animation {
+        Animated::Constant { value } => *value,
+        Animated::Keyframes { keyframes } => match segment(keyframes, time) {
+            Segment::Between(left, right, amount) => {
+                let side = |from: f32, to: f32| interpolate_f32(from, to, amount);
+                Insets {
+                    top: side(left.value.top, right.value.top),
+                    right: side(left.value.right, right.value.right),
+                    bottom: side(left.value.bottom, right.value.bottom),
+                    left: side(left.value.left, right.value.left),
+                }
+            }
+            Segment::At(keyframe) => keyframe.value,
+            Segment::Empty => Insets::default(),
+        },
+    }
+}
+
+/// Samples a layout length. Validation makes every keyframe one kind; were
+/// they not, the left keyframe's kind is kept.
+#[must_use]
+pub fn sample_length(animation: &Animated<LayoutLength>, time: MediaTime) -> LayoutLength {
+    match animation {
+        Animated::Constant { value } => *value,
+        Animated::Keyframes { keyframes } => match segment(keyframes, time) {
+            Segment::Between(left, right, amount) => {
+                let value = interpolate_f32(left.value.value(), right.value.value(), amount);
+                match left.value {
+                    LayoutLength::Length { .. } => LayoutLength::Length { value },
+                    LayoutLength::Percent { .. } => LayoutLength::Percent { value },
+                }
+            }
+            Segment::At(keyframe) => keyframe.value,
+            Segment::Empty => LayoutLength::Length { value: 0.0 },
+        },
+    }
+}
+
+/// Samples a value that does not interpolate: the last keyframe at or
+/// before `time`, else the first.
+#[must_use]
+pub fn sample_hold<T: Clone + Default>(animation: &Animated<T>, time: MediaTime) -> T {
+    match animation {
+        Animated::Constant { value } => value.clone(),
+        Animated::Keyframes { keyframes } => {
+            let next = keyframes.partition_point(|keyframe| keyframe.time <= time);
+            keyframes
+                .get(next.saturating_sub(1))
+                .map(|keyframe| keyframe.value.clone())
+                .unwrap_or_default()
+        }
+    }
 }

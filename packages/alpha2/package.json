@@ -77,6 +77,10 @@
       "types": "./dist/media.d.ts",
       "import": "./dist/media.js"
     },
+    "./layout": {
+      "types": "./dist/layout.d.ts",
+      "import": "./dist/layout.js"
+    },
     "./text": {
       "types": "./dist/text.d.ts",
       "import": "./dist/text.js"

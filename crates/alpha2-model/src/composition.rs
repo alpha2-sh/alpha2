@@ -937,6 +937,22 @@ fn shape_error(
     }
 }
 
+/// A node's layout problem as the model reports it.
+fn layout_error(
+    composition: &Composition,
+    node: &CompositionNode,
+    issue: crate::LayoutIssue,
+) -> crate::ModelError {
+    crate::ModelError::InvalidLayout {
+        owner: crate::ShapeOwner::Node {
+            composition: composition.id.clone(),
+            node: node.id.clone(),
+        },
+        at: issue.at,
+        problem: issue.problem,
+    }
+}
+
 fn validate_node(
     composition: &Composition,
     node: &CompositionNode,
@@ -980,8 +996,11 @@ fn validate_node(
         }
         NodeOp::Generator { generator } => match generator.validate() {
             Ok(()) => true,
-            Err(Some(issue)) => return Err(shape_error(issue)),
-            Err(None) => false,
+            Err(crate::GeneratorIssue::Shape(issue)) => return Err(shape_error(issue)),
+            Err(crate::GeneratorIssue::Layout(issue)) => {
+                return Err(layout_error(composition, node, issue));
+            }
+            Err(crate::GeneratorIssue::Invalid) => false,
         },
         NodeOp::Effect { effect, inputs, .. } => {
             effect.is_valid()

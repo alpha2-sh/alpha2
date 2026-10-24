@@ -6,8 +6,8 @@
 #
 # Seeds are written, never committed: each target's corpus directory (fuzz/corpus/<target>, ignored
 # by git) starts from the test files it reads (tests/corpus/extensions, the project documents under
-# tests/cases/, tests/corpus/captions with LF and CRLF line ends); evaluate, audio_render, and
-# vector_raster start empty. ALPHA2_FUZZ_SEEDS=<dir> adds <dir>/<target>/* to a target's seeds.
+# tests/cases/, tests/corpus/captions with LF and CRLF line ends, the layouts of
+# tests/golden/layout_measure.json); evaluate, audio_render, and vector_raster start empty. ALPHA2_FUZZ_SEEDS=<dir> adds <dir>/<target>/* to a target's seeds.
 #
 # An input that takes longer than ALPHA2_FUZZ_TIMEOUT seconds (default 20) or more than
 # ALPHA2_FUZZ_RSS_MB megabytes (default 2560) is a finding, as a panic is. Findings land in
@@ -80,6 +80,20 @@ seed() {
         # The same cues with CRLF line ends: git checks the seeds out with LF.
         { printf %s "$format"; sed 's/$/\r/' "$file"; } >"$dir/crlf-$(basename "$file")"
       done
+      ;;
+    layout_resolve)
+      # Each pinned layout behind the header the target reads: width and height (u16 LE) and the
+      # time in hundreds of ticks (i16 LE).
+      node -e '
+        const [golden, dir] = process.argv.slice(1);
+        const fs = require("fs");
+        for (const test of JSON.parse(fs.readFileSync(golden, "utf8")).cases) {
+          const head = Buffer.alloc(6);
+          head.writeUInt16LE(test.width, 0);
+          head.writeUInt16LE(test.height, 2);
+          head.writeInt16LE(Math.trunc(test.time / 100), 4);
+          fs.writeFileSync(`${dir}/${test.name}`, Buffer.concat([head, Buffer.from(JSON.stringify(test.generator.root))]));
+        }' tests/golden/layout_measure.json "$dir"
       ;;
     evaluate | audio_render | vector_raster) ;;
     *) echo "unknown target $target" >&2; exit 2 ;;

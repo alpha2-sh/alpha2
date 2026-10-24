@@ -1,5 +1,30 @@
 {
   "$defs": {
+    "AlignItems": {
+      "description": "Where children lie across a flex container's main axis.",
+      "oneOf": [
+        {
+          "const": "start",
+          "description": "At the start.",
+          "type": "string"
+        },
+        {
+          "const": "center",
+          "description": "In the middle.",
+          "type": "string"
+        },
+        {
+          "const": "end",
+          "description": "At the end.",
+          "type": "string"
+        },
+        {
+          "const": "stretch",
+          "description": "Across the whole line.",
+          "type": "string"
+        }
+      ]
+    },
     "AnimatedPoint": {
       "description": "A position that can move along curves between its keyframes.\n\nIts JSON is that of an `Animated<Vec2>`, plus optional spatial tangents on\neach keyframe: with them, the value travels along the cubic Bezier from\none keyframe's value through its `out_tangent` and the next keyframe's\n`in_tangent`, at the speed its timing curve sets along the curve's\nlength. Without them it moves in a straight line, as an `Animated<Vec2>`\ndoes.",
       "oneOf": [
@@ -76,6 +101,98 @@
               "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
               "items": {
                 "$ref": "#/$defs/Keyframe_EffectValue"
+              },
+              "type": "array"
+            },
+            "mode": {
+              "const": "keyframes",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "keyframes"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Animated_Insets": {
+      "description": "A value that is either constant or controlled by sorted keyframes.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A value without animation.",
+          "properties": {
+            "mode": {
+              "const": "constant",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/Insets",
+              "description": "Value used at every timestamp."
+            }
+          },
+          "required": [
+            "mode",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Values evaluated from their keyframe sequence.",
+          "properties": {
+            "keyframes": {
+              "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
+              "items": {
+                "$ref": "#/$defs/Keyframe_Insets"
+              },
+              "type": "array"
+            },
+            "mode": {
+              "const": "keyframes",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "keyframes"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Animated_LayoutLength": {
+      "description": "A value that is either constant or controlled by sorted keyframes.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A value without animation.",
+          "properties": {
+            "mode": {
+              "const": "constant",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/LayoutLength",
+              "description": "Value used at every timestamp."
+            }
+          },
+          "required": [
+            "mode",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Values evaluated from their keyframe sequence.",
+          "properties": {
+            "keyframes": {
+              "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
+              "items": {
+                "$ref": "#/$defs/Keyframe_LayoutLength"
               },
               "type": "array"
             },
@@ -261,6 +378,52 @@
               "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
               "items": {
                 "$ref": "#/$defs/Keyframe_float"
+              },
+              "type": "array"
+            },
+            "mode": {
+              "const": "keyframes",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "keyframes"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Animated_string": {
+      "description": "A value that is either constant or controlled by sorted keyframes.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A value without animation.",
+          "properties": {
+            "mode": {
+              "const": "constant",
+              "type": "string"
+            },
+            "value": {
+              "description": "Value used at every timestamp.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Values evaluated from their keyframe sequence.",
+          "properties": {
+            "keyframes": {
+              "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
+              "items": {
+                "$ref": "#/$defs/Keyframe_string"
               },
               "type": "array"
             },
@@ -1476,6 +1639,46 @@
         }
       ]
     },
+    "FlexDirection": {
+      "description": "The main axis of a flex container.",
+      "oneOf": [
+        {
+          "const": "row",
+          "description": "Left to right.",
+          "type": "string"
+        },
+        {
+          "const": "column",
+          "description": "Top to bottom.",
+          "type": "string"
+        },
+        {
+          "const": "row_reverse",
+          "description": "Right to left.",
+          "type": "string"
+        },
+        {
+          "const": "column_reverse",
+          "description": "Bottom to top.",
+          "type": "string"
+        }
+      ]
+    },
+    "FlexWrap": {
+      "description": "Whether a flex container's children wrap.",
+      "oneOf": [
+        {
+          "const": "nowrap",
+          "description": "One line.",
+          "type": "string"
+        },
+        {
+          "const": "wrap",
+          "description": "As many lines as the children need.",
+          "type": "string"
+        }
+      ]
+    },
     "FrameRate": {
       "additionalProperties": false,
       "description": "A positive rational frame rate in reduced form, at most one frame per tick\n(120 000 frames per second).",
@@ -1502,7 +1705,7 @@
       "type": "object"
     },
     "Generator": {
-      "description": "The picture of a generated source.\n\nA generated picture has the canvas's size and aspect, like a source that\nfills the frame at scale 1. Positions are in its normalized space, `(0, 0)`\ntop-left to `(1, 1)` bottom-right; lengths (radii, stroke widths) are\nfractions of its shorter side, so the picture is the same at any render\nresolution. A fill or text does not change over time (a clip animates it\nwith its transform, effects, and masks); shapes may.",
+      "description": "The picture of a generated source.\n\nA generated picture has the canvas's size and aspect, like a source that\nfills the frame at scale 1. Positions are in its normalized space, `(0, 0)`\ntop-left to `(1, 1)` bottom-right; lengths (radii, stroke widths) are\nfractions of its shorter side, so the picture is the same at any render\nresolution. A fill or text does not change over time (a clip animates it\nwith its transform, effects, and masks); shapes and layouts may.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -1589,6 +1792,25 @@
             "text"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Boxes laid out by CSS flexbox around their text and shapes. Its\npicture changes over time when any value in the tree is keyframed,\nin the picture's time. The engine lays it out with the fonts it\ndraws with. See [`LayoutNode`].",
+          "properties": {
+            "root": {
+              "$ref": "#/$defs/LayoutNode",
+              "description": "The root box: the whole picture."
+            },
+            "type": {
+              "const": "layout",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "root"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -1626,6 +1848,37 @@
           "type": "string"
         }
       ]
+    },
+    "Insets": {
+      "additionalProperties": false,
+      "description": "A length on each side of a box. Missing sides are 0.",
+      "properties": {
+        "bottom": {
+          "default": 0.0,
+          "description": "Bottom side.",
+          "format": "float",
+          "type": "number"
+        },
+        "left": {
+          "default": 0.0,
+          "description": "Left side.",
+          "format": "float",
+          "type": "number"
+        },
+        "right": {
+          "default": 0.0,
+          "description": "Right side.",
+          "format": "float",
+          "type": "number"
+        },
+        "top": {
+          "default": 0.0,
+          "description": "Top side.",
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "type": "object"
     },
     "Interpolation": {
       "description": "Interpolation from one keyframe to the next.\n\nValues are interpolated numerically: a rotation from 0 to 720 degrees\nturns twice, and one from 0 to 360 turns once. A host that wants the\nshortest path normalizes its keyframe values.",
@@ -1698,6 +1951,41 @@
         }
       ]
     },
+    "JustifyContent": {
+      "description": "Where children lie along a flex container's main axis.",
+      "oneOf": [
+        {
+          "const": "start",
+          "description": "Packed at the start.",
+          "type": "string"
+        },
+        {
+          "const": "center",
+          "description": "Packed in the middle.",
+          "type": "string"
+        },
+        {
+          "const": "end",
+          "description": "Packed at the end.",
+          "type": "string"
+        },
+        {
+          "const": "space_between",
+          "description": "The first at the start, the last at the end, equal space between.",
+          "type": "string"
+        },
+        {
+          "const": "space_around",
+          "description": "Equal space around each.",
+          "type": "string"
+        },
+        {
+          "const": "space_evenly",
+          "description": "Equal space between each and at both ends.",
+          "type": "string"
+        }
+      ]
+    },
     "Keyframe_EffectValue": {
       "additionalProperties": false,
       "description": "One timestamped control value.",
@@ -1708,10 +1996,58 @@
         },
         "time": {
           "$ref": "#/$defs/MediaTime",
-          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time."
+          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time, and in a\nshapes or layout generator's tree, which is keyed in its picture's\ntime."
         },
         "value": {
           "$ref": "#/$defs/EffectValue",
+          "description": "Value at `time`."
+        }
+      },
+      "required": [
+        "time",
+        "value",
+        "interpolation"
+      ],
+      "type": "object"
+    },
+    "Keyframe_Insets": {
+      "additionalProperties": false,
+      "description": "One timestamped control value.",
+      "properties": {
+        "interpolation": {
+          "$ref": "#/$defs/Interpolation",
+          "description": "Interpolation from this keyframe to its successor."
+        },
+        "time": {
+          "$ref": "#/$defs/MediaTime",
+          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time, and in a\nshapes or layout generator's tree, which is keyed in its picture's\ntime."
+        },
+        "value": {
+          "$ref": "#/$defs/Insets",
+          "description": "Value at `time`."
+        }
+      },
+      "required": [
+        "time",
+        "value",
+        "interpolation"
+      ],
+      "type": "object"
+    },
+    "Keyframe_LayoutLength": {
+      "additionalProperties": false,
+      "description": "One timestamped control value.",
+      "properties": {
+        "interpolation": {
+          "$ref": "#/$defs/Interpolation",
+          "description": "Interpolation from this keyframe to its successor."
+        },
+        "time": {
+          "$ref": "#/$defs/MediaTime",
+          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time, and in a\nshapes or layout generator's tree, which is keyed in its picture's\ntime."
+        },
+        "value": {
+          "$ref": "#/$defs/LayoutLength",
           "description": "Value at `time`."
         }
       },
@@ -1732,7 +2068,7 @@
         },
         "time": {
           "$ref": "#/$defs/MediaTime",
-          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time."
+          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time, and in a\nshapes or layout generator's tree, which is keyed in its picture's\ntime."
         },
         "value": {
           "$ref": "#/$defs/Paint",
@@ -1756,7 +2092,7 @@
         },
         "time": {
           "$ref": "#/$defs/MediaTime",
-          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time."
+          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time, and in a\nshapes or layout generator's tree, which is keyed in its picture's\ntime."
         },
         "value": {
           "$ref": "#/$defs/Path",
@@ -1780,7 +2116,7 @@
         },
         "time": {
           "$ref": "#/$defs/MediaTime",
-          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time."
+          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time, and in a\nshapes or layout generator's tree, which is keyed in its picture's\ntime."
         },
         "value": {
           "$ref": "#/$defs/Vec2",
@@ -1804,7 +2140,7 @@
         },
         "time": {
           "$ref": "#/$defs/MediaTime",
-          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time."
+          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time, and in a\nshapes or layout generator's tree, which is keyed in its picture's\ntime."
         },
         "value": {
           "description": "Value at `time`.",
@@ -1816,6 +2152,564 @@
         "time",
         "value",
         "interpolation"
+      ],
+      "type": "object"
+    },
+    "Keyframe_string": {
+      "additionalProperties": false,
+      "description": "One timestamped control value.",
+      "properties": {
+        "interpolation": {
+          "$ref": "#/$defs/Interpolation",
+          "description": "Interpolation from this keyframe to its successor."
+        },
+        "time": {
+          "$ref": "#/$defs/MediaTime",
+          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time, and in a\nshapes or layout generator's tree, which is keyed in its picture's\ntime."
+        },
+        "value": {
+          "description": "Value at `time`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "time",
+        "value",
+        "interpolation"
+      ],
+      "type": "object"
+    },
+    "LayoutBorder": {
+      "additionalProperties": false,
+      "description": "A border inside the border box, as wide on every side.",
+      "properties": {
+        "paint": {
+          "$ref": "#/$defs/Animated_Paint",
+          "description": "What covers the border. Positions are normalized to the border box."
+        },
+        "width": {
+          "$ref": "#/$defs/Animated_float",
+          "description": "Width. At least 0."
+        }
+      },
+      "required": [
+        "width",
+        "paint"
+      ],
+      "type": "object"
+    },
+    "LayoutInset": {
+      "additionalProperties": false,
+      "description": "Where an absolute box lies in its parent's padding box. A missing side is\nauto: with neither `left` nor `right`, the box keeps its place in the\nflow on that axis.",
+      "properties": {
+        "bottom": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_LayoutLength"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Distance from the parent's bottom padding edge."
+        },
+        "left": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_LayoutLength"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Distance from the parent's left padding edge."
+        },
+        "right": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_LayoutLength"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Distance from the parent's right padding edge."
+        },
+        "top": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_LayoutLength"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Distance from the parent's top padding edge."
+        }
+      },
+      "type": "object"
+    },
+    "LayoutLength": {
+      "description": "A size or an inset.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A fraction of the layout picture's shorter side.",
+          "properties": {
+            "type": {
+              "const": "length",
+              "type": "string"
+            },
+            "value": {
+              "description": "The fraction.",
+              "format": "float",
+              "type": "number"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Percent (0 to 100 is 0% to 100%) of the parent's content box, along\nthe field's axis.",
+          "properties": {
+            "type": {
+              "const": "percent",
+              "type": "string"
+            },
+            "value": {
+              "description": "The percent.",
+              "format": "float",
+              "type": "number"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "LayoutNode": {
+      "additionalProperties": false,
+      "description": "One box of a layout tree, laid out by CSS flexbox.\n\nA box is a flex container when it has children, a leaf when it has text\nor shape content, and empty otherwise (a spacer or a decoration). Per\nbox, its background is drawn first, then its border, then its content.\nBoxes are drawn in document order; a reversed direction moves them, not\ntheir order.",
+      "properties": {
+        "align_items": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AlignItems"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where children lie across the main axis. Default `stretch`."
+        },
+        "align_self": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AlignItems"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where the box lies across its parent's main axis. `None` follows the\nparent's `align_items`."
+        },
+        "aspect_ratio": {
+          "description": "Width over height. Positive.",
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "background": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_Paint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What covers the border box, rounded by `border_radius`. Positions\nare normalized to the border box."
+        },
+        "border": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LayoutBorder"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A border inside the border box."
+        },
+        "border_radius": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_float"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The corner radius of the border box. At least 0; default 0. A radius\npast half the box's shorter side is capped."
+        },
+        "children": {
+          "description": "Boxes laid out in this one, in document (and paint) order. Not with\n`text` or `shape`.",
+          "items": {
+            "$ref": "#/$defs/LayoutNode"
+          },
+          "type": "array"
+        },
+        "flex_basis": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_LayoutLength"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The main size before growing and shrinking. `None` is auto."
+        },
+        "flex_direction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FlexDirection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The main axis of the box's children. Default `row`. Not on a box\nwith text or shape content, as every flex container field."
+        },
+        "flex_grow": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_float"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How much of the free space the box takes. At least 0; default 0."
+        },
+        "flex_shrink": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_float"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How much the box gives up when space runs short. At least 0; default\n1."
+        },
+        "flex_wrap": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FlexWrap"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Whether children wrap onto more lines. Default `nowrap`."
+        },
+        "gap": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_float"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Space between children, on both axes. At least 0; default 0."
+        },
+        "height": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_LayoutLength"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Border-box height. `None` is auto."
+        },
+        "inset": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LayoutInset"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where an `absolute` box lies in its parent's padding box."
+        },
+        "justify_content": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/JustifyContent"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Where children lie along the main axis. Default `start`."
+        },
+        "margin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_Insets"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Space outside the border. Sides may be negative; there is no `auto`."
+        },
+        "max_height": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_LayoutLength"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Largest height. `None` is none."
+        },
+        "max_width": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_LayoutLength"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Largest width. `None` is none."
+        },
+        "min_height": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_LayoutLength"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Smallest height. `None` is auto."
+        },
+        "min_width": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_LayoutLength"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Smallest width. `None` is auto, the CSS automatic minimum size."
+        },
+        "opacity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_float"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Opacity of the box and everything in it, as one group, in `0..=1`.\nDrawn after layout; it never moves a box."
+        },
+        "overflow": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Overflow"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Whether content past the padding box is drawn. Default `visible`."
+        },
+        "padding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_Insets"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Space inside the border. Sides at least 0; default 0."
+        },
+        "position": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Position"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Whether the box is in its parent's flow. Default `relative`."
+        },
+        "rotation_degrees": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_float"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Clockwise rotation of the box and everything in it about its\nborder-box centre, in degrees, after layout."
+        },
+        "scale": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_Vec2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Per-axis scale of the box and everything in it about its border-box\ncentre, after layout."
+        },
+        "shape": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LayoutShape"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Shapes drawn on a picture the size of the box's content box. Not with\n`children` or `text`."
+        },
+        "text": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LayoutText"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The box's text, wrapped at its content width. Not with `children` or\n`shape`."
+        },
+        "translate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_Vec2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Offset of the box and everything in it, after layout."
+        },
+        "width": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_LayoutLength"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Border-box width. `None` is auto. Not on the root, as every flex item\nfield."
+        }
+      },
+      "type": "object"
+    },
+    "LayoutShape": {
+      "additionalProperties": false,
+      "description": "A box's shapes, drawn as a shapes generator draws its items on a picture\nthe size of the box's content box: positions normalized to that box,\nlengths fractions of its shorter side. A shape box has no size of its\nown.",
+      "properties": {
+        "items": {
+          "description": "The content tree, front first.",
+          "items": {
+            "$ref": "#/$defs/ShapeItem"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "LayoutText": {
+      "additionalProperties": false,
+      "description": "A box's text: one paragraph style, wrapped at the box's content width.\n\nThe text fills the content width, its lines aligned in it by\n`text_align`; its first line starts at the content box's top.",
+      "properties": {
+        "color": {
+          "$ref": "#/$defs/Rgba",
+          "default": {
+            "alpha": 1.0,
+            "blue": 1.0,
+            "green": 1.0,
+            "red": 1.0
+          },
+          "description": "Text color."
+        },
+        "content": {
+          "$ref": "#/$defs/Animated_string",
+          "description": "The text; `\\n` starts a line. At most [`MAX_TEXT_CONTENT_BYTES`]\nbytes per value; may be empty. Its keyframes all `hold`."
+        },
+        "font_family": {
+          "description": "The family the text draws in, as a text style's `font_family`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "font_size": {
+          "$ref": "#/$defs/Animated_float",
+          "default": {
+            "mode": "constant",
+            "value": 0.05
+          },
+          "description": "Font size as a fraction of the picture's shorter side: positive, at\nmost [`MAX_LAYOUT_FONT_SIZE`]."
+        },
+        "line_height": {
+          "default": 1.2,
+          "description": "Baseline-to-baseline distance in font sizes, in `[0.5, 3]`.",
+          "format": "float",
+          "type": "number"
+        },
+        "outline": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextOutline"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A band around the glyphs; its width a fraction of the font size."
+        },
+        "text_align": {
+          "$ref": "#/$defs/TextAlign",
+          "default": "start",
+          "description": "How lines align within the content width. Default `start`."
+        }
+      },
+      "required": [
+        "content"
       ],
       "type": "object"
     },
@@ -2644,6 +3538,21 @@
         }
       ]
     },
+    "Overflow": {
+      "description": "Whether content past a box's padding box is drawn.",
+      "oneOf": [
+        {
+          "const": "visible",
+          "description": "Drawn.",
+          "type": "string"
+        },
+        {
+          "const": "hidden",
+          "description": "Clipped to the padding box.",
+          "type": "string"
+        }
+      ]
+    },
     "Paint": {
       "description": "A color or gradient.\n\nGradients interpolate between stops premultiplied, in linear light: the\nengine's working space, so a gradient between two colors passes through\nthe physical mix of them, and a stop fading to transparent does not darken\nits neighbour.",
       "oneOf": [
@@ -2866,6 +3775,21 @@
         {
           "const": "polygon",
           "description": "Points joined by straight sides.",
+          "type": "string"
+        }
+      ]
+    },
+    "Position": {
+      "description": "Whether a box is in its parent's flow.",
+      "oneOf": [
+        {
+          "const": "relative",
+          "description": "In the flow.",
+          "type": "string"
+        },
+        {
+          "const": "absolute",
+          "description": "Out of the flow, placed by `inset`.",
           "type": "string"
         }
       ]

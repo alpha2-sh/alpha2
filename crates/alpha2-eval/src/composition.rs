@@ -27,7 +27,7 @@ use alpha2_time::MediaTime;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use crate::ShapesPlan;
+use crate::GeneratorPlan;
 
 /// Most bytes the compiled composition plans of one project hold together,
 /// as [`Step`]s estimate them: each step, its node path, and the heap its
@@ -108,10 +108,11 @@ pub enum StepOp {
         /// What it draws.
         generator: Generator,
         /// The picture's time at composition time zero: a media node's
-        /// start, zero for a generator node. Only shapes animate with it.
+        /// start, zero for a generator node. Only shapes and layouts animate
+        /// with it.
         start: MediaTime,
-        /// A shapes generator's tree, its fixed parts evaluated.
-        shapes: Option<Arc<ShapesPlan>>,
+        /// A shapes or layout generator's tree, its fixed parts evaluated.
+        plan: Option<Arc<GeneratorPlan>>,
     },
     /// A registered effect.
     Effect {
@@ -862,16 +863,14 @@ fn shape_items_bytes(items: &[alpha2_model::ShapeItem]) -> usize {
         .sum()
 }
 
-/// A generator step, with a plan when the generator is a shapes generator.
+/// A generator step, with a plan when the generator is a shapes or layout
+/// generator.
 fn generator_step(generator: Generator, start: MediaTime) -> StepOp {
-    let shapes = match &generator {
-        Generator::Shapes { items } => Some(Arc::new(ShapesPlan::new(items))),
-        _ => None,
-    };
+    let plan = GeneratorPlan::new(&generator).map(Arc::new);
     StepOp::Generator {
         generator,
         start,
-        shapes,
+        plan,
     }
 }
 
@@ -883,6 +882,8 @@ fn generator_bytes(generator: &Generator) -> usize {
         Generator::Text { text, style } => {
             text.len() + style.font_family.as_ref().map_or(0, String::len)
         }
+        // Twice: the tree, and its plan.
+        Generator::Layout { root } => 2 * crate::layout::layout_bytes(root, &shape_items_bytes),
     }
 }
 

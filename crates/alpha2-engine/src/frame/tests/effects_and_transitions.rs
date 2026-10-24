@@ -36,7 +36,7 @@ fn evaluated_frame_executes_the_clip_effect_chain() {
             matte: None,
             is_matte: false,
             generator: None,
-            shapes: None,
+            plan: None,
             source_composition: None,
         }],
         audio: Vec::new(),
@@ -130,7 +130,7 @@ fn keyframed_effect_parameters_render_at_the_frame_time_and_clamp_only_overshoot
                 matte: None,
                 is_matte: false,
                 generator: None,
-                shapes: None,
+                plan: None,
                 source_composition: None,
             }],
             audio: Vec::new(),
@@ -209,7 +209,7 @@ fn evaluated_frame_executes_active_transition_nodes() {
         matte: None,
         is_matte: false,
         generator: None,
-        shapes: None,
+        plan: None,
         source_composition: None,
     };
     let frame = FrameDesc {

@@ -1,7 +1,8 @@
 //! Sources the engine draws itself: fills, gradients, shapes, and text.
 
 use crate::{
-    MAX_TEXT_CONTENT_BYTES, MAX_TEXT_GENERATOR_FONT_SIZE, ShapeIssue, ShapeItem, TextStyle, Vec2,
+    GeneratorIssue, LayoutNode, MAX_TEXT_CONTENT_BYTES, MAX_TEXT_GENERATOR_FONT_SIZE, ShapeItem,
+    TextStyle, Vec2,
 };
 use serde::{Deserialize, Serialize};
 
@@ -50,7 +51,7 @@ impl Rgba {
 /// top-left to `(1, 1)` bottom-right; lengths (radii, stroke widths) are
 /// fractions of its shorter side, so the picture is the same at any render
 /// resolution. A fill or text does not change over time (a clip animates it
-/// with its transform, effects, and masks); shapes may.
+/// with its transform, effects, and masks); shapes and layouts may.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -80,6 +81,14 @@ pub enum Generator {
         /// [`MAX_TEXT_GENERATOR_FONT_SIZE`].
         #[serde(default)]
         style: TextStyle,
+    },
+    /// Boxes laid out by CSS flexbox around their text and shapes. Its
+    /// picture changes over time when any value in the tree is keyframed,
+    /// in the picture's time. The engine lays it out with the fonts it
+    /// draws with. See [`LayoutNode`].
+    Layout {
+        /// The root box: the whole picture.
+        root: Box<LayoutNode>,
     },
 }
 
@@ -167,24 +176,26 @@ impl Generator {
         self.validate().is_ok()
     }
 
-    /// Checks every field. A shapes generator's problem names where in its
-    /// tree it lies; another generator's is `None`.
+    /// Checks every field. A shapes or layout generator's problem names
+    /// where in its tree it lies; another generator's is
+    /// [`GeneratorIssue::Invalid`].
     ///
     /// # Errors
     /// Returns the first problem, if any.
-    pub fn validate(&self) -> Result<(), Option<ShapeIssue>> {
+    pub fn validate(&self) -> Result<(), GeneratorIssue> {
         let valid = match self {
             Self::Fill { paint } => paint.is_valid(),
             Self::Shapes { items } => {
-                return crate::shapes::validate_shape_items(items).map_err(Some);
+                return crate::shapes::validate_shape_items(items).map_err(GeneratorIssue::Shape);
             }
+            Self::Layout { root } => return crate::layout::validate_layout(root),
             Self::Text { text, style } => {
                 !text.is_empty()
                     && text.len() <= MAX_TEXT_CONTENT_BYTES
                     && style.is_valid(MAX_TEXT_GENERATOR_FONT_SIZE)
             }
         };
-        valid.then_some(()).ok_or(None)
+        valid.then_some(()).ok_or(GeneratorIssue::Invalid)
     }
 }
 

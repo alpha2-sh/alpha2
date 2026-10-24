@@ -46,7 +46,8 @@ pub(crate) fn vector_wgsl() -> String {
     format!(
         r"{paint}
 struct VectorUniform {{
-    // Device pixels to paint-space pixels: rows of a 2x3 matrix.
+    // Device pixels to paint-space pixels: rows of a 2x3 matrix, then the
+    // paint space's width (in the first) and height (in the second).
     inverse0: vec4f,
     inverse1: vec4f,
     // Canvas width and height, opacity, and 1 to store sRGB-encoded.
@@ -113,7 +114,7 @@ fn fs_tile(in: TileOut) -> @location(0) vec4f {{
         dot(op.inverse0.xy, device) + op.inverse0.z,
         dot(op.inverse1.xy, device) + op.inverse1.z,
     );
-    let res = op.canvas.xy;
+    let res = vec2f(op.inverse0.w, op.inverse1.w);
     var color = builtin_paint(builtin_op_paint(), painted / res, res);
     if (op.canvas.w > 0.5) {{ color = builtin_generator_store(color); }}
     return color * (coverage * op.canvas.z);
@@ -763,16 +764,16 @@ fn scissor(bounds: IRect, size: RenderSize) -> Option<(u32, u32, u32, u32)> {
     ))
 }
 
-/// A fill op's uniform: its paint through the inverse transform, the
-/// canvas, its opacity, and whether it stores sRGB-encoded.
+/// A fill op's uniform: its paint through the inverse transform into its
+/// space, the canvas, its opacity, and whether it stores sRGB-encoded.
 fn op_uniform(paint: &ScenePaint, canvas: [f32; 2], opacity: f32, encoded: bool) -> Vec<u8> {
     let [xx, yx, xy, yy, x0, y0] = paint.inverse.as_coeffs();
     #[allow(clippy::cast_possible_truncation)]
     let narrow = |value: f64| value as f32;
     let mut floats = [0.0_f32; 60];
     // Paint-space x = xx * x + xy * y + x0; y = yx * x + yy * y + y0.
-    floats[0..4].copy_from_slice(&[narrow(xx), narrow(xy), narrow(x0), 0.0]);
-    floats[4..8].copy_from_slice(&[narrow(yx), narrow(yy), narrow(y0), 0.0]);
+    floats[0..4].copy_from_slice(&[narrow(xx), narrow(xy), narrow(x0), paint.space[0]]);
+    floats[4..8].copy_from_slice(&[narrow(yx), narrow(yy), narrow(y0), paint.space[1]]);
     floats[8..12].copy_from_slice(&[
         canvas[0],
         canvas[1],

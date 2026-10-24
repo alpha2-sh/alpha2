@@ -18,9 +18,10 @@ pub(crate) fn generator_params(generator: &Generator) -> EffectParams<'static> {
     let params = EffectParams::with_capacity(MAX_GENERATOR_PARAMS);
     match generator {
         Generator::Fill { paint } => with_paint(params, &FILL_PAINT_PARAMS, paint),
-        // Shapes are drawn by the vector pass (`frame::shapes_node`) and text from its prepared
-        // texture (`frame::PlacedText`), never by this one.
-        Generator::Shapes { .. } | Generator::Text { .. } => params,
+        // Shapes are drawn by the vector pass (`frame::shapes_node`), text from its prepared
+        // texture (`frame::PlacedText`), and layouts from both (`layout::draw`), never by this
+        // one.
+        Generator::Shapes { .. } | Generator::Text { .. } | Generator::Layout { .. } => params,
     }
 }
 

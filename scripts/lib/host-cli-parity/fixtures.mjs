@@ -72,6 +72,18 @@ export const shapesProjectPath = join(
 );
 export const shapesAssets = { still: complexAssets.still };
 
+// Layout generators: a lower third that fades and rises in, a panel with a gradient border box, a
+// shape node and clipped wrapped text, and a layout generator node that turns and scales. Text
+// lays out with the fixture font on both sides.
+export const layoutProjectPath = join(
+  root,
+  "tests",
+  "cases",
+  "host-parity-layout-project.json",
+);
+export const layoutAssets = { still: complexAssets.still };
+export const layoutFont = join(root, "tests", "fonts", "Alpha2Fixture.ttf");
+
 // Every built-in effect and transition. The page fails a project that leaves a catalog entry out,
 // so a new body is compared as soon as it ships.
 export const effectsProjectPath = join(

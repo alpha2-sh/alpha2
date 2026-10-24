@@ -74,7 +74,8 @@ pub enum LintIssue {
     EmptySubpath {
         /// The shapes generator.
         owner: ShapeLintOwner,
-        /// The empty subpath, like `items[0].path.subpaths[1]`.
+        /// The empty subpath, like `items[0].path.subpaths[1]`, or in a
+        /// layout `root.children[0].shape.items[0].path.subpaths[1]`.
         at: String,
     },
     /// A fill or stroke with no geometry before it in its group, which
@@ -87,7 +88,7 @@ pub enum LintIssue {
     },
 }
 
-/// The shapes generator a shape [`LintIssue`] is about.
+/// The shapes or layout generator a shape [`LintIssue`] is about.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]
@@ -241,28 +242,39 @@ impl Project {
         issues
     }
 
-    /// Every shapes generator's empty subpaths and paints without geometry:
-    /// sources' first, then composition nodes', in order.
+    /// Every shapes generator's and layout shape node's empty subpaths and
+    /// paints without geometry: sources' first, then composition nodes', in
+    /// order.
     fn lint_shapes(&self, issues: &mut Vec<LintIssue>) {
+        let lint = |owner: &ShapeLintOwner, generator: &Generator, issues: &mut Vec<LintIssue>| {
+            match generator {
+                Generator::Shapes { items } => {
+                    lint_shape_items(owner, items, "items", issues);
+                }
+                Generator::Layout { root } => root.walk(|at, node| {
+                    if let Some(shape) = &node.shape {
+                        lint_shape_items(owner, &shape.items, &format!("{at}.shape.items"), issues);
+                    }
+                }),
+                Generator::Fill { .. } | Generator::Text { .. } => {}
+            }
+        };
         for source in &self.sources {
-            if let Some(Generator::Shapes { items }) = &source.generator {
+            if let Some(generator) = &source.generator {
                 let owner = ShapeLintOwner::Source {
                     source: source.id.clone(),
                 };
-                lint_shape_items(&owner, items, "items", issues);
+                lint(&owner, generator, issues);
             }
         }
         for composition in &self.compositions {
             for node in &composition.nodes {
-                if let crate::NodeOp::Generator {
-                    generator: Generator::Shapes { items },
-                } = &node.op
-                {
+                if let crate::NodeOp::Generator { generator } = &node.op {
                     let owner = ShapeLintOwner::Node {
                         composition: composition.id.clone(),
                         node: node.id.clone(),
                     };
-                    lint_shape_items(&owner, items, "items", issues);
+                    lint(&owner, generator, issues);
                 }
             }
         }

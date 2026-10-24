@@ -41,7 +41,7 @@ impl ActiveIndex {
             .iter()
             .map(|source| (&source.id, source))
             .collect::<std::collections::HashMap<_, _>>();
-        let shapes = shape_plans(project);
+        let generators = generator_plans(project);
         for (track_order, track) in project.timeline.tracks.iter().enumerate() {
             for (clip_order, clip) in track.clips.iter().enumerate() {
                 // Validation guarantees the source exists.
@@ -83,7 +83,7 @@ impl ActiveIndex {
                     audio: clip.audio.clone(),
                     source_is_audible,
                     generator,
-                    shapes: shapes.get(&clip.source_id).cloned(),
+                    plan: generators.get(&clip.source_id).cloned(),
                     source_composition,
                     track_order,
                     clip_order,
@@ -343,19 +343,17 @@ fn deepest_overlap(entries: &[IndexedClip]) -> usize {
     deepest
 }
 
-/// Each shapes source's tree, planned once however many clips show it.
-fn shape_plans(
+/// Each shapes or layout source's tree, planned once however many clips
+/// show it.
+fn generator_plans(
     project: &Project,
-) -> std::collections::HashMap<&SourceId, std::sync::Arc<crate::ShapesPlan>> {
+) -> std::collections::HashMap<&SourceId, std::sync::Arc<crate::GeneratorPlan>> {
     project
         .sources
         .iter()
-        .filter_map(|source| match &source.generator {
-            Some(alpha2_model::Generator::Shapes { items }) => Some((
-                &source.id,
-                std::sync::Arc::new(crate::ShapesPlan::new(items)),
-            )),
-            _ => None,
+        .filter_map(|source| {
+            let plan = crate::GeneratorPlan::new(source.generator.as_ref()?)?;
+            Some((&source.id, std::sync::Arc::new(plan)))
         })
         .collect()
 }
