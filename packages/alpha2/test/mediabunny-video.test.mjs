@@ -660,3 +660,30 @@ test("a stall timeout longer than a timer can hold is refused before the input i
       /stallTimeoutMs .*2147483647/.test(error.message),
   );
 });
+
+test("a software decoder asked for is checked when the track opens", async (t) => {
+  const asked = [];
+  let supported = false;
+  const original = globalThis.VideoDecoder;
+  globalThis.VideoDecoder = {
+    async isConfigSupported(config) {
+      asked.push(config);
+      return { supported, config };
+    },
+  };
+  t.after(() => {
+    globalThis.VideoDecoder = original;
+  });
+  await assert.rejects(open({ hardwareAcceleration: "prefer-software" }), {
+    code: "software_decode_unavailable",
+    message: /no software decoder for vp8/,
+  });
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0].codec, "vp8");
+  assert.equal(asked[0].hardwareAcceleration, "prefer-software");
+  supported = true;
+  (await open({ hardwareAcceleration: "prefer-software" })).close();
+  // Any other choice is the browser's to make, so nothing is asked.
+  (await open()).close();
+  assert.equal(asked.length, 2);
+});

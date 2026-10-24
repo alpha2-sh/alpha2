@@ -77,6 +77,7 @@ export function installEditorWorker(scope) {
             pixels,
             library,
             request.runtimeAssets,
+            { unreadableFrames: "present" },
           );
           audio = new AudioWindowSupplier(library);
           engine.backend = "worker";

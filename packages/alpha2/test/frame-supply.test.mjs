@@ -1631,3 +1631,230 @@ test("HDR frames are copied out planar into one buffer reused from frame to fram
     "every copy reuses the first one's buffer",
   );
 });
+
+const unreadableError = () =>
+  new DOMException("Failed to read VideoFrame data.", "InvalidStateError");
+
+/** `frame`, whose first `failures` reads fail as Chrome's hardware frames do now and then. */
+function failingReads(frame, failures = Infinity) {
+  const read = frame.copyTo;
+  let failed = 0;
+  frame.copyTo = async (buffer) => {
+    if (failed < failures) {
+      failed += 1;
+      throw unreadableError();
+    }
+    return read(buffer);
+  };
+  return frame;
+}
+
+function sdrFrame(format = "NV12") {
+  const frame = fakeHdrFrame({ transfer: "bt709", timestamp: 0 });
+  frame.format = format;
+  frame.colorSpace = {
+    primaries: "bt709",
+    transfer: "bt709",
+    matrix: "bt709",
+    fullRange: false,
+  };
+  return frame;
+}
+
+function recoveryEngine() {
+  const yuv = [];
+  const direct = [];
+  return {
+    yuv,
+    direct,
+    deviceLost: false,
+    supportsExternalVideoFrame: true,
+    frameNeeds: () =>
+      JSON.stringify([{ clipId: "a", sourceId: "v", mediaTimeTicks: "0" }]),
+    uploadPresentedVideoFrame(...args) {
+      direct.push(args);
+      return { generation: 1n, retainedBytes: 32 };
+    },
+    uploadYuvFrame(...args) {
+      yuv.push(args);
+      return { generation: 1n, retainedBytes: 32 };
+    },
+    hdrSource: () => false,
+    aliasVideoFrame: () => true,
+  };
+}
+
+/** Supplies one frame: `hardware` first, and `software()` for a request to decode in software. */
+function supplyOne(supply, hardware, software = () => null) {
+  const requests = [];
+  const done = supply.supply(0n, {
+    width: 4,
+    height: 2,
+    liveSourceIds: new Set(["v"]),
+    getLayer: () => ({ id: "v", kind: "video" }),
+    pixelsFor: async (_layer, _seconds, options) => {
+      requests.push(options);
+      if (options.decode === "software") {
+        const frame = software();
+        return frame && { kind: "video-frame", frame, chromaSiting: "left" };
+      }
+      return { kind: "video-frame", frame: hardware, chromaSiting: "left" };
+    },
+    isCurrent: () => true,
+  });
+  return { done, requests };
+}
+
+test("a frame the browser fails to read back once is read again", async () => {
+  const engine = recoveryEngine();
+  const supply = new FrameSupply(engine);
+  const frame = failingReads(sdrFrame(), 1);
+  const { done, requests } = supplyOne(supply, frame);
+  await done;
+  assert.equal(engine.yuv.length, 1);
+  assert.equal(requests.length, 1, "no software decode");
+  assert.ok(frame.closed);
+  assert.deepEqual(supply.readbackRecovery, {
+    unreadableFrames: 0,
+    readbackRetries: 1,
+    redecodedFrames: 0,
+    presentedFrames: 0,
+  });
+  assert.equal(supply.sourceTransfer.planarCopyFrames, 1);
+});
+
+test("a frame the browser cannot read back is decoded again in software and converted by the engine", async () => {
+  const engine = recoveryEngine();
+  const supply = new FrameSupply(engine);
+  const hardware = failingReads(sdrFrame("NV12"));
+  const software = sdrFrame("I420");
+  const { done, requests } = supplyOne(supply, hardware, () => software);
+  await done;
+  assert.equal(engine.direct.length, 0, "never the browser's conversion");
+  assert.equal(engine.yuv.length, 1);
+  assert.equal(engine.yuv[0][2], "I420", "the software decode's planes");
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].decode, "software");
+  assert.equal(requests[1].consumerId, requests[0].consumerId);
+  assert.equal(requests[1].sourceId, "v");
+  assert.equal(requests[0].decode, undefined);
+  assert.ok(hardware.closed && software.closed);
+  assert.deepEqual(supply.readbackRecovery, {
+    unreadableFrames: 1,
+    readbackRetries: 2,
+    redecodedFrames: 1,
+    presentedFrames: 0,
+  });
+  assert.equal(supply.sourceTransfer.planarCopyFrames, 1);
+});
+
+test("a software decode of another picture is refused", async () => {
+  const engine = recoveryEngine();
+  const supply = new FrameSupply(engine);
+  const later = sdrFrame("I420");
+  later.timestamp = 40_000;
+  const { done } = supplyOne(supply, failingReads(sdrFrame()), () => later);
+  await assert.rejects(
+    done,
+    (error) =>
+      /gave the frame at 40000 us/.test(error.message) &&
+      error.cause?.name === "InvalidStateError",
+  );
+  assert.ok(later.closed);
+  assert.equal(engine.yuv.length, 0);
+  assert.equal(supply.readbackRecovery.redecodedFrames, 0);
+});
+
+test("a source the host cannot decode in software fails the supply, with why", async () => {
+  const supply = new FrameSupply(recoveryEngine());
+  const hardware = failingReads(sdrFrame());
+  const { done } = supplyOne(supply, hardware, () => {
+    throw new Error("this browser has no software decoder for hvc1");
+  });
+  await assert.rejects(
+    done,
+    (error) =>
+      /decoding it again in software failed/.test(error.message) &&
+      /no software decoder/.test(error.cause?.message),
+  );
+  assert.ok(hardware.closed);
+});
+
+test("a software decode that gives no frame, or one that cannot be read either, fails the supply", async () => {
+  const none = new FrameSupply(recoveryEngine());
+  await assert.rejects(
+    supplyOne(none, failingReads(sdrFrame()), () => null).done,
+    /gave no VideoFrame/,
+  );
+  const unreadable = new FrameSupply(recoveryEngine());
+  const software = failingReads(sdrFrame("I420"));
+  await assert.rejects(
+    supplyOne(unreadable, failingReads(sdrFrame()), () => software).done,
+    (error) =>
+      /could not be copied either/.test(error.message) &&
+      error.cause?.name === "InvalidStateError",
+  );
+  assert.ok(software.closed);
+});
+
+test("a preview gives an SDR frame it cannot read back to the browser, but never an HDR one", async () => {
+  const sdr = recoveryEngine();
+  const preview = new FrameSupply(sdr, { unreadableFrames: "present" });
+  const frame = failingReads(sdrFrame());
+  const { done, requests } = supplyOne(preview, frame);
+  await done;
+  assert.equal(sdr.direct.length, 1);
+  assert.equal(sdr.direct[0][2], frame, "the frame itself, to the browser");
+  assert.equal(sdr.yuv.length, 0);
+  assert.equal(requests.length, 1, "no software decode in a preview");
+  assert.equal(preview.readbackRecovery.presentedFrames, 1);
+  assert.equal(preview.sourceTransfer.planarCopyFrames, 0);
+
+  const hdr = recoveryEngine();
+  hdr.uploadPresentedVideoFrame = () => {
+    throw new Error("an HDR frame must not take the browser's conversion");
+  };
+  const strict = new FrameSupply(hdr, { unreadableFrames: "present" });
+  const pq = failingReads(fakeHdrFrame({ transfer: "pq", timestamp: 0 }));
+  const software = fakeHdrFrame({ transfer: "pq", timestamp: 0 });
+  await supplyOne(strict, pq, () => software).done;
+  assert.equal(hdr.yuv.length, 1, "decoded again in software instead");
+  assert.ok(pq.closed && software.closed);
+  assert.equal(strict.readbackRecovery.redecodedFrames, 1);
+  assert.equal(strict.readbackRecovery.presentedFrames, 0);
+});
+
+test("a preview frame given back to the browser is closed when the browser's upload fails", async () => {
+  const engine = recoveryEngine();
+  engine.uploadPresentedVideoFrame = () => {
+    throw new Error("the external texture failed");
+  };
+  const supply = new FrameSupply(engine, { unreadableFrames: "present" });
+  const frame = failingReads(sdrFrame());
+  await assert.rejects(
+    supplyOne(supply, frame).done,
+    /the external texture failed/,
+  );
+  assert.ok(frame.closed);
+});
+
+test("a planar copy that fails otherwise is neither retried nor decoded again", async () => {
+  const engine = recoveryEngine();
+  const supply = new FrameSupply(engine);
+  const frame = sdrFrame("I420");
+  frame.copyTo = async () => {
+    throw new RangeError("destination is too small");
+  };
+  const { done, requests } = supplyOne(supply, frame);
+  await assert.rejects(done, RangeError);
+  assert.ok(frame.closed);
+  assert.equal(requests.length, 1);
+  assert.equal(supply.readbackRecovery.readbackRetries, 0);
+});
+
+test("unreadableFrames takes only redecode or present", () => {
+  assert.throws(
+    () => new FrameSupply(recoveryEngine(), { unreadableFrames: "skip" }),
+    RangeError,
+  );
+});

@@ -163,6 +163,16 @@ test("session disposal drains its bridge and waits for registered cleanup", asyn
   await bridge.dispose();
   assert.equal(closed, 1);
 });
+test("a browser export decode mode other than auto or software is refused before the export starts", async () => {
+  const editor = createEditor();
+  const bridge = createBrowserBridge({ editor });
+  for (const videoDecode of ["hardware", "", 1])
+    assert.throws(() => bridge.startExport({ videoDecode }), {
+      code: "invalid_video_decode",
+    });
+  await bridge.dispose();
+  await editor.dispose();
+});
 test("a browser export rate the engine cannot read is refused before the export starts", async () => {
   const editor = createEditor();
   const bridge = createBrowserBridge({ editor });

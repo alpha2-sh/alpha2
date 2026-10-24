@@ -104,8 +104,10 @@ export type ExportArtifact = (
   readonly bytes?: number;
   /**
    * What the exporter reported about the run: timings, `performance` (with `memory` and `output`),
-   * rates. A browser export adds `decodeFallbacks`: the sources whose frames were read by element
-   * seeks rather than decoded, with why, how many frames, and whether for good.
+   * rates. A browser export adds `videoDecode`, the decode mode it ran with, and `decodeFallbacks`:
+   * per source, frames read by element seeks rather than decoded (`kind: "element-seek"`), with
+   * why, how many frames, and whether for good, and sources `videoDecode: "software"` could not
+   * decode in software (`kind: "software-unavailable"`).
    */
   readonly report?: Readonly<Record<string, unknown>>;
 };
