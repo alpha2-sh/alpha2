@@ -36,6 +36,40 @@ pub fn project_json_schema() -> Value {
     value
 }
 
+/// What a CSS hex color string looks like.
+const HEX_COLOR_PATTERN: &str = "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$";
+
+/// `Rgba` as written: its object, or a CSS hex string.
+pub(crate) fn with_hex_form(schema: &mut schemars::Schema) {
+    let object = std::mem::take(schema);
+    let mut object = object.to_value();
+    let description = object
+        .as_object_mut()
+        .and_then(|map| map.remove("description"));
+    let mut both = json!({
+        "anyOf": [object, { "type": "string", "pattern": HEX_COLOR_PATTERN }],
+    });
+    if let Some(description) = description {
+        both["description"] = description;
+    }
+    *schema = schemars::Schema::try_from(both).expect("a schema object");
+}
+
+/// `Paint` as written: tagged, or a color painting solid.
+pub(crate) fn with_color_form(schema: &mut schemars::Schema) {
+    let color = json!({ "$ref": "#/$defs/Rgba" });
+    let union = if schema.get("oneOf").is_some() {
+        "oneOf"
+    } else {
+        "anyOf"
+    };
+    let variants = schema
+        .get_mut(union)
+        .and_then(Value::as_array_mut)
+        .expect("a paint is a union of its kinds");
+    variants.push(color);
+}
+
 /// Writes each `default` the way the engine writes the document
 /// ([`shortest_floats`]): schemars widens a 32-bit default to 64 bits.
 fn shortest_defaults(node: &mut Value) {
@@ -125,6 +159,7 @@ pub fn project_limits_json() -> Value {
         ("MAX_LAYOUT_TEXTS", json!(crate::MAX_LAYOUT_TEXTS)),
         ("MAX_LAYOUT_ISOLATED", json!(crate::MAX_LAYOUT_ISOLATED)),
         ("MAX_LAYOUT_FONT_SIZE", json!(crate::MAX_LAYOUT_FONT_SIZE)),
+        ("MAX_GRID_TRACKS", json!(crate::MAX_GRID_TRACKS)),
         ("MIN_POLYSTAR_POINTS", json!(crate::MIN_POLYSTAR_POINTS)),
         ("MAX_POLYSTAR_POINTS", json!(crate::MAX_POLYSTAR_POINTS)),
         (

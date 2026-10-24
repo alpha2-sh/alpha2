@@ -40,7 +40,7 @@ pub(crate) use interval_tree::{
 };
 pub use layout::{
     EvaluatedLayout, EvaluatedNode, EvaluatedText, GeneratorPlan, LayoutPlan, NodeContent,
-    NodeLayout, NodePaint, NodeVisual,
+    NodeLayout, NodePaint, NodeVisual, Sides,
 };
 pub use retime::picture_source_time;
 pub(crate) use retime::{Mirror, map_source_time};

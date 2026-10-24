@@ -4,6 +4,17 @@
 /** The project schema's shape rules, without its documentation. */
 export const PROJECT_SHAPE: unknown = {
   $defs: {
+    AlignContent: {
+      oneOf: [
+        { const: "start", type: "string" },
+        { const: "center", type: "string" },
+        { const: "end", type: "string" },
+        { const: "space_between", type: "string" },
+        { const: "space_around", type: "string" },
+        { const: "space_evenly", type: "string" },
+        { const: "stretch", type: "string" },
+      ],
+    },
     AlignItems: {
       oneOf: [
         { const: "start", type: "string" },
@@ -103,6 +114,56 @@ export const PROJECT_SHAPE: unknown = {
           properties: {
             keyframes: {
               items: { $ref: "#/$defs/Keyframe_LayoutLength" },
+              type: "array",
+            },
+            mode: { const: "keyframes", type: "string" },
+          },
+          required: ["mode", "keyframes"],
+          type: "object",
+        },
+      ],
+    },
+    Animated_LayoutOffset: {
+      oneOf: [
+        {
+          additionalProperties: false,
+          properties: {
+            mode: { const: "constant", type: "string" },
+            value: { $ref: "#/$defs/LayoutOffset" },
+          },
+          required: ["mode", "value"],
+          type: "object",
+        },
+        {
+          additionalProperties: false,
+          properties: {
+            keyframes: {
+              items: { $ref: "#/$defs/Keyframe_LayoutOffset" },
+              type: "array",
+            },
+            mode: { const: "keyframes", type: "string" },
+          },
+          required: ["mode", "keyframes"],
+          type: "object",
+        },
+      ],
+    },
+    Animated_LayoutSize: {
+      oneOf: [
+        {
+          additionalProperties: false,
+          properties: {
+            mode: { const: "constant", type: "string" },
+            value: { $ref: "#/$defs/LayoutSize" },
+          },
+          required: ["mode", "value"],
+          type: "object",
+        },
+        {
+          additionalProperties: false,
+          properties: {
+            keyframes: {
+              items: { $ref: "#/$defs/Keyframe_LayoutSize" },
               type: "array",
             },
             mode: { const: "keyframes", type: "string" },
@@ -520,6 +581,12 @@ export const PROJECT_SHAPE: unknown = {
       required: ["pattern"],
       type: "object",
     },
+    Display: {
+      oneOf: [
+        { const: "flex", type: "string" },
+        { const: "grid", type: "string" },
+      ],
+    },
     Ducking: {
       additionalProperties: false,
       properties: {
@@ -769,6 +836,20 @@ export const PROJECT_SHAPE: unknown = {
       required: ["offset", "color"],
       type: "object",
     },
+    GridAutoFlow: {
+      oneOf: [
+        { const: "row", type: "string" },
+        { const: "column", type: "string" },
+        { const: "row_dense", type: "string" },
+        { const: "column_dense", type: "string" },
+      ],
+    },
+    GridPlacement: {
+      anyOf: [
+        { maximum: 32767, minimum: -32768, type: "integer" },
+        { type: "string" },
+      ],
+    },
     HdrSources: {
       oneOf: [
         { const: "tone_map", type: "string" },
@@ -776,14 +857,24 @@ export const PROJECT_SHAPE: unknown = {
       ],
     },
     Insets: {
-      additionalProperties: false,
-      properties: {
-        bottom: { format: "float", type: "number" },
-        left: { format: "float", type: "number" },
-        right: { format: "float", type: "number" },
-        top: { format: "float", type: "number" },
-      },
-      type: "object",
+      anyOf: [
+        { format: "float", type: "number" },
+        {
+          pattern:
+            "^ *-?(\\d+\\.?\\d*|\\.\\d+)(px)?( +-?(\\d+\\.?\\d*|\\.\\d+)(px)?){0,3} *$",
+          type: "string",
+        },
+        {
+          additionalProperties: false,
+          properties: {
+            bottom: { $ref: "#/$defs/LayoutSize" },
+            left: { $ref: "#/$defs/LayoutSize" },
+            right: { $ref: "#/$defs/LayoutSize" },
+            top: { $ref: "#/$defs/LayoutSize" },
+          },
+          type: "object",
+        },
+      ],
     },
     Interpolation: {
       oneOf: [
@@ -853,6 +944,26 @@ export const PROJECT_SHAPE: unknown = {
       required: ["time", "value", "interpolation"],
       type: "object",
     },
+    Keyframe_LayoutOffset: {
+      additionalProperties: false,
+      properties: {
+        interpolation: { $ref: "#/$defs/Interpolation" },
+        time: { $ref: "#/$defs/MediaTime" },
+        value: { $ref: "#/$defs/LayoutOffset" },
+      },
+      required: ["time", "value", "interpolation"],
+      type: "object",
+    },
+    Keyframe_LayoutSize: {
+      additionalProperties: false,
+      properties: {
+        interpolation: { $ref: "#/$defs/Interpolation" },
+        time: { $ref: "#/$defs/MediaTime" },
+        value: { $ref: "#/$defs/LayoutSize" },
+      },
+      required: ["time", "value", "interpolation"],
+      type: "object",
+    },
     Keyframe_Paint: {
       additionalProperties: false,
       properties: {
@@ -907,7 +1018,7 @@ export const PROJECT_SHAPE: unknown = {
       additionalProperties: false,
       properties: {
         paint: { $ref: "#/$defs/Animated_Paint" },
-        width: { $ref: "#/$defs/Animated_float" },
+        width: { $ref: "#/$defs/Animated_LayoutSize" },
       },
       required: ["width", "paint"],
       type: "object",
@@ -931,30 +1042,17 @@ export const PROJECT_SHAPE: unknown = {
       type: "object",
     },
     LayoutLength: {
-      oneOf: [
-        {
-          additionalProperties: false,
-          properties: {
-            type: { const: "length", type: "string" },
-            value: { format: "float", type: "number" },
-          },
-          required: ["type", "value"],
-          type: "object",
-        },
-        {
-          additionalProperties: false,
-          properties: {
-            type: { const: "percent", type: "string" },
-            value: { format: "float", type: "number" },
-          },
-          required: ["type", "value"],
-          type: "object",
-        },
+      anyOf: [
+        { format: "float", type: "number" },
+        { pattern: "^ *-?(\\d+\\.?\\d*|\\.\\d+)(px|%)? *$", type: "string" },
       ],
     },
     LayoutNode: {
       additionalProperties: false,
       properties: {
+        align_content: {
+          anyOf: [{ $ref: "#/$defs/AlignContent" }, { type: "null" }],
+        },
         align_items: {
           anyOf: [{ $ref: "#/$defs/AlignItems" }, { type: "null" }],
         },
@@ -967,9 +1065,14 @@ export const PROJECT_SHAPE: unknown = {
         },
         border: { anyOf: [{ $ref: "#/$defs/LayoutBorder" }, { type: "null" }] },
         border_radius: {
-          anyOf: [{ $ref: "#/$defs/Animated_float" }, { type: "null" }],
+          anyOf: [{ $ref: "#/$defs/Animated_LayoutSize" }, { type: "null" }],
         },
         children: { items: { $ref: "#/$defs/LayoutNode" }, type: "array" },
+        color: { anyOf: [{ $ref: "#/$defs/Rgba" }, { type: "null" }] },
+        column_gap: {
+          anyOf: [{ $ref: "#/$defs/Animated_LayoutSize" }, { type: "null" }],
+        },
+        display: { anyOf: [{ $ref: "#/$defs/Display" }, { type: "null" }] },
         flex_basis: {
           anyOf: [{ $ref: "#/$defs/Animated_LayoutLength" }, { type: "null" }],
         },
@@ -983,7 +1086,34 @@ export const PROJECT_SHAPE: unknown = {
           anyOf: [{ $ref: "#/$defs/Animated_float" }, { type: "null" }],
         },
         flex_wrap: { anyOf: [{ $ref: "#/$defs/FlexWrap" }, { type: "null" }] },
-        gap: { anyOf: [{ $ref: "#/$defs/Animated_float" }, { type: "null" }] },
+        font_family: { type: ["string", "null"] },
+        font_size: {
+          anyOf: [{ $ref: "#/$defs/Animated_LayoutSize" }, { type: "null" }],
+        },
+        gap: {
+          anyOf: [{ $ref: "#/$defs/Animated_LayoutSize" }, { type: "null" }],
+        },
+        grid_auto_columns: {
+          anyOf: [{ $ref: "#/$defs/TrackList" }, { type: "null" }],
+        },
+        grid_auto_flow: {
+          anyOf: [{ $ref: "#/$defs/GridAutoFlow" }, { type: "null" }],
+        },
+        grid_auto_rows: {
+          anyOf: [{ $ref: "#/$defs/TrackList" }, { type: "null" }],
+        },
+        grid_column: {
+          anyOf: [{ $ref: "#/$defs/GridPlacement" }, { type: "null" }],
+        },
+        grid_row: {
+          anyOf: [{ $ref: "#/$defs/GridPlacement" }, { type: "null" }],
+        },
+        grid_template_columns: {
+          anyOf: [{ $ref: "#/$defs/TrackList" }, { type: "null" }],
+        },
+        grid_template_rows: {
+          anyOf: [{ $ref: "#/$defs/TrackList" }, { type: "null" }],
+        },
         height: {
           anyOf: [{ $ref: "#/$defs/Animated_LayoutLength" }, { type: "null" }],
         },
@@ -991,6 +1121,13 @@ export const PROJECT_SHAPE: unknown = {
         justify_content: {
           anyOf: [{ $ref: "#/$defs/JustifyContent" }, { type: "null" }],
         },
+        justify_items: {
+          anyOf: [{ $ref: "#/$defs/AlignItems" }, { type: "null" }],
+        },
+        justify_self: {
+          anyOf: [{ $ref: "#/$defs/AlignItems" }, { type: "null" }],
+        },
+        line_height: { format: "float", type: ["number", "null"] },
         margin: {
           anyOf: [{ $ref: "#/$defs/Animated_Insets" }, { type: "null" }],
         },
@@ -1009,6 +1146,7 @@ export const PROJECT_SHAPE: unknown = {
         opacity: {
           anyOf: [{ $ref: "#/$defs/Animated_float" }, { type: "null" }],
         },
+        outline: { anyOf: [{ $ref: "#/$defs/TextOutline" }, { type: "null" }] },
         overflow: { anyOf: [{ $ref: "#/$defs/Overflow" }, { type: "null" }] },
         padding: {
           anyOf: [{ $ref: "#/$defs/Animated_Insets" }, { type: "null" }],
@@ -1017,17 +1155,43 @@ export const PROJECT_SHAPE: unknown = {
         rotation_degrees: {
           anyOf: [{ $ref: "#/$defs/Animated_float" }, { type: "null" }],
         },
+        row_gap: {
+          anyOf: [{ $ref: "#/$defs/Animated_LayoutSize" }, { type: "null" }],
+        },
         scale: { anyOf: [{ $ref: "#/$defs/Animated_Vec2" }, { type: "null" }] },
         shape: { anyOf: [{ $ref: "#/$defs/LayoutShape" }, { type: "null" }] },
-        text: { anyOf: [{ $ref: "#/$defs/LayoutText" }, { type: "null" }] },
+        text: {
+          anyOf: [{ $ref: "#/$defs/Animated_string" }, { type: "null" }],
+        },
+        text_align: {
+          anyOf: [{ $ref: "#/$defs/TextAlign" }, { type: "null" }],
+        },
         translate: {
-          anyOf: [{ $ref: "#/$defs/Animated_Vec2" }, { type: "null" }],
+          anyOf: [{ $ref: "#/$defs/Animated_LayoutOffset" }, { type: "null" }],
         },
         width: {
           anyOf: [{ $ref: "#/$defs/Animated_LayoutLength" }, { type: "null" }],
         },
       },
       type: "object",
+    },
+    LayoutOffset: {
+      anyOf: [
+        {
+          pattern:
+            "^ *-?(\\d+\\.?\\d*|\\.\\d+)(px)?( +-?(\\d+\\.?\\d*|\\.\\d+)(px)?)? *$",
+          type: "string",
+        },
+        {
+          additionalProperties: false,
+          properties: {
+            x: { $ref: "#/$defs/LayoutSize" },
+            y: { $ref: "#/$defs/LayoutSize" },
+          },
+          required: ["x", "y"],
+          type: "object",
+        },
+      ],
     },
     LayoutShape: {
       additionalProperties: false,
@@ -1037,19 +1201,11 @@ export const PROJECT_SHAPE: unknown = {
       required: ["items"],
       type: "object",
     },
-    LayoutText: {
-      additionalProperties: false,
-      properties: {
-        color: { $ref: "#/$defs/Rgba" },
-        content: { $ref: "#/$defs/Animated_string" },
-        font_family: { type: ["string", "null"] },
-        font_size: { $ref: "#/$defs/Animated_float" },
-        line_height: { format: "float", type: "number" },
-        outline: { anyOf: [{ $ref: "#/$defs/TextOutline" }, { type: "null" }] },
-        text_align: { $ref: "#/$defs/TextAlign" },
-      },
-      required: ["content"],
-      type: "object",
+    LayoutSize: {
+      anyOf: [
+        { format: "float", type: "number" },
+        { pattern: "^ *-?(\\d+\\.?\\d*|\\.\\d+)(px)? *$", type: "string" },
+      ],
     },
     Limiter: {
       additionalProperties: false,
@@ -1376,6 +1532,7 @@ export const PROJECT_SHAPE: unknown = {
           required: ["type", "center", "stops"],
           type: "object",
         },
+        { $ref: "#/$defs/Rgba" },
       ],
     },
     Path: {
@@ -1512,15 +1669,24 @@ export const PROJECT_SHAPE: unknown = {
       type: "object",
     },
     Rgba: {
-      additionalProperties: false,
-      properties: {
-        alpha: { format: "float", type: "number" },
-        blue: { format: "float", type: "number" },
-        green: { format: "float", type: "number" },
-        red: { format: "float", type: "number" },
-      },
-      required: ["red", "green", "blue", "alpha"],
-      type: "object",
+      anyOf: [
+        {
+          additionalProperties: false,
+          properties: {
+            alpha: { format: "float", type: "number" },
+            blue: { format: "float", type: "number" },
+            green: { format: "float", type: "number" },
+            red: { format: "float", type: "number" },
+          },
+          required: ["red", "green", "blue", "alpha"],
+          type: "object",
+        },
+        {
+          pattern:
+            "^#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+          type: "string",
+        },
+      ],
     },
     ShapeGeometry: {
       oneOf: [
@@ -1876,6 +2042,7 @@ export const PROJECT_SHAPE: unknown = {
         { const: "caption", type: "string" },
       ],
     },
+    TrackList: { type: "string" },
     TransferFunction: {
       oneOf: [
         { const: "bt709", type: "string" },

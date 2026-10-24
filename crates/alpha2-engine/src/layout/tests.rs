@@ -32,15 +32,16 @@ fn constant(value: serde_json::Value) -> serde_json::Value {
 }
 
 fn length(value: f64) -> serde_json::Value {
-    constant(json!({ "type": "length", "value": value }))
+    constant(json!(value))
 }
 
 fn text(content: &str, size: f64) -> serde_json::Value {
-    json!({ "text": { "content": constant(json!(content)), "font_size": constant(json!(size)) } })
+    json!({ "text": constant(json!(content)), "font_size": constant(json!(size)) })
 }
 
+/// `root` resolved on a picture of `size`, which is also its canvas.
 fn resolved(rasterizer: &TextRasterizer, root: &LayoutNode, size: RenderSize) -> ResolvedLayout {
-    let evaluated = LayoutPlan::new(root).evaluate(MediaTime::ZERO);
+    let evaluated = LayoutPlan::new(root, (size.width, size.height)).evaluate(MediaTime::ZERO);
     let shaped = shape_texts(&evaluated, size, |request| {
         rasterizer.shape(request).map(Arc::new)
     })
@@ -202,11 +203,11 @@ fn an_absolute_box_lies_at_its_percent_inset_in_the_padding_box() {
             {
                 "position": "absolute",
                 "inset": {
-                    "left": constant(json!({ "type": "percent", "value": 50 })),
-                    "top": constant(json!({ "type": "percent", "value": 25 })),
+                    "left": constant(json!("50%")),
+                    "top": constant(json!("25%")),
                 },
                 "width": length(0.1),
-                "height": constant(json!({ "type": "percent", "value": 10 })),
+                "height": constant(json!("10%")),
             },
         ],
     }));
@@ -301,6 +302,7 @@ fn empty_text_measures_nothing_and_needs_no_fonts() {
         &root,
         MediaTime::ZERO,
         size(1000, 1000),
+        (1000, 1000),
     )
     .expect("no text to shape");
     assert_eq!(bounds.nodes.len(), 3);
@@ -313,7 +315,8 @@ fn empty_text_measures_nothing_and_needs_no_fonts() {
             &TextRasterizer::empty(),
             &words,
             MediaTime::ZERO,
-            size(10, 10)
+            size(10, 10),
+            (10, 10)
         ),
         Err(TextError::Raster(TextRasterError::NoFonts))
     );
@@ -330,8 +333,14 @@ fn measured_bounds_name_every_node_as_fractions_of_the_picture() {
             { "children": [text("Title", 0.1)] },
         ],
     }));
-    let bounds =
-        measure_layout(&rasterizer, &root, MediaTime::ZERO, size(800, 400)).expect("measures");
+    let bounds = measure_layout(
+        &rasterizer,
+        &root,
+        MediaTime::ZERO,
+        size(800, 400),
+        (800, 400),
+    )
+    .expect("measures");
     let at = bounds
         .nodes
         .iter()
@@ -362,25 +371,149 @@ fn measured_bounds_name_every_node_as_fractions_of_the_picture() {
 }
 
 #[test]
+fn pixels_are_canvas_pixels_and_scale_with_the_render_size() {
+    let rasterizer = fixture();
+    let root = node(json!({
+        "padding": constant(json!("54px 108px")),
+        "align_items": "start",
+        "children": [{ "width": constant(json!("540px")), "height": constant(json!("10%")) }],
+    }));
+    // On its 1920x1080 canvas: pixels are pixels.
+    let at_canvas = measure_layout(
+        &rasterizer,
+        &root,
+        MediaTime::ZERO,
+        size(1920, 1080),
+        (1920, 1080),
+    )
+    .expect("measures");
+    let child = at_canvas.nodes[1].border;
+    assert_eq!(child.left * 1920.0, 108.0);
+    assert_eq!(child.top * 1080.0, 54.0);
+    assert_eq!((child.right - child.left) * 1920.0, 540.0);
+    // A preview at half the size keeps the proportions: the same fractions of the picture.
+    let half = measure_layout(
+        &rasterizer,
+        &root,
+        MediaTime::ZERO,
+        size(960, 540),
+        (1920, 1080),
+    )
+    .expect("measures");
+    // Rounding to whole pixels of each picture may differ by a pixel; nothing else does.
+    let moved = half.nodes[1].border;
+    assert_eq!(
+        [moved.left, moved.top, moved.right],
+        [child.left, child.top, child.right]
+    );
+    assert!((moved.bottom - child.bottom).abs() * 540.0 <= 1.0);
+    // The same tree in fractions of the shorter side lays out alike.
+    let fractions = node(json!({
+        "padding": constant(json!("0.05 0.1")),
+        "align_items": "start",
+        "children": [{ "width": length(0.5), "height": constant(json!("10%")) }],
+    }));
+    let layout = resolved(&rasterizer, &fractions, size(1920, 1080));
+    assert_eq!(layout.nodes[1].border, [108.0, 54.0, 648.0, 54.0 + 97.0]);
+}
+
+#[test]
+fn a_grid_lays_its_children_out_in_tracks() {
+    let rasterizer = fixture();
+    let root = node(json!({
+        "display": "grid",
+        "grid_template_columns": "1fr 2fr 100px",
+        "grid_auto_rows": "50px",
+        "column_gap": constant(json!("10px")),
+        "row_gap": constant(json!("20px")),
+        "children": [{}, {}, {}, { "grid_column": "2 / span 2" }],
+    }));
+    let layout = resolved(&rasterizer, &root, size(1000, 500));
+    // 1000 - 100 - 2 * 10 = 880 px for the fr tracks: 293.33 and 586.67.
+    assert_eq!(layout.nodes[1].border, [0.0, 0.0, 293.0, 50.0]);
+    assert_eq!(layout.nodes[2].border, [303.0, 0.0, 890.0, 50.0]);
+    assert_eq!(layout.nodes[3].border, [900.0, 0.0, 1000.0, 50.0]);
+    // The second row; the item spans the last two columns and the gap between them.
+    assert_eq!(layout.nodes[4].border, [303.0, 70.0, 1000.0, 120.0]);
+    assert!(!layout.nodes.iter().any(|rects| rects.overflow));
+}
+
+#[test]
+fn a_grid_repeats_tracks_to_fill_its_width() {
+    let rasterizer = fixture();
+    let root = node(json!({
+        "display": "grid",
+        "grid_template_columns": "repeat(auto-fill, minmax(150px, 1fr))",
+        "grid_auto_rows": "40px",
+        "children": (0..5).map(|_| json!({})).collect::<Vec<_>>(),
+    }));
+    // 640 px hold four 150 px columns, grown to 160 px each; the fifth child wraps.
+    let layout = resolved(&rasterizer, &root, size(640, 400));
+    let lefts = layout.nodes[1..]
+        .iter()
+        .map(|rects| rects.border[0])
+        .collect::<Vec<_>>();
+    assert_eq!(lefts, [0.0, 160.0, 320.0, 480.0, 0.0]);
+    assert_eq!(layout.nodes[5].border[1], 40.0);
+}
+
+#[test]
+fn grid_items_align_in_their_areas_and_text_wraps_at_its_cell() {
+    let rasterizer = fixture();
+    let content = "Wrote the first published algorithm for a machine, 1843";
+    let mut label = text(content, 0.03);
+    label["align_self"] = json!("start");
+    let root = node(json!({
+        "display": "grid",
+        "grid_template_columns": "300px 1fr",
+        "grid_template_rows": "200px",
+        "justify_items": "center",
+        "align_items": "end",
+        "children": [
+            label,
+            { "width": length(0.1), "height": length(0.1), "justify_self": "end" },
+        ],
+    }));
+    let layout = resolved(&rasterizer, &root, size(1000, 1000));
+    let lines = shaped(&rasterizer, content, 30.0).lines_at(wrap(300.0));
+    let label = layout.nodes[1];
+    assert!(lines.line_count > 1);
+    assert_eq!(label.line_count, Some(lines.line_count));
+    assert_eq!(label.border[1], 0.0);
+    assert!(label.border[2] - label.border[0] <= 300.0);
+    // `justify_self: end` and the container's `align_items: end` put the box bottom right.
+    assert_eq!(layout.nodes[2].border, [900.0, 100.0, 1000.0, 200.0]);
+}
+
+#[test]
 fn an_invalid_tree_resolves_without_panicking() {
     let rasterizer = fixture();
     let root: LayoutNode = serde_json::from_value(json!({
-        "width": constant(json!({ "type": "length", "value": -3.0 })),
+        "width": constant(json!(-3.0)),
         "gap": constant(json!(-1.0)),
         "children": [
             {
-                "text": { "content": constant(json!("both")) },
+                "text": constant(json!("both")),
                 "shape": { "items": [] },
                 "children": [{ "aspect_ratio": 0.0 }],
                 "margin": constant(json!({ "left": -50.0 })),
+                "display": "grid",
+                "grid_template_columns": "repeat(65, 0fr) -1px",
             },
-            { "max_width": constant(json!({ "type": "percent", "value": 1.0e30 })) },
+            { "max_width": constant(json!("1000000000000000000000000000000%")) },
+            { "display": "grid", "grid_column": "-30000 / span 30000", "children": [{}] },
         ],
     }))
     .expect("parses");
     for (width, height) in [(1, 1), (16_384, 3), (640, 360)] {
-        let bounds = measure_layout(&rasterizer, &root, MediaTime::ZERO, size(width, height))
-            .expect("measures");
+        let bounds = measure_layout(
+            &rasterizer,
+            &root,
+            MediaTime::ZERO,
+            size(width, height),
+            (width, height),
+        )
+        .expect("measures");
         for node in &bounds.nodes {
             for value in [node.border.left, node.border.right, node.content.top] {
                 assert!(value.is_finite(), "{node:?}");
@@ -427,11 +560,12 @@ fn layout_resolve_cost() {
     let start = web_time::Instant::now();
     for _ in 0..runs {
         std::hint::black_box(
-            measure_layout(&rasterizer, &root, MediaTime::ZERO, size).expect("measures"),
+            measure_layout(&rasterizer, &root, MediaTime::ZERO, size, (1920, 1080))
+                .expect("measures"),
         );
     }
     let cold = start.elapsed() / runs;
-    let evaluated = LayoutPlan::new(&root).evaluate(MediaTime::ZERO);
+    let evaluated = LayoutPlan::new(&root, (1920, 1080)).evaluate(MediaTime::ZERO);
     let shaped = shape_texts(&evaluated, size, |request| {
         rasterizer.shape(request).map(Arc::new)
     })

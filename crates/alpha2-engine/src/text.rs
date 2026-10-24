@@ -450,7 +450,8 @@ impl TextTextures {
     }
 
     /// Where each node of `root` lies on a picture of `size` at picture
-    /// time `time`, laid out with these fonts: [`crate::measure_layout`].
+    /// time `time`, its pixels those of a `canvas` canvas, laid out with
+    /// these fonts: [`crate::measure_layout`].
     ///
     /// # Errors
     /// Returns [`TextError::Raster`] as [`Self::prepare`] would for its
@@ -460,8 +461,9 @@ impl TextTextures {
         root: &alpha2_model::LayoutNode,
         time: alpha2_time::MediaTime,
         size: RenderSize,
+        canvas: (u32, u32),
     ) -> Result<crate::LayoutBounds, TextError> {
-        crate::measure_layout(&self.rasterizer, root, time, size)
+        crate::measure_layout(&self.rasterizer, root, time, size, canvas)
     }
 
     /// [`Self::prepare`] for the frame of `project` at `time`, rendered at

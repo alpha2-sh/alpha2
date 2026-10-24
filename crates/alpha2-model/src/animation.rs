@@ -49,6 +49,27 @@ pub enum Animated<T> {
     },
 }
 
+impl<T> Animated<T> {
+    /// The same animation with each value mapped by `map`, its keyframes'
+    /// times and interpolations kept.
+    #[must_use]
+    pub fn map<U>(&self, map: impl Fn(&T) -> U) -> Animated<U> {
+        match self {
+            Self::Constant { value } => Animated::Constant { value: map(value) },
+            Self::Keyframes { keyframes } => Animated::Keyframes {
+                keyframes: keyframes
+                    .iter()
+                    .map(|keyframe| Keyframe {
+                        time: keyframe.time,
+                        value: map(&keyframe.value),
+                        interpolation: keyframe.interpolation,
+                    })
+                    .collect(),
+            },
+        }
+    }
+}
+
 /// A position that can move along curves between its keyframes.
 ///
 /// Its JSON is that of an `Animated<Vec2>`, plus optional spatial tangents on

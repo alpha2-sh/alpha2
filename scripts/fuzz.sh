@@ -7,7 +7,8 @@
 # Seeds are written, never committed: each target's corpus directory (fuzz/corpus/<target>, ignored
 # by git) starts from the test files it reads (tests/corpus/extensions, the project documents under
 # tests/cases/, tests/corpus/captions with LF and CRLF line ends, the layouts of
-# tests/golden/layout_measure.json); evaluate, audio_render, and vector_raster start empty. ALPHA2_FUZZ_SEEDS=<dir> adds <dir>/<target>/* to a target's seeds.
+# tests/golden/layout_measure.json, and its string values for layout_values); evaluate,
+# audio_render, and vector_raster start empty. ALPHA2_FUZZ_SEEDS=<dir> adds <dir>/<target>/* to a target's seeds.
 #
 # An input that takes longer than ALPHA2_FUZZ_TIMEOUT seconds (default 20) or more than
 # ALPHA2_FUZZ_RSS_MB megabytes (default 2560) is a finding, as a panic is. Findings land in
@@ -94,6 +95,20 @@ seed() {
           head.writeInt16LE(Math.trunc(test.time / 100), 4);
           fs.writeFileSync(`${dir}/${test.name}`, Buffer.concat([head, Buffer.from(JSON.stringify(test.generator.root))]));
         }' tests/golden/layout_measure.json "$dir"
+      ;;
+    layout_values)
+      # Every string value of the pinned layouts: lengths, shorthands, track lists, grid lines, hex.
+      node -e '
+        const [golden, dir] = process.argv.slice(1);
+        const fs = require("fs");
+        const strings = new Set();
+        const walk = (value) => {
+          if (typeof value === "string") strings.add(value);
+          else if (value && typeof value === "object") Object.values(value).forEach(walk);
+        };
+        JSON.parse(fs.readFileSync(golden, "utf8")).cases.forEach((test) => walk(test.generator));
+        [...strings].forEach((text, index) => fs.writeFileSync(`${dir}/value-${index}`, text));
+      ' tests/golden/layout_measure.json "$dir"
       ;;
     evaluate | audio_render | vector_raster) ;;
     *) echo "unknown target $target" >&2; exit 2 ;;

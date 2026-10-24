@@ -1,4 +1,5 @@
 import type { Generator, MediaFingerprint, Project } from "alpha2/project";
+import type { LayoutBounds } from "alpha2/layout";
 import type { AssetBinding, ConformReport, MediaPurpose } from "alpha2/assets";
 import type { BuiltinEffectCatalog, EffectDefinition } from "alpha2/effects";
 import type { EditorSession } from "../core/session.js";
@@ -535,6 +536,19 @@ export interface BrowserBridge {
   measureText(
     generator: Extract<Generator, { type: "text" }>,
   ): Promise<TextBounds>;
+  /**
+   * Where every box of a layout generator lies at picture time `time` (whole ticks) and whether
+   * anything overflows (see `alpha2/layout`'s `LayoutBounds`): laid out as preview lays it out,
+   * with the same fonts, at the draft's canvas size, without rendering. A clip's transform maps
+   * these rectangles as it maps the rest of its picture.
+   *
+   * Rejects a generator that is not a valid layout generator (`INVALID_INPUT`), a layout with text
+   * and no fonts to draw it, and once the bridge is disposed (`disposed`).
+   */
+  measureLayout(
+    generator: Extract<Generator, { type: "layout" }>,
+    time?: number,
+  ): Promise<LayoutBounds>;
   /**
    * The files a native export of `document` (the current one by default) needs, for upload:
    * shown media (or their proxies with `media: "proxies"`), an image sequence's frames, font

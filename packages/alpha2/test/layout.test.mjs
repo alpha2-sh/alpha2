@@ -3,115 +3,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { box, layout, measureLayout, px, shape, text } from "../dist/layout.js";
+import { box, layout, measureLayout, shape, text } from "../dist/layout.js";
 import { validateProject } from "../dist/project.js";
 
 const constant = (value) => ({ mode: "constant", value });
 const red = { red: 1, green: 0, blue: 0, alpha: 1 };
 
-test("shorthands become the explicit document", () => {
-  const ellipse = [
-    {
-      type: "ellipse",
-      center: constant({ x: 0.5, y: 0.5 }),
-      size: constant({ x: 1, y: 1 }),
-    },
-    { type: "fill", paint: constant({ type: "solid", color: red }) },
-  ];
-  const root = box(
-    {
-      flex_direction: "column",
-      gap: 0.01,
-      padding: [0.1, 0.2, 0.3, 0.4],
-      margin: undefined,
-      width: "50%",
-      max_height: 0.5,
-      background: red,
-      border: { width: 0.002, paint: red },
-      inset: { left: "10%" },
-      translate: [0, 0.03],
-      scale: 1.5,
-      opacity: {
-        mode: "keyframes",
-        keyframes: [
-          { time: 0, value: 0, interpolation: { type: "linear" } },
-          { time: 6000, value: 1, interpolation: { type: "hold" } },
-        ],
-      },
-    },
-    text("Title", { font_size: px(54), color: red, padding: 0.01 }),
-    shape(ellipse, { width: 0.1, aspect_ratio: 1 }),
-    box(),
-  );
-  assert.deepEqual(root, {
-    flex_direction: "column",
-    gap: constant(0.01),
-    padding: constant({ top: 0.1, right: 0.2, bottom: 0.3, left: 0.4 }),
-    width: constant({ type: "percent", value: 50 }),
-    max_height: constant({ type: "length", value: 0.5 }),
-    background: constant({ type: "solid", color: red }),
-    border: {
-      width: constant(0.002),
-      paint: constant({ type: "solid", color: red }),
-    },
-    inset: { left: constant({ type: "percent", value: 10 }) },
-    translate: constant({ x: 0, y: 0.03 }),
-    scale: constant({ x: 1.5, y: 1.5 }),
-    opacity: root.opacity,
-    children: [
-      {
-        padding: constant({ top: 0.01, right: 0.01, bottom: 0.01, left: 0.01 }),
-        text: {
-          content: constant("Title"),
-          font_size: constant(0.05),
-          color: red,
-        },
-      },
-      {
-        width: constant({ type: "length", value: 0.1 }),
-        aspect_ratio: 1,
-        shape: { items: ellipse },
-      },
-      {},
-    ],
-  });
-  assert.equal(root.opacity.mode, "keyframes");
-  assert.equal(px(27, 540), 0.05);
-  assert.throws(() => box({ width: "5" }), /a length is a number or "N%"/);
-});
-
-test("a built lower third is a valid project document", () => {
-  const card = box(
-    {
-      flex_direction: "row",
-      gap: px(17),
-      padding: [px(24), px(32), px(24), px(24)],
-      background: { red: 0.06, green: 0.07, blue: 0.09, alpha: 0.92 },
-      border_radius: px(13),
-      max_width: "60%",
-      translate: [0, 0.03],
-    },
-    box({ width: px(5), flex_shrink: 0, background: red }),
-    box(
-      { flex_direction: "column", gap: px(6) },
-      text("Ada Lovelace", { font_size: px(45) }),
-      text("Wrote the first published algorithm for a machine, 1843", {
-        font_size: px(28),
-      }),
-    ),
-  );
-  const generator = layout(
-    box(
-      {
-        flex_direction: "column",
-        justify_content: "end",
-        align_items: "start",
-        padding: [0.06, 0.06, 0.08, 0.06],
-      },
-      card,
-    ),
-  );
-  const project = {
+/** A 1920x1080 project showing `generator` as its one source. */
+function projectOf(generator) {
+  return {
     schema_version: 1,
     id: "p",
     name: "P",
@@ -140,16 +40,141 @@ test("a built lower third is a valid project document", () => {
       ],
     },
   };
-  assert.deepEqual(validateProject(project), []);
-  // A field the model does not take is refused by name, as an agent writing CSS needs.
-  const grid = structuredClone(project);
-  grid.sources[0].generator.root.display = "grid";
-  assert.deepEqual(validateProject(grid), [
-    'project.sources[0].generator.root has unknown field "display"',
-  ]);
+}
+
+test("props become the document, CSS value strings as written", () => {
+  const ellipse = [
+    {
+      type: "ellipse",
+      center: constant({ x: 0.5, y: 0.5 }),
+      size: constant({ x: 1, y: 1 }),
+    },
+    { type: "fill", paint: constant({ type: "solid", color: red }) },
+  ];
+  const root = box(
+    {
+      flex_direction: "column",
+      gap: "10px",
+      padding: [0.1, "20px", 0.3, 0.4],
+      margin: undefined,
+      width: "50%",
+      max_height: 0.5,
+      background: "#ff0000",
+      border: { width: "2px", paint: red },
+      inset: { left: "10%" },
+      translate: [0, "30px"],
+      scale: 1.5,
+      font_family: "Inter",
+      color: "#f5f5f0",
+      opacity: {
+        mode: "keyframes",
+        keyframes: [
+          { time: 0, value: 0, interpolation: { type: "linear" } },
+          { time: 6000, value: 1, interpolation: { type: "hold" } },
+        ],
+      },
+    },
+    text("Title", { font_size: "54px", color: red, padding: "8px 16px" }),
+    shape(ellipse, { width: 0.1, aspect_ratio: 1 }),
+    box(),
+  );
+  assert.deepEqual(root, {
+    flex_direction: "column",
+    gap: constant("10px"),
+    padding: constant({ top: 0.1, right: "20px", bottom: 0.3, left: 0.4 }),
+    width: constant("50%"),
+    max_height: constant(0.5),
+    background: constant("#ff0000"),
+    border: { width: constant("2px"), paint: constant(red) },
+    inset: { left: constant("10%") },
+    translate: constant({ x: 0, y: "30px" }),
+    scale: constant({ x: 1.5, y: 1.5 }),
+    font_family: "Inter",
+    color: "#f5f5f0",
+    opacity: root.opacity,
+    children: [
+      {
+        font_size: constant("54px"),
+        color: red,
+        padding: constant("8px 16px"),
+        text: constant("Title"),
+      },
+      { width: constant(0.1), aspect_ratio: 1, shape: { items: ellipse } },
+      {},
+    ],
+  });
+  assert.equal(root.opacity.mode, "keyframes");
+  // The root is the picture: the box sits in one.
+  assert.deepEqual(validateProject(projectOf(layout(box({}, root)))), []);
 });
 
-test("measureLayout sends a layout generator and reads the engine's bounds", () => {
+test("a CSS value string the engine cannot read throws its message", () => {
+  assert.throws(
+    () => box({ width: "5 px" }),
+    /^TypeError: invalid length "5 px" \(write 5px\)/,
+  );
+  assert.throws(
+    () => box({ padding: "1px 2px 3px 4px 5px" }),
+    /expected 1 to 4 lengths, got 5/,
+  );
+  assert.throws(() => box({ gap: "5%" }), /percent is not allowed here/);
+  assert.throws(
+    () => box({ display: "grid", grid_template_columns: "1 fr" }),
+    /unknown track "1 fr" \(write 1fr\)/,
+  );
+  assert.throws(
+    () => box({ grid_column: "header" }),
+    /named grid lines are not supported/,
+  );
+  assert.throws(() => box({ background: "#ggg" }), /invalid color "#ggg"/);
+});
+
+test("a built grid with inherited style is a valid project document", () => {
+  const generator = layout(
+    box(
+      {
+        display: "grid",
+        grid_template_columns: "1fr 1fr",
+        gap: "24px",
+        padding: "48px 64px",
+        font_family: "Inter",
+        color: "#f5f5f0",
+      },
+      text("Revenue", { font_size: "32px" }),
+      text("Margin", { font_size: "32px", color: "#ffb020" }),
+      box({
+        background: "#1e2230",
+        border_radius: "12px",
+        height: "50%",
+        grid_column: "1 / -1",
+      }),
+    ),
+  );
+  const project = projectOf(generator);
+  assert.deepEqual(validateProject(project), []);
+  // A field that does not apply is refused naming it and why.
+  const flex = structuredClone(project);
+  delete flex.sources[0].generator.root.display;
+  assert.deepEqual(validateProject(flex), [
+    "source g has an invalid layout: root sets grid_template_columns, a grid container field, without display grid",
+  ]);
+  // A field the model does not take is refused by name.
+  const areas = structuredClone(project);
+  areas.sources[0].generator.root.grid_template_areas = "a b";
+  assert.deepEqual(validateProject(areas), [
+    'project.sources[0].generator.root has unknown field "grid_template_areas"',
+  ]);
+  // A pixel font size past the canvas's shorter side is too large on this canvas.
+  const huge = structuredClone(project);
+  huge.sources[0].generator.root.font_size = constant("1200px");
+  assert.deepEqual(validateProject(huge), [
+    "source g has an invalid layout: root.font_size has a value out of range",
+  ]);
+  huge.settings.height = 1440;
+  assert.deepEqual(validateProject(huge), []);
+});
+
+test("measureLayout sends a layout generator and its canvas and reads the engine's bounds", () => {
   const calls = [];
   const answer = {
     nodes: [
@@ -163,8 +188,8 @@ test("measureLayout sends a layout generator and reads the engine's bounds", () 
     ],
   };
   const binding = {
-    measureLayout(json, width, height, time) {
-      calls.push([JSON.parse(json), width, height, time]);
+    measureLayout(json, ...rest) {
+      calls.push([JSON.parse(json), ...rest]);
       return JSON.stringify(answer);
     },
   };
@@ -172,8 +197,16 @@ test("measureLayout sends a layout generator and reads the engine's bounds", () 
   const picture = { width: 1280, height: 720 };
   assert.deepEqual(measureLayout(binding, root, picture), answer);
   assert.deepEqual(measureLayout(binding, layout(root), picture, 600), answer);
+  assert.deepEqual(
+    measureLayout(binding, root, { width: 960, height: 540 }, 0, {
+      width: 3840,
+      height: 2160,
+    }),
+    answer,
+  );
   assert.deepEqual(calls, [
-    [{ type: "layout", root }, 1280, 720, 0],
-    [{ type: "layout", root }, 1280, 720, 600],
+    [{ type: "layout", root }, 1280, 720, 0, 1280, 720],
+    [{ type: "layout", root }, 1280, 720, 600, 1280, 720],
+    [{ type: "layout", root }, 960, 540, 0, 3840, 2160],
   ]);
 });

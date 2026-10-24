@@ -34,7 +34,11 @@ impl ActiveIndex {
         let mut entries = Vec::new();
         let mut transitions = Vec::new();
         let matte_sources = project.timeline.matte_sources();
-        let lookup = crate::composition::Lookup::new(&project.compositions, &project.sources);
+        let lookup = crate::composition::Lookup::new(
+            &project.compositions,
+            &project.sources,
+            (project.settings.width, project.settings.height),
+        );
         let (plans, source_plans) = compile_plans(project, &lookup);
         let sources = project
             .sources
@@ -352,7 +356,10 @@ fn generator_plans(
         .sources
         .iter()
         .filter_map(|source| {
-            let plan = crate::GeneratorPlan::new(source.generator.as_ref()?)?;
+            let plan = crate::GeneratorPlan::new(
+                source.generator.as_ref()?,
+                (project.settings.width, project.settings.height),
+            )?;
             Some((&source.id, std::sync::Arc::new(plan)))
         })
         .collect()

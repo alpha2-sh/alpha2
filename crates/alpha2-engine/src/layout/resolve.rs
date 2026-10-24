@@ -1,17 +1,20 @@
-//! Flexbox resolution with taffy: the only file that names it, so an upgrade
-//! touches this file and the goldens.
+//! Flexbox and grid resolution with taffy: the only file that names it, so
+//! an upgrade touches this file and the goldens.
 
 use super::{NodeRects, ResolvedLayout, wrap};
-use alpha2_eval::{EvaluatedLayout, EvaluatedNode, NodeContent, NodeLayout};
+use alpha2_eval::{EvaluatedLayout, EvaluatedNode, NodeContent, NodeLayout, Sides};
 use alpha2_model::{
-    AlignItems, FlexDirection, FlexWrap, JustifyContent, LayoutLength, Overflow, Position,
+    AlignContent, AlignItems, Display, FlexDirection, FlexWrap, GridAutoFlow, GridEdge,
+    GridPlacement, JustifyContent, LayoutLength, Overflow, Position, RepeatCount, TrackBreadth,
+    TrackComponent, TrackList, TrackSize,
 };
 use alpha2_render::RenderSize;
 use alpha2_text::ShapedText;
 use std::sync::Arc;
 use taffy::{
-    AvailableSpace, Dimension, LengthPercentage, LengthPercentageAuto, NodeId, Point, Rect, Size,
-    Style, TaffyTree,
+    AvailableSpace, Dimension, GridTemplateComponent, GridTemplateRepetition, LengthPercentage,
+    LengthPercentageAuto, MaxTrackSizingFunction, MinTrackSizingFunction, NodeId, Point, Rect,
+    RepetitionCount, Size, Style, TaffyTree, TrackSizingFunction,
 };
 
 /// What a leaf measures by.
@@ -145,19 +148,129 @@ fn length(value: f32, unit: f32) -> LengthPercentage {
     LengthPercentage::length(value * unit)
 }
 
+// A plan holds no pixels (they became fractions); were one left, it would read as a fraction.
+
 fn length_auto(value: Option<LayoutLength>, unit: f32) -> LengthPercentageAuto {
     match value {
         None => LengthPercentageAuto::auto(),
-        Some(LayoutLength::Length { value }) => LengthPercentageAuto::length(value * unit),
-        Some(LayoutLength::Percent { value }) => LengthPercentageAuto::percent(value / 100.0),
+        Some(LayoutLength::Fraction(value) | LayoutLength::Px(value)) => {
+            LengthPercentageAuto::length(value * unit)
+        }
+        Some(LayoutLength::Percent(value)) => LengthPercentageAuto::percent(value / 100.0),
     }
 }
 
 fn dimension(value: Option<LayoutLength>, unit: f32) -> Dimension {
     match value {
         None => Dimension::auto(),
-        Some(LayoutLength::Length { value }) => Dimension::length(value * unit),
-        Some(LayoutLength::Percent { value }) => Dimension::percent(value / 100.0),
+        Some(LayoutLength::Fraction(value) | LayoutLength::Px(value)) => {
+            Dimension::length(value * unit)
+        }
+        Some(LayoutLength::Percent(value)) => Dimension::percent(value / 100.0),
+    }
+}
+
+fn min_breadth(breadth: TrackBreadth, unit: f32) -> MinTrackSizingFunction {
+    match breadth {
+        TrackBreadth::Length(LayoutLength::Fraction(value) | LayoutLength::Px(value)) => {
+            MinTrackSizingFunction::length(value * unit)
+        }
+        TrackBreadth::Length(LayoutLength::Percent(value)) => {
+            MinTrackSizingFunction::percent(value / 100.0)
+        }
+        // A minimum is never fr: the parser refuses it, as CSS does.
+        TrackBreadth::Auto | TrackBreadth::Fr(_) => MinTrackSizingFunction::auto(),
+        TrackBreadth::MinContent => MinTrackSizingFunction::min_content(),
+        TrackBreadth::MaxContent => MinTrackSizingFunction::max_content(),
+    }
+}
+
+fn max_breadth(breadth: TrackBreadth, unit: f32) -> MaxTrackSizingFunction {
+    match breadth {
+        TrackBreadth::Length(LayoutLength::Fraction(value) | LayoutLength::Px(value)) => {
+            MaxTrackSizingFunction::length(value * unit)
+        }
+        TrackBreadth::Length(LayoutLength::Percent(value)) => {
+            MaxTrackSizingFunction::percent(value / 100.0)
+        }
+        TrackBreadth::Fr(share) => MaxTrackSizingFunction::fr(share),
+        TrackBreadth::Auto => MaxTrackSizingFunction::auto(),
+        TrackBreadth::MinContent => MaxTrackSizingFunction::min_content(),
+        TrackBreadth::MaxContent => MaxTrackSizingFunction::max_content(),
+    }
+}
+
+/// A track's sizing functions, as CSS reads a single breadth: a length is
+/// fixed, `<n>fr` is `minmax(auto, <n>fr)`, a keyword sizes by content.
+fn track(size: TrackSize, unit: f32) -> TrackSizingFunction {
+    let (min, max) = match size {
+        TrackSize::Breadth(TrackBreadth::Fr(share)) => (
+            MinTrackSizingFunction::auto(),
+            MaxTrackSizingFunction::fr(share),
+        ),
+        TrackSize::Breadth(breadth) => (min_breadth(breadth, unit), max_breadth(breadth, unit)),
+        TrackSize::MinMax(min, max) => (min_breadth(min, unit), max_breadth(max, unit)),
+        TrackSize::FitContent(limit) => (
+            MinTrackSizingFunction::auto(),
+            match limit {
+                LayoutLength::Fraction(value) | LayoutLength::Px(value) => {
+                    MaxTrackSizingFunction::fit_content_px(value * unit)
+                }
+                LayoutLength::Percent(value) => {
+                    MaxTrackSizingFunction::fit_content_percent(value / 100.0)
+                }
+            },
+        ),
+    };
+    TrackSizingFunction { min, max }
+}
+
+/// An explicit track list, `repeat()` kept for taffy to expand, with no line
+/// names (the model refuses them).
+fn template<S: taffy::CheapCloneStr>(
+    tracks: Option<&TrackList>,
+    unit: f32,
+) -> Vec<GridTemplateComponent<S>> {
+    tracks.map_or_else(Vec::new, |tracks| {
+        tracks
+            .0
+            .iter()
+            .map(|component| match component {
+                TrackComponent::Single(size) => GridTemplateComponent::Single(track(*size, unit)),
+                TrackComponent::Repeat(count, sizes) => {
+                    GridTemplateComponent::Repeat(GridTemplateRepetition {
+                        count: match count {
+                            RepeatCount::Count(count) => RepetitionCount::Count(*count),
+                            RepeatCount::AutoFill => RepetitionCount::AutoFill,
+                            RepeatCount::AutoFit => RepetitionCount::AutoFit,
+                        },
+                        tracks: sizes.iter().map(|size| track(*size, unit)).collect(),
+                        line_names: Vec::new(),
+                    })
+                }
+            })
+            .collect()
+    })
+}
+
+/// Implicit track sizes: the model refuses `repeat()` in them.
+fn implicit(tracks: Option<&TrackList>, unit: f32) -> Vec<TrackSizingFunction> {
+    tracks.map_or_else(Vec::new, |tracks| {
+        tracks.sizes().map(|size| track(size, unit)).collect()
+    })
+}
+
+fn placement<S: taffy::CheapCloneStr>(
+    placement: GridPlacement,
+) -> taffy::Line<taffy::GridPlacement<S>> {
+    let edge = |edge: GridEdge| match edge {
+        GridEdge::Auto => taffy::GridPlacement::Auto,
+        GridEdge::Line(line) => taffy::style_helpers::line(line),
+        GridEdge::Span(count) => taffy::GridPlacement::Span(count),
+    };
+    taffy::Line {
+        start: edge(placement.start),
+        end: edge(placement.end),
     }
 }
 
@@ -170,11 +283,22 @@ const fn align(value: AlignItems) -> taffy::AlignItems {
     }
 }
 
+const fn align_content(value: AlignContent) -> taffy::AlignContent {
+    match value {
+        AlignContent::Start => taffy::AlignContent::START,
+        AlignContent::Center => taffy::AlignContent::CENTER,
+        AlignContent::End => taffy::AlignContent::END,
+        AlignContent::SpaceBetween => taffy::AlignContent::SPACE_BETWEEN,
+        AlignContent::SpaceAround => taffy::AlignContent::SPACE_AROUND,
+        AlignContent::SpaceEvenly => taffy::AlignContent::SPACE_EVENLY,
+        AlignContent::Stretch => taffy::AlignContent::STRETCH,
+    }
+}
+
 /// The taffy style of one node, lengths scaled by `unit` pixels. The root
 /// takes the picture's size.
 fn taffy_style(node: &NodeLayout, unit: f32, root_size: Option<Size<f32>>) -> Style {
-    let gap = length(node.gap, unit);
-    let insets = |insets: alpha2_model::Insets| Rect {
+    let insets = |insets: Sides| Rect {
         left: length(insets.left, unit),
         right: length(insets.right, unit),
         top: length(insets.top, unit),
@@ -193,7 +317,10 @@ fn taffy_style(node: &NodeLayout, unit: f32, root_size: Option<Size<f32>>) -> St
         Overflow::Hidden => taffy::Overflow::Hidden,
     };
     Style {
-        display: taffy::Display::Flex,
+        display: match node.display {
+            Display::Flex => taffy::Display::Flex,
+            Display::Grid => taffy::Display::Grid,
+        },
         box_sizing: taffy::BoxSizing::BorderBox,
         direction: taffy::Direction::Ltr,
         flex_direction: match node.flex_direction {
@@ -207,8 +334,8 @@ fn taffy_style(node: &NodeLayout, unit: f32, root_size: Option<Size<f32>>) -> St
             FlexWrap::Wrap => taffy::FlexWrap::Wrap,
         },
         gap: Size {
-            width: gap,
-            height: gap,
+            width: length(node.column_gap, unit),
+            height: length(node.row_gap, unit),
         },
         justify_content: match node.justify_content {
             JustifyContent::Start => taffy::JustifyContent::START,
@@ -220,7 +347,7 @@ fn taffy_style(node: &NodeLayout, unit: f32, root_size: Option<Size<f32>>) -> St
         },
         align_items: align(node.align_items),
         align_self: node.align_self.map(align),
-        align_content: taffy::AlignContent::STRETCH,
+        align_content: align_content(node.align_content),
         padding: insets(node.padding),
         margin,
         border: Rect {
@@ -267,6 +394,28 @@ fn taffy_style(node: &NodeLayout, unit: f32, root_size: Option<Size<f32>>) -> St
             y: overflow,
         },
         scrollbar_width: 0.0,
+        ..grid_style(node, unit)
+    }
+}
+
+/// The grid container and grid item fields of one node's taffy style, lengths scaled by `unit`
+/// pixels; taffy reads them only where a grid lays the node or its children out.
+fn grid_style(node: &NodeLayout, unit: f32) -> Style {
+    Style {
+        justify_items: align(node.justify_items),
+        justify_self: node.justify_self.map(align),
+        grid_template_columns: template(node.grid_template_columns.as_ref(), unit),
+        grid_template_rows: template(node.grid_template_rows.as_ref(), unit),
+        grid_auto_columns: implicit(node.grid_auto_columns.as_ref(), unit),
+        grid_auto_rows: implicit(node.grid_auto_rows.as_ref(), unit),
+        grid_auto_flow: match node.grid_auto_flow {
+            GridAutoFlow::Row => taffy::GridAutoFlow::Row,
+            GridAutoFlow::Column => taffy::GridAutoFlow::Column,
+            GridAutoFlow::RowDense => taffy::GridAutoFlow::RowDense,
+            GridAutoFlow::ColumnDense => taffy::GridAutoFlow::ColumnDense,
+        },
+        grid_column: placement(node.grid_column),
+        grid_row: placement(node.grid_row),
         ..Style::default()
     }
 }

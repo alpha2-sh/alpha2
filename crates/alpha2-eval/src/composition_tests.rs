@@ -84,6 +84,7 @@ fn plan(project: &Project) -> Result<CompositionPlan, PlanError> {
         &project.compositions[0],
         &project.compositions,
         &project.sources,
+        (project.settings.width, project.settings.height),
     )
 }
 
@@ -624,8 +625,9 @@ fn nested(levels: usize, uses: usize) -> Vec<Composition> {
 
 #[test]
 fn the_planner_stops_at_the_nesting_and_size_validation_allows() {
-    let plan_first =
-        |compositions: &[Composition]| plan_composition(&compositions[0], compositions, &[]);
+    let plan_first = |compositions: &[Composition]| {
+        plan_composition(&compositions[0], compositions, &[], (64, 36))
+    };
     // Validation refuses both projects; a caller that skips it gets an error, not an exhausted
     // stack or memory.
     let deep = nested(alpha2_model::MAX_COMPOSITION_DEPTH - 1, 1);
@@ -745,7 +747,7 @@ fn a_plan_holds_its_steps_settings_and_paths_and_stops_where_its_budget_does() {
         let mut budget = PlanBudget::new(bytes);
         let plan = plan_composition_within(
             &compositions[0],
-            &Lookup::new(&compositions, &[]),
+            &Lookup::new(&compositions, &[], (64, 36)),
             &mut budget,
         );
         (plan, budget.exceeded())
@@ -784,6 +786,7 @@ fn the_plans_of_one_project_hold_at_most_the_plan_budget_together() {
         &project.compositions[0],
         &project.compositions,
         &project.sources,
+        (project.settings.width, project.settings.height),
     )
     .expect("one composition is within the budget");
     let held = alone.steps.iter().map(step_bytes).sum::<u64>();
@@ -839,8 +842,8 @@ fn the_planner_refuses_what_the_editor_finds_incomplete() {
             .find(|composition| composition.id.as_str() == case["composition"])
             .expect(name);
         let planned = match case["use"].as_str() {
-            Some("clip") => plan_composition(target, &compositions, &sources),
-            Some("source") => plan_source_composition(target, &compositions, &sources),
+            Some("clip") => plan_composition(target, &compositions, &sources, (64, 36)),
+            Some("source") => plan_source_composition(target, &compositions, &sources, (64, 36)),
             other => panic!("{name}: use {other:?}"),
         };
         let issues = case["issues"].as_array().expect(name);

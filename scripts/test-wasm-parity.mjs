@@ -276,18 +276,31 @@ measurer.addFont(
 );
 for (const layoutCase of layoutGolden.cases) {
   const picture = { width: layoutCase.width, height: layoutCase.height };
+  // A case may give the project canvas its pixels are pixels of; the picture's own by default.
+  const [canvasWidth, canvasHeight] = layoutCase.canvas ?? [];
   assert.equal(
     measurer.measureLayout(
       JSON.stringify(layoutCase.generator),
       picture.width,
       picture.height,
       layoutCase.time,
+      canvasWidth,
+      canvasHeight,
     ),
     layoutCase.expected,
     layoutCase.name,
   );
+  const canvas = layoutCase.canvas
+    ? { width: canvasWidth, height: canvasHeight }
+    : undefined;
   assert.deepEqual(
-    measureLayout(measurer, layoutCase.generator, picture, layoutCase.time),
+    measureLayout(
+      measurer,
+      layoutCase.generator,
+      picture,
+      layoutCase.time,
+      canvas,
+    ),
     JSON.parse(layoutCase.expected),
     layoutCase.name,
   );

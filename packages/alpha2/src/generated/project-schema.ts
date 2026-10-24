@@ -89,6 +89,9 @@ export const MAX_GAIN = 16;
 /** Mirrors `alpha2_model::MAX_GRADIENT_STOPS`. */
 export const MAX_GRADIENT_STOPS = 8;
 
+/** Mirrors `alpha2_model::MAX_GRID_TRACKS`. */
+export const MAX_GRID_TRACKS = 64;
+
 /** Mirrors `alpha2_model::MAX_GROUP_INPUTS`. */
 export const MAX_GROUP_INPUTS = 16;
 
@@ -200,6 +203,17 @@ export const REVERB_DELAY_MS = 160;
 /** Mirrors `alpha2_model::TICKS_PER_SECOND`. */
 export const TICKS_PER_SECOND = 120000;
 
+/** Every {@link AlignContent}, in the model's order. */
+export const ALIGN_CONTENT_VALUES: readonly AlignContent[] = [
+  "start",
+  "center",
+  "end",
+  "space_between",
+  "space_around",
+  "space_evenly",
+  "stretch",
+];
+
 /** Every {@link AlignItems}, in the model's order. */
 export const ALIGN_ITEMS_VALUES: readonly AlignItems[] = [
   "start",
@@ -259,6 +273,9 @@ export const COLOR_PRIMARIES_VALUES: readonly ColorPrimaries[] = [
 /** Every {@link ColorRange}, in the model's order. */
 export const COLOR_RANGE_VALUES: readonly ColorRange[] = ["limited", "full"];
 
+/** Every {@link Display}, in the model's order. */
+export const DISPLAY_VALUES: readonly Display[] = ["flex", "grid"];
+
 /** Every {@link DynamicRange}, in the model's order. */
 export const DYNAMIC_RANGE_VALUES: readonly DynamicRange[] = ["sdr", "hdr"];
 
@@ -293,6 +310,14 @@ export const FLEX_DIRECTION_VALUES: readonly FlexDirection[] = [
 
 /** Every {@link FlexWrap}, in the model's order. */
 export const FLEX_WRAP_VALUES: readonly FlexWrap[] = ["nowrap", "wrap"];
+
+/** Every {@link GridAutoFlow}, in the model's order. */
+export const GRID_AUTO_FLOW_VALUES: readonly GridAutoFlow[] = [
+  "row",
+  "column",
+  "row_dense",
+  "column_dense",
+];
 
 /** Every {@link HdrSources}, in the model's order. */
 export const HDR_SOURCES_VALUES: readonly HdrSources[] = ["tone_map", "reject"];
@@ -455,7 +480,21 @@ export interface Project {
 }
 
 /**
- * Where children lie across a flex container's main axis.
+ * Where the lines of a wrapping flex container, or a grid's rows, lie
+ * across the container.
+ */
+export type AlignContent =
+  | "start"
+  | "center"
+  | "end"
+  | "space_between"
+  | "space_around"
+  | "space_evenly"
+  | "stretch";
+
+/**
+ * Where children lie across a flex container's main axis, or in their grid
+ * areas.
  */
 export type AlignItems = "start" | "center" | "end" | "stretch";
 
@@ -1048,6 +1087,11 @@ export interface Dash {
 }
 
 /**
+ * How a box lays its children out.
+ */
+export type Display = "flex" | "grid";
+
+/**
  * Sidechain ducking authored on the track that is attenuated.
  */
 export interface Ducking {
@@ -1339,39 +1383,32 @@ export interface GradientStop {
 }
 
 /**
+ * How a grid places items that have no placement of their own.
+ */
+export type GridAutoFlow = "row" | "column" | "row_dense" | "column_dense";
+
+/**
+ * Where a grid item lies on one axis, as CSS writes it: 2, "1 / 3", "span 2", "2 / span 3", "auto". Lines count from 1, or from -1 at the end.
+ */
+export type GridPlacement = number | string;
+
+/**
  * What a project does with HDR sources.
  */
 export type HdrSources = "tone_map" | "reject";
 
 /**
- * A length on each side of a box. Missing sides are 0.
+ * A length on each side of a box: one length for every side, the CSS shorthand of one to four lengths ("8px 16px": top first, clockwise), or the sides object, missing sides 0.
  */
-export interface Insets {
-  /**
-   * Bottom side.
-   *
-   * @defaultValue `0`
-   */
-  readonly bottom?: number;
-  /**
-   * Left side.
-   *
-   * @defaultValue `0`
-   */
-  readonly left?: number;
-  /**
-   * Right side.
-   *
-   * @defaultValue `0`
-   */
-  readonly right?: number;
-  /**
-   * Top side.
-   *
-   * @defaultValue `0`
-   */
-  readonly top?: number;
-}
+export type Insets =
+  | number
+  | string
+  | {
+      readonly bottom?: LayoutSize;
+      readonly left?: LayoutSize;
+      readonly right?: LayoutSize;
+      readonly top?: LayoutSize;
+    };
 
 /**
  * Interpolation from one keyframe to the next.
@@ -1417,7 +1454,8 @@ export type Interpolation =
     };
 
 /**
- * Where children lie along a flex container's main axis.
+ * Where children lie along a container's main axis, or a grid's columns in
+ * it.
  */
 export type JustifyContent =
   | "start"
@@ -1459,7 +1497,7 @@ export interface LayoutBorder {
   /**
    * Width. At least 0.
    */
-  readonly width: Animated<number>;
+  readonly width: Animated<LayoutSize>;
 }
 
 /**
@@ -1487,48 +1525,34 @@ export interface LayoutInset {
 }
 
 /**
- * A size or an inset.
+ * A length: a number is a fraction of the layout picture's shorter side, "<n>px" pixels of the project canvas, "<n>%" a percent of the parent's content box along the field's axis.
  */
-export type LayoutLength =
-  | {
-      /**
-       * A fraction of the layout picture's shorter side.
-       */
-      readonly type: "length";
-      /**
-       * The fraction.
-       */
-      readonly value: number;
-    }
-  | {
-      /**
-       * Percent (0 to 100 is 0% to 100%) of the parent's content box, along
-       * the field's axis.
-       */
-      readonly type: "percent";
-      /**
-       * The percent.
-       */
-      readonly value: number;
-    };
+export type LayoutLength = number | string;
 
 /**
- * One box of a layout tree, laid out by CSS flexbox.
+ * One box of a layout tree.
  *
- * A box is a flex container when it has children, a leaf when it has text
- * or shape content, and empty otherwise (a spacer or a decoration). Per
- * box, its background is drawn first, then its border, then its content.
- * Boxes are drawn in document order; a reversed direction moves them, not
- * their order.
+ * A box lays its children out by flexbox (`display: flex`, the default) or
+ * grid (`display: grid`). It is a container when it has children, a leaf
+ * when it has text or shape content, and empty otherwise (a spacer or a
+ * decoration). Per box, its background is drawn first, then its border,
+ * then its content. Boxes are drawn in document order; a reversed
+ * direction or a grid placement moves them, not their order.
  */
 export interface LayoutNode {
   /**
-   * Where children lie across the main axis. Default `stretch`.
+   * Where lines of a wrapping flex container, or a grid's rows, lie
+   * across the container. Default `stretch`.
+   */
+  readonly align_content?: AlignContent | null;
+  /**
+   * Where children lie across the main axis, or in their grid areas'
+   * rows. Default `stretch`.
    */
   readonly align_items?: AlignItems | null;
   /**
-   * Where the box lies across its parent's main axis. `None` follows the
-   * parent's `align_items`.
+   * Where the box lies across its flex container's main axis, or in its
+   * grid area's row. `None` follows the parent's `align_items`.
    */
   readonly align_self?: AlignItems | null;
   /**
@@ -1548,38 +1572,92 @@ export interface LayoutNode {
    * The corner radius of the border box. At least 0; default 0. A radius
    * past half the box's shorter side is capped.
    */
-  readonly border_radius?: Animated<number> | null;
+  readonly border_radius?: Animated<LayoutSize> | null;
   /**
    * Boxes laid out in this one, in document (and paint) order. Not with
    * `text` or `shape`.
    */
   readonly children?: readonly LayoutNode[];
   /**
+   * Text color. Inherited; the root's is white.
+   */
+  readonly color?: Rgba | null;
+  /**
+   * Space between columns, in place of `gap`. At least 0.
+   */
+  readonly column_gap?: Animated<LayoutSize> | null;
+  /**
+   * How the box lays its children out. Default `flex`. Not on a box with
+   * text or shape content, as every container field.
+   */
+  readonly display?: Display | null;
+  /**
    * The main size before growing and shrinking. `None` is auto.
    */
   readonly flex_basis?: Animated<LayoutLength> | null;
   /**
-   * The main axis of the box's children. Default `row`. Not on a box
-   * with text or shape content, as every flex container field.
+   * The main axis of a flex container's children. Default `row`.
    */
   readonly flex_direction?: FlexDirection | null;
   /**
-   * How much of the free space the box takes. At least 0; default 0.
+   * How much of a flex container's free space the box takes. At least
+   * 0; default 0. Not in a grid, as every flex item field.
    */
   readonly flex_grow?: Animated<number> | null;
   /**
-   * How much the box gives up when space runs short. At least 0; default
-   * 1.
+   * How much the box gives up when a flex container's space runs short.
+   * At least 0; default 1.
    */
   readonly flex_shrink?: Animated<number> | null;
   /**
-   * Whether children wrap onto more lines. Default `nowrap`.
+   * Whether a flex container's children wrap onto more lines. Default
+   * `nowrap`.
    */
   readonly flex_wrap?: FlexWrap | null;
   /**
+   * The family the box's text draws in, as a text style's
+   * `font_family`. Inherited; the root's is the host's first font.
+   */
+  readonly font_family?: string | null;
+  /**
+   * Font size: positive, at most `MAX_LAYOUT_FONT_SIZE` of the
+   * picture's shorter side. Inherited; the root's is 0.05.
+   */
+  readonly font_size?: Animated<LayoutSize> | null;
+  /**
    * Space between children, on both axes. At least 0; default 0.
    */
-  readonly gap?: Animated<number> | null;
+  readonly gap?: Animated<LayoutSize> | null;
+  /**
+   * The size of a grid's implicit columns. Default `auto`.
+   */
+  readonly grid_auto_columns?: TrackList | null;
+  /**
+   * How a grid places items without a placement. Default `row`.
+   */
+  readonly grid_auto_flow?: GridAutoFlow | null;
+  /**
+   * The size of a grid's implicit rows. Default `auto`.
+   */
+  readonly grid_auto_rows?: TrackList | null;
+  /**
+   * The box's columns in its grid, as CSS writes them (`2`, `"1 / 3"`,
+   * `"span 2"`). Default `auto`.
+   */
+  readonly grid_column?: GridPlacement | null;
+  /**
+   * The box's rows in its grid. Default `auto`.
+   */
+  readonly grid_row?: GridPlacement | null;
+  /**
+   * A grid's explicit columns, as CSS writes them (`"1fr 2fr"`,
+   * `"repeat(3, minmax(100px, 1fr))"`). Default none.
+   */
+  readonly grid_template_columns?: TrackList | null;
+  /**
+   * A grid's explicit rows. Default none.
+   */
+  readonly grid_template_rows?: TrackList | null;
   /**
    * Border-box height. `None` is auto.
    */
@@ -1589,11 +1667,29 @@ export interface LayoutNode {
    */
   readonly inset?: LayoutInset | null;
   /**
-   * Where children lie along the main axis. Default `start`.
+   * Where children lie along the main (inline, for a grid) axis. Default
+   * `start`.
    */
   readonly justify_content?: JustifyContent | null;
   /**
-   * Space outside the border. Sides may be negative; there is no `auto`.
+   * Where a grid's children lie in their grid areas' columns. Default
+   * `stretch`.
+   */
+  readonly justify_items?: AlignItems | null;
+  /**
+   * Where the box lies in its grid area's column. `None` follows the
+   * parent's `justify_items`. Not in a flex container, as every grid
+   * item field.
+   */
+  readonly justify_self?: AlignItems | null;
+  /**
+   * Baseline-to-baseline distance in font sizes, in `[0.5, 3]`.
+   * Inherited; the root's is 1.2.
+   */
+  readonly line_height?: number | null;
+  /**
+   * Space outside the border, written as `padding` is. Sides may be
+   * negative; there is no `auto`.
    */
   readonly margin?: Animated<Insets> | null;
   /**
@@ -1618,11 +1714,17 @@ export interface LayoutNode {
    */
   readonly opacity?: Animated<number> | null;
   /**
+   * A band around the glyphs; its width a fraction of the font size.
+   * Inherited; the root has none.
+   */
+  readonly outline?: TextOutline | null;
+  /**
    * Whether content past the padding box is drawn. Default `visible`.
    */
   readonly overflow?: Overflow | null;
   /**
-   * Space inside the border. Sides at least 0; default 0.
+   * Space inside the border: a length, the CSS shorthand
+   * (`"8px 16px"`), or the sides object. Sides at least 0; default 0.
    */
   readonly padding?: Animated<Insets> | null;
   /**
@@ -1635,6 +1737,11 @@ export interface LayoutNode {
    */
   readonly rotation_degrees?: Animated<number> | null;
   /**
+   * Space between rows (between lines of a wrapping row flex
+   * container), in place of `gap`. At least 0.
+   */
+  readonly row_gap?: Animated<LayoutSize> | null;
+  /**
    * Per-axis scale of the box and everything in it about its border-box
    * centre, after layout.
    */
@@ -1645,20 +1752,38 @@ export interface LayoutNode {
    */
   readonly shape?: LayoutShape | null;
   /**
-   * The box's text, wrapped at its content width. Not with `children` or
-   * `shape`.
+   * The box's text, wrapped at its content width and drawn in the style
+   * it inherits; `\n` starts a line. At most `MAX_TEXT_CONTENT_BYTES`
+   * bytes per value; may be empty. Its keyframes all `hold`. Not with
+   * `children` or `shape`.
    */
-  readonly text?: LayoutText | null;
+  readonly text?: Animated<string> | null;
   /**
-   * Offset of the box and everything in it, after layout.
+   * How lines align within the content width. Inherited; the root's is
+   * `start`.
    */
-  readonly translate?: Animated<Vec2> | null;
+  readonly text_align?: TextAlign | null;
   /**
-   * Border-box width. `None` is auto. Not on the root, as every flex item
+   * Offset of the box and everything in it, after layout: the object, or
+   * one or two lengths as CSS `translate` writes them.
+   */
+  readonly translate?: Animated<LayoutOffset> | null;
+  /**
+   * Border-box width. `None` is auto. Not on the root, as every item
    * field.
    */
   readonly width?: Animated<LayoutLength> | null;
 }
+
+/**
+ * An offset, x right and y down: one or two lengths as CSS translate writes them (y 0 when missing), or {x, y}.
+ */
+export type LayoutOffset =
+  | string
+  | {
+      readonly x: LayoutSize;
+      readonly y: LayoutSize;
+    };
 
 /**
  * A box's shapes, drawn as a shapes generator draws its items on a picture
@@ -1674,51 +1799,9 @@ export interface LayoutShape {
 }
 
 /**
- * A box's text: one paragraph style, wrapped at the box's content width.
- *
- * The text fills the content width, its lines aligned in it by
- * `text_align`; its first line starts at the content box's top.
+ * A length that may not be a percent: a number is a fraction of the layout picture's shorter side, "<n>px" pixels of the project canvas.
  */
-export interface LayoutText {
-  /**
-   * Text color.
-   *
-   * @defaultValue `{"alpha":1,"blue":1,"green":1,"red":1}`
-   */
-  readonly color?: Rgba;
-  /**
-   * The text; `\n` starts a line. At most `MAX_TEXT_CONTENT_BYTES`
-   * bytes per value; may be empty. Its keyframes all `hold`.
-   */
-  readonly content: Animated<string>;
-  /**
-   * The family the text draws in, as a text style's `font_family`.
-   */
-  readonly font_family?: string | null;
-  /**
-   * Font size as a fraction of the picture's shorter side: positive, at
-   * most `MAX_LAYOUT_FONT_SIZE`.
-   *
-   * @defaultValue `{"mode":"constant","value":0.05}`
-   */
-  readonly font_size?: Animated<number>;
-  /**
-   * Baseline-to-baseline distance in font sizes, in `[0.5, 3]`.
-   *
-   * @defaultValue `1.2`
-   */
-  readonly line_height?: number;
-  /**
-   * A band around the glyphs; its width a fraction of the font size.
-   */
-  readonly outline?: TextOutline | null;
-  /**
-   * How lines align within the content width. Default `start`.
-   *
-   * @defaultValue `"start"`
-   */
-  readonly text_align?: TextAlign;
-}
+export type LayoutSize = number | string;
 
 /**
  * Final peak limiter placed at the end of the master bus.
@@ -2171,6 +2254,9 @@ export type Overflow = "visible" | "hidden";
  * engine's working space, so a gradient between two colors passes through
  * the physical mix of them, and a stop fading to transparent does not darken
  * its neighbour.
+ *
+ * A color (hex or object) is read as a solid paint of it; a paint is
+ * written back tagged.
  */
 export type Paint =
   | {
@@ -2251,7 +2337,8 @@ export type Paint =
        * Colors around a point: offsets 0 to 1 are one clockwise turn.
        */
       readonly type: "conic_gradient";
-    };
+    }
+  | Rgba;
 
 /**
  * One or more subpaths.
@@ -2483,25 +2570,31 @@ export interface Rgb {
 /**
  * A straight (not premultiplied), sRGB-encoded color with alpha, each
  * component in `0..=1`.
+ *
+ * Written as the object, or as CSS hex: `"#rgb"`, `"#rgba"`, `"#rrggbb"` or
+ * `"#rrggbbaa"`, any case, each digit pair a component times 255. It is
+ * written back as the object: a component need not be a multiple of 1/255.
  */
-export interface Rgba {
-  /**
-   * Coverage.
-   */
-  readonly alpha: number;
-  /**
-   * Blue component.
-   */
-  readonly blue: number;
-  /**
-   * Green component.
-   */
-  readonly green: number;
-  /**
-   * Red component.
-   */
-  readonly red: number;
-}
+export type Rgba =
+  | {
+      /**
+       * Coverage.
+       */
+      readonly alpha: number;
+      /**
+       * Blue component.
+       */
+      readonly blue: number;
+      /**
+       * Green component.
+       */
+      readonly green: number;
+      /**
+       * Red component.
+       */
+      readonly red: number;
+    }
+  | string;
 
 /**
  * A geometry alone, as a mask's outline is.
@@ -3261,6 +3354,11 @@ export type TrackId = string;
  * The media domain accepted by a track.
  */
 export type TrackKind = "video" | "audio" | "caption";
+
+/**
+ * A grid track list as CSS writes it: "1fr 2fr 120px", "repeat(3, minmax(100px, 1fr))", "repeat(auto-fill, 160px)", "auto min-content max-content", "fit-content(200px)". A bare number is a fraction of the picture's shorter side. Named lines are not supported.
+ */
+export type TrackList = string;
 
 /**
  * Encoded transfer curve.

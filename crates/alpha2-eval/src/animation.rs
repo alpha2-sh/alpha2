@@ -1,7 +1,7 @@
 use crate::EvaluatedVisual;
 use alpha2_model::{
-    Animated, AnimatedPoint, EffectValue, GradientStop, Insets, Keyframe, LayoutLength, Paint,
-    Path, PointKeyframe, Vec2, VisualProperties,
+    Animated, AnimatedPoint, EffectValue, GradientStop, Insets, Keyframe, LayoutLength,
+    LayoutOffset, LayoutSize, Paint, Path, PointKeyframe, Vec2, VisualProperties,
 };
 use alpha2_time::MediaTime;
 
@@ -463,43 +463,72 @@ fn interpolate_f32(start: f32, end: f32, amount: f64) -> f32 {
         .clamp(f64::from(f32::MIN), f64::from(f32::MAX)) as f32
 }
 
-/// Samples per-side lengths; each side as [`sample_scalar`] samples a value.
+/// Samples per-side lengths, each side as [`sample_size`] samples one.
 #[must_use]
-pub fn sample_insets(animation: &Animated<Insets>, time: MediaTime) -> Insets {
+pub fn sample_insets(animation: &Animated<Insets>, time: MediaTime) -> [f32; 4] {
     match animation {
-        Animated::Constant { value } => *value,
+        Animated::Constant { value } => value.sides().map(LayoutSize::value),
         Animated::Keyframes { keyframes } => match segment(keyframes, time) {
             Segment::Between(left, right, amount) => {
-                let side = |from: f32, to: f32| interpolate_f32(from, to, amount);
-                Insets {
-                    top: side(left.value.top, right.value.top),
-                    right: side(left.value.right, right.value.right),
-                    bottom: side(left.value.bottom, right.value.bottom),
-                    left: side(left.value.left, right.value.left),
-                }
+                let (from, to) = (left.value.sides(), right.value.sides());
+                std::array::from_fn(|side| {
+                    interpolate_f32(from[side].value(), to[side].value(), amount)
+                })
             }
-            Segment::At(keyframe) => keyframe.value,
-            Segment::Empty => Insets::default(),
+            Segment::At(keyframe) => keyframe.value.sides().map(LayoutSize::value),
+            Segment::Empty => [0.0; 4],
         },
     }
 }
 
-/// Samples a layout length. Validation makes every keyframe one kind; were
-/// they not, the left keyframe's kind is kept.
+/// Samples a layout size as [`sample_scalar`] samples a value. A plan's
+/// sizes are all fractions, so its number is the size.
+#[must_use]
+pub fn sample_size(animation: &Animated<LayoutSize>, time: MediaTime) -> f32 {
+    match animation {
+        Animated::Constant { value } => value.value(),
+        Animated::Keyframes { keyframes } => match segment(keyframes, time) {
+            Segment::Between(left, right, amount) => {
+                interpolate_f32(left.value.value(), right.value.value(), amount)
+            }
+            Segment::At(keyframe) => keyframe.value.value(),
+            Segment::Empty => 0.0,
+        },
+    }
+}
+
+/// Samples a layout offset, each axis as [`sample_size`] samples one.
+#[must_use]
+pub fn sample_offset(animation: &Animated<LayoutOffset>, time: MediaTime) -> Vec2 {
+    let vector = |offset: &LayoutOffset| Vec2::new(offset.x.value(), offset.y.value());
+    match animation {
+        Animated::Constant { value } => vector(value),
+        Animated::Keyframes { keyframes } => match segment(keyframes, time) {
+            Segment::Between(left, right, amount) => Vec2::new(
+                interpolate_f32(left.value.x.value(), right.value.x.value(), amount),
+                interpolate_f32(left.value.y.value(), right.value.y.value(), amount),
+            ),
+            Segment::At(keyframe) => vector(&keyframe.value),
+            Segment::Empty => Vec2::default(),
+        },
+    }
+}
+
+/// Samples a layout length. Validation makes every keyframe one kind (a
+/// plan's lengths are fractions or percents); were they not, the left
+/// keyframe's kind is kept.
 #[must_use]
 pub fn sample_length(animation: &Animated<LayoutLength>, time: MediaTime) -> LayoutLength {
     match animation {
         Animated::Constant { value } => *value,
         Animated::Keyframes { keyframes } => match segment(keyframes, time) {
-            Segment::Between(left, right, amount) => {
-                let value = interpolate_f32(left.value.value(), right.value.value(), amount);
-                match left.value {
-                    LayoutLength::Length { .. } => LayoutLength::Length { value },
-                    LayoutLength::Percent { .. } => LayoutLength::Percent { value },
-                }
-            }
+            Segment::Between(left, right, amount) => left.value.with_value(interpolate_f32(
+                left.value.value(),
+                right.value.value(),
+                amount,
+            )),
             Segment::At(keyframe) => keyframe.value,
-            Segment::Empty => LayoutLength::Length { value: 0.0 },
+            Segment::Empty => LayoutLength::Fraction(0.0),
         },
     }
 }

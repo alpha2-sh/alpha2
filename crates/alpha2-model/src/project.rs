@@ -341,6 +341,7 @@ impl Project {
             &self.sources,
             &sources,
             &effect_resource_ids,
+            (self.settings.width, self.settings.height),
         )?;
         let index = DocumentIndex {
             sources,
@@ -419,7 +420,7 @@ impl Project {
         let mut sources = HashMap::with_capacity(self.sources.len());
         for source in &self.sources {
             ensure_id(&source.id)?;
-            validate_source_content(source)?;
+            validate_source_content(source, (self.settings.width, self.settings.height))?;
             if sources.insert(&source.id, source).is_some() {
                 return Err(ModelError::DuplicateSourceId(source.id.clone()));
             }
@@ -921,7 +922,9 @@ fn validate_captions(track: &crate::Track) -> Result<(), ModelError> {
 /// A generated source has a valid generator and nothing a host would supply;
 /// any other source has a locator and no generator, and an image no audio.
 /// A declared color is consistent: HDR exactly when its transfer is PQ or HLG.
-fn validate_source_content(source: &MediaSource) -> Result<(), ModelError> {
+/// Checks one source; `canvas` is the project's, which a layout's pixels are
+/// pixels of.
+fn validate_source_content(source: &MediaSource, canvas: (u32, u32)) -> Result<(), ModelError> {
     if let Some(fingerprint) = &source.fingerprint
         && (source.kind == MediaKind::Generated || !fingerprint.is_valid())
     {
@@ -968,7 +971,11 @@ fn validate_source_content(source: &MediaSource) -> Result<(), ModelError> {
     }
     if source.kind == MediaKind::Generated {
         let owner = || crate::ShapeOwner::Source(source.id.clone());
-        match source.generator.as_ref().map(Generator::validate) {
+        match source
+            .generator
+            .as_ref()
+            .map(|generator| generator.validate_on(canvas.0, canvas.1))
+        {
             Some(Err(crate::GeneratorIssue::Shape(issue))) => {
                 return Err(ModelError::InvalidShape {
                     owner: owner(),

@@ -212,9 +212,11 @@ pub(crate) fn layout_texts(
 
 /// Where each node of a valid layout tree lies on a picture of `size`, at
 /// picture time `time`, laid out with `rasterizer`'s fonts as a frame lays it
-/// out. Rects are before the clip's transform and before node visuals: layout
-/// boxes, not where they are drawn. An invalid tree gives unspecified rects,
-/// but never panics.
+/// out. `canvas` is the project canvas, which the tree's pixel lengths are
+/// pixels of (the picture's own size when they are measured at it). Rects are
+/// before the clip's transform and before node visuals: layout boxes, not
+/// where they are drawn. An invalid tree gives unspecified rects, but never
+/// panics.
 ///
 /// # Errors
 /// Returns [`TextError::Raster`] when the text host refuses a text: no
@@ -225,8 +227,9 @@ pub fn measure_layout(
     root: &LayoutNode,
     time: MediaTime,
     size: RenderSize,
+    canvas: (u32, u32),
 ) -> Result<LayoutBounds, TextError> {
-    let evaluated = LayoutPlan::new(root).evaluate(time);
+    let evaluated = LayoutPlan::new(root, canvas).evaluate(time);
     let shaped = shape_texts(&evaluated, size, |request| {
         rasterizer.shape(request).map(Arc::new)
     })?;

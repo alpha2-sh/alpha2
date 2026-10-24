@@ -31,6 +31,21 @@ import type {
   Vec2,
 } from "./generated/project-schema.js";
 import {
+  parseHex,
+  parseInsets,
+  parseLength,
+  parseOffset,
+  parsePlacement,
+  parseSize,
+  parseTrackList,
+  type GridEdge,
+  type Length,
+  type Parsed,
+  type TrackBreadth,
+  type TrackComponent,
+  type TrackSize,
+} from "./layout-values.js";
+import {
   AUDIO_EFFECT_STATE_MARGIN_MS,
   MAX_CANVAS_DIMENSION,
   MAX_CANVAS_PIXELS,
@@ -58,6 +73,7 @@ import {
   MAX_LAYOUT_ISOLATED,
   MAX_LAYOUT_NODES,
   MAX_LAYOUT_TEXTS,
+  MAX_GRID_TRACKS,
   MIN_POLYSTAR_POINTS,
   MAX_CLIPS,
   MAX_CLIPS_PER_TRACK,
@@ -262,7 +278,12 @@ function invariantProblems(value: unknown): string[] {
     "effect_resources",
     false,
   );
-  const catalog = catalogOf(sourceList, resourceList, compositionList);
+  const catalog = catalogOf(
+    sourceList,
+    resourceList,
+    compositionList,
+    canvasOf(project),
+  );
   for (const problem of catalog.problems) problems.push(problem);
 
   const trackIds = new Set<string>();
@@ -367,10 +388,19 @@ interface Catalog {
   readonly inlined?: ReadonlyMap<string, number>;
 }
 
+/** The project's canvas, which its layouts' pixels are pixels of. */
+function canvasOf(project: Project): Canvas {
+  const settings: Record<string, unknown> = isRecord(project.settings)
+    ? project.settings
+    : {};
+  return [Number(settings.width), Number(settings.height)];
+}
+
 function catalogOf(
   sourceList: readonly MediaSource[],
   resourceList: readonly EffectResource[],
   compositionList: readonly Composition[],
+  canvas: Canvas,
 ): Catalog {
   const problems: string[] = [];
   const sources = new Map(
@@ -426,7 +456,7 @@ function catalogOf(
       problems.push(`source ${sourceId} is not a valid composition source`);
     } else if (source.kind === "generated") {
       const issue = generatorShapeIssue(source.generator);
-      const layout = generatorLayoutIssue(source.generator);
+      const layout = generatorLayoutIssue(source.generator, canvas);
       if (issue) {
         problems.push(shapeProblem(`source ${sourceId}`, issue));
       } else if (layout) {
@@ -502,6 +532,7 @@ function catalogOf(
       effectResources,
       compositionsById,
       controlNamesOf,
+      canvas,
     );
     for (const problem of found) problems.push(problem);
   }
@@ -707,7 +738,12 @@ const checkedClips = new WeakMap<object, { kind: unknown; catalog: Catalog }>();
 /** The catalog of an immutable source list, with the immutable lists it was made with. */
 const catalogs = new WeakMap<
   object,
-  { resources: unknown; compositions: unknown; catalog: Catalog }
+  {
+    resources: unknown;
+    compositions: unknown;
+    canvas: Canvas;
+    catalog: Catalog;
+  }
 >();
 /** What {@link invariantsHold} keeps of an immutable track that passed `trackProblems`. */
 const trackSummaries = new WeakMap<object, TrackSummary>();
@@ -762,6 +798,7 @@ function catalogFor(
   sources: unknown,
   resources: unknown,
   compositions: unknown,
+  canvas: Canvas,
 ): Catalog {
   const reusable =
     typeof sources === "object" &&
@@ -774,7 +811,9 @@ function catalogFor(
     if (
       known !== undefined &&
       known.resources === resources &&
-      known.compositions === compositions
+      known.compositions === compositions &&
+      known.canvas[0] === canvas[0] &&
+      known.canvas[1] === canvas[1]
     )
       return known.catalog;
   }
@@ -782,9 +821,10 @@ function catalogFor(
     Array.isArray(sources) ? sources : [],
     Array.isArray(resources) ? resources : [],
     Array.isArray(compositions) ? compositions : [],
+    canvas,
   );
   if (reusable && catalog.problems.length === 0)
-    catalogs.set(sources, { resources, compositions, catalog });
+    catalogs.set(sources, { resources, compositions, canvas, catalog });
   return catalog;
 }
 
@@ -875,6 +915,7 @@ function invariantsHold(value: unknown): boolean {
     project.sources,
     project.effect_resources,
     project.compositions,
+    canvasOf(project),
   );
   if (catalog.problems.length > 0) return false;
   const trackIds = new Set<string>();
@@ -1188,6 +1229,185 @@ function checkShape(
   return read;
 }
 
+/**
+ * The defs whose JSON is a CSS value form or an alternative spelling, read as the engine's parser
+ * reads them (`alpha2_model::layout_values`): each problem worded as the parser words it, and the
+ * value given to the model's checks in one form. A color is `{ red, green, blue, alpha }`, a paint
+ * tagged, a layout length `{ unit, value }`, sides `{ top, right, bottom, left }` of lengths, an
+ * offset `{ x, y }` of lengths, a track list its parsed components, a grid placement
+ * `{ start, end }` edges.
+ */
+const SHAPE_DEFS = shapeRoot.$defs as Record<string, ShapeNode>;
+
+type ShapeReader = (
+  value: unknown,
+  path: string,
+  problems: string[],
+  spelling: JsonSpelling | undefined,
+) => unknown;
+
+/** A value read by `parse`, its problem reported at `path` as the parser reports it. */
+function parsedOr<T>(
+  parsed: Parsed<T>,
+  path: string,
+  problems: string[],
+  value: unknown,
+): unknown {
+  if (parsed.ok) return parsed.value;
+  problems.push(`${path}: ${parsed.error}`);
+  return value;
+}
+
+/** A length: a number is a fraction, a string `"<n>px"` or (with `percent`) `"<n>%"`. */
+function readLayoutLength(percent: boolean): ShapeReader {
+  return (value, path, problems) => {
+    if (typeof value === "number")
+      return { unit: "fraction", value: Math.fround(value) };
+    if (typeof value === "string")
+      return parsedOr(
+        percent ? parseLength(value) : parseSize(value),
+        path,
+        problems,
+        value,
+      );
+    problems.push(`${path} must be number or string`);
+    return value;
+  };
+}
+
+/** Fields of an object form: unknown ones refused, required ones present, each read by `read`. */
+function readFields(
+  value: Record<string, unknown>,
+  path: string,
+  problems: string[],
+  fields: readonly string[],
+  required: boolean,
+  read: ShapeReader,
+  spelling: JsonSpelling | undefined,
+): Record<string, unknown> {
+  for (const key of Object.keys(value)) {
+    if (!fields.includes(key))
+      problems.push(`${path} has unknown field ${describeValue(key)}`);
+  }
+  const out: Record<string, unknown> = {};
+  for (const field of fields) {
+    if (value[field] === undefined) {
+      if (required) problems.push(`${path}.${field} is required`);
+      else out[field] = { unit: "fraction", value: 0 };
+      continue;
+    }
+    out[field] = read(value[field], `${path}.${field}`, problems, spelling);
+  }
+  return out;
+}
+
+const readSize = readLayoutLength(false);
+const SIDES = ["top", "right", "bottom", "left"] as const;
+
+const SHAPE_READERS = new Map<ShapeNode, ShapeReader>([
+  [
+    SHAPE_DEFS.Rgba,
+    (value, path, problems, spelling) => {
+      if (typeof value === "string")
+        return parsedOr(parseHex(value), path, problems, value);
+      // The object form, or what is wrong with a value of neither form.
+      const object = (SHAPE_DEFS.Rgba.anyOf as ShapeNode[])[0];
+      return checkShape(object, value, path, problems, spelling);
+    },
+  ],
+  [
+    SHAPE_DEFS.Paint,
+    (value, path, problems, spelling) => {
+      // A color, hex or object, paints solid: told apart by its lack of a tag.
+      if (
+        typeof value === "string" ||
+        (isRecord(value) && !("type" in value))
+      ) {
+        const color = checkShape(
+          SHAPE_DEFS.Rgba,
+          value,
+          path,
+          problems,
+          spelling,
+        );
+        return { type: "solid", color };
+      }
+      const tagged = (SHAPE_DEFS.Paint.oneOf as ShapeNode[]).filter(
+        (variant) => variant.$ref === undefined,
+      );
+      return checkVariants(tagged, value, path, problems, spelling, undefined);
+    },
+  ],
+  [SHAPE_DEFS.LayoutLength, readLayoutLength(true)],
+  [SHAPE_DEFS.LayoutSize, readSize],
+  [
+    SHAPE_DEFS.Insets,
+    (value, path, problems, spelling) => {
+      const sides = (lengths: readonly unknown[]) =>
+        Object.fromEntries(SIDES.map((side, index) => [side, lengths[index]]));
+      if (typeof value === "number")
+        return sides(
+          Array(4).fill({ unit: "fraction", value: Math.fround(value) }),
+        );
+      if (typeof value === "string") {
+        const parsed = parseInsets(value);
+        return parsed.ok
+          ? sides(parsed.value)
+          : parsedOr(parsed, path, problems, value);
+      }
+      if (isRecord(value))
+        return readFields(
+          value,
+          path,
+          problems,
+          SIDES,
+          false,
+          readSize,
+          spelling,
+        );
+      problems.push(`${path} must be number, string, or object`);
+      return value;
+    },
+  ],
+  [
+    SHAPE_DEFS.LayoutOffset,
+    (value, path, problems, spelling) => {
+      if (typeof value === "string")
+        return parsedOr(parseOffset(value), path, problems, value);
+      if (isRecord(value))
+        return readFields(
+          value,
+          path,
+          problems,
+          ["x", "y"],
+          true,
+          readSize,
+          spelling,
+        );
+      problems.push(`${path} must be string or object`);
+      return value;
+    },
+  ],
+  [
+    SHAPE_DEFS.TrackList,
+    (value, path, problems) => {
+      if (typeof value === "string")
+        return parsedOr(parseTrackList(value), path, problems, value);
+      problems.push(`${path} must be string`);
+      return value;
+    },
+  ],
+  [
+    SHAPE_DEFS.GridPlacement,
+    (value, path, problems) => {
+      if (typeof value === "number" || typeof value === "string")
+        return parsedOr(parsePlacement(value), path, problems, value);
+      problems.push(`${path} must be integer or string`);
+      return value;
+    },
+  ],
+]);
+
 /** {@link checkShape} of a value not known to match `node`. */
 function walkShape(
   node: ShapeNode,
@@ -1198,6 +1418,8 @@ function walkShape(
   texts?: readonly string[],
 ): unknown {
   const schema = resolveShape(node);
+  const reader = SHAPE_READERS.get(schema);
+  if (reader !== undefined) return reader(value, path, problems, spelling);
   const variants = (schema.oneOf ?? schema.anyOf) as ShapeNode[] | undefined;
   if (variants !== undefined) {
     return checkVariants(variants, value, path, problems, spelling, texts);
@@ -2445,10 +2667,25 @@ const LAYOUT_PROBLEM = {
   tooManyIsolated:
     "has more nodes with opacity, transforms, or hidden overflow than a layout may hold",
   mixedContent: "has more than one of children, text, and shape",
+  displayOnLeaf: "sets display on a node with text or shape content",
   containerFieldOnLeaf:
-    "sets a flex container field on a node with text or shape content",
-  rootItemField:
-    "sets a size, margin, position, or flex item field on the root",
+    "sets a container field on a node with text or shape content",
+  rootItemField: "sets a size, margin, position, or item field on the root",
+  gridFieldOnFlex: (field: string) =>
+    `sets ${field}, a grid container field, without display grid`,
+  flexFieldOnGrid: (field: string) =>
+    `sets ${field}, a flex container field, on a grid container`,
+  flexItemFieldInGrid: (field: string) =>
+    `sets ${field}, a flex item field, in a grid container`,
+  gridItemFieldInFlex: (field: string) =>
+    `sets ${field}, a grid item field, in a flex container`,
+  tooManyTracks: "has more than 64 tracks",
+  repeatCount: "repeats tracks a number of times outside 1 to 64",
+  repeatInAutoTracks: "uses repeat() in implicit track sizes",
+  autoRepeatNeedsFixedTracks:
+    "repeats auto-fill or auto-fit beside another, or with a track without a fixed size",
+  gridLineOutOfRange:
+    "names a grid line outside -65 to 65 or line 0, or a span outside 1 to 64",
   invalidKeyframes: "has invalid keyframes",
   outOfRange: "has a value out of range",
   lengthKeyframesDiffer: "has size keyframes that differ in kind",
@@ -2464,10 +2701,19 @@ interface LayoutIssue extends ShapeIssue {
   readonly shape?: boolean;
 }
 
-/** A generator's layout problem, if it is a layout generator with one. */
-function generatorLayoutIssue(generator: unknown): LayoutIssue | undefined {
+/** A canvas's width and height in pixels, which a layout's `"<n>px"` lengths are pixels of. */
+type Canvas = readonly [number, number];
+
+/**
+ * A generator's layout problem, if it is a layout generator with one; pixel font sizes are held
+ * to the limit on `canvas` when it is known.
+ */
+function generatorLayoutIssue(
+  generator: unknown,
+  canvas?: Canvas,
+): LayoutIssue | undefined {
   return isRecord(generator) && generator.type === "layout"
-    ? layoutIssue(generator.root)
+    ? layoutIssue(generator.root, canvas)
     : undefined;
 }
 
@@ -2478,12 +2724,38 @@ function layoutProblem(owner: string, issue: LayoutIssue): string {
     : `${owner} has an invalid layout: ${issue.at} ${issue.problem}`;
 }
 
+const LAYOUT_FLEX_CONTAINER_FIELDS = ["flex_direction", "flex_wrap"] as const;
+
+const LAYOUT_GRID_CONTAINER_FIELDS = [
+  "grid_template_columns",
+  "grid_template_rows",
+  "grid_auto_columns",
+  "grid_auto_rows",
+  "grid_auto_flow",
+  "justify_items",
+] as const;
+
 const LAYOUT_CONTAINER_FIELDS = [
-  "flex_direction",
-  "flex_wrap",
+  ...LAYOUT_FLEX_CONTAINER_FIELDS,
+  ...LAYOUT_GRID_CONTAINER_FIELDS,
   "gap",
+  "row_gap",
+  "column_gap",
   "justify_content",
   "align_items",
+  "align_content",
+] as const;
+
+const LAYOUT_FLEX_ITEM_FIELDS = [
+  "flex_grow",
+  "flex_shrink",
+  "flex_basis",
+] as const;
+
+const LAYOUT_GRID_ITEM_FIELDS = [
+  "grid_column",
+  "grid_row",
+  "justify_self",
 ] as const;
 
 const LAYOUT_ITEM_FIELDS = [
@@ -2495,9 +2767,8 @@ const LAYOUT_ITEM_FIELDS = [
   "max_height",
   "aspect_ratio",
   "margin",
-  "flex_grow",
-  "flex_shrink",
-  "flex_basis",
+  ...LAYOUT_FLEX_ITEM_FIELDS,
+  ...LAYOUT_GRID_ITEM_FIELDS,
   "align_self",
   "position",
   "inset",
@@ -2524,19 +2795,41 @@ function present(value: unknown): boolean {
   return value !== undefined && value !== null;
 }
 
+/** The first of `fields` present on `node`. */
+function firstPresent(
+  node: Record<string, unknown>,
+  fields: readonly string[],
+): string | undefined {
+  return fields.find((field) => present(node[field]));
+}
+
+/** A length as the shape walk reads it ({@link readLayoutLength}). */
+function lengthOf(value: unknown): Length | undefined {
+  return isRecord(value) && typeof value.unit === "string"
+    ? (value as unknown as Length)
+    : undefined;
+}
+
 /**
- * Mirrors `validate_layout`: the first problem of a layout tree in preorder. Its limits
- * ({@link MAX_LAYOUT_NODES} nodes, {@link MAX_LAYOUT_DEPTH} deep, {@link MAX_LAYOUT_TEXTS} texts,
- * {@link MAX_LAYOUT_ISOLATED} isolated nodes, {@link MAX_SHAPE_ITEMS} shape items over every shape
- * node), its structure, every value's range, and keyframes alike in kind.
+ * Mirrors `validate_layout`: the first problem of a layout tree in preorder, as the shape walk
+ * reads it. Its limits ({@link MAX_LAYOUT_NODES} nodes, {@link MAX_LAYOUT_DEPTH} deep,
+ * {@link MAX_LAYOUT_TEXTS} texts, {@link MAX_LAYOUT_ISOLATED} isolated nodes,
+ * {@link MAX_SHAPE_ITEMS} shape items over every shape node), its structure, which fields apply
+ * where, every value's range, and keyframes alike in kind. With `canvas`, a pixel font size is
+ * held to the largest a layout's text may be.
  */
-function layoutIssue(root: unknown): LayoutIssue | undefined {
+function layoutIssue(root: unknown, canvas?: Canvas): LayoutIssue | undefined {
   const node = isRecord(root) ? root : {};
   if (LAYOUT_ITEM_FIELDS.some((field) => present(node[field]))) {
     return { at: "root", problem: LAYOUT_PROBLEM.rootItemField };
   }
   const counts = { nodes: 0, texts: 0, isolated: 0, shapes: { count: 0 } };
-  return layoutNodeIssue(root, "root", 1, counts);
+  const shorterSide =
+    canvas === undefined ? undefined : Math.min(canvas[0], canvas[1]);
+  return layoutNodeIssue(root, "root", 1, counts, {
+    shorterSide,
+    parent: undefined,
+  });
 }
 
 function layoutNodeIssue(
@@ -2549,6 +2842,7 @@ function layoutNodeIssue(
     isolated: number;
     shapes: { count: number };
   },
+  context: { shorterSide: number | undefined; parent: string | undefined },
 ): LayoutIssue | undefined {
   const issue = (problem: string): LayoutIssue => ({ at, problem });
   const node = isRecord(value) ? value : {};
@@ -2564,11 +2858,35 @@ function layoutNodeIssue(
   if (Number(children.length > 0) + Number(text) + Number(shape) > 1) {
     return issue(LAYOUT_PROBLEM.mixedContent);
   }
+  if ((text || shape) && present(node.display)) {
+    return issue(LAYOUT_PROBLEM.displayOnLeaf);
+  }
   if (
     (text || shape) &&
     LAYOUT_CONTAINER_FIELDS.some((field) => present(node[field]))
   ) {
     return issue(LAYOUT_PROBLEM.containerFieldOnLeaf);
+  }
+  const display = node.display === "grid" ? "grid" : "flex";
+  const mismatch =
+    display === "flex"
+      ? firstPresent(node, LAYOUT_GRID_CONTAINER_FIELDS)
+      : firstPresent(node, LAYOUT_FLEX_CONTAINER_FIELDS);
+  if (mismatch !== undefined) {
+    return issue(
+      display === "flex"
+        ? LAYOUT_PROBLEM.gridFieldOnFlex(mismatch)
+        : LAYOUT_PROBLEM.flexFieldOnGrid(mismatch),
+    );
+  }
+  if (context.parent === "flex") {
+    const field = firstPresent(node, LAYOUT_GRID_ITEM_FIELDS);
+    if (field !== undefined)
+      return issue(LAYOUT_PROBLEM.gridItemFieldInFlex(field));
+  } else if (context.parent === "grid") {
+    const field = firstPresent(node, LAYOUT_FLEX_ITEM_FIELDS);
+    if (field !== undefined)
+      return issue(LAYOUT_PROBLEM.flexItemFieldInGrid(field));
   }
   if (text) {
     counts.texts += 1;
@@ -2584,7 +2902,10 @@ function layoutNodeIssue(
       return issue(LAYOUT_PROBLEM.tooManyIsolated);
     }
   }
-  const fields = layoutFieldsIssue(node, at);
+  const fields =
+    layoutFieldsIssue(node, at) ??
+    layoutGridIssue(node, at) ??
+    layoutStyleIssue(node, at, context.shorterSide);
   if (fields) return fields;
   if (text) {
     const textIssue = layoutTextIssue(node.text, `${at}.text`);
@@ -2606,6 +2927,7 @@ function layoutNodeIssue(
       `${at}.children[${index}]`,
       depth + 1,
       counts,
+      { shorterSide: context.shorterSide, parent: display },
     );
     if (childIssue) return childIssue;
   }
@@ -2639,6 +2961,20 @@ function layoutScalarIssue(
   );
 }
 
+/** A size that may not be a percent: each value's number. */
+function layoutSizeIssue(
+  animation: unknown,
+  at: string,
+  check: (value: number) => boolean,
+): LayoutIssue | undefined {
+  return layoutAnimatedIssue(animation, at, (value) => {
+    const length = lengthOf(value);
+    return (
+      length !== undefined && finiteNumber(length.value) && check(length.value)
+    );
+  });
+}
+
 function layoutInsetsIssue(
   animation: unknown,
   at: string,
@@ -2650,31 +2986,27 @@ function layoutInsetsIssue(
     (value) =>
       isRecord(value) &&
       (["top", "right", "bottom", "left"] as const).every((side) => {
-        const length = value[side] ?? 0;
-        return finiteNumber(length) && check(length);
+        const length = lengthOf(value[side]);
+        return (
+          length !== undefined &&
+          finiteNumber(length.value) &&
+          check(length.value)
+        );
       }),
   );
 }
 
-/** A size or inset: its values, then its keyframes one kind (`length` or `percent`). */
+/** A size or inset: its values, then its keyframes one kind (a percent, or a length). */
 function layoutLengthIssue(
   animation: unknown,
   at: string,
   check: (value: number) => boolean,
 ): LayoutIssue | undefined {
-  const issue = layoutAnimatedIssue(
-    animation,
-    at,
-    (value) =>
-      isRecord(value) &&
-      (value.type === "length" || value.type === "percent") &&
-      finiteNumber(value.value) &&
-      check(value.value),
-  );
+  const issue = layoutSizeIssue(animation, at, check);
   if (issue || !present(animation)) return issue;
   const kinds = new Set(
-    (animationValues<Record<string, unknown>>(animation) ?? []).map(
-      (value) => value.type,
+    (animationValues<unknown>(animation) ?? []).map(
+      (value) => lengthOf(value)?.unit === "percent",
     ),
   );
   return kinds.size > 1
@@ -2705,18 +3037,21 @@ function layoutFieldsIssue(
 ): LayoutIssue | undefined {
   const field = (name: string) => `${at}.${name}`;
   const border = isRecord(node.border) ? node.border : undefined;
+  for (const name of ["gap", "row_gap", "column_gap"] as const) {
+    const issue = layoutSizeIssue(node[name], field(name), nonNegativeValue);
+    if (issue) return issue;
+  }
   const first =
-    layoutScalarIssue(node.gap, field("gap"), nonNegativeValue) ??
     layoutInsetsIssue(node.padding, field("padding"), nonNegativeValue) ??
     layoutPaintIssue(node.background, field("background")) ??
     (border
-      ? (layoutScalarIssue(
+      ? (layoutSizeIssue(
           border.width,
           field("border.width"),
           nonNegativeValue,
         ) ?? layoutPaintIssue(border.paint, field("border.paint")))
       : undefined) ??
-    layoutScalarIssue(
+    layoutSizeIssue(
       node.border_radius,
       field("border_radius"),
       nonNegativeValue,
@@ -2754,7 +3089,14 @@ function layoutFieldsIssue(
   }
   return (
     layoutScalarIssue(node.opacity, field("opacity"), unitValue) ??
-    layoutAnimatedIssue(node.translate, field("translate"), validVec2) ??
+    layoutAnimatedIssue(
+      node.translate,
+      field("translate"),
+      (value) =>
+        isRecord(value) &&
+        finiteNumber(lengthOf(value.x)?.value) &&
+        finiteNumber(lengthOf(value.y)?.value),
+    ) ??
     layoutAnimatedIssue(node.scale, field("scale"), validVec2) ??
     layoutScalarIssue(
       node.rotation_degrees,
@@ -2764,37 +3106,129 @@ function layoutFieldsIssue(
   );
 }
 
-/** Mirrors `layout::validate_text`. */
-function layoutTextIssue(value: unknown, at: string): LayoutIssue | undefined {
-  const text = isRecord(value) ? value : {};
-  const contentAt = `${at}.content`;
+/** A track size's lengths and `fr` share, as the shape walk reads it. */
+function trackParts(size: TrackSize): {
+  lengths: Length[];
+  share: number | undefined;
+} {
+  const breadths =
+    size.kind === "breadth"
+      ? [size.breadth]
+      : size.kind === "minmax"
+        ? [size.min, size.max]
+        : [];
+  const lengths = breadths.flatMap((breadth) =>
+    breadth.kind === "length" ? [breadth.length] : [],
+  );
+  if (size.kind === "fit-content") lengths.push(size.limit);
+  const last = breadths.at(-1);
+  return { lengths, share: last?.kind === "fr" ? last.share : undefined };
+}
+
+/** Mirrors `TrackSize::is_fixed`: what `auto-fill` and `auto-fit` repeat. */
+function fixedTrack(size: TrackSize): boolean {
+  const fixed = (breadth: TrackBreadth) => breadth.kind === "length";
+  if (size.kind === "breadth") return fixed(size.breadth);
+  if (size.kind === "minmax")
+    return fixed(size.min) || (fixed(size.max) && size.min.kind !== "fr");
+  return false;
+}
+
+/** Mirrors `layout::track_problem`. */
+function trackProblem(
+  tracks: readonly TrackComponent[],
+  explicit: boolean,
+): string | undefined {
+  const sizes = tracks.flatMap((component) =>
+    component.kind === "single" ? [component.size] : component.tracks,
+  );
+  const parts = sizes.map(trackParts);
+  if (
+    !parts.every(
+      ({ lengths, share }) =>
+        lengths.every(
+          (length) => Number.isFinite(length.value) && length.value >= 0,
+        ) &&
+        (share === undefined || (Number.isFinite(share) && share > 0)),
+    )
+  ) {
+    return LAYOUT_PROBLEM.outOfRange;
+  }
+  const repeats = tracks.flatMap((component) =>
+    component.kind === "repeat" ? [component.count] : [],
+  );
+  if (!explicit && repeats.length > 0) return LAYOUT_PROBLEM.repeatInAutoTracks;
+  if (
+    repeats.some(
+      (count) => typeof count === "number" && (count < 1 || count > 64),
+    )
+  )
+    return LAYOUT_PROBLEM.repeatCount;
+  const count = tracks.reduce(
+    (total, component) =>
+      total +
+      (component.kind === "single"
+        ? 1
+        : (typeof component.count === "number" ? component.count : 1) *
+          component.tracks.length),
+    0,
+  );
+  if (count > MAX_GRID_TRACKS) return LAYOUT_PROBLEM.tooManyTracks;
+  const automatic = repeats.filter((count) => typeof count !== "number").length;
+  if (automatic > 1 || (automatic === 1 && !sizes.every(fixedTrack)))
+    return LAYOUT_PROBLEM.autoRepeatNeedsFixedTracks;
+  return undefined;
+}
+
+/** Mirrors `layout::validate_grid`. */
+function layoutGridIssue(
+  node: Record<string, unknown>,
+  at: string,
+): LayoutIssue | undefined {
+  for (const [name, explicit] of [
+    ["grid_template_columns", true],
+    ["grid_template_rows", true],
+    ["grid_auto_columns", false],
+    ["grid_auto_rows", false],
+  ] as const) {
+    const tracks = node[name];
+    if (!Array.isArray(tracks)) continue;
+    const problem = trackProblem(tracks as TrackComponent[], explicit);
+    if (problem) return { at: `${at}.${name}`, problem };
+  }
+  for (const name of ["grid_column", "grid_row"] as const) {
+    const placement = node[name];
+    if (!isRecord(placement)) continue;
+    const inRange = (edge: GridEdge) =>
+      edge.kind === "auto" ||
+      (edge.kind === "line"
+        ? edge.line !== 0 && Math.abs(edge.line) <= 65
+        : edge.count >= 1 && edge.count <= 64);
+    if (
+      ![placement.start, placement.end].every((edge) =>
+        inRange(edge as GridEdge),
+      )
+    ) {
+      return {
+        at: `${at}.${name}`,
+        problem: LAYOUT_PROBLEM.gridLineOutOfRange,
+      };
+    }
+  }
+  return undefined;
+}
+
+/** Mirrors `layout::validate_style`: the text style a node writes, where it writes it. */
+function layoutStyleIssue(
+  node: Record<string, unknown>,
+  at: string,
+  shorterSide: number | undefined,
+): LayoutIssue | undefined {
   const outOfRange = (name: string): LayoutIssue => ({
     at: `${at}.${name}`,
     problem: LAYOUT_PROBLEM.outOfRange,
   });
-  const content = layoutAnimatedIssue(text.content, contentAt, () => true);
-  if (content) return content;
-  if (
-    isRecord(text.content) &&
-    text.content.mode === "keyframes" &&
-    (text.content.keyframes as readonly unknown[]).some(
-      (keyframe) =>
-        !isRecord(keyframe) ||
-        !isRecord(keyframe.interpolation) ||
-        keyframe.interpolation.type !== "hold",
-    )
-  ) {
-    return { at: contentAt, problem: LAYOUT_PROBLEM.textKeyframesInterpolate };
-  }
-  const tooLong = layoutAnimatedIssue(
-    text.content,
-    contentAt,
-    (content) =>
-      typeof content === "string" &&
-      new TextEncoder().encode(content).length <= MAX_TEXT_CONTENT_BYTES,
-  );
-  if (tooLong) return tooLong;
-  const family = text.font_family;
+  const family = node.font_family;
   if (
     present(family) &&
     !(
@@ -2805,24 +3239,43 @@ function layoutTextIssue(value: unknown, at: string): LayoutIssue | undefined {
   ) {
     return outOfRange("font_family");
   }
-  const size = layoutScalarIssue(
-    text.font_size,
+  const size = layoutAnimatedIssue(
+    node.font_size,
     `${at}.font_size`,
-    (size) => size > 0 && size <= MAX_LAYOUT_FONT_SIZE,
+    (value) => {
+      const length = lengthOf(value);
+      if (
+        length === undefined ||
+        !finiteNumber(length.value) ||
+        length.value <= 0
+      )
+        return false;
+      // Pixels compare with the limit on a known canvas only.
+      const fraction =
+        length.unit !== "px"
+          ? length.value
+          : shorterSide === undefined
+            ? 0
+            : Math.fround(length.value / shorterSide);
+      return fraction <= MAX_LAYOUT_FONT_SIZE;
+    },
   );
   if (size) return size;
-  if (text.color !== undefined && !validRgba(text.color)) {
+  if (present(node.color) && !validRgba(node.color)) {
     return outOfRange("color");
   }
-  const lineHeight = text.line_height ?? 1.2;
+  const lineHeight = node.line_height;
   if (
-    !finiteNumber(lineHeight) ||
-    lineHeight < MIN_LINE_HEIGHT ||
-    lineHeight > MAX_LINE_HEIGHT
+    present(lineHeight) &&
+    !(
+      finiteNumber(lineHeight) &&
+      lineHeight >= MIN_LINE_HEIGHT &&
+      lineHeight <= MAX_LINE_HEIGHT
+    )
   ) {
     return outOfRange("line_height");
   }
-  const outline = text.outline;
+  const outline = node.outline;
   if (
     present(outline) &&
     !(
@@ -2836,6 +3289,34 @@ function layoutTextIssue(value: unknown, at: string): LayoutIssue | undefined {
     return outOfRange("outline");
   }
   return undefined;
+}
+
+/** Mirrors `layout::validate_text`: a node's text content. */
+function layoutTextIssue(
+  content: unknown,
+  at: string,
+): LayoutIssue | undefined {
+  const keyframes = layoutAnimatedIssue(content, at, () => true);
+  if (keyframes) return keyframes;
+  if (
+    isRecord(content) &&
+    content.mode === "keyframes" &&
+    (content.keyframes as readonly unknown[]).some(
+      (keyframe) =>
+        !isRecord(keyframe) ||
+        !isRecord(keyframe.interpolation) ||
+        keyframe.interpolation.type !== "hold",
+    )
+  ) {
+    return { at, problem: LAYOUT_PROBLEM.textKeyframesInterpolate };
+  }
+  return layoutAnimatedIssue(
+    content,
+    at,
+    (value) =>
+      typeof value === "string" &&
+      new TextEncoder().encode(value).length <= MAX_TEXT_CONTENT_BYTES,
+  );
 }
 
 /**
@@ -3512,6 +3993,7 @@ function compositionProblems(
   effectResources: ReadonlySet<string>,
   compositions: ReadonlyMap<string, Record<string, unknown>>,
   controlNamesOf: (target: Record<string, unknown>) => ReadonlySet<string>,
+  canvas: Canvas,
 ): string[] {
   if (!isRecord(composition)) return ["each composition must be an object"];
   const id = text(composition.id);
@@ -3599,7 +4081,7 @@ function compositionProblems(
       }
       case "generator": {
         const issue = generatorShapeIssue(op.generator);
-        const layout = generatorLayoutIssue(op.generator);
+        const layout = generatorLayoutIssue(op.generator, canvas);
         if (issue) {
           problems.push(
             shapeProblem(`node ${nodeId} of composition ${id}`, issue),

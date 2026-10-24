@@ -280,7 +280,7 @@ export function createBrowserBridge(options) {
   };
   /** The engine's asset decisions, from the wasm module, loaded on first use. */
   const decisions = async () => (decisionBinding ??= await loadWasm());
-  /** What `measureText` lays text out with, made on first use, and the font stack it holds. */
+  /** What `measureText` and `measureLayout` lay text out with, made on first use, and the font stack it holds. */
   let measurer = null,
     measuredFonts = null;
   const registry = new ResourceRegistry(resourceLimit);
@@ -817,6 +817,24 @@ export function createBrowserBridge(options) {
     return Object.values(document.assets).filter(
       (a) => a.kind === "font" && !a.missing && ownerOf(document, a),
     );
+  }
+  /**
+   * Readies `measurer` with the fonts preview draws the draft with, and answers the draft's canvas
+   * size, which preview draws it at.
+   */
+  async function draftMeasurer() {
+    const { WasmTextMeasurer } = await loadWasm();
+    if (disposed)
+      throw new EditorError("disposed", "Bridge is disposed", "browser");
+    const document = editor.draft;
+    const fonts = fontStackOf(document);
+    measurer ??= new WasmTextMeasurer();
+    if (!sameList(measuredFonts, fonts)) {
+      // A font the engine refuses is left out here as preview leaves it out, and reported there.
+      registerCaptionFonts(measurer, fonts);
+      measuredFonts = fonts;
+    }
+    return document.project.settings;
   }
   const sameList = (a, b) =>
     a !== null &&
@@ -2346,21 +2364,23 @@ export function createBrowserBridge(options) {
       return families;
     },
     async measureText(generator) {
-      const { WasmTextMeasurer } = await loadWasm();
-      if (disposed)
-        throw new EditorError("disposed", "Bridge is disposed", "browser");
-      // The fonts and canvas preview draws the draft with.
-      const document = editor.draft;
-      const fonts = fontStackOf(document);
-      measurer ??= new WasmTextMeasurer();
-      if (!sameList(measuredFonts, fonts)) {
-        // A font the engine refuses is left out here as preview leaves it out, and reported there.
-        registerCaptionFonts(measurer, fonts);
-        measuredFonts = fonts;
-      }
-      const { width, height } = document.project.settings;
+      const { width, height } = await draftMeasurer();
       return JSON.parse(
         measurer.measure(JSON.stringify(generator), width, height),
+      );
+    },
+    async measureLayout(generator, time = 0) {
+      const { width, height } = await draftMeasurer();
+      // Measured at the canvas size, which its pixel lengths are pixels of.
+      return JSON.parse(
+        measurer.measureLayout(
+          JSON.stringify(generator),
+          width,
+          height,
+          time,
+          width,
+          height,
+        ),
       );
     },
     conform,

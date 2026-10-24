@@ -40,7 +40,7 @@ serde.workspace = true
 serde_json.workspace = true
 # Exact: its minor versions break the API and a patch can move pixels. Used by `layout/resolve.rs`
 # alone.
-taffy = { version = "=0.15.0", default-features = false, features = ["std", "taffy_tree", "flexbox"] }
+taffy = { version = "=0.15.0", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid"] }
 web-time = "1.1.0"
 wgpu.workspace = true
 

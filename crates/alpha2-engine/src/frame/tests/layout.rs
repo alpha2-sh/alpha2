@@ -30,7 +30,7 @@ fn c(value: &str) -> String {
 }
 
 fn len(value: f32) -> String {
-    c(&format!(r#"{{ "type": "length", "value": {value} }}"#))
+    c(&value.to_string())
 }
 
 fn solid(red: f32, green: f32, blue: f32, alpha: f32) -> String {
@@ -41,7 +41,7 @@ fn solid(red: f32, green: f32, blue: f32, alpha: f32) -> String {
 
 fn text(content: &str, size: f32, extra: &str) -> String {
     format!(
-        r#"{{ "text": {{ "content": {content}, "font_size": {size} {extra} }} }}"#,
+        r#"{{ "text": {content}, "font_size": {size} {extra} }}"#,
         content = c(&format!("{content:?}")),
         size = c(&size.to_string()),
     )
@@ -183,7 +183,7 @@ fn lower_third() -> String {
             "padding": {card_padding},
             "background": {card},
             "border_radius": {radius},
-            "max_width": {{ "mode": "constant", "value": {{ "type": "percent", "value": 60 }} }},
+            "max_width": {{ "mode": "constant", "value": "60%" }},
             "opacity": {{ "mode": "keyframes", "keyframes": [
               {{ "time": 0, "value": 0, "interpolation": {ease} }},
               {{ "time": 36000, "value": 1, "interpolation": {{ "type": "hold" }} }} ] }},
@@ -286,6 +286,66 @@ fn layout_goldens() {
     alpha2_golden_support::assert_rgba8_golden("layout_text_panel", (W, H), &panel, 2);
 }
 
+/// A grid dashboard in the authoring forms: pixel lengths on the 320x180 canvas, hex colors, the
+/// padding shorthand, text style inherited from the grid, `fr` and `minmax` tracks, a spanning
+/// item and an item aligned in its area.
+fn grid_dashboard() -> String {
+    layout(&format!(
+        r##"{{
+          "display": "grid", "grid_template_columns": "1fr 2fr 60px",
+          "grid_template_rows": "minmax(40px, auto) 1fr", "gap": {gap}, "padding": {padding},
+          "background": {back}, "font_size": {font}, "color": "#f5f5f0", "line_height": 1.1,
+          "children": [
+            {{ "text": {revenue}, "background": {card}, "padding": {inner}, "border_radius": {radius} }},
+            {{ "text": {margin}, "background": {card}, "padding": {inner}, "border_radius": {radius},
+               "color": "#ffb020", "text_align": "end" }},
+            {{ "grid_row": "1 / 3", "grid_column": 3, "background": {bar}, "border_radius": {radius} }},
+            {{ "grid_column": "1 / span 2", "background": {card}, "border_radius": {radius},
+               "display": "grid", "grid_template_columns": "repeat(4, 1fr)", "align_items": "end",
+               "padding": {inner}, "column_gap": {inner_gap},
+               "children": [
+                 {{ "height": {h1}, "background": {blue} }},
+                 {{ "height": {h2}, "background": {blue} }},
+                 {{ "height": {h3}, "background": {blue} }},
+                 {{ "height": {h4}, "justify_self": "center", "width": {half}, "background": {pink} }}
+               ] }}
+          ]
+        }}"##,
+        gap = c(r#""8px""#),
+        padding = c(r#""12px 16px""#),
+        back = c(r##""#101418""##),
+        font = c(r#""14px""#),
+        revenue = c(r#""Revenue 4.2M""#),
+        card = c(r##""#1e2230""##),
+        inner = c(r#""6px 8px""#),
+        radius = c(r#""6px""#),
+        margin = c(r#""Margin up four points""#),
+        bar = c(r##""#2b5c3a""##),
+        inner_gap = c(r#""6px""#),
+        h1 = c(r#""30%""#),
+        h2 = c(r#""60%""#),
+        h3 = c(r#""45%""#),
+        h4 = c(r#""80%""#),
+        half = c(r#""50%""#),
+        blue = c(r##""#4c8dff""##),
+        pink = c(r##""#ff5c7a""##),
+    ))
+}
+
+#[test]
+fn layout_grid_golden() {
+    let _lock = gpu_test_lock();
+    let renderer = renderer();
+    let mut texts = texts();
+    let grid = render(
+        &renderer,
+        &mut texts,
+        &project(&grid_dashboard(), "", ""),
+        0,
+    );
+    alpha2_golden_support::assert_rgba8_golden("layout_grid", (W, H), &grid, 2);
+}
+
 /// Two overlapping half-white squares in a box: `group` puts the opacity on the box, else on
 /// each square.
 fn overlapping(group: bool) -> String {
@@ -308,7 +368,7 @@ fn overlapping(group: bool) -> String {
     layout(&format!(
         r#"{{ "children": [ {{ "width": {all}, "height": {all} {opacity},
               "children": [ {a}, {b} ] }} ] }}"#,
-        all = c(r#"{ "type": "percent", "value": 100 }"#),
+        all = c(r#""100%""#),
         opacity = if group {
             format!(r#", "opacity": {half}"#)
         } else {

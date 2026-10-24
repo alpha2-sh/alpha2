@@ -240,10 +240,16 @@ pub(crate) struct Lookup<'a> {
     compositions: HashMap<&'a CompositionId, &'a Composition>,
     sources: HashMap<&'a SourceId, &'a MediaSource>,
     reads: CompositionReads<'a>,
+    /// The project canvas, which a layout's pixels are pixels of.
+    canvas: (u32, u32),
 }
 
 impl<'a> Lookup<'a> {
-    pub(crate) fn new(compositions: &'a [Composition], sources: &'a [MediaSource]) -> Self {
+    pub(crate) fn new(
+        compositions: &'a [Composition],
+        sources: &'a [MediaSource],
+        canvas: (u32, u32),
+    ) -> Self {
         let compositions = compositions
             .iter()
             .map(|composition| (&composition.id, composition))
@@ -253,6 +259,7 @@ impl<'a> Lookup<'a> {
             compositions,
             sources: sources.iter().map(|source| (&source.id, source)).collect(),
             reads,
+            canvas,
         }
     }
 
@@ -281,10 +288,11 @@ pub fn plan_composition(
     composition: &Composition,
     compositions: &[Composition],
     sources: &[MediaSource],
+    canvas: (u32, u32),
 ) -> Result<CompositionPlan, PlanError> {
     plan(
         composition,
-        &Lookup::new(compositions, sources),
+        &Lookup::new(compositions, sources, canvas),
         true,
         &mut PlanBudget::new(MAX_PLAN_BYTES),
     )
@@ -311,10 +319,11 @@ pub fn plan_source_composition(
     composition: &Composition,
     compositions: &[Composition],
     sources: &[MediaSource],
+    canvas: (u32, u32),
 ) -> Result<CompositionPlan, PlanError> {
     plan(
         composition,
-        &Lookup::new(compositions, sources),
+        &Lookup::new(compositions, sources, canvas),
         false,
         &mut PlanBudget::new(MAX_PLAN_BYTES),
     )
@@ -447,6 +456,11 @@ impl<'a> Planner<'a, '_> {
         Ok(done[id])
     }
 
+    /// A generator's step, planned for the project's canvas.
+    fn generator_step(&self, generator: &Generator, start: MediaTime) -> StepOp {
+        generator_step(generator.clone(), start, self.lookup.canvas)
+    }
+
     /// The step (or inlined steps) drawing `node`, its inputs planned.
     fn node_step(
         &mut self,
@@ -497,16 +511,16 @@ impl<'a> Planner<'a, '_> {
                 }
                 let generator = source
                     .filter(|source| source.kind == MediaKind::Generated)
-                    .and_then(|source| source.generator.clone());
+                    .and_then(|source| source.generator.as_ref());
                 generator.map_or_else(
                     || StepOp::Media {
                         source_id: source_id.clone(),
                         start: *start,
                     },
-                    |generator| generator_step(generator, *start),
+                    |generator| self.generator_step(generator, *start),
                 )
             }
-            NodeOp::Generator { generator } => generator_step(generator.clone(), MediaTime::ZERO),
+            NodeOp::Generator { generator } => self.generator_step(generator, MediaTime::ZERO),
             NodeOp::Effect {
                 input,
                 inputs,
@@ -864,9 +878,9 @@ fn shape_items_bytes(items: &[alpha2_model::ShapeItem]) -> usize {
 }
 
 /// A generator step, with a plan when the generator is a shapes or layout
-/// generator.
-fn generator_step(generator: Generator, start: MediaTime) -> StepOp {
-    let plan = GeneratorPlan::new(&generator).map(Arc::new);
+/// generator, drawn on a project of `canvas` pixels.
+fn generator_step(generator: Generator, start: MediaTime, canvas: (u32, u32)) -> StepOp {
+    let plan = GeneratorPlan::new(&generator, canvas).map(Arc::new);
     StepOp::Generator {
         generator,
         start,

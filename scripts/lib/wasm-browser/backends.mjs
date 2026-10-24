@@ -907,7 +907,7 @@ const engine = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(160, 
 engine.addFont("Alpha2 Fixture", new Uint8Array(await (await fetch("/tests/fonts/Alpha2Fixture.ttf")).arrayBuffer()), 0);
 const constant = (value) => ({ mode: "constant", value });
 const white = constant({ type: "solid", color: { red: 1, green: 1, blue: 1, alpha: 1 } });
-const length = (value) => constant({ type: "length", value });
+const length = constant;
 const at = (left, top, side, extra = {}) => ({ position: "absolute",
   inset: { left: length(left), top: length(top) }, width: length(side), height: length(side), ...extra });
 const root = { children: [
@@ -922,7 +922,7 @@ const root = { children: [
     overflow: "hidden", children: [{ width: length(0.6), height: length(0.6), flex_shrink: constant(0), background: white }] },
   // Text right of the clipped box, from (54, 49).
   { position: "absolute", inset: { left: length(0.6), top: length(0.55) },
-    children: [{ text: { content: constant("Hi"), font_size: constant(0.3) } }] },
+    children: [{ text: constant("Hi"), font_size: constant(0.3) }] },
 ] };
 engine.loadProject(JSON.stringify({
   schema_version: 1, id: "layout", name: "Layout",
@@ -948,6 +948,59 @@ report({
   ok: luma.square > 200 && luma.outside < 40 && luma.faded > 100 && luma.faded < 210
     && Math.abs(luma.overlap - luma.faded) <= 3 && luma.clipped > 200 && luma.pastClip < 40
     && luma.text > 200 && uncaptured.length === 0 && !engine.deviceLost,
+  luma,
+  ...(uncaptured.length ? { uncaptured } : {}),
+});
+`;
+}
+
+/**
+ * A grid layout drawn end to end in the browser, in the authoring forms: two `fr` columns and
+ * rows with pixel gaps and padding, a cell spanning a row, hex colors, and text in the style it
+ * inherits from the grid.
+ */
+export function layoutGrid(webgl) {
+  return `
+${webgl ? 'Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });' : 'if (!navigator.gpu) throw new Error("this browser offers no WebGPU");'}
+const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+await init();
+const engine = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(160, 90));
+engine.addFont("Alpha2 Fixture", new Uint8Array(await (await fetch("/tests/fonts/Alpha2Fixture.ttf")).arrayBuffer()), 0);
+const constant = (value) => ({ mode: "constant", value });
+// Content 140 by 70 px: columns 10..75 and 85..150, rows 10..40 and 50..80.
+const root = {
+  display: "grid", grid_template_columns: "1fr 1fr", grid_template_rows: "repeat(2, 1fr)",
+  gap: constant("10px"), padding: constant("10px"), font_size: constant("27px"), color: "#ffffff",
+  children: [
+    { background: constant("#fff") },
+    { text: constant("Hi"), justify_self: "center" },
+    { grid_column: "1 / -1", background: constant("#ffffffff") },
+  ],
+};
+engine.loadProject(JSON.stringify({
+  schema_version: 1, id: "grid", name: "Grid",
+  settings: { width: 160, height: 90, frame_rate: { num: 30, den: 1 }, sample_rate: 48000 },
+  sources: [{ id: "grid", kind: "generated", generator: { type: "layout", root } }],
+  timeline: { tracks: [{ id: "t", name: "T", kind: "video", clips: [{ id: "c", source_id: "grid",
+    timeline_range: { start: 0, end: 120000 }, source_range: { start: 0, end: 120000 } }] }] },
+}));
+const ticket = engine.beginExportAt(0n, "h264");
+const rendered = ticket.kind === "rendered" ? await ticket.readback : ticket;
+if (rendered.kind !== "rendered") throw new Error("the frame did not render: " + rendered.kind);
+const [{ offset, stride }] = rendered.layout;
+const y = (x, row) => rendered.pixels[offset + row * stride + x];
+let text = 0;
+for (let row = 10; row < 40; row++) for (let x = 85; x < 150; x++) text = Math.max(text, y(x, row));
+const luma = {
+  cell: y(40, 25), padding: y(5, 5), columnGap: y(80, 25), rowGap: y(40, 45),
+  spanLeft: y(40, 65), spanRight: y(120, 65), text,
+};
+const gpu = JSON.parse(engine.diagnostics()).gpu;
+const uncaptured = gpu.events.filter((event) => event.event === "uncaptured-error");
+report({
+  ok: luma.cell > 200 && luma.padding < 40 && luma.columnGap < 40 && luma.rowGap < 40
+    && luma.spanLeft > 200 && luma.spanRight > 200 && luma.text > 200
+    && uncaptured.length === 0 && !engine.deviceLost,
   luma,
   ...(uncaptured.length ? { uncaptured } : {}),
 });

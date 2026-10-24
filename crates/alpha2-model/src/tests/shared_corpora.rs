@@ -194,3 +194,90 @@ fn the_shared_used_sources_corpus_reads_what_the_planner_reads() {
         assert_eq!(unused, expected, "{name}");
     }
 }
+
+/// Where `value` holds a color or paint in a form the engine reads but never writes: a hex
+/// string where a color lies, or a paint without its tag.
+fn non_canonical(value: &serde_json::Value, path: &str, found: &mut Vec<String>) {
+    use serde_json::Value;
+    match value {
+        Value::Object(object) => {
+            for (key, field) in object {
+                let at = format!("{path}.{key}");
+                // A paint, or an animated one (a layout's background is always animated).
+                let paints = match field.get("mode").and_then(Value::as_str) {
+                    Some("constant") => vec![&field["value"]],
+                    Some("keyframes") => field["keyframes"]
+                        .as_array()
+                        .map(|keys| keys.iter().map(|key| &key["value"]).collect())
+                        .unwrap_or_default(),
+                    _ if key == "paint" => vec![field],
+                    _ => Vec::new(),
+                };
+                let untagged = matches!(key.as_str(), "paint" | "background")
+                    && paints
+                        .iter()
+                        .any(|paint| paint.is_string() || paint.get("type").is_none());
+                if (key == "color" && field.is_string()) || untagged {
+                    found.push(at.clone());
+                }
+                non_canonical(field, &at, found);
+            }
+        }
+        Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                non_canonical(item, &format!("{path}[{index}]"), found);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[test]
+fn every_valid_document_round_trips_and_writes_canonical_forms() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/cases");
+    let mut documents = Vec::new();
+    for entry in std::fs::read_dir(&root).expect("tests/cases") {
+        let path = entry.expect("an entry").path();
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with("-project.json"))
+        {
+            let text = std::fs::read_to_string(&path).expect("a fixture");
+            documents.push((path.display().to_string(), text));
+        }
+    }
+    let corpus = expand_repeats(
+        serde_json::from_str(
+            &std::fs::read_to_string(root.join("project-validation-corpus.json")).expect("corpus"),
+        )
+        .expect("corpus JSON"),
+    );
+    for case in corpus.as_array().expect("cases") {
+        if case["valid"] == true && case.get("json").is_none() {
+            documents.push((
+                case["name"].as_str().expect("a name").to_owned(),
+                case["project"].to_string(),
+            ));
+        }
+    }
+    assert!(documents.len() > 50, "{}", documents.len());
+    for (name, text) in documents {
+        let project = Project::from_json(&text).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let written = serde_json::to_string(&project).expect("writes");
+        let again = Project::from_json(&written).unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(again, project, "{name}");
+        assert_eq!(
+            serde_json::to_string(&again).expect("writes"),
+            written,
+            "{name}"
+        );
+        let mut found = Vec::new();
+        non_canonical(
+            &serde_json::from_str(&written).expect("JSON"),
+            "project",
+            &mut found,
+        );
+        assert!(found.is_empty(), "{name}: {found:?}");
+    }
+}

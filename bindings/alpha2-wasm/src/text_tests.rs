@@ -89,10 +89,10 @@ fn a_layout_measures_as_the_engine_measures_it() {
     let mut rasterizer = TextRasterizer::empty();
     let generator = r#"{ "type": "layout", "root": { "justify_content": "center", "children": [
         { "padding": { "mode": "constant", "value": { "left": 0.02, "right": 0.02 } },
-          "children": [ { "text": { "content": { "mode": "constant", "value": "Title" } } } ] } ] } }"#;
+          "children": [ { "text": { "mode": "constant", "value": "Title" } } ] } ] } }"#;
     assert!(
         matches!(
-            measure_layout_json(&rasterizer, generator, 1920, 1080, 0.0),
+            measure_layout_json(&rasterizer, generator, 1920, 1080, 0.0, None),
             Err(MeasureError::Text(alpha2_engine::TextError::Raster(
                 alpha2_text::TextRasterError::NoFonts
             )))
@@ -103,7 +103,7 @@ fn a_layout_measures_as_the_engine_measures_it() {
         .add_font(font("Alpha2 Fixture".into(), bytes, 0))
         .expect("valid font");
     let measured: serde_json::Value = serde_json::from_str(
-        &measure_layout_json(&rasterizer, generator, 1920, 1080, 0.0).expect("measures"),
+        &measure_layout_json(&rasterizer, generator, 1920, 1080, 0.0, None).expect("measures"),
     )
     .expect("JSON");
     let alpha2_model::Generator::Layout { root } =
@@ -116,6 +116,7 @@ fn a_layout_measures_as_the_engine_measures_it() {
         &root,
         alpha2_time::MediaTime::ZERO,
         alpha2_render::RenderSize::new(1920, 1080).expect("size"),
+        (1920, 1080),
     )
     .expect("measures");
     let nodes = measured["nodes"].as_array().expect("nodes");
@@ -131,24 +132,39 @@ fn a_layout_measures_as_the_engine_measures_it() {
     for (refused, why) in [
         (r#"{ "type": "text", "text": "a" }"#, "only a layout"),
         (
-            r#"{ "type": "layout", "root": { "width": { "mode": "constant", "value": { "type": "length", "value": 1 } } } }"#,
+            r#"{ "type": "layout", "root": { "width": { "mode": "constant", "value": 1 } } }"#,
             "root sets a size",
         ),
         (
-            r#"{ "type": "layout", "root": { "display": "grid" } }"#,
+            r#"{ "type": "layout", "root": { "float": "left" } }"#,
             "unknown field",
+        ),
+        (
+            r#"{ "type": "layout", "root": { "display": "grid", "grid_template_columns": "1 fr" } }"#,
+            r#"unknown track "1 fr" (write 1fr)"#,
+        ),
+        (
+            r#"{ "type": "layout", "root": { "font_size": { "mode": "constant", "value": "1200px" } } }"#,
+            "root.font_size has a value out of range",
         ),
     ] {
         let Err(MeasureError::Input(message)) =
-            measure_layout_json(&rasterizer, refused, 1920, 1080, 0.0)
+            measure_layout_json(&rasterizer, refused, 1920, 1080, 0.0, None)
         else {
             panic!("{refused} is refused as input");
         };
         assert!(message.contains(why), "{message}");
     }
     assert!(matches!(
-        measure_layout_json(&rasterizer, generator, 1920, 1080, 0.5),
+        measure_layout_json(&rasterizer, generator, 1920, 1080, 0.5, None),
         Err(MeasureError::Input(_))
+    ));
+    // A pixel font size within a larger canvas's shorter side is measured on it.
+    let large = r#"{ "type": "layout", "root": { "font_size": { "mode": "constant", "value": "1200px" } } }"#;
+    assert!(measure_layout_json(&rasterizer, large, 1920, 1080, 0.0, Some((3840, 2160))).is_ok());
+    assert!(matches!(
+        measure_layout_json(&rasterizer, generator, 1920, 1080, 0.0, Some((0, 10))),
+        Err(MeasureError::Input(message)) if message.contains("project canvas")
     ));
 }
 
@@ -178,12 +194,20 @@ fn layout_measurements_match_the_pinned_answers() {
         std::env::var_os("ALPHA2_UPDATE_GOLDENS").as_deref() == Some(std::ffi::OsStr::new("1"));
     for case in golden["cases"].as_array_mut().expect("cases") {
         let number = |key: &str| case[key].as_u64().expect("a size");
+        // A case may give the project canvas its pixels are pixels of.
+        let canvas = case.get("canvas").map(|canvas| {
+            let side = |index: usize| {
+                u32::try_from(canvas[index].as_u64().expect("a canvas side")).expect("a side")
+            };
+            (side(0), side(1))
+        });
         let measured = measure_layout_json(
             &rasterizer,
             &case["generator"].to_string(),
             u32::try_from(number("width")).expect("width"),
             u32::try_from(number("height")).expect("height"),
             case["time"].as_f64().expect("time"),
+            canvas,
         )
         .expect("measures");
         if update {

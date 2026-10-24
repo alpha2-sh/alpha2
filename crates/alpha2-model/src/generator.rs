@@ -11,9 +11,17 @@ pub const MAX_GRADIENT_STOPS: usize = 8;
 
 /// A straight (not premultiplied), sRGB-encoded color with alpha, each
 /// component in `0..=1`.
+///
+/// Written as the object, or as CSS hex: `"#rgb"`, `"#rgba"`, `"#rrggbb"` or
+/// `"#rrggbbaa"`, any case, each digit pair a component times 255. It is
+/// written back as the object: a component need not be a multiple of 1/255.
 #[derive(Copy, Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(deny_unknown_fields)]
+#[cfg_attr(
+    feature = "schema",
+    schemars(rename = "Rgba", transform = crate::schema::with_hex_form)
+)]
+#[serde(remote = "Self", deny_unknown_fields)]
 pub struct Rgba {
     /// Red component.
     pub red: f32,
@@ -41,6 +49,64 @@ impl Rgba {
         [self.red, self.green, self.blue, self.alpha]
             .iter()
             .all(|value| (0.0..=1.0).contains(value))
+    }
+
+    /// The color a CSS hex string names, if it is one.
+    #[must_use]
+    pub fn from_hex(text: &str) -> Option<Self> {
+        let digits = text.strip_prefix('#')?.as_bytes();
+        let nibble = |index: usize| char::from(digits[index]).to_digit(16);
+        let component = |value: u32| u8::try_from(value).ok().map(|byte| f32::from(byte) / 255.0);
+        let channels = match digits.len() {
+            3 | 4 => (0..digits.len())
+                .map(|index| component(nibble(index)? * 17))
+                .collect::<Option<Vec<_>>>()?,
+            6 | 8 => (0..digits.len() / 2)
+                .map(|index| component(nibble(index * 2)? * 16 + nibble(index * 2 + 1)?))
+                .collect::<Option<Vec<_>>>()?,
+            _ => return None,
+        };
+        Some(Self::new(
+            channels[0],
+            channels[1],
+            channels[2],
+            channels.get(3).copied().unwrap_or(1.0),
+        ))
+    }
+}
+
+/// Reads a hex string or the object.
+struct RgbaVisitor;
+
+impl<'de> serde::de::Visitor<'de> for RgbaVisitor {
+    type Value = Rgba;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a color: the {red, green, blue, alpha} object or a CSS hex string")
+    }
+
+    fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Rgba, E> {
+        Rgba::from_hex(value).ok_or_else(|| {
+            E::custom(format!(
+                "invalid color \"{value}\": write #rgb, #rgba, #rrggbb, or #rrggbbaa"
+            ))
+        })
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<Rgba, A::Error> {
+        Rgba::deserialize(serde::de::value::MapAccessDeserializer::new(map))
+    }
+}
+
+impl<'de> Deserialize<'de> for Rgba {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_any(RgbaVisitor)
+    }
+}
+
+impl Serialize for Rgba {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        Self::serialize(self, serializer)
     }
 }
 
@@ -98,9 +164,21 @@ pub enum Generator {
 /// engine's working space, so a gradient between two colors passes through
 /// the physical mix of them, and a stop fading to transparent does not darken
 /// its neighbour.
+///
+/// A color (hex or object) is read as a solid paint of it; a paint is
+/// written back tagged.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[cfg_attr(
+    feature = "schema",
+    schemars(rename = "Paint", transform = crate::schema::with_color_form)
+)]
+#[serde(
+    remote = "Self",
+    tag = "type",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum Paint {
     /// One color.
     Solid {
@@ -144,6 +222,27 @@ pub enum Paint {
     },
 }
 
+impl<'de> Deserialize<'de> for Paint {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+        // Which form it is shows only in whether it has a tag.
+        let value = serde_json::Value::deserialize(deserializer)?;
+        if value.get("type").is_some() {
+            Self::deserialize(value).map_err(D::Error::custom)
+        } else {
+            <Rgba as Deserialize>::deserialize(value)
+                .map(|color| Self::Solid { color })
+                .map_err(D::Error::custom)
+        }
+    }
+}
+
+impl Serialize for Paint {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        Self::serialize(self, serializer)
+    }
+}
+
 /// One color of a gradient.
 #[derive(Copy, Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -178,17 +277,31 @@ impl Generator {
 
     /// Checks every field. A shapes or layout generator's problem names
     /// where in its tree it lies; another generator's is
-    /// [`GeneratorIssue::Invalid`].
+    /// [`GeneratorIssue::Invalid`]. A layout's pixel font sizes are not
+    /// held to the limit here: that takes the canvas ([`Self::validate_on`]).
     ///
     /// # Errors
     /// Returns the first problem, if any.
     pub fn validate(&self) -> Result<(), GeneratorIssue> {
+        self.validate_canvas(None)
+    }
+
+    /// [`Self::validate`] for a generator drawn on a `width` by `height`
+    /// canvas, which a layout's pixel lengths are pixels of.
+    ///
+    /// # Errors
+    /// Returns the first problem, if any.
+    pub fn validate_on(&self, width: u32, height: u32) -> Result<(), GeneratorIssue> {
+        self.validate_canvas(Some((width, height)))
+    }
+
+    fn validate_canvas(&self, canvas: Option<(u32, u32)>) -> Result<(), GeneratorIssue> {
         let valid = match self {
             Self::Fill { paint } => paint.is_valid(),
             Self::Shapes { items } => {
                 return crate::shapes::validate_shape_items(items).map_err(GeneratorIssue::Shape);
             }
-            Self::Layout { root } => return crate::layout::validate_layout(root),
+            Self::Layout { root } => return crate::layout::validate_layout(root, canvas),
             Self::Text { text, style } => {
                 !text.is_empty()
                     && text.len() <= MAX_TEXT_CONTENT_BYTES

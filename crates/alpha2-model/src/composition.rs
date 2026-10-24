@@ -653,6 +653,7 @@ pub(crate) fn validate_compositions<'a>(
     sources: &'a [crate::MediaSource],
     by_source: &std::collections::HashMap<&SourceId, &crate::MediaSource>,
     effect_resources: &std::collections::HashSet<&crate::EffectResourceId>,
+    canvas: (u32, u32),
 ) -> Result<InlinedNodes<'a>, crate::ModelError> {
     use crate::ModelError;
     use std::collections::{HashMap, HashSet};
@@ -708,7 +709,14 @@ pub(crate) fn validate_compositions<'a>(
         }
         validate_ports(composition, &positions)?;
         for node in &composition.nodes {
-            validate_node(composition, node, by_source, &by_id, effect_resources)?;
+            validate_node(
+                composition,
+                node,
+                by_source,
+                &by_id,
+                effect_resources,
+                canvas,
+            )?;
             for input in node.op.inputs() {
                 if let Some(target) = input.node()
                     && !positions.contains_key(target)
@@ -959,6 +967,7 @@ fn validate_node(
     sources: &std::collections::HashMap<&SourceId, &crate::MediaSource>,
     compositions: &std::collections::HashMap<&CompositionId, &Composition>,
     effect_resources: &std::collections::HashSet<&crate::EffectResourceId>,
+    canvas: (u32, u32),
 ) -> Result<(), crate::ModelError> {
     use crate::ModelError;
 
@@ -994,7 +1003,7 @@ fn validate_node(
             }
             start.ticks() >= 0
         }
-        NodeOp::Generator { generator } => match generator.validate() {
+        NodeOp::Generator { generator } => match generator.validate_on(canvas.0, canvas.1) {
             Ok(()) => true,
             Err(crate::GeneratorIssue::Shape(issue)) => return Err(shape_error(issue)),
             Err(crate::GeneratorIssue::Layout(issue)) => {

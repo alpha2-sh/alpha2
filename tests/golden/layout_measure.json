@@ -47,42 +47,35 @@
                   },
                   "width": {
                     "mode": "constant",
-                    "value": {
-                      "type": "length",
-                      "value": 0.005
-                    }
+                    "value": 0.005
                   }
                 },
                 {
                   "children": [
                     {
+                      "font_size": {
+                        "mode": "constant",
+                        "value": 0.042
+                      },
                       "text": {
-                        "content": {
-                          "mode": "constant",
-                          "value": "Ada Lovelace"
-                        },
-                        "font_size": {
-                          "mode": "constant",
-                          "value": 0.042
-                        }
+                        "mode": "constant",
+                        "value": "Ada Lovelace"
                       }
                     },
                     {
+                      "color": {
+                        "alpha": 1.0,
+                        "blue": 0.86,
+                        "green": 0.82,
+                        "red": 0.8
+                      },
+                      "font_size": {
+                        "mode": "constant",
+                        "value": 0.026
+                      },
                       "text": {
-                        "color": {
-                          "alpha": 1.0,
-                          "blue": 0.86,
-                          "green": 0.82,
-                          "red": 0.8
-                        },
-                        "content": {
-                          "mode": "constant",
-                          "value": "Wrote the first published algorithm for a machine, 1843"
-                        },
-                        "font_size": {
-                          "mode": "constant",
-                          "value": 0.026
-                        }
+                        "mode": "constant",
+                        "value": "Wrote the first published algorithm for a machine, 1843"
                       }
                     }
                   ],
@@ -100,10 +93,7 @@
               },
               "max_width": {
                 "mode": "constant",
-                "value": {
-                  "type": "percent",
-                  "value": 60
-                }
+                "value": "60%"
               },
               "opacity": {
                 "keyframes": [
@@ -234,42 +224,35 @@
                   },
                   "width": {
                     "mode": "constant",
-                    "value": {
-                      "type": "length",
-                      "value": 0.005
-                    }
+                    "value": 0.005
                   }
                 },
                 {
                   "children": [
                     {
+                      "font_size": {
+                        "mode": "constant",
+                        "value": 0.042
+                      },
                       "text": {
-                        "content": {
-                          "mode": "constant",
-                          "value": "Ada Lovelace"
-                        },
-                        "font_size": {
-                          "mode": "constant",
-                          "value": 0.042
-                        }
+                        "mode": "constant",
+                        "value": "Ada Lovelace"
                       }
                     },
                     {
+                      "color": {
+                        "alpha": 1.0,
+                        "blue": 0.86,
+                        "green": 0.82,
+                        "red": 0.8
+                      },
+                      "font_size": {
+                        "mode": "constant",
+                        "value": 0.026
+                      },
                       "text": {
-                        "color": {
-                          "alpha": 1.0,
-                          "blue": 0.86,
-                          "green": 0.82,
-                          "red": 0.8
-                        },
-                        "content": {
-                          "mode": "constant",
-                          "value": "Wrote the first published algorithm for a machine, 1843"
-                        },
-                        "font_size": {
-                          "mode": "constant",
-                          "value": 0.026
-                        }
+                        "mode": "constant",
+                        "value": "Wrote the first published algorithm for a machine, 1843"
                       }
                     }
                   ],
@@ -287,10 +270,7 @@
               },
               "max_width": {
                 "mode": "constant",
-                "value": {
-                  "type": "percent",
-                  "value": 60
-                }
+                "value": "60%"
               },
               "opacity": {
                 "keyframes": [
@@ -421,42 +401,35 @@
                   },
                   "width": {
                     "mode": "constant",
-                    "value": {
-                      "type": "length",
-                      "value": 0.005
-                    }
+                    "value": 0.005
                   }
                 },
                 {
                   "children": [
                     {
+                      "font_size": {
+                        "mode": "constant",
+                        "value": 0.042
+                      },
                       "text": {
-                        "content": {
-                          "mode": "constant",
-                          "value": "Ada Lovelace"
-                        },
-                        "font_size": {
-                          "mode": "constant",
-                          "value": 0.042
-                        }
+                        "mode": "constant",
+                        "value": "Ada Lovelace"
                       }
                     },
                     {
+                      "color": {
+                        "alpha": 1.0,
+                        "blue": 0.86,
+                        "green": 0.82,
+                        "red": 0.8
+                      },
+                      "font_size": {
+                        "mode": "constant",
+                        "value": 0.026
+                      },
                       "text": {
-                        "color": {
-                          "alpha": 1.0,
-                          "blue": 0.86,
-                          "green": 0.82,
-                          "red": 0.8
-                        },
-                        "content": {
-                          "mode": "constant",
-                          "value": "Wrote the first published algorithm for a machine, 1843"
-                        },
-                        "font_size": {
-                          "mode": "constant",
-                          "value": 0.026
-                        }
+                        "mode": "constant",
+                        "value": "Wrote the first published algorithm for a machine, 1843"
                       }
                     }
                   ],
@@ -474,10 +447,7 @@
               },
               "max_width": {
                 "mode": "constant",
-                "value": {
-                  "type": "percent",
-                  "value": 60
-                }
+                "value": "60%"
               },
               "opacity": {
                 "keyframes": [
@@ -582,17 +552,15 @@
               },
               "children": [
                 {
+                  "font_size": {
+                    "mode": "constant",
+                    "value": 0.04
+                  },
                   "text": {
-                    "content": {
-                      "mode": "constant",
-                      "value": "Layout resolves where text is drawn, so a paragraph wraps the same in preview and export."
-                    },
-                    "font_size": {
-                      "mode": "constant",
-                      "value": 0.04
-                    },
-                    "text_align": "center"
-                  }
+                    "mode": "constant",
+                    "value": "Layout resolves where text is drawn, so a paragraph wraps the same in preview and export."
+                  },
+                  "text_align": "center"
                 }
               ],
               "flex_grow": {
@@ -649,41 +617,30 @@
               },
               "width": {
                 "mode": "constant",
-                "value": {
-                  "type": "percent",
-                  "value": 25
-                }
+                "value": "25%"
               }
             },
             {
               "children": [
                 {
+                  "font_size": {
+                    "mode": "constant",
+                    "value": 0.05
+                  },
                   "text": {
-                    "content": {
-                      "mode": "constant",
-                      "value": "NEW"
-                    },
-                    "font_size": {
-                      "mode": "constant",
-                      "value": 0.05
-                    }
+                    "mode": "constant",
+                    "value": "NEW"
                   }
                 }
               ],
               "inset": {
                 "bottom": {
                   "mode": "constant",
-                  "value": {
-                    "type": "percent",
-                    "value": 5
-                  }
+                  "value": "5%"
                 },
                 "right": {
                   "mode": "constant",
-                  "value": {
-                    "type": "length",
-                    "value": 0.02
-                  }
+                  "value": 0.02
                 }
               },
               "position": "absolute"
@@ -718,17 +675,15 @@
           "align_items": "center",
           "children": [
             {
+              "font_size": {
+                "mode": "constant",
+                "value": 0.07
+              },
               "text": {
-                "content": {
-                  "mode": "constant",
-                  "value": "Top title that wraps across the narrow portrait picture"
-                },
-                "font_size": {
-                  "mode": "constant",
-                  "value": 0.07
-                },
-                "text_align": "center"
-              }
+                "mode": "constant",
+                "value": "Top title that wraps across the narrow portrait picture"
+              },
+              "text_align": "center"
             },
             {
               "background": {
@@ -745,17 +700,11 @@
               },
               "height": {
                 "mode": "constant",
-                "value": {
-                  "type": "length",
-                  "value": 0.3
-                }
+                "value": 0.3
               },
               "width": {
                 "mode": "constant",
-                "value": {
-                  "type": "percent",
-                  "value": 80
-                }
+                "value": "80%"
               }
             },
             {
@@ -763,81 +712,51 @@
                 {
                   "height": {
                     "mode": "constant",
-                    "value": {
-                      "type": "length",
-                      "value": 0.1
-                    }
+                    "value": 0.1
                   },
                   "width": {
                     "mode": "constant",
-                    "value": {
-                      "type": "length",
-                      "value": 0.25
-                    }
+                    "value": 0.25
                   }
                 },
                 {
                   "height": {
                     "mode": "constant",
-                    "value": {
-                      "type": "length",
-                      "value": 0.1
-                    }
+                    "value": 0.1
                   },
                   "width": {
                     "mode": "constant",
-                    "value": {
-                      "type": "length",
-                      "value": 0.25
-                    }
+                    "value": 0.25
                   }
                 },
                 {
                   "height": {
                     "mode": "constant",
-                    "value": {
-                      "type": "length",
-                      "value": 0.1
-                    }
+                    "value": 0.1
                   },
                   "width": {
                     "mode": "constant",
-                    "value": {
-                      "type": "length",
-                      "value": 0.25
-                    }
+                    "value": 0.25
                   }
                 },
                 {
                   "height": {
                     "mode": "constant",
-                    "value": {
-                      "type": "length",
-                      "value": 0.1
-                    }
+                    "value": 0.1
                   },
                   "width": {
                     "mode": "constant",
-                    "value": {
-                      "type": "length",
-                      "value": 0.25
-                    }
+                    "value": 0.25
                   }
                 },
                 {
                   "height": {
                     "mode": "constant",
-                    "value": {
-                      "type": "length",
-                      "value": 0.1
-                    }
+                    "value": 0.1
                   },
                   "width": {
                     "mode": "constant",
-                    "value": {
-                      "type": "length",
-                      "value": 0.25
-                    }
+                    "value": 0.25
                   }
                 }
               ],
@@ -851,24 +770,19 @@
             {
               "children": [
                 {
+                  "font_size": {
+                    "mode": "constant",
+                    "value": 0.05
+                  },
                   "text": {
-                    "content": {
-                      "mode": "constant",
-                      "value": "Supercalifragilistic"
-                    },
-                    "font_size": {
-                      "mode": "constant",
-                      "value": 0.05
-                    }
+                    "mode": "constant",
+                    "value": "Supercalifragilistic"
                   }
                 }
               ],
               "width": {
                 "mode": "constant",
-                "value": {
-                  "type": "length",
-                  "value": 0.05
-                }
+                "value": 0.05
               }
             }
           ],
@@ -890,6 +804,233 @@
       "name": "portrait",
       "time": 0,
       "width": 1080
+    },
+    {
+      "expected": "{\"nodes\":[{\"at\":\"root\",\"border\":{\"bottom\":1.0,\"left\":0.0,\"right\":1.0,\"top\":0.0},\"content\":{\"bottom\":0.9555555582046509,\"left\":0.03333333507180214,\"right\":0.9666666388511658,\"top\":0.04444444552063942},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[0]\",\"border\":{\"bottom\":0.3499999940395355,\"left\":0.03333333507180214,\"right\":0.17864583432674408,\"top\":0.04444444552063942},\"content\":{\"bottom\":0.3351851999759674,\"left\":0.0416666679084301,\"right\":0.17031249403953552,\"top\":0.05925925821065903},\"lineCount\":1,\"overflow\":false},{\"at\":\"root.children[1]\",\"border\":{\"bottom\":0.3499999940395355,\"left\":0.19114583730697632,\"right\":0.3359375,\"top\":0.04444444552063942},\"content\":{\"bottom\":0.3351851999759674,\"left\":0.19947916269302368,\"right\":0.32760417461395264,\"top\":0.05925925821065903},\"lineCount\":3,\"overflow\":false},{\"at\":\"root.children[2]\",\"border\":{\"bottom\":0.3499999940395355,\"left\":0.6015625,\"right\":0.651562511920929,\"top\":0.04444444552063942},\"content\":{\"bottom\":0.3499999940395355,\"left\":0.6015625,\"right\":0.651562511920929,\"top\":0.04444444552063942},\"lineCount\":1,\"overflow\":false},{\"at\":\"root.children[3]\",\"border\":{\"bottom\":0.6527777910232544,\"left\":0.8213541507720947,\"right\":0.9666666388511658,\"top\":0.04444444552063942},\"content\":{\"bottom\":0.6527777910232544,\"left\":0.8213541507720947,\"right\":0.9666666388511658,\"top\":0.04444444552063942},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[4]\",\"border\":{\"bottom\":0.8388888835906982,\"left\":0.03333333507180214,\"right\":0.9666666388511658,\"top\":0.7916666865348816},\"content\":{\"bottom\":0.8388888835906982,\"left\":0.03333333507180214,\"right\":0.9666666388511658,\"top\":0.7916666865348816},\"lineCount\":1,\"overflow\":true}]}",
+      "generator": {
+        "root": {
+          "children": [
+            {
+              "background": {
+                "mode": "constant",
+                "value": "#1e2230"
+              },
+              "padding": {
+                "mode": "constant",
+                "value": "16px"
+              },
+              "text": {
+                "mode": "constant",
+                "value": "Revenue"
+              }
+            },
+            {
+              "color": "#ffb020",
+              "padding": {
+                "mode": "constant",
+                "value": "16px"
+              },
+              "text": {
+                "mode": "constant",
+                "value": "Margin, up four points on the quarter"
+              }
+            },
+            {
+              "grid_column": "span 2",
+              "justify_self": "end",
+              "text": {
+                "mode": "constant",
+                "value": "Churn"
+              },
+              "text_align": "end"
+            },
+            {
+              "background": {
+                "mode": "constant",
+                "value": "#334"
+              },
+              "border_radius": {
+                "mode": "constant",
+                "value": "12px"
+              },
+              "grid_column": "-2 / -1",
+              "grid_row": "1 / 3"
+            },
+            {
+              "align_self": "center",
+              "font_size": {
+                "mode": "constant",
+                "value": 0.04
+              },
+              "grid_column": "1 / -1",
+              "text": {
+                "mode": "constant",
+                "value": "Wide cell wraps at its track width, not the grid's"
+              }
+            }
+          ],
+          "color": "#f5f5f0",
+          "display": "grid",
+          "font_size": {
+            "mode": "constant",
+            "value": "32px"
+          },
+          "gap": {
+            "mode": "constant",
+            "value": "24px"
+          },
+          "grid_auto_rows": "minmax(120px, auto)",
+          "grid_template_columns": "repeat(auto-fill, minmax(240px, 1fr))",
+          "padding": {
+            "mode": "constant",
+            "value": "48px 64px"
+          }
+        },
+        "type": "layout"
+      },
+      "height": 1080,
+      "name": "grid",
+      "time": 0,
+      "width": 1920
+    },
+    {
+      "expected": "{\"nodes\":[{\"at\":\"root\",\"border\":{\"bottom\":1.0,\"left\":0.0,\"right\":1.0,\"top\":0.0},\"content\":{\"bottom\":0.9624999761581421,\"left\":0.08888889104127884,\"right\":0.9111111164093018,\"top\":0.03750000149011612},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[0]\",\"border\":{\"bottom\":0.24921874701976776,\"left\":0.08888889104127884,\"right\":0.4833333194255829,\"top\":0.03750000149011612},\"content\":{\"bottom\":0.23671874403953552,\"left\":0.1111111119389534,\"right\":0.4611110985279083,\"top\":0.05000000074505806},\"lineCount\":1,\"overflow\":false},{\"at\":\"root.children[1]\",\"border\":{\"bottom\":0.5015624761581421,\"left\":0.08888889104127884,\"right\":0.4833333194255829,\"top\":0.2679687440395355},\"content\":{\"bottom\":0.48906248807907104,\"left\":0.1111111119389534,\"right\":0.4611110985279083,\"top\":0.28046876192092896},\"lineCount\":3,\"overflow\":false},{\"at\":\"root.children[2]\",\"border\":{\"bottom\":0.7320312261581421,\"left\":0.7777777910232544,\"right\":0.9111111164093018,\"top\":0.520312488079071},\"content\":{\"bottom\":0.7320312261581421,\"left\":0.7777777910232544,\"right\":0.9111111164093018,\"top\":0.520312488079071},\"lineCount\":1,\"overflow\":false},{\"at\":\"root.children[3]\",\"border\":{\"bottom\":0.5015624761581421,\"left\":0.5166666507720947,\"right\":0.9111111164093018,\"top\":0.03750000149011612},\"content\":{\"bottom\":0.5015624761581421,\"left\":0.5166666507720947,\"right\":0.9111111164093018,\"top\":0.03750000149011612},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[4]\",\"border\":{\"bottom\":0.883593738079071,\"left\":0.08888889104127884,\"right\":0.9111111164093018,\"top\":0.8296874761581421},\"content\":{\"bottom\":0.883593738079071,\"left\":0.08888889104127884,\"right\":0.9111111164093018,\"top\":0.8296874761581421},\"lineCount\":2,\"overflow\":false}]}",
+      "generator": {
+        "root": {
+          "children": [
+            {
+              "background": {
+                "mode": "constant",
+                "value": "#1e2230"
+              },
+              "padding": {
+                "mode": "constant",
+                "value": "16px"
+              },
+              "text": {
+                "mode": "constant",
+                "value": "Revenue"
+              }
+            },
+            {
+              "color": "#ffb020",
+              "padding": {
+                "mode": "constant",
+                "value": "16px"
+              },
+              "text": {
+                "mode": "constant",
+                "value": "Margin, up four points on the quarter"
+              }
+            },
+            {
+              "grid_column": "span 2",
+              "justify_self": "end",
+              "text": {
+                "mode": "constant",
+                "value": "Churn"
+              },
+              "text_align": "end"
+            },
+            {
+              "background": {
+                "mode": "constant",
+                "value": "#334"
+              },
+              "border_radius": {
+                "mode": "constant",
+                "value": "12px"
+              },
+              "grid_column": "-2 / -1",
+              "grid_row": "1 / 3"
+            },
+            {
+              "align_self": "center",
+              "font_size": {
+                "mode": "constant",
+                "value": 0.04
+              },
+              "grid_column": "1 / -1",
+              "text": {
+                "mode": "constant",
+                "value": "Wide cell wraps at its track width, not the grid's"
+              }
+            }
+          ],
+          "color": "#f5f5f0",
+          "display": "grid",
+          "font_size": {
+            "mode": "constant",
+            "value": "32px"
+          },
+          "gap": {
+            "mode": "constant",
+            "value": "24px"
+          },
+          "grid_auto_rows": "minmax(120px, auto)",
+          "grid_template_columns": "repeat(auto-fill, minmax(240px, 1fr))",
+          "padding": {
+            "mode": "constant",
+            "value": "48px 64px"
+          }
+        },
+        "type": "layout"
+      },
+      "height": 1280,
+      "name": "grid-narrow",
+      "time": 0,
+      "width": 720
+    },
+    {
+      "canvas": [
+        3840,
+        2160
+      ],
+      "expected": "{\"nodes\":[{\"at\":\"root\",\"border\":{\"bottom\":1.0,\"left\":0.0,\"right\":1.0,\"top\":0.0},\"content\":{\"bottom\":0.970370352268219,\"left\":0.02500000037252903,\"right\":0.9750000238418579,\"top\":0.029629629105329514},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[0]\",\"border\":{\"bottom\":0.970370352268219,\"left\":0.02500000037252903,\"right\":0.1614583283662796,\"top\":0.9333333373069763},\"content\":{\"bottom\":0.9648148417472839,\"left\":0.03125,\"right\":0.15520833432674408,\"top\":0.9388889074325562},\"lineCount\":null,\"overflow\":false},{\"at\":\"root.children[0].children[0]\",\"border\":{\"bottom\":0.9648148417472839,\"left\":0.03125,\"right\":0.15520833432674408,\"top\":0.9388889074325562},\"content\":{\"bottom\":0.9648148417472839,\"left\":0.03125,\"right\":0.15520833432674408,\"top\":0.9388889074325562},\"lineCount\":1,\"overflow\":false}]}",
+      "generator": {
+        "root": {
+          "align_items": "start",
+          "children": [
+            {
+              "background": {
+                "mode": "constant",
+                "value": "#000000c0"
+              },
+              "border_radius": {
+                "mode": "constant",
+                "value": "8px"
+              },
+              "children": [
+                {
+                  "text": {
+                    "mode": "constant",
+                    "value": "Pixels of the canvas"
+                  }
+                }
+              ],
+              "font_size": {
+                "mode": "constant",
+                "value": "48px"
+              },
+              "padding": {
+                "mode": "constant",
+                "value": "12px 24px"
+              }
+            }
+          ],
+          "flex_direction": "column",
+          "justify_content": "end",
+          "padding": {
+            "mode": "constant",
+            "value": "64px 96px"
+          }
+        },
+        "type": "layout"
+      },
+      "height": 540,
+      "name": "px-preview-of-a-4k-canvas",
+      "time": 0,
+      "width": 960
     }
   ],
   "font": "tests/fonts/Alpha2Fixture.ttf"

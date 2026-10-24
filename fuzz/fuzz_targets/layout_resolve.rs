@@ -23,8 +23,8 @@ fn rasterizer() -> &'static TextRasterizer {
     })
 }
 
-// A layout tree from JSON, valid or not, lays out at any size and time without a panic; a valid
-// one gives finite rects for every node.
+// A layout tree from JSON, valid or not, lays out at any size and time without a panic, its
+// pixels those of a canvas the picture's size; a valid one gives finite rects for every node.
 fuzz_target!(|data: &[u8]| {
     let Some((head, json)) = data.split_at_checked(6) else {
         return;
@@ -37,9 +37,11 @@ fuzz_target!(|data: &[u8]| {
     };
     let valid = Generator::Layout {
         root: Box::new(root.clone()),
-    }.validate().is_ok();
+    }
+    .validate_on(width, height)
+    .is_ok();
     let size = RenderSize::new(width, height).expect("a size within the limits");
-    let Ok(bounds) = measure_layout(rasterizer(), &root, time, size) else {
+    let Ok(bounds) = measure_layout(rasterizer(), &root, time, size, (width, height)) else {
         return;
     };
     if valid {
