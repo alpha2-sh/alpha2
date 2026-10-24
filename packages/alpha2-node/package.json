@@ -1,6 +1,6 @@
 {
   "name": "@alpha2-sh/node",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "license": "MIT",
   "description": "Node.js client for the alpha2 native rendering host.",
   "repository": {
@@ -35,7 +35,7 @@
     "LICENSE.md"
   ],
   "dependencies": {
-    "alpha2": "0.3.1"
+    "alpha2": "0.4.0"
   },
   "devDependencies": {
     "@types/node": "22.15.30"

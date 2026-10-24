@@ -37,6 +37,9 @@ fuzz_target!(|data: &[u8]| {
     round_trips::<Rgba>(&value);
     round_trips::<Paint>(&value);
     if let Ok(tracks) = TrackList::deserialize(&value) {
-        assert_eq!(tracks.to_string(), serde_json::to_value(&tracks).expect("writes"));
+        assert_eq!(
+            tracks.to_string(),
+            serde_json::to_value(&tracks).expect("writes")
+        );
     }
 });
