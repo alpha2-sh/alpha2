@@ -23,10 +23,15 @@ import type {
   Easing,
   EffectResource,
   FrameRate,
+  Insets,
   Interpolation,
+  LayoutOffset,
+  LayoutSize,
   MediaSource,
   MediaTime,
+  Paint,
   Project,
+  Rgba,
   Track,
   Vec2,
 } from "./generated/project-schema.js";
@@ -1407,6 +1412,192 @@ const SHAPE_READERS = new Map<ShapeNode, ShapeReader>([
     },
   ],
 ]);
+
+/** A color as the engine writes it: the `{ red, green, blue, alpha }` object, never hex. */
+export type RgbaObject = Exclude<Rgba, string>;
+
+/** A paint as the engine writes it: tagged, its colors objects. */
+export type CanonicalPaint = CanonicalPart<Exclude<Paint, Rgba>>;
+
+/** Padding or margin sides as the engine writes them: all four, each a length. */
+export interface CanonicalInsets {
+  readonly top: LayoutSize;
+  readonly right: LayoutSize;
+  readonly bottom: LayoutSize;
+  readonly left: LayoutSize;
+}
+
+/** An offset (a layout node's `translate`) as the engine writes it: `{ x, y }`. */
+export type CanonicalOffset = Exclude<LayoutOffset, string>;
+
+type Same<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+
+/**
+ * `T`, a part of a project document, in the forms the engine writes: each color an
+ * {@link RgbaObject}, each paint a {@link CanonicalPaint}, each padding or margin
+ * {@link CanonicalInsets}, each offset a {@link CanonicalOffset}. What {@link canonicalProject}
+ * returns for a `Project`. Lengths and grid values keep the CSS spelling they were written in.
+ */
+export type Canonical<T> =
+  CanonicalValue<Exclude<T, null | undefined>> | Extract<T, null | undefined>;
+
+type CanonicalValue<T> = [T] extends [never]
+  ? never
+  : Same<T, Rgba> extends true
+    ? RgbaObject
+    : Same<T, Paint> extends true
+      ? CanonicalPaint
+      : Same<T, Insets> extends true
+        ? CanonicalInsets
+        : Same<T, LayoutOffset> extends true
+          ? CanonicalOffset
+          : CanonicalPart<T>;
+
+type CanonicalPart<T> = T extends string | number | boolean | bigint
+  ? T
+  : { readonly [K in keyof T]: Canonical<T[K]> };
+
+/** A project document in the forms the engine writes ({@link Canonical}). */
+export type CanonicalProject = Canonical<Project>;
+
+/** The shortest decimal that reads back as the same 32-bit float, as the engine writes one. */
+function shortestFloat32(value: number): number {
+  const target = Math.fround(value);
+  for (let digits = 1; digits < 9; digits++) {
+    const short = Number(target.toPrecision(digits));
+    if (Math.fround(short) === target) return short;
+  }
+  return Number(target.toPrecision(9));
+}
+
+/**
+ * `color` as the engine writes it: a CSS hex string becomes the components object, each
+ * component the 32-bit value the engine reads, spelled shortest.
+ *
+ * @throws A `TypeError` for a string that is not CSS hex.
+ */
+export function canonicalRgba(color: Rgba): RgbaObject {
+  if (typeof color !== "string") return color;
+  const parsed = parseHex(color);
+  if (!parsed.ok) throw new TypeError(parsed.error);
+  const { red, green, blue, alpha } = parsed.value;
+  return {
+    red: shortestFloat32(red),
+    green: shortestFloat32(green),
+    blue: shortestFloat32(blue),
+    alpha: shortestFloat32(alpha),
+  };
+}
+
+/**
+ * `paint` as the engine writes it: a color (hex or object) becomes a solid paint of it, and
+ * every color in it the components object.
+ *
+ * @throws A `TypeError` for a color string that is not CSS hex.
+ */
+export function canonicalPaint(paint: Paint): CanonicalPaint {
+  if (typeof paint === "string" || !("type" in paint)) {
+    return { type: "solid", color: canonicalRgba(paint) };
+  }
+  if (paint.type === "solid") {
+    return { ...paint, color: canonicalRgba(paint.color) };
+  }
+  return {
+    ...paint,
+    stops: paint.stops.map((stop) => ({
+      ...stop,
+      color: canonicalRgba(stop.color),
+    })),
+  };
+}
+
+/** A length read from a CSS token, written back as the engine writes it. */
+function lengthWritten(length: Length): LayoutSize {
+  const value = shortestFloat32(length.value);
+  return length.unit === "px" ? `${value}px` : value;
+}
+
+function canonicalInsets(value: unknown): CanonicalInsets {
+  if (typeof value === "number") {
+    return { top: value, right: value, bottom: value, left: value };
+  }
+  if (typeof value === "string") {
+    const parsed = parseInsets(value);
+    if (!parsed.ok) throw new TypeError(parsed.error);
+    const [top, right, bottom, left] = parsed.value.map(lengthWritten);
+    return { top, right, bottom, left };
+  }
+  const sides = value as Partial<CanonicalInsets>;
+  return {
+    top: sides.top ?? 0,
+    right: sides.right ?? 0,
+    bottom: sides.bottom ?? 0,
+    left: sides.left ?? 0,
+  };
+}
+
+function canonicalOffset(value: unknown): CanonicalOffset {
+  if (typeof value !== "string") return value as CanonicalOffset;
+  const parsed = parseOffset(value);
+  if (!parsed.ok) throw new TypeError(parsed.error);
+  return { x: lengthWritten(parsed.value.x), y: lengthWritten(parsed.value.y) };
+}
+
+/**
+ * `project` in the forms the engine writes it back ({@link Canonical}): every color the
+ * components object, every paint tagged, every padding and margin the four sides, every offset
+ * `{ x, y }`. The forms the engine reads but never writes (CSS hex, a color as a paint, the
+ * sides shorthand, a `translate` string) are gone, so code that reads the document can take the
+ * one form. Read it from a document {@link validateProject} accepts: it does not check one, and
+ * leaves what does not fit the schema as it is. The input is not changed.
+ *
+ * @throws A `TypeError` for a color, sides or offset string the engine cannot read.
+ */
+export function canonicalProject(project: Project): CanonicalProject {
+  return canonicalAt(shapeRoot, project) as CanonicalProject;
+}
+
+function canonicalAt(node: ShapeNode | boolean, value: unknown): unknown {
+  if (typeof node !== "object") return value;
+  const schema = resolveShape(node);
+  if (schema === SHAPE_DEFS.Rgba) return canonicalRgba(value as Rgba);
+  if (schema === SHAPE_DEFS.Paint) return canonicalPaint(value as Paint);
+  if (schema === SHAPE_DEFS.Insets) return canonicalInsets(value);
+  if (schema === SHAPE_DEFS.LayoutOffset) return canonicalOffset(value);
+  const variants = (schema.oneOf ?? schema.anyOf) as ShapeNode[] | undefined;
+  if (variants !== undefined) {
+    // The form that fits, as the parser picks it.
+    const fits = variants.find((variant) => {
+      const found: string[] = [];
+      checkShape(variant, value, "", found, undefined);
+      return found.length === 0;
+    });
+    return fits === undefined ? value : canonicalAt(fits, value);
+  }
+  if (Array.isArray(value)) {
+    const prefix = schema.prefixItems as ShapeNode[] | undefined;
+    const items = schema.items as ShapeNode | boolean | undefined;
+    return value.map((item: unknown, index) =>
+      prefix !== undefined && index < prefix.length
+        ? canonicalAt(prefix[index], item)
+        : canonicalAt(items ?? true, item),
+    );
+  }
+  if (isRecord(value)) {
+    const properties = (schema.properties ?? {}) as Record<string, ShapeNode>;
+    const extra = schema.additionalProperties as
+      ShapeNode | boolean | undefined;
+    return Object.fromEntries(
+      Object.entries(value).map(([key, field]) => [
+        key,
+        Object.hasOwn(properties, key)
+          ? canonicalAt(properties[key], field)
+          : canonicalAt(extra ?? true, field),
+      ]),
+    );
+  }
+  return value;
+}
 
 /** {@link checkShape} of a value not known to match `node`. */
 function walkShape(

@@ -20,6 +20,9 @@ import {
   MAX_COMPOSITIONS,
   MAX_PROJECT_JSON_BYTES,
   MAX_TRANSITIONS_PER_TRACK,
+  canonicalPaint,
+  canonicalProject,
+  canonicalRgba,
   validateProject,
   validateProjectJson,
 } from "../dist/project.js";
@@ -856,4 +859,139 @@ test("count limits admit their maximum and refuse one more", () => {
       assert.deepEqual(at, [], `${limit} at ${maximum}`);
     }
   }
+});
+
+/** Where `value` still holds a form the engine reads but never writes. */
+function nonCanonical(value, path, found) {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) =>
+      nonCanonical(item, `${path}[${index}]`, found),
+    );
+    return found;
+  }
+  if (typeof value !== "object" || value === null) return found;
+  for (const [key, field] of Object.entries(value)) {
+    const at = `${path}.${key}`;
+    if (key === "color" && typeof field === "string") found.push(at);
+    if (key === "padding" || key === "margin" || key === "translate") {
+      const sides =
+        field?.mode === "constant"
+          ? [field.value]
+          : (field?.keyframes ?? []).map((k) => k.value);
+      if (sides.some((side) => typeof side !== "object")) found.push(at);
+    }
+    if (key === "paint" || key === "background") {
+      const paints =
+        field?.mode === "constant"
+          ? [field.value]
+          : field?.mode === "keyframes"
+            ? field.keyframes.map((k) => k.value)
+            : key === "paint"
+              ? [field]
+              : [];
+      if (
+        paints.some((paint) => typeof paint !== "object" || !("type" in paint))
+      )
+        found.push(at);
+    }
+    nonCanonical(field, at, found);
+  }
+  return found;
+}
+
+test("canonicalProject writes every valid corpus document in the forms the engine writes", async () => {
+  for (const fixture of await readValidationCorpus()) {
+    if (!fixture.valid || fixture.json !== undefined) continue;
+    const before = JSON.stringify(fixture.project);
+    const canonical = canonicalProject(fixture.project);
+    assert.equal(
+      JSON.stringify(fixture.project),
+      before,
+      `${fixture.name}: input unchanged`,
+    );
+    assert.deepEqual(nonCanonical(canonical, "project", []), [], fixture.name);
+    assert.deepEqual(validateProject(canonical), [], fixture.name);
+    assert.deepEqual(
+      canonicalProject(canonical),
+      canonical,
+      `${fixture.name}: idempotent`,
+    );
+  }
+});
+
+test("a hex color becomes the components the engine reads, spelled as it writes them", () => {
+  // 30/255, 34/255 and 48/255 as 32-bit floats, spelled shortest, as the engine writes them.
+  assert.deepEqual(canonicalRgba("#1e2230"), {
+    red: 0.11764706,
+    green: 0.13333334,
+    blue: 0.1882353,
+    alpha: 1,
+  });
+  assert.deepEqual(canonicalRgba("#f008"), {
+    red: 1,
+    green: 0,
+    blue: 0,
+    alpha: 0.53333336,
+  });
+  const object = { red: 0.5, green: 0.5, blue: 0.5, alpha: 1 };
+  assert.equal(canonicalRgba(object), object);
+  assert.throws(() => canonicalRgba("#ggg"), /invalid color "#ggg"/);
+  assert.deepEqual(canonicalPaint("#000"), {
+    type: "solid",
+    color: { red: 0, green: 0, blue: 0, alpha: 1 },
+  });
+  assert.deepEqual(canonicalPaint(object), { type: "solid", color: object });
+  assert.deepEqual(
+    canonicalPaint({
+      type: "conic_gradient",
+      center: { x: 0.5, y: 0.5 },
+      stops: [
+        { offset: 0, color: "#fff" },
+        { offset: 1, color: object },
+      ],
+    }).stops.map((stop) => stop.color),
+    [{ red: 1, green: 1, blue: 1, alpha: 1 }, object],
+  );
+});
+
+test("canonicalProject writes a layout's sides and offsets as objects", () => {
+  const layout = {
+    type: "layout",
+    root: {
+      padding: constant("8px 0.02"),
+      background: constant("#000"),
+      children: [{ margin: constant(0.01), translate: constant("10px") }],
+    },
+  };
+  const project = {
+    schema_version: CURRENT_SCHEMA_VERSION,
+    id: "p",
+    name: "P",
+    settings: {
+      width: 1920,
+      height: 1080,
+      frame_rate: { num: 30, den: 1 },
+      sample_rate: 48000,
+    },
+    sources: [{ id: "g", kind: "generated", generator: layout }],
+    timeline: { tracks: [] },
+  };
+  const root = canonicalProject(project).sources[0].generator.root;
+  assert.deepEqual(root.padding.value, {
+    top: "8px",
+    right: 0.02,
+    bottom: "8px",
+    left: 0.02,
+  });
+  assert.deepEqual(root.background.value, {
+    type: "solid",
+    color: { red: 0, green: 0, blue: 0, alpha: 1 },
+  });
+  assert.deepEqual(root.children[0].margin.value, {
+    top: 0.01,
+    right: 0.01,
+    bottom: 0.01,
+    left: 0.01,
+  });
+  assert.deepEqual(root.children[0].translate.value, { x: "10px", y: 0 });
 });
