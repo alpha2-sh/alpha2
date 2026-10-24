@@ -818,10 +818,11 @@ fn the_plans_of_one_project_hold_at_most_the_plan_budget_together() {
     }
 }
 
-/// The planner refuses exactly the compositions @alpha2-sh/editor's
-/// `graphIssues` finds issues in, with one of those issues: the editor marks
-/// what the engine would refuse, for all four reasons a composition is
-/// incomplete.
+/// The planner refuses exactly the incomplete compositions of
+/// `tests/cases/composition-issues-corpus.json`, each for one of the reasons
+/// the corpus lists, for all four reasons a composition is incomplete. A tool
+/// that marks incomplete compositions before planning is held to the same
+/// corpus.
 #[test]
 fn the_planner_refuses_what_the_editor_finds_incomplete() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

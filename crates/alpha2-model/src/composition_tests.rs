@@ -341,9 +341,9 @@ fn a_scale_with_a_zero_denominator_shows_no_composition_time() {
     assert_eq!(reference.local_time(start, MediaTime(240_000)), None);
 }
 
-/// `tests/cases/composition-time-corpus.json`, which @alpha2-sh/editor's `compositionTime` and
-/// `timelineTime` read too: an editor that places keyframes by composition time places them where
-/// the engine evaluates them.
+/// Composition time as `tests/cases/composition-time-corpus.json` pins it: a tool that converts
+/// between timeline and composition time and is held to the same corpus places keyframes where the
+/// engine evaluates them.
 #[test]
 fn composition_time_matches_the_shared_corpus() {
     let corpus: serde_json::Value = serde_json::from_str(include_str!(

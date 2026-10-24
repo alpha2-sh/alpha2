@@ -6,10 +6,9 @@
 //! is far from how often frames come. Every host instead measures the rate
 //! its frames are presented at near the start, from the packets' times
 //! alone (durations differ between demuxers), and rounds it to the rational
-//! a stream would declare ([`rational_rate`]). The browser runtime's
-//! `packages/alpha2-editor/src/browser/runtime/fingerprint.js` is this
-//! module's twin; `tests/cases/media-evidence-corpus.json` holds both to the same
-//! answers.
+//! a stream would declare ([`rational_rate`]).
+//! `tests/cases/media-evidence-corpus.json` pins the answers; any other host's
+//! measurement (the browser runtime's among them) is held to the same corpus.
 
 use alpha2_time::FrameRate;
 

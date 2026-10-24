@@ -1591,7 +1591,7 @@ function offsetRead(value: unknown): unknown {
  *
  * The input is not changed. A part that is already canonical comes back as the same object, so
  * a document in canonical form is returned itself, and a frozen part met before is not walked
- * again: running it after each edit costs the parts the edit changed.
+ * again: run on a changed copy of a document read before, it costs the parts that changed.
  */
 export function canonicalProject(project: Project): CanonicalProject {
   const reusing = reusingShapes;
