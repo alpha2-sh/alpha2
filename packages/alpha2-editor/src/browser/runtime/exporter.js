@@ -485,6 +485,12 @@ export async function exportTimeline({
         transferAfter.planarCopyFrames - transferBefore.planarCopyFrames;
       metrics.sourcePlanarCopyBytes =
         transferAfter.planarCopyBytes - transferBefore.planarCopyBytes;
+      metrics.sourceUnreadableFrames =
+        transferAfter.unreadableFrames - transferBefore.unreadableFrames;
+      metrics.sourceReadbackRetries =
+        transferAfter.readbackRetries - transferBefore.readbackRetries;
+      metrics.sourceRedecodedFrames =
+        transferAfter.redecodedFrames - transferBefore.redecodedFrames;
     }
     const result = {
       renderMs,
@@ -700,6 +706,9 @@ function browserExportMetrics() {
     outputRepackBytes: 0,
     sourcePlanarCopyFrames: 0,
     sourcePlanarCopyBytes: 0,
+    sourceUnreadableFrames: 0,
+    sourceReadbackRetries: 0,
+    sourceRedecodedFrames: 0,
     peakEncodeQueueBytes: 0,
     maxPendingMediaEvents: 0,
     pendingDepthTotal: 0,
@@ -739,6 +748,11 @@ function finishBrowserExportMetrics(metrics, before, after) {
     outputRepackBytes: metrics.outputRepackBytes,
     sourcePlanarCopyFrames: metrics.sourcePlanarCopyFrames,
     sourcePlanarCopyBytes: metrics.sourcePlanarCopyBytes,
+    // Source frames the browser could not read back, the reads repeated, and the frames decoded
+    // again in software for it.
+    sourceUnreadableFrames: metrics.sourceUnreadableFrames,
+    sourceReadbackRetries: metrics.sourceReadbackRetries,
+    sourceRedecodedFrames: metrics.sourceRedecodedFrames,
     peakEncodeQueueBytes: metrics.peakEncodeQueueBytes,
     maxPendingMediaEvents: metrics.maxPendingMediaEvents,
     averagePendingMediaEvents:

@@ -66,8 +66,11 @@ export class SourcePixels {
       rasterBudgetBytes = DEFAULT_RASTER_BUDGET_BYTES,
       providerSourceBytes = DEFAULT_PROVIDER_SOURCE_BYTES,
       extensionsWasmUrl,
+      videoDecode = "auto",
     } = {},
   ) {
+    if (videoDecode !== "auto" && videoDecode !== "software")
+      throw new RangeError('videoDecode must be "auto" or "software"');
     if (!Number.isSafeInteger(rasterBudgetBytes) || rasterBudgetBytes <= 0)
       throw new RangeError("rasterBudgetBytes must be a positive integer");
     if (!Number.isSafeInteger(providerSourceBytes) || providerSourceBytes <= 0)
@@ -77,6 +80,13 @@ export class SourcePixels {
     this.providerSourceBytes = providerSourceBytes;
     this.library = library;
     this.extensionsWasmUrl = extensionsWasmUrl;
+    /**
+     * How video decodes: `"auto"` lets the browser pick, a hardware decoder where it has one;
+     * `"software"` decodes on the CPU, so no frame needs a GPU readback, except a source the
+     * browser has no software decoder for, which decodes as `"auto"` and is reported in
+     * `decodeFallbacks`.
+     */
+    this.videoDecode = videoDecode;
   }
 
   get diagnostics() {
@@ -152,14 +162,22 @@ export class SourcePixels {
   /**
    * Bound method handed to `FrameSupply` as its `pixelsFor` callback. `sourceId` is the source the
    * engine asked for, which the layer may stand in for (a proxy has an ID of its own): decoders are
-   * kept per source, as `release` names them.
+   * kept per source, as `release` names them. `decode: "software"` asks for the frame decoded on
+   * the CPU (see `#softwareFrame`).
    */
   pixelsFor = async (
     layer,
     seconds,
-    { preferVideoFrame = false, consumerId = layer.id, sourceId } = {},
+    { preferVideoFrame = false, consumerId = layer.id, sourceId, decode } = {},
   ) => {
     const asset = layer.asset ?? layer;
+    if (decode === "software")
+      return this.#softwareFrame(
+        asset,
+        seconds,
+        consumerId,
+        sourceId ?? asset.id,
+      );
     if (asset.provider)
       return this.#providerPixels(
         asset,
@@ -544,7 +562,7 @@ export class SourcePixels {
       decoder = undefined;
     }
     if (!decoder) {
-      if (this.#decoders.size >= this.decoderLimit)
+      if (this.#cursorCount() >= this.decoderLimit)
         throw Object.assign(new Error("Video decoder budget reached"), {
           code: "resource_budget",
         });
@@ -565,10 +583,7 @@ export class SourcePixels {
     }
     // A decoder that cannot open (a codec the browser cannot decode) is the fallback's for good.
     try {
-      decoder.video ??= await (decoder.opening ??= MediabunnyVideoDecoder.open(
-        asset.id,
-        asset.file,
-      ));
+      decoder.video ??= await (decoder.opening ??= this.#openVideo(decoder));
     } catch (error) {
       decoder.opening = null;
       return this.#fallBack(decoder, error, true);
@@ -587,7 +602,7 @@ export class SourcePixels {
       // decoder's surfaces do not hold up.
       closeOpened(decoder);
       try {
-        decoder.opening = MediabunnyVideoDecoder.open(asset.id, asset.file);
+        decoder.opening = this.#openVideo(decoder);
         decoder.video = await decoder.opening;
         decoded = await decoder.video.refill(request);
       } catch (error) {
@@ -615,6 +630,99 @@ export class SourcePixels {
     };
   }
 
+  /** Decoder cursors the budget counts: the software cursors of recovered frames are not. */
+  #cursorCount() {
+    let count = 0;
+    for (const decoder of this.#decoders.values())
+      if (!decoder.software) count += 1;
+    return count;
+  }
+
+  /**
+   * Opens `decoder`'s source as `videoDecode` says. A source the browser has no software decoder
+   * for opens as `"auto"`, for good, and is reported once in `decodeFallbacks`.
+   */
+  async #openVideo(decoder) {
+    const { asset } = decoder;
+    if (this.videoDecode !== "software" || decoder.softwareUnavailable)
+      return MediabunnyVideoDecoder.open(asset.id, asset.file);
+    try {
+      return await MediabunnyVideoDecoder.open(asset.id, asset.file, {
+        hardwareAcceleration: "prefer-software",
+      });
+    } catch (error) {
+      if (error?.code !== "software_decode_unavailable") throw error;
+      decoder.softwareUnavailable = true;
+      const key = `software-unavailable\u0000${decoder.sourceId}`;
+      if (!this.#fallbacks.has(key))
+        this.#fallbacks.set(key, {
+          kind: "software-unavailable",
+          sourceId: decoder.sourceId,
+          reason: String(error.message),
+          frames: 0,
+          permanent: false,
+        });
+      return MediabunnyVideoDecoder.open(asset.id, asset.file);
+    }
+  }
+
+  /**
+   * The frame at `seconds` decoded on the CPU, on a cursor of its own beside the consumer's: what
+   * `FrameSupply` asks for when the browser could not read a hardware frame back. Rejects rather
+   * than falling back to an element seek, whose frame would be the browser's again.
+   *
+   * The cursor shares the consumer's source and consumer IDs, so `retainConsumers` and `release`
+   * close it with the consumer's; it stays open between frames, as readback failures come in runs
+   * and the next one then decodes on from it.
+   */
+  async #softwareFrame(asset, seconds, consumerId, sourceId) {
+    if (!asset.file)
+      throw new Error(`${asset.id} has no file to decode in software`);
+    const cursor = `${decoderCursorKey(sourceId, consumerId)}\u0000software`;
+    let decoder = this.#decoders.get(cursor);
+    if (decoder && decoder.asset !== asset) {
+      await closeDecoder(decoder);
+      this.#decoders.delete(cursor);
+      decoder = undefined;
+    }
+    if (!decoder) {
+      decoder = {
+        sourceId,
+        asset,
+        consumerId,
+        software: true,
+        opening: null,
+        video: null,
+      };
+      this.#decoders.set(cursor, decoder);
+    }
+    try {
+      decoder.video ??= await (decoder.opening ??= MediabunnyVideoDecoder.open(
+        asset.id,
+        asset.file,
+        { hardwareAcceleration: "prefer-software" },
+      ));
+      const decoded = await decoder.video.refill({
+        sourceId: asset.id,
+        mediaTimeTicks: BigInt(Math.round(seconds * TICKS_PER_SECOND)),
+        reason: "prefetch",
+        generation: 0,
+      });
+      return {
+        kind: "video-frame",
+        frame: decoded.frame,
+        rotation: decoded.rotationDegrees ?? 0,
+        mirror: decoded.mirror ?? false,
+        chromaSiting: decoded.chromaSiting,
+        physicalTimeMicroseconds: decoded.frame.timestamp,
+      };
+    } catch (error) {
+      // The next request opens it again.
+      closeOpened(decoder);
+      throw error;
+    }
+  }
+
   /**
    * Records that `decoder`'s frame falls back to an element seek because of `error`; `permanent`
    * applies it to every later frame of the cursor.
@@ -624,6 +732,7 @@ export class SourcePixels {
     const reason = String(error?.message ?? error);
     const known = this.#fallbacks.get(decoder.sourceId);
     this.#fallbacks.set(decoder.sourceId, {
+      kind: "element-seek",
       sourceId: decoder.sourceId,
       reason,
       frames: (known?.frames ?? 0) + 1,
@@ -638,9 +747,11 @@ export class SourcePixels {
   }
 
   /**
-   * The sources whose frames fell back from WebCodecs decoding, one entry each: the last reason,
-   * how many frames, and whether its decoding stopped for good (it could not open, or failed
-   * {@link MAX_DECODE_FAILURES} frames running). A browser export reports it.
+   * What fell back, per source and kind: `"element-seek"`, frames read by element seeks rather
+   * than decoded, with the last reason, how many frames, and whether its decoding stopped for good
+   * (it could not open, or failed {@link MAX_DECODE_FAILURES} frames running);
+   * `"software-unavailable"`, a source `videoDecode: "software"` decoded as `"auto"` because the
+   * browser has no software decoder for it (`frames` 0). A browser export reports it.
    */
   get decodeFallbacks() {
     return [...this.#fallbacks.values()].map((entry) => ({ ...entry }));

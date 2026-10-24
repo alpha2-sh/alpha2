@@ -219,7 +219,9 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
 
   /**
    * Opens `resource`'s primary video track. Rejects when it has none, or when this browser cannot
-   * decode it, so a host can fall back before the first request.
+   * decode it, so a host can fall back before the first request. With `hardwareAcceleration:
+   * "prefer-software"`, a track the browser has no software decoder for rejects with `code:
+   * "software_decode_unavailable"`.
    */
   static async open(
     sourceId: string,
@@ -254,6 +256,28 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
         throw new Error("mediabunny input has no video track");
       if (!(await track.canDecode()))
         throw new Error("this browser cannot decode the video track");
+      // `canDecode` does not ask for a software decoder: a codec only hardware decodes would open
+      // and fail on its first read. Without WebCodecs only mediabunny's own decoders decode.
+      if (
+        options.hardwareAcceleration === "prefer-software" &&
+        typeof VideoDecoder !== "undefined"
+      ) {
+        const config = await track.getDecoderConfig();
+        const support =
+          config === null
+            ? { supported: false }
+            : await VideoDecoder.isConfigSupported({
+                ...config,
+                hardwareAcceleration: "prefer-software",
+              });
+        if (support.supported !== true)
+          throw Object.assign(
+            new Error(
+              `this browser has no software decoder for ${config?.codec ?? track.codec ?? "the video track"}`,
+            ),
+            { code: "software_decode_unavailable" },
+          );
+      }
       // mediabunny reports a turn but not a mirror, and reads a mirroring matrix's angle otherwise
       // than native decoding does.
       const orientation = (await readVideoOrientation(resource, track.id)) ?? {

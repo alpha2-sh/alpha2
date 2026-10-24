@@ -1505,6 +1505,8 @@ export function createBrowserBridge(options) {
       sources,
       library,
       runtimeAssets,
+      // A frame shown at once matters more in a preview than the engine's conversion of it.
+      { unreadableFrames: "present" },
     );
     mixer = new EngineAudioMixer(runtimeAssets, { enabled: audio });
     mixer.setMasterVolume(monitorVolume);
@@ -1989,6 +1991,13 @@ export function createBrowserBridge(options) {
         "export",
       );
     requireExportFrameRate(options.frameRate);
+    const videoDecode = options.videoDecode ?? "auto";
+    if (videoDecode !== "auto" && videoDecode !== "software")
+      throw new EditorError(
+        "invalid_video_decode",
+        `Export videoDecode must be "auto" or "software"; received ${JSON.stringify(videoDecode)}`,
+        "export",
+      );
     materializeText(editor.document);
     const snapshot = editor.document,
       revision = editor.revision,
@@ -2039,6 +2048,7 @@ export function createBrowserBridge(options) {
           lib = { get: (id) => map.get(id) };
         const pixels = new SourcePixels(lib, {
           extensionsWasmUrl: runtimeAssets.extensionsWasmUrl,
+          videoDecode,
         });
         const renderer = new Engine(
           new OffscreenCanvas(project.settings.width, project.settings.height),
@@ -2121,7 +2131,11 @@ export function createBrowserBridge(options) {
           return {
             ...artifact,
             media: Object.fromEntries(selection),
-            report: { ...result, decodeFallbacks: pixels.decodeFallbacks },
+            report: {
+              ...result,
+              videoDecode,
+              decodeFallbacks: pixels.decodeFallbacks,
+            },
           };
         } finally {
           await audio.close();

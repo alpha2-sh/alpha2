@@ -159,6 +159,7 @@ const EDITOR_FAILURE_CODES: Readonly<Record<string, ExportFailureCode>> =
     invalid_rate: "INVALID_INPUT",
     invalid_time: "INVALID_INPUT",
     invalid_transition: "INVALID_INPUT",
+    invalid_video_decode: "INVALID_INPUT",
     locked: "INVALID_INPUT",
     missing_asset: "INVALID_INPUT",
     preview_worker_failed: "UNKNOWN",

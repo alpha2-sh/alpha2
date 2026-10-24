@@ -257,6 +257,16 @@ export interface BrowserExportOptions {
    * the budget, the least one frame needed, the most held, and how often the budget waited.
    */
   readonly memory?: { readonly inFlightBytes?: number };
+  /**
+   * How source video decodes: `auto` (the default) lets the browser pick, a hardware decoder where
+   * it has one; `software` decodes on the CPU, so no frame is read back from the GPU, except a
+   * source the browser has no software decoder for, which decodes as `auto` and is reported in the
+   * result's `report.decodeFallbacks` (`kind: "software-unavailable"`). Either way the engine
+   * converts the same decoded values; a frame the browser cannot read back is decoded again in
+   * software. Another value is refused when the export starts, with an `EditorError`
+   * `invalid_video_decode`.
+   */
+  readonly videoDecode?: "auto" | "software";
 }
 /** Where a browser export writes its file. */
 export type ExportOutputTarget =
@@ -621,7 +631,8 @@ export interface BrowserBridge {
    * decisions must be loaded: call {@link BrowserBridge.conform} first, or pass `assetDecisions`.
    *
    * Throws synchronously when the bridge is disposed (`disposed`), another export runs
-   * (`export_busy`), `frameRate` is not one the engine reads (`invalid_frame_rate`), the asset
+   * (`export_busy`), `frameRate` is not one the engine reads (`invalid_frame_rate`), `videoDecode`
+   * is not `auto` or `software` (`invalid_video_decode`), the asset
    * decisions are not loaded (`conform_pending`), the media is not ready (`ConformError`), or the
    * document does not compile. Everything later is reported through the job's `result`.
    */

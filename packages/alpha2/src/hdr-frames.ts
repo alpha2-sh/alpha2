@@ -37,6 +37,14 @@ export {
   sampleAspectForStream,
 } from "./chroma-siting.js";
 
+/** What a planar copy carries of its frame's identity beyond the frame itself. */
+export interface PlanarFrameIdentity {
+  readonly physicalTimeMicroseconds?: number;
+  readonly rotation?: 0 | 90 | 180 | 270;
+  readonly mirror?: boolean;
+  readonly chromaSiting?: ChromaSiting;
+}
+
 /** A decoded frame copied out as planar YUV, with the color it carries. */
 export interface PlanarYuvFrame {
   readonly kind: "yuv-frame";
@@ -251,58 +259,67 @@ export class PlanarCopyPool {
 export async function copyPlanarYuvFrame(
   frame: VideoFrame,
   declared: ColorMetadata | null,
-  identity: {
-    readonly physicalTimeMicroseconds?: number;
-    readonly rotation?: 0 | 90 | 180 | 270;
-    readonly mirror?: boolean;
-    readonly chromaSiting?: ChromaSiting;
-  } = {},
+  identity: PlanarFrameIdentity = {},
   pool?: PlanarCopyPool,
 ): Promise<PlanarYuvFrame> {
   try {
-    const format = frame.format;
-    if (format === null || !isPlanarVideoFrame(frame)) {
-      throw new Error(
-        `frame has no planar YUV format the engine reads (${format ?? "opaque"}); decode HDR sources, and sources whose color the project declares, in software`,
-      );
-    }
-    const visible = frame.visibleRect;
-    if (!visible) throw new Error("frame has no visible rectangle");
-    // copyTo copies the visible rectangle by default, so the copy is exactly the picture.
-    const size = frame.allocationSize();
-    const data = pool?.acquire(size) ?? new Uint8Array(size);
-    let planes: PlaneLayout[];
-    try {
-      planes = await frame.copyTo(data);
-    } catch (error) {
-      pool?.release(data);
-      throw error;
-    }
-    return {
-      kind: "yuv-frame",
-      format,
-      codedWidth: visible.width,
-      codedHeight: visible.height,
-      data,
-      layout: planes.flatMap((plane) => [plane.offset, plane.stride]),
-      visibleRect: [0, 0, visible.width, visible.height],
-      color: declared ?? colorMetadataFromVideoColorSpace(frame.colorSpace),
-      chromaSiting: identity.chromaSiting ?? "unspecified",
-      displayWidth: frame.displayWidth,
-      displayHeight: frame.displayHeight,
-      physicalTimeMicroseconds:
-        identity.physicalTimeMicroseconds ?? frame.timestamp,
-      ...(frame.duration === null
-        ? {}
-        : { durationMicroseconds: frame.duration }),
-      ...(identity.rotation === undefined
-        ? {}
-        : { rotation: identity.rotation }),
-      ...(identity.mirror === undefined ? {} : { mirror: identity.mirror }),
-    };
+    return await readPlanarYuvFrame(frame, declared, identity, pool);
   } finally {
     frame.close();
   }
+}
+
+/**
+ * {@link copyPlanarYuvFrame} without closing `frame`: the caller owns it whether the copy succeeds
+ * or not, so a frame whose planes the browser could not read back can be read again. Rejects as
+ * {@link copyPlanarYuvFrame} does; with `pool`, a failed copy gives its buffer back.
+ *
+ * @internal For `FrameSupply`.
+ */
+export async function readPlanarYuvFrame(
+  frame: VideoFrame,
+  declared: ColorMetadata | null,
+  identity: PlanarFrameIdentity = {},
+  pool?: PlanarCopyPool,
+): Promise<PlanarYuvFrame> {
+  const format = frame.format;
+  if (format === null || !isPlanarVideoFrame(frame)) {
+    throw new Error(
+      `frame has no planar YUV format the engine reads (${format ?? "opaque"}); decode HDR sources, and sources whose color the project declares, in software`,
+    );
+  }
+  const visible = frame.visibleRect;
+  if (!visible) throw new Error("frame has no visible rectangle");
+  // copyTo copies the visible rectangle by default, so the copy is exactly the picture.
+  const size = frame.allocationSize();
+  const data = pool?.acquire(size) ?? new Uint8Array(size);
+  let planes: PlaneLayout[];
+  try {
+    planes = await frame.copyTo(data);
+  } catch (error) {
+    pool?.release(data);
+    throw error;
+  }
+  return {
+    kind: "yuv-frame",
+    format,
+    codedWidth: visible.width,
+    codedHeight: visible.height,
+    data,
+    layout: planes.flatMap((plane) => [plane.offset, plane.stride]),
+    visibleRect: [0, 0, visible.width, visible.height],
+    color: declared ?? colorMetadataFromVideoColorSpace(frame.colorSpace),
+    chromaSiting: identity.chromaSiting ?? "unspecified",
+    displayWidth: frame.displayWidth,
+    displayHeight: frame.displayHeight,
+    physicalTimeMicroseconds:
+      identity.physicalTimeMicroseconds ?? frame.timestamp,
+    ...(frame.duration === null
+      ? {}
+      : { durationMicroseconds: frame.duration }),
+    ...(identity.rotation === undefined ? {} : { rotation: identity.rotation }),
+    ...(identity.mirror === undefined ? {} : { mirror: identity.mirror }),
+  };
 }
 
 /**

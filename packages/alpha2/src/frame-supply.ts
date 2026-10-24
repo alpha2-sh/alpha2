@@ -5,11 +5,13 @@ import type { FrameUploadReceipt } from "./effects.js";
 import type { ColorMetadata } from "./generated/project-schema.js";
 import {
   type ChromaSiting,
-  copyPlanarYuvFrame,
   isHdrVideoFrame,
   isPlanarVideoFrame,
   PlanarCopyPool,
+  type PlanarFrameIdentity,
   type PlanarYuvEngine,
+  type PlanarYuvFrame,
+  readPlanarYuvFrame,
   uploadPlanarYuvFrame,
   type VideoConversion,
 } from "./hdr-frames.js";
@@ -148,6 +150,13 @@ export interface FrameSupplyDecodeOptions {
    * own), so a host keys what it keeps per source by this, as `liveSourceIds` names sources.
    */
   readonly sourceId: string;
+  /**
+   * `"software"`: decode this frame on the CPU, on a cursor of its own beside `consumerId`'s, and
+   * resolve with a `VideoFrame`. The supply asks for it when the browser could not read a
+   * hardware-decoded frame back; a host that cannot decode the source in software rejects. Absent
+   * for every other request.
+   */
+  readonly decode?: "software";
 }
 
 /** Host callbacks and frame geometry for one `supply` call. */
@@ -213,6 +222,26 @@ export interface FrameSupplyConfig extends FrameRetentionOptions {
    * default), or the browser (`"browser"`); see {@link VideoConversion}.
    */
   readonly videoConversion?: VideoConversion;
+  /**
+   * What becomes of a frame whose planes the browser cannot read back, once reading them again
+   * has failed: `"redecode"` (the default) decodes it again in software, which decodes the same
+   * picture, and fails the supply if that fails too; `"present"` gives it to the browser's
+   * conversion instead, unless the engine must convert it (HDR, or color the project declares),
+   * for a preview, where a frame shown at once matters more than the engine's conversion.
+   */
+  readonly unreadableFrames?: "redecode" | "present";
+}
+
+/** How a {@link FrameSupply} recovered frames the browser could not read back; cumulative. */
+export interface ReadbackRecoveryStats {
+  /** Frames whose planes the browser still could not read back after the repeated reads. */
+  readonly unreadableFrames: number;
+  /** Reads repeated on the same frame. */
+  readonly readbackRetries: number;
+  /** Frames decoded again in software and copied from that decode. */
+  readonly redecodedFrames: number;
+  /** Frames given to the browser's conversion (`unreadableFrames: "present"`). */
+  readonly presentedFrames: number;
 }
 
 interface DecodedNeed {
@@ -225,7 +254,11 @@ interface DecodedNeed {
    * leaves SDR to the browser): the declared color as JSON, if any. It is copied out planar only
    * when no earlier upload of the same picture serves it.
    */
-  readonly planar?: { readonly declared: string | undefined };
+  readonly planar?: {
+    readonly declared: string | undefined;
+    /** The engine must convert it: HDR, or color the project declares. */
+    readonly required: boolean;
+  };
 }
 
 /**
@@ -488,8 +521,15 @@ export class FrameSupply {
   #decodeWaiters: Array<() => void> = [];
   #cachedImageBytes = 0;
   readonly #videoConversion: VideoConversion;
+  readonly #unreadableFrames: "redecode" | "present";
   #planarCopyFrames = 0;
   #planarCopyBytes = 0;
+  #readback = {
+    unreadableFrames: 0,
+    readbackRetries: 0,
+    redecodedFrames: 0,
+    presentedFrames: 0,
+  };
   /** Buffers the planar copies reuse; each is given back once its upload has taken it. */
   readonly #planarCopies = new PlanarCopyPool();
   #imageUse = 0n;
@@ -524,6 +564,10 @@ export class FrameSupply {
     if (videoConversion !== "engine" && videoConversion !== "browser")
       throw new RangeError('videoConversion must be "engine" or "browser"');
     this.#videoConversion = videoConversion;
+    const unreadableFrames = options.unreadableFrames ?? "redecode";
+    if (unreadableFrames !== "redecode" && unreadableFrames !== "present")
+      throw new RangeError('unreadableFrames must be "redecode" or "present"');
+    this.#unreadableFrames = unreadableFrames;
     this.#retainer = new FrameGenerationRetainer(
       (generation) => this.#engine.releaseFrameGeneration(generation),
       options,
@@ -550,6 +594,11 @@ export class FrameSupply {
       planarCopyFrames: this.#planarCopyFrames,
       planarCopyBytes: this.#planarCopyBytes,
     };
+  }
+
+  /** Frames the browser could not read back, and how they were recovered; cumulative. */
+  get readbackRecovery(): ReadbackRecoveryStats {
+    return { ...this.#readback };
   }
 
   #trace(sourceId: string, mediaTimeTicks: string, pixels: Uint8Array): void {
@@ -713,25 +762,37 @@ export class FrameSupply {
             videoFrame.frame.close();
             continue;
           }
-          let upload: FrameUploadReceipt;
+          let upload: FrameUploadReceipt | undefined;
           if (planar !== undefined) {
-            // The copy takes the frame over and closes it, failed or not.
+            // The copy takes the frame over and closes it, unless it hands it back for the
+            // browser's own upload below (`unreadableFrames: "present"`).
             decoded[decodedIndex] = { need, layer, source: null };
-            const copied = await this.#copyPlanar(videoFrame, planar.declared);
-            try {
-              upload = uploadPlanarYuvFrame(
-                this.#planarEngine(),
-                need.sourceId,
-                sourceTicks,
-                copied,
-                width,
-                height,
-              );
-            } finally {
-              // The upload copied the planes into the engine before it returned.
-              this.#planarCopies.release(copied.data);
+            const copied = await this.#copyPlanar(
+              need,
+              layer,
+              videoFrame,
+              planar,
+              pixelsFor,
+            );
+            if (copied === undefined) {
+              decoded[decodedIndex] = { need, layer, source: videoFrame };
+            } else {
+              try {
+                upload = uploadPlanarYuvFrame(
+                  this.#planarEngine(),
+                  need.sourceId,
+                  sourceTicks,
+                  copied,
+                  width,
+                  height,
+                );
+              } finally {
+                // The upload copied the planes into the engine before it returned.
+                this.#planarCopies.release(copied.data);
+              }
             }
-          } else {
+          }
+          if (upload === undefined) {
             const engine = this.#presentedEngine();
             const presented = [
               need.sourceId,
@@ -928,32 +989,158 @@ export class FrameSupply {
       )
     )
       return { need, layer, source };
-    return { need, layer, source, planar: { declared } };
+    return {
+      need,
+      layer,
+      source,
+      planar: {
+        declared,
+        required: enginesColor || isHdrVideoFrame(source.frame),
+      },
+    };
   }
 
-  /** Copies a frame out planar for the engine to convert; the copy closes the frame. */
+  /**
+   * Copies a frame out planar for the engine to convert, and closes it.
+   *
+   * A frame whose planes the browser cannot read back (Chrome, now and then, for hardware-decoded
+   * frames) is read again, then decoded again in software and copied from that decode: the codecs
+   * define their decoding exactly, so the engine converts the planes it would have. With
+   * `unreadableFrames: "present"`, a frame the engine need not convert resolves `undefined`
+   * instead, left open for the browser's conversion. Rejects, the frame closed, when the copy
+   * fails otherwise or the software decode cannot serve it.
+   */
   async #copyPlanar(
+    need: FrameNeed,
+    layer: FrameSupplyLayer,
     source: FrameSupplyVideoFrame,
-    declared: string | undefined,
-  ) {
-    const copied = await copyPlanarYuvFrame(
-      source.frame,
-      declared === undefined ? null : (JSON.parse(declared) as ColorMetadata),
-      {
-        ...(source.physicalTimeMicroseconds === undefined
-          ? {}
-          : { physicalTimeMicroseconds: source.physicalTimeMicroseconds }),
-        ...(source.rotation === undefined ? {} : { rotation: source.rotation }),
-        ...(source.mirror === undefined ? {} : { mirror: source.mirror }),
-        ...(source.chromaSiting === undefined
-          ? {}
-          : { chromaSiting: source.chromaSiting }),
-      },
-      this.#planarCopies,
-    );
+    planar: NonNullable<DecodedNeed["planar"]>,
+    pixelsFor: FrameSupplyOptions["pixelsFor"],
+  ): Promise<PlanarYuvFrame | undefined> {
+    let copied: PlanarYuvFrame;
+    try {
+      copied = await this.#readPlanes(source, planar.declared);
+    } catch (error) {
+      if (!isUnreadableFrame(error)) {
+        source.frame.close();
+        throw error;
+      }
+      this.#readback.unreadableFrames += 1;
+      if (
+        this.#unreadableFrames === "present" &&
+        !planar.required &&
+        takesPresentedFrames(this.#engine)
+      ) {
+        this.#readback.presentedFrames += 1;
+        return undefined;
+      }
+      const timestamp =
+        source.physicalTimeMicroseconds ?? source.frame.timestamp;
+      source.frame.close();
+      copied = await this.#redecodePlanar(
+        need,
+        layer,
+        planar,
+        timestamp,
+        pixelsFor,
+        error,
+      );
+    }
+    source.frame.close();
     this.#planarCopyFrames += 1;
     this.#planarCopyBytes += copied.data.byteLength;
     return copied;
+  }
+
+  /**
+   * The frame's planes, read again up to {@link READBACK_RETRIES} times, a task apart, while the
+   * browser fails to read them back. Leaves the frame open.
+   */
+  async #readPlanes(
+    source: FrameSupplyVideoFrame,
+    declared: string | undefined,
+  ): Promise<PlanarYuvFrame> {
+    const color =
+      declared === undefined ? null : (JSON.parse(declared) as ColorMetadata);
+    for (let retry = 0; ; retry += 1) {
+      try {
+        return await readPlanarYuvFrame(
+          source.frame,
+          color,
+          planarIdentity(source),
+          this.#planarCopies,
+        );
+      } catch (error) {
+        if (retry >= READBACK_RETRIES || !isUnreadableFrame(error)) throw error;
+        this.#readback.readbackRetries += 1;
+        await nextTask();
+      }
+    }
+  }
+
+  /**
+   * Decodes `need` again in software and copies that frame out planar. Rejects with `cause` when
+   * the host cannot decode it in software, decodes another picture (another timestamp), or that
+   * copy fails too.
+   */
+  async #redecodePlanar(
+    need: FrameNeed,
+    layer: FrameSupplyLayer,
+    planar: NonNullable<DecodedNeed["planar"]>,
+    timestamp: number,
+    pixelsFor: FrameSupplyOptions["pixelsFor"],
+    cause: unknown,
+  ): Promise<PlanarYuvFrame> {
+    const unrecovered = (reason: string, error: unknown = cause) =>
+      new Error(
+        `the browser could not read back the frame of ${need.sourceId} at ${need.mediaTimeTicks}, and ${reason}`,
+        { cause: error },
+      );
+    let decoded: FrameSupplySource | null;
+    try {
+      decoded = await this.#decodeCursor(
+        `${keyForNeed(need, layer)}\u0000software`,
+        () =>
+          pixelsFor(
+            layer,
+            Number(BigInt(need.mediaTimeTicks)) / TICKS_PER_SECOND,
+            {
+              preferVideoFrame: true,
+              consumerId: consumerOf(need),
+              sourceId: need.sourceId,
+              decode: "software",
+            },
+          ),
+      );
+    } catch (error) {
+      throw unrecovered("decoding it again in software failed", error);
+    }
+    if (
+      decoded === null ||
+      !("kind" in decoded) ||
+      decoded.kind !== "video-frame"
+    )
+      throw unrecovered("decoding it again in software gave no VideoFrame");
+    const again = decoded;
+    try {
+      const at = again.physicalTimeMicroseconds ?? again.frame.timestamp;
+      if (at !== timestamp)
+        throw unrecovered(
+          `decoding it again in software gave the frame at ${at} us`,
+        );
+      const copied = await this.#readPlanes(again, planar.declared);
+      this.#readback.redecodedFrames += 1;
+      return copied;
+    } catch (error) {
+      throw error instanceof Error && error.cause === cause
+        ? error
+        : unrecovered(
+            "the software decode's frame could not be copied either",
+            error,
+          );
+    } finally {
+      again.frame.close();
+    }
   }
 
   /** The engine's presented RGBA uploads, called on the engine. */
@@ -1370,6 +1557,42 @@ function validatePositiveInteger(value: number, name: string): void {
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new RangeError(`${name} must be a positive safe integer`);
   }
+}
+
+/** Reads repeated on a frame whose planes the browser could not read back, before decoding again. */
+const READBACK_RETRIES = 2;
+
+/**
+ * Whether a planar copy failed because the browser could not read a GPU-backed frame back: Chrome
+ * rejects `copyTo` with `InvalidStateError` ("Failed to read VideoFrame data."), now and then, for
+ * hardware-decoded frames. A closed frame rejects with the same name, but the supply owns the
+ * frames it copies and has not closed them.
+ */
+function isUnreadableFrame(error: unknown): boolean {
+  return (
+    typeof DOMException !== "undefined" &&
+    error instanceof DOMException &&
+    error.name === "InvalidStateError"
+  );
+}
+
+/** What a planar copy of `source` carries beyond the frame (see `PlanarFrameIdentity`). */
+function planarIdentity(source: FrameSupplyVideoFrame): PlanarFrameIdentity {
+  return {
+    ...(source.physicalTimeMicroseconds === undefined
+      ? {}
+      : { physicalTimeMicroseconds: source.physicalTimeMicroseconds }),
+    ...(source.rotation === undefined ? {} : { rotation: source.rotation }),
+    ...(source.mirror === undefined ? {} : { mirror: source.mirror }),
+    ...(source.chromaSiting === undefined
+      ? {}
+      : { chromaSiting: source.chromaSiting }),
+  };
+}
+
+/** Resolves once the browser has run other tasks, such as the GPU process's replies. */
+function nextTask(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 /** Whether `engine` takes presented `VideoFrame` uploads (`uploadPresentedVideoFrame`). */

@@ -39,8 +39,16 @@ export class Engine {
   /** What `supply` uploaded for the export frame the engine has not rendered yet. */
   #exportUploads = [];
 
-  constructor(canvas, sources, library, runtimeAssets = {}) {
+  constructor(
+    canvas,
+    sources,
+    library,
+    runtimeAssets = {},
+    { unreadableFrames } = {},
+  ) {
     this.runtimeAssets = runtimeAssets;
+    /** What the frame supply does with a frame the browser cannot read back (`FrameSupply`). */
+    this.unreadableFrames = unreadableFrames;
     this.canvas = canvas;
     this.sources = sources;
     this.library = library;
@@ -66,7 +74,11 @@ export class Engine {
         : await WebEffectRegistry.createForHtmlCanvas(this.canvas);
     this.#effectResources = new Map();
     this.#sizeResultCache();
-    this.#supply = new FrameSupply(this.#registry);
+    this.#supply = new FrameSupply(this.#registry, {
+      ...(this.unreadableFrames === undefined
+        ? {}
+        : { unreadableFrames: this.unreadableFrames }),
+    });
     // `engine.traceUploads = true` in the console logs every source upload, to tell a host decode
     // bug from an engine one when a clip shows another clip's picture.
     this.#supply.onUpload = (entry) => {
@@ -150,12 +162,27 @@ export class Engine {
     return this.#registry?.deviceLost ?? false;
   }
 
-  /** Raw source video the frame supply copied through script memory, cumulative. */
+  /**
+   * Raw source video the frame supply copied through script memory, and the frames it could not
+   * read back and how it recovered them; cumulative.
+   */
   get sourceTransfer() {
-    return (
-      this.#supply?.sourceTransfer ?? {
+    return {
+      ...(this.#supply?.sourceTransfer ?? {
         planarCopyFrames: 0,
         planarCopyBytes: 0,
+      }),
+      ...this.#readbackRecovery(),
+    };
+  }
+
+  #readbackRecovery() {
+    return (
+      this.#supply?.readbackRecovery ?? {
+        unreadableFrames: 0,
+        readbackRetries: 0,
+        redecodedFrames: 0,
+        presentedFrames: 0,
       }
     );
   }
@@ -460,6 +487,7 @@ export class Engine {
       unchanged: this.#unchanged,
       renderSize: [this.canvas.width, this.canvas.height],
       backend: this.backend,
+      readbackRecovery: this.#readbackRecovery(),
     };
     this.lastDiagnostics = diagnostics;
     this.onDiagnostics?.(diagnostics);
