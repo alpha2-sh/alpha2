@@ -30,7 +30,8 @@ pub(crate) use resolve::resolve;
 /// What a text node's wrapping width adds to its content width, in pixels:
 /// float summation order cannot then break a text sized to its own
 /// max-content width again. A line it lets through overflows its box by
-/// under this much.
+/// under this much, and a text taller than its box by under this much
+/// still fits it.
 pub const LAYOUT_WRAP_SLACK: f32 = 1.0 / 64.0;
 
 /// The width a text node with content `width` pixels wide breaks its lines

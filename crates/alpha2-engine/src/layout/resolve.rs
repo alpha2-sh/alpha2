@@ -1,7 +1,7 @@
 //! Flexbox and grid resolution with taffy: the only file that names it, so
 //! an upgrade touches this file and the goldens.
 
-use super::{NodeRects, ResolvedLayout, wrap};
+use super::{LAYOUT_WRAP_SLACK, NodeRects, ResolvedLayout, wrap};
 use alpha2_eval::{EvaluatedLayout, EvaluatedNode, NodeContent, NodeLayout, Sides};
 use alpha2_model::{
     AlignContent, AlignItems, Display, FlexDirection, FlexWrap, GridAutoFlow, GridEdge,
@@ -463,6 +463,15 @@ fn collect(
         - unrounded.padding.left
         - unrounded.padding.right)
         .max(0.0);
+    // Compared with the text's own height, unrounded like its width: taffy
+    // rounds edges by absolute position, so a whole-pixel box can be up to a
+    // pixel shorter than the height it was given.
+    let text_height = (unrounded.size.height
+        - unrounded.border.top
+        - unrounded.border.bottom
+        - unrounded.padding.top
+        - unrounded.padding.bottom)
+        .max(0.0);
     let slot = out.len();
     out.push(NodeRects {
         border,
@@ -479,7 +488,7 @@ fn collect(
             *texts += 1;
             let lines = text.map(|text| {
                 let lines = text.lines_at(wrap(text_width));
-                overflow = lines.height > content[3] - content[1] + 0.5
+                overflow = lines.height > text_height + LAYOUT_WRAP_SLACK
                     || text.min_content_width() > wrap(text_width);
                 lines.line_count
             });

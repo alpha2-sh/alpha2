@@ -280,7 +280,10 @@ export function createBrowserBridge(options) {
   };
   /** The engine's asset decisions, from the wasm module, loaded on first use. */
   const decisions = async () => (decisionBinding ??= await loadWasm());
-  /** What `measureText` and `measureLayout` lay text out with, made on first use, and the font stack it holds. */
+  /**
+   * What `measureText` and `measureLayout` lay text out with, made on first use, and the font
+   * stack it holds.
+   */
   let measurer = null,
     measuredFonts = null;
   const registry = new ResourceRegistry(resourceLimit);

@@ -242,6 +242,34 @@ fn overflow_is_reported_for_text_taller_than_its_box() {
 }
 
 #[test]
+fn text_with_a_fractional_height_fits_its_rounded_box() {
+    let rasterizer = fixture();
+    // At 1080 pixels the title is 129.6 pixels tall from 409.86, and its box
+    // rounds to 410..539, 129 pixels; the line under it is 48.6 pixels tall
+    // and its box rounds to 48.
+    let root = node(json!({
+        "flex_direction": "column",
+        "justify_content": "center",
+        "align_items": "center",
+        "gap": length(0.035),
+        "padding": constant(json!({ "left": 0.08, "top": 0.08, "right": 0.08, "bottom": 0.08 })),
+        "line_height": 1.0,
+        "children": [
+            text("Your title", 0.12),
+            { "width": length(0.09), "height": length(0.006) },
+            text("A line about what comes next", 0.045),
+        ],
+    }));
+    let layout = resolved(&rasterizer, &root, size(1920, 1080));
+    let [_, title, _, line] = layout.nodes[..] else {
+        panic!("four nodes");
+    };
+    assert_eq!(title.content[3] - title.content[1], 129.0);
+    assert_eq!(line.content[3] - line.content[1], 48.0);
+    assert!(!layout.nodes.iter().any(|rects| rects.overflow));
+}
+
+#[test]
 fn min_content_overflow_is_reported_for_a_long_word() {
     let rasterizer = fixture();
     // A flex item's automatic minimum width is its min-content: the word does not split, and the
@@ -545,7 +573,7 @@ fn forty_nodes() -> LayoutNode {
     }))
 }
 
-/// What resolving costs, recorded in ADR 0064, never gated. Run with
+/// What resolving costs, for reference only; never gated. Run with
 /// `cargo test -p alpha2-engine --release --lib layout_resolve_cost -- --ignored --nocapture`.
 #[test]
 #[ignore = "timing only"]
