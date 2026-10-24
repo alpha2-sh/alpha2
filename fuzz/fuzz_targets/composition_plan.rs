@@ -15,11 +15,13 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
     let (compositions, sources) = (&project.compositions, &project.sources);
+    // The project canvas, which a layout generator's pixels are pixels of.
+    let canvas = (project.settings.width, project.settings.height);
     for composition in compositions {
-        if let Ok(plan) = plan_composition(composition, compositions, sources) {
+        if let Ok(plan) = plan_composition(composition, compositions, sources, canvas) {
             check(&plan);
         }
-        if let Ok(plan) = plan_source_composition(composition, compositions, sources) {
+        if let Ok(plan) = plan_source_composition(composition, compositions, sources, canvas) {
             check(&plan);
             assert!(!plan.uses_clip(), "{plan:?}");
         }
