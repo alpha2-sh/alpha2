@@ -4,6 +4,7 @@ import {
   createEmptyDocument,
   validateDocument,
   withInstanceIds,
+  canonicalDocument,
   indexDocument,
   inheritDocumentIndex,
   EditorError,
@@ -77,7 +78,7 @@ export class EditorSession {
       historyByteLimit < 0
     )
       throw new RangeError("Invalid history budget");
-    document = withInstanceIds(document);
+    document = withInstanceIds(canonicalDocument(document));
     validateDocument(document);
     this.#document = frozenValid(owned(document));
     this.#snapshot = this.#read();
@@ -229,7 +230,7 @@ export class EditorSession {
    */
   open(document: EditorDocument): void {
     this.#active();
-    document = withInstanceIds(document);
+    document = withInstanceIds(canonicalDocument(document));
     validateDocument(document);
     const next = frozenValid(owned(document));
     this.#cancelGesture?.();

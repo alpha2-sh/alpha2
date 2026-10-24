@@ -182,7 +182,15 @@ test(
       const engine = globalThis.stubEngine.engines.at(-1);
       // The renderer draws the layout from the project, with the document's font.
       const source = engine.project.sources.find((s) => s.id === "panel");
-      assert.deepEqual(source.generator, panel);
+      // In the forms the engine writes: the padding shorthand as its four sides.
+      const canonical = structuredClone(panel);
+      canonical.root.children[0].padding.value = {
+        top: "4px",
+        right: "8px",
+        bottom: "4px",
+        left: "8px",
+      };
+      assert.deepEqual(source.generator, canonical);
       assert.ok(engine.renders.length >= 1);
       assert.ok(
         engine.fonts.some((f) => f === bridge.getAsset(fontId)),

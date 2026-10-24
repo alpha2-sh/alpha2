@@ -38,6 +38,7 @@ import {
   EditorError,
   validateDocument,
   validateDocumentShape,
+  canonicalDocument,
   assertProjection,
   indexDocument,
   transitionInstanceId,
@@ -53,6 +54,14 @@ import type {
   GraphLayout,
   GraphPosition,
 } from "./document.js";
+/**
+ * A document while a command is applied to it: its project may hold what the command brought in
+ * as written (a CSS hex color, say) until {@link executeCommand} puts the result in the forms the
+ * engine writes ({@link canonicalDocument}). An {@link EditorDocument} is one.
+ */
+type DraftDocument = Omit<EditorDocument, "project"> & {
+  readonly project: Project;
+};
 /**
  * An edit of an {@link EditorDocument}, run by {@link executeCommand} or
  * `EditorSession.dispatch`. Times are timeline ticks unless a variant says otherwise. Ids that
@@ -440,15 +449,15 @@ export type Command =
 const NO_NAMES: Readonly<Record<string, string>> = Object.freeze({});
 /** The names the node editor shows for group compositions, by composition id. */
 export function graphNames(
-  document: EditorDocument,
+  document: DraftDocument,
 ): Readonly<Record<string, string>> {
   return document.metadata.graphNames ?? NO_NAMES;
 }
 function withGraphName(
-  document: EditorDocument,
+  document: DraftDocument,
   id: string,
   name: string | undefined,
-): EditorDocument {
+): DraftDocument {
   if (!name) return document;
   return {
     ...document,
@@ -462,14 +471,14 @@ function withGraphName(
   };
 }
 /** The node editor positions a document stores. */
-export function graphLayout(document: EditorDocument): GraphLayout {
+export function graphLayout(document: DraftDocument): GraphLayout {
   return document.metadata.graphLayout ?? {};
 }
 function withLayout(
-  document: EditorDocument,
+  document: DraftDocument,
   compositionId: string,
   positions: Readonly<Record<string, GraphPosition>>,
-): EditorDocument {
+): DraftDocument {
   for (const position of Object.values(positions))
     if (!Number.isFinite(position.x) || !Number.isFinite(position.y))
       fail("Node positions must be finite");
@@ -486,10 +495,10 @@ function withLayout(
   };
 }
 function changeComposition(
-  document: EditorDocument,
+  document: DraftDocument,
   id: string,
   update: (composition: Composition) => Composition,
-): EditorDocument {
+): DraftDocument {
   const composition = findComposition(document.project, id);
   if (!composition) fail("Unknown composition", id);
   const next = update(composition);
@@ -508,12 +517,12 @@ function changeComposition(
  * without one stays the same object: the track lock tells what an edit changed by identity.
  */
 function mapGroupNodes(
-  document: EditorDocument,
+  document: DraftDocument,
   id: string,
   update: (
     op: Extract<CompositionNode["op"], { type: "group" }>,
   ) => CompositionNode["op"],
-): EditorDocument {
+): DraftDocument {
   const draws = (node: CompositionNode) =>
     node.op.type === "group" && node.op.composition === id;
   return {
@@ -544,7 +553,7 @@ function nodeIn(composition: Composition, id: string): CompositionNode {
  * The tracks a ripple edit on `trackId` moves too: every other sync-locked track. A locked one
  * among them still refuses the edit, as any change to a locked track does.
  */
-function syncTrackIds(document: EditorDocument, trackId: string): string[] {
+function syncTrackIds(document: DraftDocument, trackId: string): string[] {
   return document.project.timeline.tracks
     .filter((t) => t.id !== trackId && document.metadata.tracks[t.id]?.syncLock)
     .map((t) => t.id);
@@ -566,10 +575,10 @@ function patchedMarker(
  * than land on what the edit pulls in.
  */
 function shiftMarkers(
-  document: EditorDocument,
+  document: DraftDocument,
   pivot: number,
   delta: number,
-): EditorDocument {
+): DraftDocument {
   if (!delta) return document;
   if (delta < 0) {
     const closed = { start: pivot + delta, end: pivot };
@@ -598,12 +607,12 @@ function shiftMarkers(
 }
 /** The metadata the right part `newId` of a clip `leftId` cut in two inherits. */
 function afterSplit(
-  document: EditorDocument,
+  document: DraftDocument,
   newId: string,
   leftId: string,
-): EditorDocument {
+): DraftDocument {
   if (!indexDocument(document).clips.has(newId)) return document;
-  let next: EditorDocument = {
+  let next: DraftDocument = {
     ...document,
     metadata: {
       ...document.metadata,
@@ -635,9 +644,9 @@ function afterSplit(
  * original is, under its name.
  */
 function withCopiedGraphs(
-  document: EditorDocument,
+  document: DraftDocument,
   copies: ReadonlyMap<string, string>,
-): EditorDocument {
+): DraftDocument {
   const layout = graphLayout(document);
   const names = graphNames(document);
   const positions: Record<string, GraphLayout[string]> = {};
@@ -663,9 +672,9 @@ function withCopiedGraphs(
 }
 /** `document` without the node editor's positions and names of compositions `removed`. */
 function withoutGraphs(
-  document: EditorDocument,
+  document: DraftDocument,
   removed: ReadonlySet<string>,
-): EditorDocument {
+): DraftDocument {
   const layout = graphLayout(document);
   const names = graphNames(document);
   if (
@@ -722,10 +731,10 @@ function replaceTrack(project: Project, track: Track): Project {
   };
 }
 function changeClip(
-  document: EditorDocument,
+  document: DraftDocument,
   id: string,
   update: (clip: Clip) => Clip,
-): EditorDocument {
+): DraftDocument {
   const found = indexDocument(document).clips.get(id);
   if (!found) fail("Unknown clip", id);
   const track = indexDocument(document).tracks.get(found.trackId)!;
@@ -738,10 +747,10 @@ function changeClip(
   };
 }
 function ids(
-  document: EditorDocument,
+  document: DraftDocument,
   key: string,
   values: readonly string[],
-): EditorDocument {
+): DraftDocument {
   return {
     ...document,
     metadata: {
@@ -758,9 +767,9 @@ function sameSet(a: readonly string[], b: readonly string[]): boolean {
   );
 }
 function reduce(
-  document: EditorDocument,
+  document: DraftDocument,
   command: Exclude<Command, { type: "transaction" }>,
-): EditorDocument {
+): DraftDocument {
   const project = document.project;
   const trackId =
     "trackId" in command
@@ -948,7 +957,7 @@ function reduce(
               )
             : edit.append(owned.project, command.trackId, owned.clip);
       const made = edited(result, command, command.clip.id);
-      let next: EditorDocument = {
+      let next: DraftDocument = {
         ...document,
         project: made,
         metadata: {
@@ -1323,7 +1332,7 @@ function reduce(
         .forEach((node, index) => {
           inner[node.id] = { x: left, y: centre.y + index * 110 };
         });
-      let next: EditorDocument = {
+      let next: DraftDocument = {
         ...document,
         project: {
           ...project,
@@ -1359,7 +1368,7 @@ function reduce(
         command.nodeId,
         definition,
       );
-      let next: EditorDocument = {
+      let next: DraftDocument = {
         ...document,
         project: {
           ...project,
@@ -1616,7 +1625,7 @@ function reachedCompositions(
   }
   return reached;
 }
-function apply(document: EditorDocument, command: Command): EditorDocument {
+function apply(document: DraftDocument, command: Command): DraftDocument {
   if (command.type === "transaction") {
     // Only the transaction's result must be valid; `executeCommand` validates it once.
     transactions += 1;
@@ -1641,8 +1650,8 @@ function apply(document: EditorDocument, command: Command): EditorDocument {
  * as the same object is not looked into.
  */
 function assertLocksKept(
-  document: EditorDocument,
-  next: EditorDocument,
+  document: DraftDocument,
+  next: DraftDocument,
   command: Command,
 ): void {
   const locked = document.project.timeline.tracks.filter(
@@ -1741,12 +1750,15 @@ export function executeCommand(
       const reduced = apply(document, structuredClone(command));
       // A clip owns the composition it shows: what the command stopped drawing goes.
       const undrawn = withoutUndrawn(document.project, reduced.project);
+      // What the command brought in is put in the forms the engine writes, as all of a document is.
       const next = withInstanceIds(
-        withoutGraphs(
-          undrawn.removed.size
-            ? { ...reduced, project: undrawn.project }
-            : reduced,
-          undrawn.removed,
+        canonicalDocument(
+          withoutGraphs(
+            undrawn.removed.size
+              ? { ...reduced, project: undrawn.project }
+              : reduced,
+            undrawn.removed,
+          ),
         ),
       );
       if (gesture) {

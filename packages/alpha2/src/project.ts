@@ -1517,30 +1517,67 @@ function lengthWritten(length: Length): LayoutSize {
   return length.unit === "px" ? `${value}px` : value;
 }
 
-function canonicalInsets(value: unknown): CanonicalInsets {
+// The walk below reads what it can and leaves the rest as it is, for validation to report. Each
+// step returns its input itself when nothing in it changes, so a document already in canonical
+// form comes back as the same object, and a part that changes shares every part that did not.
+
+/** `color` as an object; a string that is not hex stays as it is. */
+function rgbaRead(color: unknown): unknown {
+  if (typeof color !== "string") return color;
+  return parseHex(color).ok ? canonicalRgba(color) : color;
+}
+
+/** `paint` tagged, its colors objects; what is not a paint stays as it is. */
+function paintRead(paint: unknown): unknown {
+  if (typeof paint === "string" || (isRecord(paint) && !("type" in paint))) {
+    const color = rgbaRead(paint);
+    return isRecord(color) ? { type: "solid", color } : paint;
+  }
+  if (!isRecord(paint)) return paint;
+  if (paint.type === "solid") {
+    const color = rgbaRead(paint.color);
+    return color === paint.color ? paint : { ...paint, color };
+  }
+  if (!Array.isArray(paint.stops)) return paint;
+  const stops = paint.stops as readonly unknown[];
+  const read = stops.map((stop) => {
+    if (!isRecord(stop)) return stop;
+    const color = rgbaRead(stop.color);
+    return color === stop.color ? stop : { ...stop, color };
+  });
+  return read.every((stop, index) => stop === stops[index])
+    ? paint
+    : { ...paint, stops: read };
+}
+
+const SIDE_NAMES = ["top", "right", "bottom", "left"] as const;
+
+/** Sides as the four-side object; what cannot be read stays as it is. */
+function insetsRead(value: unknown): unknown {
   if (typeof value === "number") {
     return { top: value, right: value, bottom: value, left: value };
   }
   if (typeof value === "string") {
     const parsed = parseInsets(value);
-    if (!parsed.ok) throw new TypeError(parsed.error);
+    if (!parsed.ok) return value;
     const [top, right, bottom, left] = parsed.value.map(lengthWritten);
     return { top, right, bottom, left };
   }
-  const sides = value as Partial<CanonicalInsets>;
-  return {
-    top: sides.top ?? 0,
-    right: sides.right ?? 0,
-    bottom: sides.bottom ?? 0,
-    left: sides.left ?? 0,
-  };
+  if (!isRecord(value) || SIDE_NAMES.every((side) => value[side] !== undefined))
+    return value;
+  return Object.fromEntries([
+    ...Object.entries(value),
+    ...SIDE_NAMES.map((side) => [side, value[side] ?? 0]),
+  ]);
 }
 
-function canonicalOffset(value: unknown): CanonicalOffset {
-  if (typeof value !== "string") return value as CanonicalOffset;
+/** An offset as `{ x, y }`; what cannot be read stays as it is. */
+function offsetRead(value: unknown): unknown {
+  if (typeof value !== "string") return value;
   const parsed = parseOffset(value);
-  if (!parsed.ok) throw new TypeError(parsed.error);
-  return { x: lengthWritten(parsed.value.x), y: lengthWritten(parsed.value.y) };
+  return parsed.ok
+    ? { x: lengthWritten(parsed.value.x), y: lengthWritten(parsed.value.y) }
+    : value;
 }
 
 /**
@@ -1548,22 +1585,93 @@ function canonicalOffset(value: unknown): CanonicalOffset {
  * components object, every paint tagged, every padding and margin the four sides, every offset
  * `{ x, y }`. The forms the engine reads but never writes (CSS hex, a color as a paint, the
  * sides shorthand, a `translate` string) are gone, so code that reads the document can take the
- * one form. Read it from a document {@link validateProject} accepts: it does not check one, and
- * leaves what does not fit the schema as it is. The input is not changed.
+ * one form. A value it cannot read (a string that is not hex, say) stays as it is, for
+ * {@link validateProject} to report: give it a document that validates to get a document in
+ * canonical form.
  *
- * @throws A `TypeError` for a color, sides or offset string the engine cannot read.
+ * The input is not changed. A part that is already canonical comes back as the same object, so
+ * a document in canonical form is returned itself, and a frozen part met before is not walked
+ * again: running it after each edit costs the parts the edit changed.
  */
 export function canonicalProject(project: Project): CanonicalProject {
-  return canonicalAt(shapeRoot, project) as CanonicalProject;
+  const reusing = reusingShapes;
+  reusingShapes = true;
+  try {
+    return canonicalAt(shapeRoot, project) as CanonicalProject;
+  } finally {
+    reusingShapes = reusing;
+  }
+}
+
+/** The canonical form of frozen values met before, by the node they were read as. */
+const canonicalShapes = new WeakMap<
+  object,
+  { node: ShapeNode; canonical: unknown }
+>();
+
+/** The defs a value is put in canonical form at, and every def that can hold one of them. */
+const CANONICAL_DEFS: ReadonlySet<string> = (() => {
+  const holding = new Set(["Rgba", "Paint", "Insets", "LayoutOffset"]);
+  const refs = Object.entries(SHAPE_DEFS).map(
+    ([name, def]) => [name, refsIn(def)] as const,
+  );
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const [name, names] of refs)
+      if (!holding.has(name) && names.some((ref) => holding.has(ref))) {
+        holding.add(name);
+        grew = true;
+      }
+  }
+  return holding;
+})();
+
+/** The defs `node` refers to anywhere in it. */
+function refsIn(node: unknown): string[] {
+  return [
+    ...JSON.stringify(node).matchAll(/"\$ref":"#\/\$defs\/([^"]+)"/g),
+  ].map((match) => match[1]);
+}
+
+const holdingNodes = new WeakMap<ShapeNode, boolean>();
+
+/**
+ * Whether a value read as `node` can hold a color, paint, sides or offset. The walk does not
+ * read a field that cannot: it costs nothing, and reads nothing it has no use for.
+ */
+function mayHold(node: ShapeNode): boolean {
+  let holds = holdingNodes.get(node);
+  if (holds === undefined) {
+    holds = refsIn(node).some((ref) => CANONICAL_DEFS.has(ref));
+    holdingNodes.set(node, holds);
+  }
+  return holds;
 }
 
 function canonicalAt(node: ShapeNode | boolean, value: unknown): unknown {
-  if (typeof node !== "object") return value;
+  if (typeof node !== "object" || !mayHold(node)) return value;
+  if (typeof value !== "object" || value === null)
+    return canonicalLeaf(node, value);
+  const known = canonicalShapes.get(value);
+  if (known?.node === node) return known.canonical;
+  const canonical = canonicalWalk(node, value);
+  if (Object.isFrozen(value)) canonicalShapes.set(value, { node, canonical });
+  return canonical;
+}
+
+/** A string or number where a color, paint, sides or offset lies, in its canonical form. */
+function canonicalLeaf(node: ShapeNode | boolean, value: unknown): unknown {
+  if (typeof node !== "object" || value === null || value === undefined)
+    return value;
+  return canonicalWalk(node, value);
+}
+
+function canonicalWalk(node: ShapeNode, value: unknown): unknown {
   const schema = resolveShape(node);
-  if (schema === SHAPE_DEFS.Rgba) return canonicalRgba(value as Rgba);
-  if (schema === SHAPE_DEFS.Paint) return canonicalPaint(value as Paint);
-  if (schema === SHAPE_DEFS.Insets) return canonicalInsets(value);
-  if (schema === SHAPE_DEFS.LayoutOffset) return canonicalOffset(value);
+  if (schema === SHAPE_DEFS.Rgba) return rgbaRead(value);
+  if (schema === SHAPE_DEFS.Paint) return paintRead(value);
+  if (schema === SHAPE_DEFS.Insets) return insetsRead(value);
+  if (schema === SHAPE_DEFS.LayoutOffset) return offsetRead(value);
   const variants = (schema.oneOf ?? schema.anyOf) as ShapeNode[] | undefined;
   if (variants !== undefined) {
     // The form that fits, as the parser picks it.
@@ -1574,29 +1682,32 @@ function canonicalAt(node: ShapeNode | boolean, value: unknown): unknown {
     });
     return fits === undefined ? value : canonicalAt(fits, value);
   }
+  if (typeof value !== "object" || value === null) return value;
   if (Array.isArray(value)) {
+    const items = value as readonly unknown[];
     const prefix = schema.prefixItems as ShapeNode[] | undefined;
-    const items = schema.items as ShapeNode | boolean | undefined;
-    return value.map((item: unknown, index) =>
-      prefix !== undefined && index < prefix.length
-        ? canonicalAt(prefix[index], item)
-        : canonicalAt(items ?? true, item),
+    const rest = (schema.items ?? true) as ShapeNode | boolean;
+    const read = items.map((item, index) =>
+      canonicalAt(
+        prefix !== undefined && index < prefix.length ? prefix[index] : rest,
+        item,
+      ),
     );
+    return read.every((item, index) => item === items[index]) ? value : read;
   }
-  if (isRecord(value)) {
-    const properties = (schema.properties ?? {}) as Record<string, ShapeNode>;
-    const extra = schema.additionalProperties as
-      ShapeNode | boolean | undefined;
-    return Object.fromEntries(
-      Object.entries(value).map(([key, field]) => [
-        key,
-        Object.hasOwn(properties, key)
-          ? canonicalAt(properties[key], field)
-          : canonicalAt(extra ?? true, field),
-      ]),
-    );
+  if (!isRecord(value)) return value;
+  const properties = (schema.properties ?? {}) as Record<string, ShapeNode>;
+  const extra = (schema.additionalProperties ?? true) as ShapeNode | boolean;
+  let read: Record<string, unknown> | undefined;
+  for (const key of Object.keys(value)) {
+    const field = Object.hasOwn(properties, key) ? properties[key] : extra;
+    // A field that cannot hold what is put in canonical form is not read.
+    if (typeof field !== "object" || !mayHold(field)) continue;
+    const before = value[key];
+    const canonical = canonicalAt(field, before);
+    if (canonical !== before) (read ??= {})[key] = canonical;
   }
-  return value;
+  return read === undefined ? value : { ...value, ...read };
 }
 
 /** {@link checkShape} of a value not known to match `node`. */

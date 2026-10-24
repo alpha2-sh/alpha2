@@ -911,10 +911,10 @@ test("canonicalProject writes every valid corpus document in the forms the engin
     );
     assert.deepEqual(nonCanonical(canonical, "project", []), [], fixture.name);
     assert.deepEqual(validateProject(canonical), [], fixture.name);
-    assert.deepEqual(
+    assert.equal(
       canonicalProject(canonical),
       canonical,
-      `${fixture.name}: idempotent`,
+      `${fixture.name}: a canonical document is returned itself`,
     );
   }
 });
@@ -994,4 +994,87 @@ test("canonicalProject writes a layout's sides and offsets as objects", () => {
     left: 0.01,
   });
   assert.deepEqual(root.children[0].translate.value, { x: "10px", y: 0 });
+});
+
+test("canonicalProject shares what it does not change and leaves what it cannot read", () => {
+  const frozen = (value) => {
+    if (typeof value === "object" && value !== null) {
+      Object.values(value).forEach(frozen);
+      Object.freeze(value);
+    }
+    return value;
+  };
+  const project = frozen({
+    schema_version: CURRENT_SCHEMA_VERSION,
+    id: "p",
+    name: "P",
+    settings: {
+      width: 64,
+      height: 36,
+      frame_rate: { num: 30, den: 1 },
+      sample_rate: 48000,
+    },
+    sources: [
+      {
+        id: "a",
+        kind: "generated",
+        generator: { type: "fill", paint: "#f00" },
+      },
+      {
+        id: "b",
+        kind: "generated",
+        generator: {
+          type: "fill",
+          paint: {
+            type: "solid",
+            color: { red: 0, green: 0, blue: 1, alpha: 1 },
+          },
+        },
+      },
+      {
+        id: "c",
+        kind: "generated",
+        generator: {
+          type: "layout",
+          root: { color: "#0f0", children: [{ text: constant("a") }] },
+        },
+      },
+    ],
+    timeline: { tracks: [] },
+  });
+  const canonical = canonicalProject(project);
+  assert.notEqual(canonical, project);
+  // The source already canonical is the same object; the others are read.
+  assert.equal(canonical.sources[1], project.sources[1]);
+  assert.equal(canonical.settings, project.settings);
+  assert.deepEqual(canonical.sources[0].generator.paint, {
+    type: "solid",
+    color: { red: 1, green: 0, blue: 0, alpha: 1 },
+  });
+  assert.deepEqual(canonical.sources[2].generator.root.color, {
+    red: 0,
+    green: 1,
+    blue: 0,
+    alpha: 1,
+  });
+  assert.equal(
+    canonical.sources[2].generator.root.children,
+    project.sources[2].generator.root.children,
+  );
+  // A frozen document read again is not walked again: the same result comes back.
+  assert.equal(canonicalProject(project), canonical);
+  // A string that is not a color stays, for validation to report.
+  const broken = {
+    ...project,
+    sources: [
+      {
+        id: "a",
+        kind: "generated",
+        generator: { type: "fill", paint: "#ggg" },
+      },
+    ],
+  };
+  const read = canonicalProject(broken);
+  assert.equal(read.sources[0].generator.paint, "#ggg");
+  assert.match(validateProject(read).join(" "), /invalid color "#ggg"/);
 });

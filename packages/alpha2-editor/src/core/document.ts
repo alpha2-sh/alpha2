@@ -6,10 +6,12 @@ import {
 } from "./validated.js";
 import type { ExportFailureCode } from "alpha2/export-failure";
 import {
+  canonicalProject,
   validateProject,
   MAX_JSON_DEPTH,
   MAX_PROJECT_JSON_BYTES,
 } from "alpha2/project";
+import type { Canonical, CanonicalProject } from "alpha2/project";
 import { CAPTIONS_ASSET_KIND, validCaptionsAuthoring } from "./captions.js";
 import type {
   ClipTransition,
@@ -120,7 +122,13 @@ export interface EditorMetadata {
 export interface EditorDocument {
   readonly format: "alpha2-editor-project";
   readonly version: 1;
-  readonly project: Project;
+  /**
+   * The engine project, in the forms the engine writes ({@link CanonicalProject}): every color the
+   * components object, every paint tagged, padding and margin the four sides, an offset `{ x, y }`.
+   * A document is put in this form wherever it enters the editor (opened, created, or made by a
+   * command), so reading it never meets CSS hex or a color standing for a paint.
+   */
+  readonly project: CanonicalProject;
   readonly metadata: EditorMetadata;
   readonly assets: Readonly<Record<string, AssetDescriptor>>;
 }
@@ -557,7 +565,7 @@ export function createDocument(
   return withValidated(() => {
     assertJson(project, MAX_JSON_DEPTH);
     // Frozen before validation, so validated parts are reused when edits check them.
-    const copy = freeze(structuredClone(project));
+    const copy = freeze(canonicalProject(structuredClone(project)));
     if (!knownValid(project)) {
       const errors = validateProject(copy);
       if (errors.length)
@@ -568,7 +576,7 @@ export function createDocument(
   });
 }
 function documentOf(
-  project: Project,
+  project: CanonicalProject,
   assets: EditorDocument["assets"],
 ): EditorDocument {
   const document: EditorDocument = {
@@ -657,7 +665,9 @@ export function parseDocument(text: string): EditorDocument {
   try {
     if (isRecord(data) && "schema_version" in data)
       return createDocument(data as unknown as Project);
-    const document = freeze(withInstanceIds(data as EditorDocument));
+    const document = freeze(
+      withInstanceIds(canonicalDocument(data as EditorDocument)),
+    );
     validateDocument(document);
     return frozenValid(document);
   } catch (cause) {
@@ -683,6 +693,24 @@ export function transitionInstanceId(
   transition: Pick<ClipTransition, "from_clip" | "to_clip">,
 ): string {
   return `${trackId}/transitions/${encodeURIComponent(transition.from_clip)}/${encodeURIComponent(transition.to_clip)}`;
+}
+/**
+ * `document` with its project in the forms the engine writes ({@link canonicalProject}): every
+ * color the components object, every paint tagged, padding and margin the four sides, an offset
+ * `{ x, y }`. Returns `document` itself when its project is already in that form, shares the parts
+ * that are, and leaves a document of the wrong shape, or a value it cannot read, for validation to
+ * refuse. Each place a document enters the editor puts it in this form, so the editor's own code
+ * and its callers read one form.
+ */
+export function canonicalDocument(
+  document: Omit<EditorDocument, "project"> & { readonly project: Project },
+): EditorDocument {
+  const project: unknown = document?.project;
+  if (!isRecord(project)) return document as EditorDocument;
+  const canonical = canonicalProject(project as unknown as Project);
+  return canonical === project
+    ? (document as EditorDocument)
+    : { ...document, project: canonical };
 }
 /**
  * Frozen tracks and clips {@link withInstanceIds} found named as they are in a frozen `instanceIds`
@@ -797,19 +825,24 @@ export function withInstanceIds(document: EditorDocument): EditorDocument {
         },
       };
 }
-const indexes = new WeakMap<EditorDocument, EntityIndex>();
-/** A document's tracks and clips by id. */
-export interface EntityIndex {
-  readonly tracks: ReadonlyMap<string, Track>;
+const indexes = new WeakMap<object, EntityIndex<Track>>();
+/**
+ * A document's tracks and clips by id: of an {@link EditorDocument}, in the forms the engine writes
+ * (`Canonical<Track>`).
+ */
+export interface EntityIndex<T extends Track = Canonical<Track>> {
+  readonly tracks: ReadonlyMap<string, T>;
   readonly clips: ReadonlyMap<
     string,
-    { readonly clip: Clip; readonly trackId: string }
+    { readonly clip: NonNullable<T["clips"]>[number]; readonly trackId: string }
   >;
 }
 /** The {@link EntityIndex} of `document`, built once per document object and cached. */
-export function indexDocument(document: EditorDocument): EntityIndex {
-  let index = indexes.get(document);
-  if (index) return index;
+export function indexDocument<D extends { readonly project: Project }>(
+  document: D,
+): EntityIndex<D["project"]["timeline"]["tracks"][number]> {
+  const known = indexes.get(document);
+  if (known) return known;
   const tracks = new Map<string, Track>();
   const clips = new Map<string, { clip: Clip; trackId: string }>();
   for (const track of document.project.timeline.tracks) {
@@ -817,7 +850,7 @@ export function indexDocument(document: EditorDocument): EntityIndex {
     for (const clip of track.clips ?? [])
       clips.set(clip.id, { clip, trackId: track.id });
   }
-  index = { tracks, clips };
+  const index = { tracks, clips };
   indexes.set(document, index);
   return index;
 }
