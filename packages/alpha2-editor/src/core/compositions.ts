@@ -18,6 +18,20 @@ export interface StackEntry {
   readonly bypass: boolean;
 }
 
+/**
+ * A composition of `P`: in the forms the engine writes when `P` is a document's `CanonicalProject`,
+ * as written when `P` is a `Project`. The helpers below return parts in the form their input has:
+ * they rearrange what they are given, and what they add (ids, inputs, effect and group nodes) holds
+ * no color or paint, so a canonical project stays canonical through them.
+ */
+export type CompositionOf<P extends Project> = NonNullable<
+  P["compositions"]
+>[number];
+/** A clip of `P`, in the form `P` holds it (see {@link CompositionOf}). */
+export type ClipOf<P extends Project> = NonNullable<
+  P["timeline"]["tracks"][number]["clips"]
+>[number];
+
 /** Where each composition of a compositions array is, by id, for {@link findComposition}. */
 const compositionIndexes = new WeakMap<
   readonly Composition[],
@@ -29,11 +43,11 @@ const compositionIndexes = new WeakMap<
  * array, made once per array, so walks that find many compositions stay linear. An index a changed
  * array no longer matches is made again, and an id it lacks is looked for in the array itself.
  */
-export function findComposition(
-  project: Project,
+export function findComposition<P extends Project>(
+  project: P,
   id: string,
-): Composition | undefined {
-  const compositions = project.compositions ?? [];
+): CompositionOf<P> | undefined {
+  const compositions: readonly CompositionOf<P>[] = project.compositions ?? [];
   let index = compositionIndexes.get(compositions);
   if (!index) {
     index = new Map(compositions.map((c, i) => [c.id, i]));
@@ -94,11 +108,11 @@ export function freeCompositionId(project: Project, base: string): string {
  * keeps its id and the clip its time mapping; a clip without one gets `<clip id>-fx`.
  * Throws when `clipId` names no clip.
  */
-export function withEffectStack(
-  project: Project,
+export function withEffectStack<P extends Project>(
+  project: P,
   clipId: string,
   stack: readonly StackEntry[],
-): Project {
+): P {
   const clip = project.timeline.tracks
     .flatMap((t) => t.clips ?? [])
     .find((c) => c.id === clipId);
@@ -106,7 +120,7 @@ export function withEffectStack(
   // The composition no clip shows any more goes when the command ends (`executeCommand`).
   if (stack.length === 0) {
     if (clip.composition == null) return project;
-    return setClipComposition(project, clipId, undefined);
+    return setClipComposition(project, clipId, undefined) as P;
   }
   const reference: ClipComposition = clip.composition ?? {
     id: freeCompositionId(project, `${clipId}-fx`),
@@ -137,7 +151,7 @@ export function withEffectStack(
     },
     clipId,
     reference,
-  );
+  ) as P;
 }
 
 function setClipComposition(
@@ -170,8 +184,11 @@ function setClipComposition(
  * The compositions `id` draws: itself and, through group nodes, the group definitions it uses, each
  * once.
  */
-export function compositionTree(project: Project, id: string): Composition[] {
-  const tree: Composition[] = [];
+export function compositionTree<P extends Project>(
+  project: P,
+  id: string,
+): CompositionOf<P>[] {
+  const tree: CompositionOf<P>[] = [];
   const seen = new Set<string>();
   const pending = [id];
   while (pending.length) {
@@ -222,10 +239,10 @@ export function drawnCompositions(project: Project): Set<string> {
  * and the group definitions only it drew with it. A composition `before` did not draw stays, so one
  * added for a later edit (a macro's definition) waits for it. Returns the ids it removed.
  */
-export function withoutUndrawn(
+export function withoutUndrawn<P extends Project>(
   before: Project,
-  after: Project,
-): { readonly project: Project; readonly removed: ReadonlySet<string> } {
+  after: P,
+): { readonly project: P; readonly removed: ReadonlySet<string> } {
   const compositions = after.compositions ?? [];
   if (!compositions.length) return { project: after, removed: new Set() };
   const was = drawnCompositions(before);
@@ -238,7 +255,7 @@ export function withoutUndrawn(
   if (kept.length)
     return { project: { ...after, compositions: kept }, removed };
   const { compositions: _removed, ...rest } = after;
-  return { project: rest, removed };
+  return { project: rest as P, removed };
 }
 
 /**
@@ -249,13 +266,13 @@ export function withoutUndrawn(
  * does. A copy takes free ids based on `<root>~<clip id>` ({@link copyComposition}), so the clip is
  * edited independently of its original. Returns the copies' ids by their originals'.
  */
-export function ownComposition(
-  project: Project,
-  clip: Clip,
-  compositions?: readonly Composition[],
+export function ownComposition<P extends Project>(
+  project: P,
+  clip: ClipOf<P>,
+  compositions?: readonly CompositionOf<P>[],
 ): {
-  readonly project: Project;
-  readonly clip: Clip;
+  readonly project: P;
+  readonly clip: ClipOf<P>;
   readonly copies: ReadonlyMap<string, string>;
 } {
   const reference = clip.composition;
@@ -269,7 +286,7 @@ export function ownComposition(
   } else if (!compositions.some((c) => c.id === reference.id)) return none;
   const copy = copyComposition(project, reference.id, clip.id, compositions);
   return {
-    project: copy.project,
+    project: copy.project as P,
     clip: { ...clip, composition: { ...reference, id: copy.id } },
     copies: copy.copies,
   };
@@ -672,7 +689,15 @@ export function acceptsInput(
  * An effect's named input is added when it has none of the name. Throws when `op` cannot take
  * input `key`.
  */
-export function withInput(
+export function withInput<O extends CompositionNode["op"]>(
+  op: O,
+  key: InputKey,
+  node: string | null,
+): O {
+  return opWithInput(op, key, node) as O;
+}
+
+function opWithInput(
   op: CompositionNode["op"],
   key: InputKey,
   node: string | null,
@@ -703,14 +728,16 @@ export function withInput(
  * `op` without its effect input `name`; an effect left with none has no `inputs`, as the model
  * writes it. Any other operation is returned as it is.
  */
-export function withoutEffectInput(
-  op: CompositionNode["op"],
+export function withoutEffectInput<O extends CompositionNode["op"]>(
+  op: O,
   name: string,
-): CompositionNode["op"] {
+): O {
   if (op.type !== "effect" || !Object.hasOwn(op.inputs ?? {}, name)) return op;
   const { [name]: _removed, ...rest } = op.inputs!;
   const { inputs: _inputs, ...without } = op;
-  return Object.keys(rest).length > 0 ? { ...without, inputs: rest } : without;
+  return (
+    Object.keys(rest).length > 0 ? { ...without, inputs: rest } : without
+  ) as O;
 }
 
 /**
@@ -894,10 +921,10 @@ export function freeNodeId(composition: Composition, base: string): string {
  * `composition` without the nodes `ids`, every input that read one of them disconnected, no output
  * if it was one of them, and no control that exposed one of them.
  */
-export function withoutNodes(
-  composition: Composition,
+export function withoutNodes<C extends Composition>(
+  composition: C,
   ids: readonly string[],
-): Composition {
+): C {
   const drop = new Set(ids);
   const nodes = (composition.nodes ?? [])
     .filter((node) => !drop.has(node.id))
@@ -936,12 +963,12 @@ export function withoutNodes(
  * @throws When the selection is empty or only group inputs, names an absent node, `groupId` names
  * an unselected node, or other than one selected node's picture leaves the selection.
  */
-export function groupNodes(
-  composition: Composition,
+export function groupNodes<C extends Composition>(
+  composition: C,
   ids: readonly string[],
   groupId: string,
   definitionId: string,
-): { readonly parent: Composition; readonly definition: Composition } {
+): { readonly parent: C; readonly definition: C } {
   const nodes = composition.nodes ?? [];
   if (ids.length === 0) throw new Error("Choose the nodes to group");
   for (const id of ids)
@@ -1034,7 +1061,7 @@ export function groupNodes(
     output:
       composition.output === output ? groupId : (composition.output ?? null),
   };
-  return { parent, definition };
+  return { parent: parent as C, definition: definition as C };
 }
 
 /**
@@ -1044,11 +1071,11 @@ export function groupNodes(
  * the new ids by inner id. The picture does not change.
  * Throws when `groupId` is not a group node of `composition`.
  */
-export function ungroupNode(
-  composition: Composition,
+export function ungroupNode<C extends Composition>(
+  composition: C,
   groupId: string,
-  definition: Composition,
-): { readonly parent: Composition; readonly ids: ReadonlyMap<string, string> } {
+  definition: C,
+): { readonly parent: C; readonly ids: ReadonlyMap<string, string> } {
   const nodes = composition.nodes ?? [];
   const group = nodes.find((node) => node.id === groupId);
   if (!group || group.op.type !== "group")
