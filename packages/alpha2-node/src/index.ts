@@ -36,8 +36,28 @@ import {
   loaderRefused,
   parseHostMessage,
 } from "./protocol.js";
+import {
+  cachedHostBinary,
+  hostCacheDirectory,
+  hostExecutableName,
+  packageVersion,
+} from "./install.js";
 
 export { PROTOCOL_VERSION } from "./protocol.js";
+export {
+  Alpha2HostInstallError,
+  HOST_DOWNLOAD_URL,
+  hostCacheDirectory,
+  hostExecutableName,
+  hostTarget,
+  installHost,
+} from "./install.js";
+export type {
+  HostArchiveKind,
+  HostInstallErrorCode,
+  InstallHostOptions,
+  InstallHostResult,
+} from "./install.js";
 export type { ProgressPhase } from "./protocol.js";
 export type { ExportFailure } from "alpha2/export-failure";
 
@@ -49,6 +69,8 @@ export interface ResolveHostBinaryOptions {
   readonly resourcesPath?: string;
   /** Base directory for relative explicit paths. Defaults to `process.cwd()`. */
   readonly cwd?: string;
+  /** The cache `installHost` installs into. Defaults to {@link hostCacheDirectory}. */
+  readonly cacheDirectory?: string;
 }
 
 /** Options of an {@link Alpha2NodeClient}. */
@@ -933,26 +955,17 @@ export class Alpha2AbortError extends Alpha2HostError {
   }
 }
 
-/**
- * The file name `alpha2-host` has on `platform`: Windows executables carry `.exe`, and nothing
- * there adds it to a path that lacks it.
- */
-export function hostExecutableName(
-  platform: NodeJS.Platform = process.platform,
-): string {
-  return platform === "win32" ? "alpha2-host.exe" : "alpha2-host";
-}
-
 /** Where the native archives that carry `alpha2-host` are published. */
 const HOST_RELEASES_URL = "https://github.com/alpha2-sh/alpha2/releases";
 
 /**
  * Locates `alpha2-host` without loading Electron. The package does not ship the binary: it comes
  * in the platform's native archive on https://github.com/alpha2-sh/alpha2/releases, as
- * `bin/alpha2-host` beside the `lib/` it loads. Native archives and Electron applications should
- * keep `bin/` and `lib/` together and unpack both from ASAR. Resolution order is explicit path,
- * `ALPHA2_HOST_PATH`, Electron resources (`bin/`, then the directory itself), this package's own
- * `bin/`, then `PATH`.
+ * `bin/alpha2-host` beside the `lib/` it loads, which `installHost` (`npx @alpha2-sh/node install`)
+ * downloads into the cache. Native archives and Electron applications should keep `bin/` and
+ * `lib/` together and unpack both from ASAR. Resolution order is explicit path, `ALPHA2_HOST_PATH`,
+ * Electron resources (`bin/`, then the directory itself), this package's own `bin/`, the archive of
+ * this package's version in the cache (bundled, then thin), then `PATH`.
  *
  * Throws an {@link Alpha2HostError}: `INVALID_INPUT` for an empty `hostPath`, `HOST_NOT_FOUND` when
  * an explicit path is not a file or no candidate exists; the latter message names the native
@@ -993,16 +1006,24 @@ export function resolveHostBinary(
     const candidate = asarUnpacked(raw);
     if (isFile(candidate)) return candidate;
   }
+  const cached = cachedHostBinary(
+    options.cacheDirectory === undefined
+      ? hostCacheDirectory(cwd)
+      : resolve(cwd, options.cacheDirectory),
+  );
+  if (cached !== undefined) return cached;
   for (const directory of (process.env.PATH ?? "").split(delimiter)) {
     if (!directory) continue;
     const candidate = join(directory, executable);
     if (isFile(candidate)) return candidate;
   }
+  const version = packageVersion();
   throw new Alpha2HostError(
     "HOST_NOT_FOUND",
-    `could not locate ${executable}; download the native archive for this platform from ` +
-      `${HOST_RELEASES_URL} and set hostPath or ALPHA2_HOST_PATH to its bin/${executable}, ` +
-      "or put that bin/ on PATH",
+    `could not locate ${executable}; run \`npx @alpha2-sh/node install\` to download ` +
+      `alpha2-host${version ? ` ${version}` : ""} for this platform into the cache, or download the ` +
+      `native archive from ${HOST_RELEASES_URL} and set hostPath or ALPHA2_HOST_PATH to its ` +
+      `bin/${executable}, or put that bin/ on PATH`,
   );
 }
 

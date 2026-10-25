@@ -30,6 +30,14 @@ alpha2-<version>-<target>-<kind>/
 
 Keep `bin/` and `lib/` together when the archive is moved or packaged into an application: the programs find the libraries relative to themselves.
 
+### The host cache
+
+`npx @alpha2-sh/node install` downloads the archive of the package's own version for the platform, checks it against `checksums.sha256`, and unpacks it into a cache that clients share. A client for another language that installs the host should use the same layout, so one download serves both:
+
+- The cache is `ALPHA2_HOST_CACHE_DIR` when it is set; else `alpha2` in `$XDG_CACHE_HOME` (when it is an absolute path) or `~/.cache` on Linux, in `~/Library/Caches` on macOS, and in `%LOCALAPPDATA%` on Windows.
+- Each archive is unpacked under its own name, `<cache>/alpha2-<version>-<target>-<kind>/`, and appears there whole: it is unpacked beside it and renamed into place. A client looks for `bin/alpha2-host` of its own version, `bundled` before `thin`.
+- The archives come from `<base>/v<version>/<archive>` with `<base>` `https://github.com/alpha2-sh/alpha2/releases/download`, or `ALPHA2_HOST_DOWNLOAD_URL`, a mirror with the same layout.
+
 ## `alpha2-host`
 
 `alpha2-host` renders a project on the GPU and encodes it to MP4, MOV, Matroska or WebM. Run it without arguments to print every flag.
