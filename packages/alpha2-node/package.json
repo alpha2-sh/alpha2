@@ -1,6 +1,6 @@
 {
   "name": "@alpha2-sh/node",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "license": "MIT",
   "description": "Node.js client for the alpha2 native rendering host.",
   "repository": {
@@ -23,6 +23,9 @@
     "build": "rm -rf dist && tsc -p tsconfig.json",
     "test": "npm run build && node --test test/*.test.mjs"
   },
+  "bin": {
+    "alpha2-node": "dist/cli.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -35,7 +38,7 @@
     "LICENSE.md"
   ],
   "dependencies": {
-    "alpha2": "0.4.0"
+    "alpha2": "0.4.1"
   },
   "devDependencies": {
     "@types/node": "22.15.30"

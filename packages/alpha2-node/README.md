@@ -8,15 +8,24 @@ A Node.js client for `alpha2-host`, the native alpha2 renderer: it exports alpha
 npm install @alpha2-sh/node
 ```
 
-The package does not include `alpha2-host`. Download the native archive for the platform from the [GitHub Releases page](https://github.com/alpha2-sh/alpha2/releases) and keep its `bin/` and `lib/` directories together; [native archives](https://github.com/alpha2-sh/alpha2/blob/main/docs/native.md) describes them. The client looks for `alpha2-host` (`alpha2-host.exe` on Windows) in this order:
+The package does not include `alpha2-host`. Download it for this package's version and platform:
+
+```sh
+npx @alpha2-sh/node install
+```
+
+This fetches the platform's `bundled` [native archive](https://github.com/alpha2-sh/alpha2/blob/main/docs/native.md) from the [GitHub release](https://github.com/alpha2-sh/alpha2/releases) of the same version, checks it against the release's `checksums.sha256`, and unpacks it into the cache: `ALPHA2_HOST_CACHE_DIR` when it is set, else `alpha2` in `$XDG_CACHE_HOME` or `~/.cache` on Linux, `~/Library/Caches` on macOS and `%LOCALAPPDATA%` on Windows. `--thin` fetches the archive that loads the system's FFmpeg 8 instead (not on Windows), and `--force` downloads again. `installHost(options)` does the same from code. `ALPHA2_HOST_DOWNLOAD_URL` (or the `downloadUrl` option) names a mirror laid out like `https://github.com/alpha2-sh/alpha2/releases/download`. Archives are published for `linux-x64`, `linux-arm64`, `macos-arm64` and `win-x64`.
+
+The client looks for `alpha2-host` (`alpha2-host.exe` on Windows) in this order:
 
 1. the `hostPath` option;
 2. the `ALPHA2_HOST_PATH` environment variable (a relative path is relative to the `cwd` option, else the working directory);
 3. in Electron, `process.resourcesPath/bin/`, then `process.resourcesPath/`;
 4. this package's own `bin/` directory;
-5. the directories on `PATH`.
+5. the archive of this package's version in the cache (the `cacheDirectory` option, else the directory above), `bundled` before `thin`;
+6. the directories on `PATH`.
 
-When none has it, the client throws an `Alpha2HostError` with code `HOST_NOT_FOUND`.
+When none has it, the client throws an `Alpha2HostError` with code `HOST_NOT_FOUND`. `installHost` rejects with an `Alpha2HostInstallError` instead, whose `code` is `UNSUPPORTED_PLATFORM`, `DOWNLOAD_FAILED`, `CHECKSUM_MISMATCH`, `EXTRACT_FAILED` or `ABORTED`.
 
 Node.js 20 or later.
 
@@ -25,7 +34,7 @@ Node.js 20 or later.
 ```js
 import { Alpha2NodeClient } from "@alpha2-sh/node";
 
-const client = new Alpha2NodeClient({ hostPath: "/opt/alpha2/bin/alpha2-host" });
+const client = new Alpha2NodeClient(); // finds the host `npx @alpha2-sh/node install` put in the cache
 const output = await client.exportProject({
   project, // an alpha2 project document
   assets: { "image-1": "/media/image.png" }, // the file of each source

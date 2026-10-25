@@ -69,8 +69,9 @@ engine.renderAt(0n); // draws the frame at time 0
 
 ### Native
 
-Native export runs `alpha2-host`, which renders on the GPU and decodes and encodes with FFmpeg 8: MP4 with H.264 video and AAC audio by default, and MOV, Matroska or WebM (VP9 or AV1 with Opus) when the output's extension or `container` says so. Get it one of three ways:
+Native export runs `alpha2-host`, which renders on the GPU and decodes and encodes with FFmpeg 8: MP4 with H.264 video and AAC audio by default, and MOV, Matroska or WebM (VP9 or AV1 with Opus) when the output's extension or `container` says so. Get it one of four ways:
 
+- **Fetch** it for Node.js with `npx @alpha2-sh/node install`, which unpacks the release archive of the package's version into a cache where `@alpha2-sh/node` finds it.
 - **Download** an archive from the [Releases page](https://github.com/alpha2-sh/alpha2/releases). `alpha2-<version>-<target>-bundled` carries FFmpeg; `-thin` loads the FFmpeg 8 installed on the system.
 - **Build** the same archive from a clone, on the target platform (Git Bash on Windows). The script fetches the pinned FFmpeg build and writes the archives to `target/alpha2-native-release/archives/`.
 
@@ -88,7 +89,7 @@ Then export from the command line:
 alpha2-host export --project project.json --asset image-1=image.png --out tutorial.mp4
 ```
 
-or from Node.js (`npm install @alpha2-sh/node`):
+or from Node.js (`npm install @alpha2-sh/node`, then `npx @alpha2-sh/node install`):
 
 ```js
 import { readFile } from "node:fs/promises";
@@ -104,7 +105,7 @@ await exportProject(
     frameRate: { num: 30, den: 1 },
     output: "tutorial.mp4",
   },
-  { hostPath: "/opt/alpha2/bin/alpha2-host" }, // where the archive was unpacked
+  // finds the host in the cache; { hostPath } names an unpacked archive's bin/alpha2-host instead
 );
 ```
 
