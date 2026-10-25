@@ -34,7 +34,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
 name = "alpha2"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "alpha2-audio",
  "alpha2-engine",
@@ -49,7 +49,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-alloc-budget"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "alpha2-audio",
  "alpha2-build-support",
@@ -69,7 +69,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-assets"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "alpha2-media",
  "alpha2-model",
@@ -81,7 +81,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-audio"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "alpha2-media",
  "alpha2-time",
@@ -91,7 +91,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-audio-determinism"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "alpha2-audio",
  "alpha2-engine",
@@ -103,7 +103,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-audio-worklet"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "alpha2-audio",
  "alpha2-model",
@@ -112,7 +112,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-build-support"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "bindgen",
  "cc",
@@ -120,7 +120,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-engine"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "alpha2-audio",
  "alpha2-eval",
@@ -144,7 +144,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-eval"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "alpha2-geometry",
  "alpha2-media",
@@ -156,7 +156,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-extensions"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "alpha2-model",
  "alpha2-scaling-support",
@@ -182,7 +182,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-extensions-web"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "alpha2-extensions",
  "alpha2-model",
@@ -194,7 +194,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-facade-without-wgpu"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "alpha2",
  "alpha2-gpu",
@@ -203,7 +203,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-ffmpeg-bridge"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "alpha2-build-support",
  "alpha2-media",
@@ -213,7 +213,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-geometry"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "alpha2-model",
  "kurbo",
@@ -223,14 +223,14 @@ dependencies = [
 
 [[package]]
 name = "alpha2-golden-support"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "png",
 ]
 
 [[package]]
 name = "alpha2-gpu"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "alpha2-gpu",
  "pollster",
@@ -240,7 +240,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-host"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "alpha2-assets",
  "alpha2-audio",
@@ -272,7 +272,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-media"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "alpha2-time",
  "bytes",
@@ -283,7 +283,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-model"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "alpha2-media",
  "alpha2-scaling-support",
@@ -296,7 +296,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-native"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "alpha2-audio",
  "alpha2-build-support",
@@ -319,7 +319,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-native-gpu"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "alpha2-build-support",
  "alpha2-ffmpeg-bridge",
@@ -338,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-os"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
@@ -346,7 +346,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-provider-contract"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "alpha2-extensions",
  "alpha2-media",
@@ -359,7 +359,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-render"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "alpha2-geometry",
  "alpha2-golden-support",
@@ -378,21 +378,21 @@ dependencies = [
 
 [[package]]
 name = "alpha2-scaling-support"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "alpha2-os",
 ]
 
 [[package]]
 name = "alpha2-shaders"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "wesl",
 ]
 
 [[package]]
 name = "alpha2-text"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "ab_glyph_rasterizer",
  "alpha2-media",
@@ -409,7 +409,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-time"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "schemars",
  "serde",
@@ -418,7 +418,7 @@ dependencies = [
 
 [[package]]
 name = "alpha2-wasm"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "alpha2-assets",
  "alpha2-audio",
