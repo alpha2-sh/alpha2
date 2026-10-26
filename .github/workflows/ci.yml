@@ -18,9 +18,7 @@ permissions:
 env:
   CARGO_INCREMENTAL: 0
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
-  # Pull requests restore the caches their base branch saved; saving from them would only fill the
-  # repository quota with caches no other run can read.
-  RUST_CACHE_SAVE: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/prerelease-v') }}
+  SAVE_RUST_CACHE: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/prerelease-v') }}
 
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || format('ci-run-{0}', github.run_id) }}
@@ -47,7 +45,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-bin: false
-          save-if: ${{ env.RUST_CACHE_SAVE }}
+          save-if: ${{ env.SAVE_RUST_CACHE }}
       - name: Pin the FFmpeg SDK that the hardware decode shim builds against
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
@@ -97,7 +95,7 @@ jobs:
         with:
           key: ${{ matrix.features }}
           cache-bin: false
-          save-if: ${{ env.RUST_CACHE_SAVE }}
+          save-if: ${{ env.SAVE_RUST_CACHE }}
       - name: Pin the FFmpeg SDK that the hardware decode shim builds against
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
@@ -125,7 +123,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-bin: false
-          save-if: ${{ env.RUST_CACHE_SAVE }}
+          save-if: ${{ env.SAVE_RUST_CACHE }}
       - name: Pin the FFmpeg SDK that the hardware decode shim builds against
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
@@ -170,7 +168,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-bin: false
-          save-if: ${{ env.RUST_CACHE_SAVE }}
+          save-if: ${{ env.SAVE_RUST_CACHE }}
       - name: Pin the FFmpeg SDK that the hardware decode shim builds against
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
@@ -185,9 +183,6 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: cargo build -p alpha2-wasm --target wasm32-unknown-unknown
-      - run: cargo build -p alpha2-audio-worklet --target wasm32-unknown-unknown
-      - run: npm run test:audio-determinism
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: alpha2-build
@@ -220,6 +215,26 @@ jobs:
       - run: npm run test:node-e2e
       - run: python/alpha2/.venv/bin/pytest python/alpha2/tests/test_e2e.py
 
+  wasm-audio:
+    if: >-
+      ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',wasm-audio,') ||
+      contains(format(',{0},', inputs.jobs), ',host,') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: false
+          save-if: ${{ env.SAVE_RUST_CACHE }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - run: cargo build -p alpha2-wasm --target wasm32-unknown-unknown
+      - run: cargo build -p alpha2-audio-worklet --target wasm32-unknown-unknown
+      - run: npm run test:audio-determinism
+
   msrv:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',msrv,') }}
     runs-on: ubuntu-latest
@@ -239,7 +254,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-bin: false
-          save-if: ${{ env.RUST_CACHE_SAVE }}
+          save-if: ${{ env.SAVE_RUST_CACHE }}
       - name: Pin the FFmpeg SDK that the hardware decode shim builds against
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
@@ -266,7 +281,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-bin: false
-          save-if: ${{ env.RUST_CACHE_SAVE }}
+          save-if: ${{ env.SAVE_RUST_CACHE }}
       - name: Pin the FFmpeg SDK the bridge builds against
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
@@ -297,7 +312,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-bin: false
-          save-if: ${{ env.RUST_CACHE_SAVE }}
+          save-if: ${{ env.SAVE_RUST_CACHE }}
       - run: >-
           cargo clippy -p alpha2-wasm -p alpha2-audio-worklet
           --target wasm32-unknown-unknown -- -D warnings
@@ -313,7 +328,7 @@ jobs:
         with:
           workspaces: fuzz
           cache-bin: false
-          save-if: ${{ env.RUST_CACHE_SAVE }}
+          save-if: ${{ env.SAVE_RUST_CACHE }}
       - run: cargo fmt --manifest-path fuzz/Cargo.toml --check
       - run: cargo clippy --manifest-path fuzz/Cargo.toml --locked --bins -- -D warnings
 
@@ -339,7 +354,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-bin: false
-          save-if: ${{ env.RUST_CACHE_SAVE }}
+          save-if: ${{ env.SAVE_RUST_CACHE }}
       - name: Install macOS build tools
         if: startsWith(matrix.target, 'macos-')
         run: brew install pkg-config
@@ -409,7 +424,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-bin: false
-          save-if: ${{ env.RUST_CACHE_SAVE }}
+          save-if: ${{ env.SAVE_RUST_CACHE }}
       # The oldest Python the package supports, which the abi3 module is built for.
       - name: Build the package into a Python 3.11 environment
         run: |
@@ -449,7 +464,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-bin: false
-          save-if: ${{ env.RUST_CACHE_SAVE }}
+          save-if: ${{ env.SAVE_RUST_CACHE }}
       - run: cargo test -p alpha2-audio -p alpha2-audio-determinism -p alpha2-eval -p alpha2-text --no-fail-fast
 
   security:
@@ -478,7 +493,7 @@ jobs:
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         with:
           cache-bin: false
-          save-if: ${{ env.RUST_CACHE_SAVE }}
+          save-if: ${{ env.SAVE_RUST_CACHE }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
@@ -544,7 +559,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-bin: false
-          save-if: ${{ env.RUST_CACHE_SAVE }}
+          save-if: ${{ env.SAVE_RUST_CACHE }}
       - name: Install Mesa software GPU drivers
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install --yes libegl1 libegl-mesa0 mesa-vulkan-drivers
@@ -579,7 +594,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-bin: false
-          save-if: ${{ env.RUST_CACHE_SAVE }}
+          save-if: ${{ env.SAVE_RUST_CACHE }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
