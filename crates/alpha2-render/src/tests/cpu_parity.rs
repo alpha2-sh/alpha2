@@ -111,9 +111,14 @@ impl Parity {
     /// `tolerance` against this GPU. A software rasterizer (lavapipe in CI)
     /// computes `pow` with less precision than the hardware the classes
     /// were set on, and lands up to a few codes from it near black in linear
-    /// light: there the classes widen one step.
+    /// light: there the classes widen one step. Metal does the same: wgpu
+    /// compiles its shaders with Metal's default fast math, whose `pow` and
+    /// division are approximate.
     pub(crate) fn class(&self, tolerance: Tolerance) -> Tolerance {
-        if tolerance == Tolerance::Close && self.gpu.gpu_capabilities().software_rasterizer {
+        let capabilities = self.gpu.gpu_capabilities();
+        if tolerance == Tolerance::Close
+            && (capabilities.software_rasterizer || capabilities.backend == "Metal")
+        {
             Tolerance::Edges
         } else {
             tolerance
