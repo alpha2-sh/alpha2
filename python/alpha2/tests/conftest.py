@@ -23,6 +23,10 @@ def corpus(name: str) -> Any:
 # What every fake host starts with: it reads its one request line and answers with `send`.
 HOST_PRELUDE = """\
 import json, os, signal, sys, time
+# As the real host reads and writes: UTF-8 and bare newlines, whatever the platform's defaults are.
+sys.stdin.reconfigure(encoding="utf-8")
+sys.stdout.reconfigure(encoding="utf-8", newline="\\n")
+sys.stderr.reconfigure(encoding="utf-8", newline="\\n")
 def record(path, text):
     with open(path, "a", encoding="utf-8") as file:
         file.write(text + "\\n")

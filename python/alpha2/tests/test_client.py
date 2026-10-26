@@ -288,7 +288,8 @@ def test_binary_resolution_order_and_its_not_found_message(
     target = alpha2.host_target()
     if target is not None:
         cache = tmp_path / "cache"
-        for kind in ("thin", "bundled"):
+        # Windows is published as bundled only, so no thin archive is looked for there.
+        for kind in ("bundled",) if sys.platform == "win32" else ("thin", "bundled"):
             binary = cache / f"alpha2-{version}-{target}-{kind}" / "bin" / host_executable_name()
             binary.parent.mkdir(parents=True)
             binary.write_text("")
