@@ -2,15 +2,13 @@
 //! effects, uploaded source frames and audio, preview presentation, and
 //! export, plus the free functions that publish engine decisions to the page.
 
-use alpha2_audio::TransportState;
 use alpha2_engine::{
-    AudioContinuity, AudioRenderer, EngineProject, ExportStep, Exporter, FrameRenderer,
-    FramesWithText, Player, QualityProfile, TextTextures,
+    EngineProject, ExportStep, Exporter, FramesWithText, GpuFrameRenderer, Player, QualityProfile,
+    TextTextures,
 };
 use alpha2_gpu::GpuContext;
 use alpha2_media::{
-    ChromaLocation, ColorMetadata, Orientation, Rect, Rotation, SourceId, Speaker, SpeakerLayout,
-    VideoCodec, YuvEncoding,
+    ChromaLocation, ColorMetadata, Orientation, Rect, Rotation, SourceId, VideoCodec, YuvEncoding,
 };
 use alpha2_model::Project;
 use alpha2_render::{
@@ -21,40 +19,20 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use wasm_bindgen::prelude::*;
 
-use crate::audio_store::{AudioStore, UploadRefusal, UploadSamples};
 use crate::effect::EffectRequest;
 use crate::error::{BindingError, Code, EngineTyped};
 use crate::frame_store::{FrameStore, WorkingSetOverBudget};
 use crate::interop::{
-    DeviceHealth, audio_span, diagnostics_to_js, export_readback_promise, export_status,
-    frame_upload_receipt, gpu_diagnostics_json, js_safe_integer, renderer_with_builtins, resolved,
-    set, texture_byte_len, validate_texture_extent, watch_device,
+    DeviceHealth, diagnostics_to_js, export_readback_promise, export_status, frame_upload_receipt,
+    gpu_diagnostics_json, js_safe_integer, renderer_with_builtins, resolved, set, texture_byte_len,
+    validate_texture_extent, watch_device,
 };
 use crate::present::{
     Presenter, UploadedTexture, UploadedTextureBacking, WebMissingFrame, WebPlaybackResult,
     present_texture,
 };
+use crate::project_audio::ProjectAudio;
 use crate::project_cache::StalePresentations;
-
-/// The speakers an upload's `layout` names: an array of `FFmpeg` channel
-/// names, or a channel count for its default layout.
-fn speaker_layout(layout: &JsValue) -> Option<SpeakerLayout> {
-    if let Some(count) = layout.as_f64() {
-        if count.fract() != 0.0 || !(1.0..=64.0).contains(&count) {
-            return None;
-        }
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        return SpeakerLayout::default_for(count as usize);
-    }
-    if !web_sys::js_sys::Array::is_array(layout) {
-        return None;
-    }
-    let speakers = web_sys::js_sys::Array::from(layout)
-        .iter()
-        .map(|name| name.as_string().and_then(|name| Speaker::from_name(&name)))
-        .collect::<Option<Vec<_>>>()?;
-    SpeakerLayout::new(&speakers)
-}
 
 /// An `Alpha2Error` with the `code` the place that refuses decides
 /// ([`crate::error`]): never one read from the message.
@@ -81,7 +59,7 @@ pub(crate) fn internal_error(message: impl std::fmt::Display) -> JsValue {
 /// pinned sources outgrow the uploaded-frame budget: `RESOURCE_LIMIT`, with a
 /// `failure` an export reports as it is (step `upload`, stage
 /// `working-set-over-budget`, `requestedBytes` what the frame needs at least).
-fn working_set_refusal(refusal: WorkingSetOverBudget, source_id: &str) -> JsValue {
+pub(crate) fn working_set_refusal(refusal: WorkingSetOverBudget, source_id: &str) -> JsValue {
     let error = coded_error(
         Code::ResourceLimit,
         format!(
@@ -114,8 +92,8 @@ fn working_set_refusal(refusal: WorkingSetOverBudget, source_id: &str) -> JsValu
 
 /// Pins the sources the export frame at `time` shows in `frames`, so the
 /// uploads that refill it cannot evict one another ([`FrameStore::pin`]).
-fn pin_export_frame(
-    frames: &mut FrameStore<UploadedTexture>,
+pub(crate) fn pin_export_frame<T>(
+    frames: &mut FrameStore<T>,
     project: &EngineProject,
     time: MediaTime,
 ) -> Result<(), JsValue> {
@@ -251,12 +229,7 @@ pub struct WebEffectRegistry {
     presenter: Option<Presenter>,
     browser_webgpu: bool,
     video_frame_copy: crate::interop::VideoFrameCopy,
-    audio: Option<AudioRenderer>,
-    /// What `renderAudio` does with a small step outside an export
-    /// (`setAudioContinuity`); an export is always exact.
-    audio_continuity: AudioContinuity,
-    audio_sources: AudioStore,
-    audio_missing: Vec<String>,
+    audio: ProjectAudio,
     exporter: Option<Exporter>,
     /// Fonts text draws with, and the captions and text generators drawn
     /// with them.
@@ -419,10 +392,7 @@ impl WebEffectRegistry {
             player: Player::default(),
             device_lost,
             health,
-            audio: None,
-            audio_continuity: AudioContinuity::Exact,
-            audio_sources: AudioStore::default(),
-            audio_missing: Vec::new(),
+            audio: ProjectAudio::default(),
             exporter: None,
             texts: TextTextures::new(),
             source_uploads: 0,
@@ -434,6 +404,29 @@ impl WebEffectRegistry {
             browser_webgpu,
             video_frame_copy: crate::interop::VideoFrameCopy::default(),
         })
+    }
+
+    /// Creates the renderer that draws on the CPU, for a browser that offers
+    /// no WebGPU adapter and no WebGL2 context, or a page that asks for it.
+    /// It needs no GPU: it presents preview frames on `canvas`'s 2D context
+    /// (an `OffscreenCanvas` or a page canvas, `undefined` for none) and
+    /// packs export frames in wasm, single-threaded, drawing what the native
+    /// CPU renderer draws byte for byte. Runtime WGSL effects are refused.
+    ///
+    /// # Errors
+    /// Rejects (`INVALID_INPUT`) a canvas that has no 2D context, such as
+    /// one that already holds a WebGL or WebGPU context.
+    #[wasm_bindgen(js_name = createCpu)]
+    pub fn create_cpu(canvas: &JsValue) -> Result<crate::web_cpu::WebCpuRenderer, JsValue> {
+        crate::web_cpu::WebCpuRenderer::new(canvas)
+    }
+
+    /// Which renderer this is: `"gpu"` (WebGPU or WebGL2).
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    #[allow(clippy::unused_self)] // A JS getter.
+    pub fn renderer(&self) -> String {
+        "gpu".to_owned()
     }
 
     /// Creates a worker-owned renderer compatible with an `OffscreenCanvas`.
@@ -534,10 +527,7 @@ impl WebEffectRegistry {
             player: Player::default(),
             device_lost,
             health,
-            audio: None,
-            audio_continuity: AudioContinuity::Exact,
-            audio_sources: AudioStore::default(),
-            audio_missing: Vec::new(),
+            audio: ProjectAudio::default(),
             exporter: None,
             texts: TextTextures::new(),
             source_uploads: 0,
@@ -1587,14 +1577,26 @@ impl WebEffectRegistry {
     /// What this renderer can do, as the shared capability report's JSON
     /// (`alpha2-capabilities`) with runtime `browser`. Decoding, encoding,
     /// and page features are the page's to add: `decode` and `encode` are
-    /// `null` and `features` empty.
+    /// `null`, and `features` names only the renderer's own: `renderer.gpu`
+    /// (this one), `renderer.cpu` and `effects.runtime`, as the native host
+    /// names them.
     ///
     /// # Errors
     /// Returns an error if the report cannot be serialized.
     #[wasm_bindgen(js_name = capabilityReport)]
     pub fn capability_report(&self) -> Result<String, JsValue> {
-        let report =
-            alpha2_engine::CapabilityReport::new(alpha2_engine::Runtime::Browser, &self.renderer);
+        let report = alpha2_engine::CapabilityReport::new(
+            alpha2_engine::Runtime::Browser,
+            &self.renderer,
+        )
+        .with_feature("renderer.gpu", alpha2_engine::Feature::available())
+        .with_feature(
+            "renderer.cpu",
+            alpha2_engine::Feature::unavailable(
+                "this renderer draws on a GPU; createCpu makes the one that draws on the CPU",
+            ),
+        )
+        .with_feature("effects.runtime", alpha2_engine::Feature::available());
         serde_json::to_string(&report).map_err(|error| internal_error(error.to_string()))
     }
 
@@ -1755,13 +1757,7 @@ impl WebEffectRegistry {
     pub fn load_project(&mut self, json: &str) -> Result<(), JsValue> {
         let project = Project::from_json(json).map_err(|error| typed_error(&error))?;
         let snapshot = EngineProject::new(project).map_err(|error| typed_error(&error))?;
-        let sample_rate = snapshot.project().settings.sample_rate;
-        // A fresh renderer: the graph follows the new snapshot, and DSP state from the old one
-        // would not match it.
-        let mut audio = AudioRenderer::new(&snapshot, 2, crate::AUDIO_BLOCK)
-            .map_err(|error| typed_error(&error))?;
-        // Loading ends any export, so the renderer mixes for preview.
-        audio.set_continuity(self.audio_continuity);
+        let audio = self.audio.mixer_for(&snapshot)?;
         // An editor reloads the project on every edit. Media uploaded for a source whose
         // identity is unchanged is still exactly that media, so only gone or relocated sources
         // lose theirs.
@@ -1782,17 +1778,10 @@ impl WebEffectRegistry {
                     }
                 }
             }
-            if self.audio_sources.sample_rate() == sample_rate {
-                self.audio_sources
-                    .retain_sources(|source| !stale.contains(source));
-            } else {
-                self.audio_sources = AudioStore::new(sample_rate);
-            }
         } else {
             self.frames.clear();
-            self.audio_sources = AudioStore::new(sample_rate);
         }
-        self.audio = Some(audio);
+        self.audio.install(self.project.as_ref(), &snapshot, audio);
         self.project = Some(snapshot);
         self.player.reset();
         self.exporter = None;
@@ -1828,72 +1817,38 @@ impl WebEffectRegistry {
         samples: &web_sys::js_sys::Float32Array,
         ends_source: Option<bool>,
     ) -> Result<(), JsValue> {
-        let speakers = speaker_layout(layout).ok_or_else(|| {
-            invalid_input(format!(
-                "invalid audio upload for source {source_id}: its layout must be 1 to 24 FFmpeg \
-                 channel names, or a channel count from 1 to 24"
-            ))
-        })?;
-        let length = samples.length() as usize;
-        let refused = |refusal| match refusal {
-            UploadRefusal::WrongRate { expected } => invalid_input(format!(
-                "invalid audio upload for source {source_id}: it is at {sample_rate} Hz, and \
-                 audio is uploaded at the project's rate, {expected} Hz"
-            )),
-            UploadRefusal::Planes => invalid_input(format!(
-                "invalid audio upload for source {source_id}: its {length} samples are not a \
-                 full plane of one length for each of its {} speakers",
-                speakers.channels()
-            )),
-            // Not fatal: the store holds what it did, and a smaller upload fits.
-            UploadRefusal::TooLarge => coded_error(
-                Code::ResourceLimit,
-                format!(
-                    "audio upload of {length} samples for source {source_id} is more than one \
-                     window holds: at most 600 s, and at most the {} MiB every source shares",
-                    crate::audio_store::MAX_RETAINED_BYTES >> 20,
-                ),
-            ),
-        };
-        // Checked from the length before copying into wasm memory, which never shrinks; an upload
-        // that fits is copied once, into the window that keeps it.
-        self.audio_sources
-            .admits(sample_rate, speakers.channels(), length)
-            .map_err(refused)?;
-        self.audio_sources
-            .upload_from(
-                source_id,
-                start_sample,
-                sample_rate,
-                speakers,
-                &JsSamples(samples),
-                ends_source.unwrap_or(false),
-            )
-            .map_err(refused)
+        self.audio.upload_block(
+            source_id,
+            start_sample,
+            sample_rate,
+            layout,
+            samples,
+            ends_source,
+        )
     }
 
     /// Drops one source's retained audio.
     #[wasm_bindgen(js_name = releaseAudioSource)]
     pub fn release_audio_source(&mut self, source_id: &str) -> bool {
-        self.audio_sources.release(source_id)
+        self.audio.release_source(source_id)
     }
 
     /// Drops every source's retained audio.
     #[wasm_bindgen(js_name = clearAudioSources)]
     pub fn clear_audio_sources(&mut self) {
-        self.audio_sources.clear();
+        self.audio.clear_sources();
     }
 
     /// Total retained audio samples across every source, for host budgeting.
     #[wasm_bindgen(js_name = audioRetainedFrames)]
     pub fn audio_retained_frames(&self) -> u32 {
-        u32::try_from(self.audio_sources.retained_frames()).unwrap_or(u32::MAX)
+        self.audio.retained_frames()
     }
 
     /// Allocated audio sample bytes, including spare capacity after trimming.
     #[wasm_bindgen(js_name = audioRetainedBytes)]
     pub fn audio_retained_bytes(&self) -> u32 {
-        u32::try_from(self.audio_sources.retained_bytes()).unwrap_or(u32::MAX)
+        self.audio.retained_bytes()
     }
 
     /// Half-open project-rate sample intervals of one source's retained
@@ -1904,13 +1859,7 @@ impl WebEffectRegistry {
     /// extended, replaced or dropped a window since the host uploaded it.
     #[wasm_bindgen(js_name = audioRetainedWindows)]
     pub fn audio_retained_windows(&self, source_id: &str) -> Result<String, JsValue> {
-        let windows: Vec<_> = self
-            .audio_sources
-            .windows(source_id)
-            .into_iter()
-            .map(|(start, end)| serde_json::json!({ "startSample": start, "endSample": end }))
-            .collect();
-        serde_json::to_string(&windows).map_err(|error| internal_error(error.to_string()))
+        self.audio.retained_windows(source_id)
     }
 
     /// Discards `source_id`'s retained audio that ends before `ticks`, a time
@@ -1920,7 +1869,7 @@ impl WebEffectRegistry {
     /// behind the earliest time a mix still reads of the source.
     #[wasm_bindgen(js_name = trimAudioBefore)]
     pub fn trim_audio_before(&mut self, source_id: &str, ticks: i64) {
-        self.audio_sources.trim_before(source_id, MediaTime(ticks));
+        self.audio.trim_before(source_id, ticks);
     }
 
     /// Chooses what `renderAudio` does, outside an export, with a block that
@@ -1940,30 +1889,13 @@ impl WebEffectRegistry {
     /// Rejects any other policy name (`INVALID_INPUT`, not fatal).
     #[wasm_bindgen(js_name = setAudioContinuity)]
     pub fn set_audio_continuity(&mut self, policy: &str) -> Result<(), JsValue> {
-        let continuity = match policy {
-            "exact" => AudioContinuity::Exact,
-            "continue-small-gaps" => AudioContinuity::ContinueSmallGaps,
-            _ => {
-                return Err(invalid_input(format!(
-                    "audio continuity is \"exact\" or \"continue-small-gaps\", not {policy:?}"
-                )));
-            }
-        };
-        self.audio_continuity = continuity;
-        if self.exporter.is_none()
-            && let Some(audio) = self.audio.as_mut()
-        {
-            audio.set_continuity(continuity);
-        }
-        Ok(())
+        self.audio.set_continuity(policy, self.exporter.is_some())
     }
 
     /// Clears every processor history after a seek or a transport stop.
     #[wasm_bindgen(js_name = resetAudio)]
     pub fn reset_audio(&mut self) {
-        if let Some(audio) = self.audio.as_mut() {
-            audio.reset();
-        }
+        self.audio.reset();
     }
 
     /// Source intervals a host must decode before mixing a sample range:
@@ -1974,29 +1906,8 @@ impl WebEffectRegistry {
     /// Tick values are strings so JavaScript preserves the full i64 range.
     #[wasm_bindgen(js_name = audioNeeds)]
     pub fn audio_needs(&self, start_sample: i64, frames: u32) -> Result<String, JsValue> {
-        let project = self
-            .project
-            .as_ref()
-            .ok_or_else(|| invalid_state("no project is loaded"))?;
-        let audio = self
-            .audio
-            .as_ref()
-            .ok_or_else(|| invalid_state("this project has no audio renderer"))?;
-        audio_span(audio.sample_rate(), start_sample, frames)?;
-        let needs = audio
-            .audio_needs(project, start_sample, frames as usize)
-            .map_err(|error| typed_error(&error))?;
-        let needs: Vec<_> = needs
-            .iter()
-            .map(|need| {
-                serde_json::json!({
-                    "sourceId": need.source_id.as_str(),
-                    "startTicks": need.source_range.start().ticks().to_string(),
-                    "endTicks": need.source_range.end().ticks().to_string(),
-                })
-            })
-            .collect();
-        serde_json::to_string(&needs).map_err(|error| internal_error(error.to_string()))
+        self.audio
+            .needs(self.project.as_ref(), start_sample, frames)
     }
 
     /// The most samples per channel one `renderAudio` call mixes.
@@ -2023,45 +1934,8 @@ impl WebEffectRegistry {
         frames: u32,
         playing: bool,
     ) -> Result<Vec<f32>, JsValue> {
-        if usize::try_from(frames).map_or(true, |frames| frames > crate::AUDIO_BLOCK) {
-            return Err(invalid_input(format!(
-                "renderAudio mixes at most {} samples per channel a call (audioMaxBlock), not {frames}",
-                crate::AUDIO_BLOCK
-            )));
-        }
-        let project = self
-            .project
-            .as_ref()
-            .ok_or_else(|| invalid_state("no project is loaded"))?;
-        let audio = self
-            .audio
-            .as_mut()
-            .ok_or_else(|| invalid_state("this project has no audio renderer"))?;
-        let transport = if playing {
-            TransportState::Playing
-        } else {
-            TransportState::Stopped
-        };
-        let status = audio
-            .render(
-                project,
-                start_sample,
-                frames as usize,
-                &self.audio_sources,
-                transport,
-            )
-            .map_err(|error| typed_error(&error))?;
-        self.audio_missing = status
-            .missing_sources
-            .iter()
-            .map(ToString::to_string)
-            .collect();
-        let channels = audio.channels();
-        let mut output = Vec::with_capacity(channels * status.frames);
-        for channel in 0..channels {
-            output.extend_from_slice(&audio.channel(channel)[..status.frames]);
-        }
-        Ok(output)
+        self.audio
+            .render(self.project.as_ref(), start_sample, frames, playing)
     }
 
     /// Starts (from empty) or stops measuring the loudness of the mix before
@@ -2073,11 +1947,7 @@ impl WebEffectRegistry {
     /// Returns an error without an audio renderer.
     #[wasm_bindgen(js_name = setLoudnessMetering)]
     pub fn set_loudness_metering(&mut self, enabled: bool) -> Result<(), JsValue> {
-        self.audio
-            .as_mut()
-            .ok_or_else(|| invalid_state("this project has no audio renderer"))?
-            .set_loudness_metering(enabled)
-            .map_err(|error| typed_error(&error))
+        self.audio.set_loudness_metering(enabled)
     }
 
     /// The loudness measured since metering started, as JSON (see
@@ -2088,17 +1958,7 @@ impl WebEffectRegistry {
     #[wasm_bindgen(js_name = loudnessReport)]
     #[must_use]
     pub fn loudness_report(&self) -> String {
-        self.audio.as_ref().map_or_else(
-            || "null".to_owned(),
-            |renderer| {
-                renderer.loudness_report().map_or_else(
-                    || "null".to_owned(),
-                    |report| {
-                        crate::loudness::mix_report_json(&report, renderer.limiter_threshold())
-                    },
-                )
-            },
-        )
+        self.audio.loudness_report()
     }
 
     /// Applies a static gain, in dB, after the master gain and before the
@@ -2112,33 +1972,26 @@ impl WebEffectRegistry {
     /// finite or whose factor a 32-bit float cannot hold (`INVALID_INPUT`).
     #[wasm_bindgen(js_name = setNormalizationGainDb)]
     pub fn set_normalization_gain_db(&mut self, gain_db: f64) -> Result<(), JsValue> {
-        self.audio
-            .as_mut()
-            .ok_or_else(|| invalid_state("this project has no audio renderer"))?
-            .set_normalization_gain_db(gain_db)
-            .map_err(|error| typed_error(&error))
+        self.audio.set_normalization_gain_db(gain_db)
     }
 
     /// Sources that the most recent `renderAudio` call could not mix, as a
     /// JSON array of source IDs.
     #[wasm_bindgen(js_name = audioMissingSources)]
     pub fn audio_missing_sources(&self) -> Result<String, JsValue> {
-        serde_json::to_string(&self.audio_missing)
-            .map_err(|error| internal_error(error.to_string()))
+        self.audio.missing_sources()
     }
 
     /// Channel count of every mixed block.
     #[wasm_bindgen(js_name = audioChannels)]
     pub fn audio_channels(&self) -> u32 {
-        self.audio.as_ref().map_or(0, |audio| {
-            u32::try_from(audio.channels()).unwrap_or(u32::MAX)
-        })
+        self.audio.channels()
     }
 
     /// Project sample rate used by uploads and mixed blocks.
     #[wasm_bindgen(js_name = audioSampleRate)]
     pub fn audio_sample_rate(&self) -> u32 {
-        self.audio.as_ref().map_or(0, AudioRenderer::sample_rate)
+        self.audio.sample_rate()
     }
 
     /// Starts a deterministic export over a half-open timeline range.
@@ -2193,13 +2046,8 @@ impl WebEffectRegistry {
                 .map_err(|error| typed_error(&error))?,
         );
         self.frames.unpin();
-        // Export audio starts from fresh DSP state. The renderer resets on any jump by itself;
-        // this covers an export starting exactly where preview stopped.
-        if let Some(audio) = self.audio.as_mut() {
-            audio.set_continuity(AudioContinuity::Exact);
-            audio.reset();
-            audio.set_hold_incomplete_blocks(true);
-        }
+        // Export audio starts from fresh DSP state.
+        self.audio.begin_export();
         Ok(())
     }
 
@@ -2208,10 +2056,7 @@ impl WebEffectRegistry {
     pub fn end_export(&mut self) {
         self.exporter = None;
         self.frames.unpin();
-        if let Some(audio) = self.audio.as_mut() {
-            audio.set_hold_incomplete_blocks(false);
-            audio.set_continuity(self.audio_continuity);
-        }
+        self.audio.end_export();
     }
 
     /// Completed and total frame counts for the running export, and the
@@ -2782,7 +2627,7 @@ pub fn check_lut_3d(cube: &str) -> Result<(), JsValue> {
 
 /// The exact frame each of `missing` was needed at, from the snapshot that rendered `time`: a
 /// trimmed, offset, or retimed clip needs its source at a time other than the timeline's.
-fn missing_frames(
+pub(crate) fn missing_frames(
     project: &EngineProject,
     time: MediaTime,
     missing: &[SourceId],
@@ -2806,7 +2651,7 @@ fn missing_frames(
 
 /// `{ kind: "waiting", timeTicks, missingSources, missingFrames }` for an export frame at `time`
 /// that lacks `missing`; `missingFrames` is what `renderAt` reports for the same need.
-fn export_waiting(
+pub(crate) fn export_waiting(
     project: &EngineProject,
     time: MediaTime,
     missing: &[SourceId],
@@ -2824,7 +2669,7 @@ fn export_waiting(
 }
 
 /// The engine's YUV layout for a `WebCodecs` planar pixel format.
-fn webcodecs_yuv_format(format: &str) -> Result<alpha2_media::YuvFormat, JsValue> {
+pub(crate) fn webcodecs_yuv_format(format: &str) -> Result<alpha2_media::YuvFormat, JsValue> {
     Ok(match format {
         "I420" => alpha2_media::YuvFormat::I420,
         "NV12" => alpha2_media::YuvFormat::NV12,
@@ -2855,7 +2700,7 @@ fn webcodecs_yuv_format(format: &str) -> Result<alpha2_media::YuvFormat, JsValue
 }
 
 /// A chroma siting as the SDK names it.
-fn chroma_siting_named(name: &str) -> Result<ChromaLocation, JsValue> {
+pub(crate) fn chroma_siting_named(name: &str) -> Result<ChromaLocation, JsValue> {
     Ok(match name {
         "left" => ChromaLocation::Left,
         "center" => ChromaLocation::Center,
@@ -2865,7 +2710,7 @@ fn chroma_siting_named(name: &str) -> Result<ChromaLocation, JsValue> {
     })
 }
 
-fn rotation_from_degrees(degrees: u32) -> Result<Rotation, JsValue> {
+pub(crate) fn rotation_from_degrees(degrees: u32) -> Result<Rotation, JsValue> {
     Ok(match degrees {
         0 => Rotation::Deg0,
         90 => Rotation::Deg90,
@@ -2876,7 +2721,7 @@ fn rotation_from_degrees(degrees: u32) -> Result<Rotation, JsValue> {
 }
 
 /// The output size and orientation a presented upload is shown at.
-fn presented_placement(
+pub(crate) fn presented_placement(
     output_width: u32,
     output_height: u32,
     rotation_degrees: u32,
@@ -2930,7 +2775,7 @@ enum PresentedPixels<'a> {
 }
 
 /// The result cache's counters as the diagnostics snapshot reports them.
-fn result_cache_json(cache: alpha2_render::ResultCacheStats) -> serde_json::Value {
+pub(crate) fn result_cache_json(cache: alpha2_render::ResultCacheStats) -> serde_json::Value {
     serde_json::json!({
         "budgetBytes": cache.budget_bytes,
         "bytes": cache.bytes,
@@ -2950,23 +2795,4 @@ fn result_cache_json(cache: alpha2_render::ResultCacheStats) -> serde_json::Valu
             "gpuError": cache.invalidations[4],
         },
     })
-}
-
-/// An upload's JS buffer, copied plane by plane straight into the window
-/// that keeps it rather than into wasm memory first.
-struct JsSamples<'a>(&'a web_sys::js_sys::Float32Array);
-
-impl UploadSamples for JsSamples<'_> {
-    fn values(&self) -> usize {
-        self.0.length() as usize
-    }
-
-    fn append(&self, range: std::ops::Range<usize>, plane: &mut Vec<f32>) {
-        let from = plane.len();
-        plane.resize(from + range.len(), 0.0);
-        let index = |at: usize| u32::try_from(at).unwrap_or(u32::MAX);
-        self.0
-            .subarray(index(range.start), index(range.end))
-            .copy_to(&mut plane[from..]);
-    }
 }

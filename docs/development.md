@@ -87,6 +87,7 @@ The renderer and engine tests need a GPU adapter. They use the machine's GPU, or
 WGPU_BACKEND=vulkan cargo test -p alpha2-render -p alpha2-engine -- --test-threads=1   # or metal, dx12, gl
 ```
 
+- `alpha2-host` renders on the CPU when the machine has no hardware GPU (`ALPHA2_RENDERER=auto`). To run the host tests on lavapipe, set `ALPHA2_RENDERER=gpu`, as CI does; `ALPHA2_RENDERER=cpu` runs them on the CPU renderer. The CPU renderer's parity tests (`cargo test -p alpha2-render --lib cpu_`) compare every CPU pass with the GPU's; a failure writes both pictures to `target/cpu-parity/`.
 - Render goldens live in `tests/golden/`. `ALPHA2_UPDATE_GOLDENS=1` rewrites them instead of comparing, and `ALPHA2_GOLDEN_ACTUAL_DIR=<dir>` keeps a mismatching render for inspection.
 - `ALPHA2_TEST_INTERMEDIATE=rgba8unorm` runs the renderer on its 8-bit intermediate.
 - Hardware decode and encode tests skip without the hardware. To make a skip fail on a machine that has it, set the matching variable: `ALPHA2_REQUIRE_VIDEOTOOLBOX=1` (macOS), `ALPHA2_REQUIRE_D3D12=1` (Windows), `ALPHA2_REQUIRE_H264=1`.

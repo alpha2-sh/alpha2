@@ -1,13 +1,14 @@
 use alpha2_eval::FrameNeed;
 use alpha2_media::{SourceId, VideoCodec, YuvEncoding};
-use alpha2_render::{FrameSubmitTimings, Renderer, Yuv420pReadback};
+use alpha2_render::{FrameSubmitTimings, Renderer, Yuv420pReadback, Yuv420pTargets};
 use alpha2_time::{FrameRate, MediaTime, TICKS_PER_SECOND, TimeRange};
 use std::time::Duration;
 use web_time::Instant;
 
 use crate::schedule::frame_times;
 use crate::{
-    EngineError, EngineProject, FrameProvider, FrameRenderer, MissingFramePolicy, QualityProfile,
+    EngineError, EngineProject, FrameProvider, FrameRenderer, GpuFrameRenderer, MissingFramePolicy,
+    QualityProfile,
 };
 
 /// Largest frame schedule accepted by one export operation.
@@ -94,10 +95,10 @@ pub enum ExportTextureStep {
     Complete,
 }
 
-/// One step of an export that packs straight into GPU encoder planes.
+/// One step of an export that packs its picture straight into caller-owned
+/// planes: an encoder's frame in memory, or GPU encoder planes.
 #[derive(Debug)]
-#[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
-pub enum ExportNv12Step {
+pub enum ExportPlaneStep {
     /// Required decoded frames are not available; retry without advancing.
     Waiting {
         /// Timeline timestamp that remains pending.
@@ -470,10 +471,10 @@ impl Exporter {
         frames: &dyn FrameProvider,
         planes: alpha2_render::Nv12PlaneTargets<'_>,
         timings: &mut ExportStepTimings,
-    ) -> Result<ExportNv12Step, EngineError> {
+    ) -> Result<ExportPlaneStep, EngineError> {
         self.check(project)?;
         let Some(time) = self.pending_time() else {
-            return Ok(ExportNv12Step::Complete);
+            return Ok(ExportPlaneStep::Complete);
         };
         let evaluate_started = Instant::now();
         let frame = project.evaluate(time)?;
@@ -502,7 +503,7 @@ impl Exporter {
             submit,
         };
         if !attempt.submitted {
-            return Ok(ExportNv12Step::Waiting {
+            return Ok(ExportPlaneStep::Waiting {
                 time,
                 missing_sources: attempt.report.missing_sources,
             });
@@ -513,7 +514,70 @@ impl Exporter {
             .checked_add(1)
             .ok_or(EngineError::OutOfRange)?;
         self.completed += 1;
-        Ok(ExportNv12Step::Rendered { index, time })
+        Ok(ExportPlaneStep::Rendered { index, time })
+    }
+
+    /// Renders the next frame straight into caller-owned YUV420 planes, on
+    /// whichever renderer draws it.
+    ///
+    /// The cursor advances exactly as it does for [`Self::render_next`]; a
+    /// step that waits writes nothing. `timings`, when given, receives the
+    /// evaluation and preparation spans, and the whole draw as its submit
+    /// span.
+    ///
+    /// # Errors
+    /// Returns an engine error when evaluation or rendering fails, and
+    /// [`EngineError::ExportProjectChanged`] for another snapshot.
+    pub fn render_next_into_yuv420p<R: FrameRenderer + ?Sized>(
+        &mut self,
+        project: &EngineProject,
+        renderer: &R,
+        frames: &dyn FrameProvider,
+        targets: &mut Yuv420pTargets<'_>,
+        timings: Option<&mut ExportStepTimings>,
+    ) -> Result<ExportPlaneStep, EngineError> {
+        self.check(project)?;
+        let Some(time) = self.pending_time() else {
+            return Ok(ExportPlaneStep::Complete);
+        };
+        let evaluate_started = Instant::now();
+        let frame = project.evaluate(time)?;
+        crate::frame::check_frame_effects(renderer, &frame)?;
+        let prepare_started = Instant::now();
+        let evaluate = prepare_started.duration_since(evaluate_started);
+        let size = self.quality.render_size(&project.project().settings)?;
+        renderer.set_texture_budget_bytes(self.quality.texture_budget_bytes);
+        renderer.set_quality_controls(
+            self.quality.max_filter_samples,
+            self.quality.motion_blur_subframes,
+        );
+        let draw_started = Instant::now();
+        let prepare = draw_started.duration_since(prepare_started);
+        let report =
+            renderer.render_frame_into_yuv420p(size, &frame, frames, self.encoding, targets)?;
+        if let Some(timings) = timings {
+            *timings = ExportStepTimings {
+                evaluate,
+                prepare,
+                submit: FrameSubmitTimings {
+                    command_encode: draw_started.elapsed(),
+                    ..FrameSubmitTimings::default()
+                },
+            };
+        }
+        if !report.is_complete() {
+            return Ok(ExportPlaneStep::Waiting {
+                time,
+                missing_sources: report.missing_sources,
+            });
+        }
+        let index = self.completed;
+        self.next_frame = self
+            .next_frame
+            .checked_add(1)
+            .ok_or(EngineError::OutOfRange)?;
+        self.completed += 1;
+        Ok(ExportPlaneStep::Rendered { index, time })
     }
 
     /// Renders the next frame and hands its texture over, with no readback
@@ -753,7 +817,7 @@ mod tests {
         )
         .expect("valid exporter");
         assert_eq!(
-            Player::default().missing_frame_policy(),
+            Player::<alpha2_render::RenderedTexture>::default().missing_frame_policy(),
             MissingFramePolicy::HoldPrevious
         );
         assert_eq!(exporter.missing_frame_policy(), MissingFramePolicy::Wait);

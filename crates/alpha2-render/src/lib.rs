@@ -9,6 +9,7 @@
 //! version. Without the feature those items are hidden: alpha2's own crates
 //! share handles through them, and they are not part of this crate's API.
 
+mod backend;
 mod blend;
 mod builtins;
 mod call_budget;
@@ -16,6 +17,7 @@ mod canary;
 mod catalog;
 mod color;
 mod composite;
+mod cpu;
 mod diagnostics;
 mod effect;
 mod effect_resource;
@@ -62,6 +64,7 @@ pub(crate) type Shared<T> = std::sync::Arc<T>;
 #[cfg(target_arch = "wasm32")]
 pub(crate) type Shared<T> = std::rc::Rc<T>;
 
+pub use backend::{EffectCatalog, RenderControls};
 pub use blend::{BlendMode, BlendSpace};
 pub use builtins::{
     CHROMA_KEY_ID, GAUSSIAN_BLUR_ID, GLOW_ID, LUT_3D_ID, builtin_effect_definitions,
@@ -74,6 +77,7 @@ pub use color::{
     convert_yuv_to_linear_rgba, encode_linear_rgb, is_hdr,
 };
 pub use composite::{CompositeLayer, LayerTransform};
+pub use cpu::{CpuImage, CpuRenderStats, CpuRenderer, CpuSource, RgbaPixels, YuvPlanes};
 pub use diagnostics::{
     AdapterDiagnostics, BenchmarkMetadata, PassTiming, RenderDiagnostics, TimingSource,
 };

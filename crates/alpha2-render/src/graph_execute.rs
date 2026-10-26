@@ -186,12 +186,12 @@ impl Renderer {
                     {
                         return Err(GraphError::EffectKindMismatch);
                     }
-                    let source_view = graph_view(graph, &outputs, *source);
+                    let source_view = graph_view(graph, &outputs, *source)?;
                     // Empty, and so not allocated, for an effect without named inputs.
                     let input_views: Vec<(&str, &wgpu::TextureView)> = inputs
                         .iter()
-                        .map(|(name, node)| (name, graph_view(graph, &outputs, node)))
-                        .collect();
+                        .map(|(name, node)| Ok((name, graph_view(graph, &outputs, node)?)))
+                        .collect::<Result<_, GraphError>>()?;
                     let target = self.textures.acquire(
                         self.gpu.device(),
                         graph.size,
@@ -233,8 +233,8 @@ impl Renderer {
                     {
                         return Err(GraphError::EffectKindMismatch);
                     }
-                    let from_view = graph_view(graph, &outputs, *from);
-                    let to_view = graph_view(graph, &outputs, *to);
+                    let from_view = graph_view(graph, &outputs, *from)?;
+                    let to_view = graph_view(graph, &outputs, *to)?;
                     let target = self.textures.acquire(
                         self.gpu.device(),
                         graph.size,
@@ -324,7 +324,7 @@ impl Renderer {
                     let views = layers
                         .iter()
                         .map(|layer| graph_view(graph, &outputs, layer.source))
-                        .collect::<Vec<_>>();
+                        .collect::<Result<Vec<_>, _>>()?;
                     let composite_layers = layers
                         .iter()
                         .zip(&views)
@@ -482,17 +482,21 @@ fn graph_uniform_capacity(
     capacity
 }
 
+/// The texture a node's dependency is drawn from: a source's view, or a
+/// result drawn earlier. A CPU source has no texture.
 fn graph_view<'a>(
     graph: &'a RenderGraph<'_>,
     outputs: &'a [Option<RenderedTexture>],
     node: RenderNodeId,
-) -> &'a wgpu::TextureView {
+) -> Result<&'a wgpu::TextureView, GraphError> {
     match &graph.nodes[node.index] {
-        RenderNode::Source(view) => view,
-        _ => outputs[node.index]
+        RenderNode::Source(view) => view
+            .wgpu_view()
+            .ok_or(GraphError::Render(crate::RenderError::InvalidSource)),
+        _ => Ok(outputs[node.index]
             .as_ref()
             .expect("compiled dependency has an output")
-            .view(),
+            .view()),
     }
 }
 

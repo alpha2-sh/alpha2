@@ -37,6 +37,7 @@ engine.renderAt(0n); // draws the frame at time 0 on the canvas
 
 - `init()` loads `alpha2_wasm_bg.wasm` from beside the module. A bundler that moves it passes its URL, a `Response`, its bytes or a compiled `WebAssembly.Module` as `init({ module_or_path })`; the files are `alpha2/wasm/alpha2_wasm_bg.wasm` (the engine), `alpha2/wasm/alpha2_audio_worklet.wasm` (the audio worklet) and `alpha2/wasm/alpha2_extensions_bg.wasm` (SVG, animated images, Lottie, OpenEXR and image sequences, loaded only for such a source).
 - `createForHtmlCanvas` draws on a page canvas; a worker passes an `OffscreenCanvas` to `createForCanvas`. Either renders with WebGPU, or with WebGL2 when the browser has no WebGPU.
+- With neither (Chrome with acceleration off, a blocklisted GPU), `WebEffectRegistry.createCpu(canvas)` makes the engine's CPU renderer: the same calls, drawn in wasm on one thread, the preview put on the canvas's 2D context. It draws exactly what the native CPU renderer draws, refuses runtime WGSL effects with `EFFECT_ERROR`, and needs no canvas to export. `detectBrowserCapabilities()` reports which renderer the browser gets (`renderer`).
 - A project is the engine's JSON document. `alpha2/project` has its TypeScript types, tick conversions and `validateProject`, which reports what the engine would refuse before the document is sent; `alpha2/builder` writes one with times in seconds. `loadProject` checks the document again and throws what it refuses.
 - `renderAt(ticks)` returns JSON that names the sources it had no frame for (`missingSources`, `missingFrames`). The engine decides which frame of each source a time needs: `frameNeeds(ticks)` lists them with the exact source time, and the application decodes and uploads those (`uploadVideoFrame` for a `VideoFrame`, `uploadRgbaFrame` for pixels at a source time, `uploadRgbaImage` for a still). `FrameSupply` in `alpha2/frame-supply` does this for a decoder per clip, and keeps the uploads within a byte budget.
 
@@ -76,7 +77,7 @@ For preview, `alpha2/audio-timeline` moves the mixed blocks to the audio thread 
 
 ## Preview in a worker
 
-`alpha2/worker` runs the engine in a worker that owns the GPU device and an `OffscreenCanvas` (`installRenderWorker`, `createWasmRenderWorkerHost`), and `WorkerRenderBackend` drives it from the page. `Alpha2Player` in `alpha2/player` presents times through such a backend: it serializes presentations, asks for the frames a presentation lacks and shows them once they arrive, and makes the device again after a device loss.
+`alpha2/worker` runs the engine in a worker that owns the GPU device and an `OffscreenCanvas` (`installRenderWorker`, `createWasmRenderWorkerHost`), and `WorkerRenderBackend` drives it from the page. The host's `renderer` option is `"auto"` (WebGPU, else WebGL2, else the CPU renderer), `"gpu"` or `"cpu"`; `WorkerRenderBackend.rendererChoice` says which renderer the worker made and why it draws on the CPU, as the native host's `renderer` and `rendererReason` do. `Alpha2Player` in `alpha2/player` presents times through such a backend: it serializes presentations, asks for the frames a presentation lacks and shows them once they arrive, and makes the device again after a device loss.
 
 ## Subpaths
 

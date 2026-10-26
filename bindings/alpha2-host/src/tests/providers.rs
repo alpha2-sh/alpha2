@@ -61,7 +61,7 @@ fn sequence_paths() -> Value {
 fn extension_sources_export_through_their_providers() {
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("extensions");
-    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let mut host = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
     let request = |frames: Value, output: &Path| {
         parse_request(
             &json!({

@@ -2009,6 +2009,120 @@ pub fn set_output_stream_extradata(
     Ok(())
 }
 
+/// A packet holding a copy of `data`, every other field at its default.
+///
+/// An encoder that is not `FFmpeg`'s (`OpenH264`, loaded at run time) hands
+/// its output over as bytes, and the muxer takes packets; rsmpeg can make an
+/// empty packet but not give one a payload.
+///
+/// # Errors
+/// When `data` is larger than a packet can be, or the packet cannot be
+/// allocated.
+pub fn packet_from_bytes(data: &[u8]) -> Result<rsmpeg::avcodec::AVPacket, BridgeError> {
+    let size = i32::try_from(data.len())
+        .map_err(|_| BridgeError::InvalidInput("a packet is larger than FFmpeg holds"))?;
+    let mut packet = rsmpeg::avcodec::AVPacket::new();
+    // SAFETY: `packet` is a freshly allocated, empty packet; `av_new_packet` gives it a
+    // reference-counted, zero-padded buffer of `size` bytes or fails without touching it.
+    let status = unsafe { ffi::av_new_packet(packet.as_mut_ptr(), size) };
+    if status < 0 {
+        return Err(BridgeError::FfmpegCode(status));
+    }
+    if !data.is_empty() {
+        // SAFETY: the packet's buffer holds `size` writable bytes and does not overlap `data`.
+        unsafe { ptr::copy_nonoverlapping(data.as_ptr(), packet.data, data.len()) };
+    }
+    Ok(packet)
+}
+
+/// What the codec parameters of a video stream no `FFmpeg` encoder produced
+/// say: the fields an encoder's `avcodec_parameters_from_context` would
+/// fill in for it.
+#[derive(Clone, Copy, Debug)]
+pub struct VideoStreamDescription<'a> {
+    /// The codec.
+    pub codec_id: ffi::AVCodecID,
+    /// Coded width.
+    pub width: i32,
+    /// Coded height.
+    pub height: i32,
+    /// The pixel format the stream decodes to.
+    pub pixel_format: ffi::AVPixelFormat,
+    /// `AV_PROFILE_*` for the codec.
+    pub profile: i32,
+    /// The codec's level number.
+    pub level: i32,
+    /// Colour primaries tag.
+    pub color_primaries: ffi::AVColorPrimaries,
+    /// Transfer characteristics tag.
+    pub color_trc: ffi::AVColorTransferCharacteristic,
+    /// Matrix coefficients tag.
+    pub color_space: ffi::AVColorSpace,
+    /// Sample range.
+    pub color_range: ffi::AVColorRange,
+    /// Pixel aspect ratio; `0/1` when undeclared.
+    pub sample_aspect_ratio: ffi::AVRational,
+    /// Frames per second.
+    pub frame_rate: ffi::AVRational,
+    /// Average bitrate, `0` when unknown.
+    pub bit_rate: i64,
+    /// The sample description (`avcC` for H.264).
+    pub extradata: &'a [u8],
+}
+
+/// Codec parameters for a video stream `description` describes.
+///
+/// # Errors
+/// When the extradata is larger than `FFmpeg` holds or cannot be allocated.
+pub fn video_codec_parameters(
+    description: &VideoStreamDescription<'_>,
+) -> Result<rsmpeg::avcodec::AVCodecParameters, BridgeError> {
+    let extradata_size = i32::try_from(description.extradata.len())
+        .map_err(|_| BridgeError::InvalidInput("extradata is larger than FFmpeg holds"))?;
+    let mut parameters = rsmpeg::avcodec::AVCodecParameters::new();
+    let raw = parameters.as_mut_ptr();
+    // SAFETY: `raw` is the freshly allocated parameters, uniquely owned here; the fields written
+    // are plain values.
+    unsafe {
+        (*raw).codec_type = ffi::AVMEDIA_TYPE_VIDEO;
+        (*raw).codec_id = description.codec_id;
+        (*raw).width = description.width;
+        (*raw).height = description.height;
+        (*raw).format = description.pixel_format;
+        (*raw).profile = description.profile;
+        (*raw).level = description.level;
+        (*raw).color_primaries = description.color_primaries;
+        (*raw).color_trc = description.color_trc;
+        (*raw).color_space = description.color_space;
+        (*raw).color_range = description.color_range;
+        (*raw).sample_aspect_ratio = description.sample_aspect_ratio;
+        (*raw).framerate = description.frame_rate;
+        (*raw).bit_rate = description.bit_rate;
+        (*raw).field_order = ffi::AV_FIELD_PROGRESSIVE;
+    }
+    if !description.extradata.is_empty() {
+        let padding = usize::try_from(ffi::AV_INPUT_BUFFER_PADDING_SIZE).unwrap_or(64);
+        // SAFETY: `av_mallocz` returns null or a zeroed buffer of the size asked for.
+        let buffer = unsafe { ffi::av_mallocz(description.extradata.len() + padding) }.cast::<u8>();
+        if buffer.is_null() {
+            return Err(BridgeError::FfmpegCode(ffi::AVERROR(ffi::ENOMEM)));
+        }
+        // SAFETY: `buffer` holds the extradata's length in writable bytes and does not overlap
+        // it. The parameters had no extradata, and now own `buffer`, which they free with
+        // `av_free` as they free any.
+        unsafe {
+            ptr::copy_nonoverlapping(
+                description.extradata.as_ptr(),
+                buffer,
+                description.extradata.len(),
+            );
+            (*raw).extradata = buffer;
+            (*raw).extradata_size = extradata_size;
+        }
+    }
+    Ok(parameters)
+}
+
 /// Opens a bitstream filter chain, written in `FFmpeg`'s list syntax
 /// (`name=option=value:option=value,name...`, as `ffmpeg -bsf` takes it), for
 /// a stream that `parameters` describes and whose packets are timed in

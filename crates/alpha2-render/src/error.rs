@@ -63,6 +63,9 @@ pub enum RenderError {
     /// An HDR (PQ or HLG) source met [`crate::ColorPolicy::RejectHdr`]: the
     /// project's color pipeline refuses it rather than show it.
     UnsupportedHdr,
+    /// A source belongs to the other renderer backend: a CPU source given to
+    /// the GPU renderer, or a GPU texture given to the CPU renderer.
+    InvalidSource,
 }
 
 impl fmt::Display for RenderError {
@@ -122,6 +125,9 @@ impl fmt::Display for RenderError {
             Self::GpuDeviceLost => formatter.write_str(GPU_DEVICE_LOST_MESSAGE),
             Self::UnsupportedHdr => {
                 formatter.write_str("the color policy refuses HDR (PQ or HLG) sources")
+            }
+            Self::InvalidSource => {
+                formatter.write_str("the source belongs to another renderer backend")
             }
         }
     }

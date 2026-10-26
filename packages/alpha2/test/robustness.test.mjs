@@ -22,8 +22,11 @@ test("capability detection answers without a browser and reports the gaps", asyn
   assert.equal(capabilities.webgl2, false);
   assert.equal(capabilities.webcodecs, false);
   assert.equal(capabilities.offscreenCanvas, false);
+  // With neither GPU API the engine draws on the CPU.
+  assert.equal(capabilities.renderer, "cpu");
   assert.deepEqual(capabilities.diagnostics, [
     "webgpu-unavailable",
+    "webgl2-unavailable",
     "webcodecs-unavailable",
     "offscreen-canvas-unavailable",
   ]);
@@ -59,6 +62,7 @@ test("WebGPU is reported only when the browser hands out an adapter", async () =
       detectBrowserCapabilities(),
     );
     assert.equal(capabilities.webgpu, expected, label);
+    assert.equal(capabilities.renderer, expected ? "gpu" : "cpu", label);
     assert.equal(
       capabilities.diagnostics.includes("webgpu-unavailable"),
       !expected,
@@ -119,6 +123,8 @@ test("WebGL2 is probed on a canvas of its own, never one the caller passes", asy
     const callers = canvas("caller");
     const capabilities = await detectBrowserCapabilities(callers);
     assert.equal(capabilities.webgl2, true);
+    assert.equal(capabilities.renderer, "gpu");
+    assert.ok(!capabilities.diagnostics.includes("webgl2-unavailable"));
     assert.deepEqual(contexts, [["probe", "webgl2"]]);
   } finally {
     delete globalThis.document;

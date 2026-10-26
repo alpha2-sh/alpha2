@@ -19,7 +19,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use alpha2_eval::{FrameDesc, GeneratorPlan, LayoutPlan, StepOp};
 use alpha2_media::EmojiPolicy;
 use alpha2_model::{Generator, Rgba, TextAlign, TextStyle};
-use alpha2_render::{RenderCacheKey, RenderError, RenderSize, Renderer, SourceView, UploadTexture};
+use alpha2_render::{
+    CpuImage, CpuRenderer, CpuSource, RenderCacheKey, RenderError, RenderSize, Renderer,
+    SourceView, UploadTexture,
+};
 use alpha2_text::{ShapedText, TextFont, TextRasterError, TextRasterRequest, TextRasterizer};
 
 use crate::layout::PreparedLayout;
@@ -51,6 +54,55 @@ const RETAINED_SHAPED: usize = 256;
 pub(crate) const MAX_FONT_PIXELS: f32 = 2_048.0;
 pub(crate) const MAX_OUTLINE_PIXELS: f32 = 64.0;
 const MAX_PADDING_PIXELS: f32 = 256.0;
+
+/// Where [`TextTextures`] keeps the pixels of a rasterized text: the GPU
+/// renderer uploads them to a texture, the CPU renderer keeps them.
+pub trait TextUpload {
+    /// Takes `rgba8`, premultiplied sRGB-encoded RGBA of `size` with rows
+    /// packed, as the renderer's source for that text.
+    ///
+    /// # Errors
+    /// Returns [`RenderError::InvalidImageData`] when `rgba8` does not hold
+    /// `size`, or the GPU's upload failure.
+    fn upload_text(&self, size: RenderSize, rgba8: &[u8]) -> Result<TextPixels, RenderError>;
+}
+
+/// The pixels of one prepared text, as the renderer that drew it keeps
+/// them.
+#[derive(Debug)]
+pub struct TextPixels(TextStorage);
+
+#[derive(Debug)]
+enum TextStorage {
+    Gpu(UploadTexture),
+    Cpu(CpuSource),
+}
+
+impl TextPixels {
+    /// The text as a graph source.
+    fn view(&self) -> SourceView<'_> {
+        match &self.0 {
+            TextStorage::Gpu(texture) => SourceView::from(texture),
+            TextStorage::Cpu(source) => SourceView::cpu(source),
+        }
+    }
+}
+
+impl TextUpload for Renderer {
+    fn upload_text(&self, size: RenderSize, rgba8: &[u8]) -> Result<TextPixels, RenderError> {
+        self.upload_rgba8(size, rgba8)
+            .map(|texture| TextPixels(TextStorage::Gpu(texture)))
+    }
+}
+
+impl TextUpload for CpuRenderer {
+    fn upload_text(&self, size: RenderSize, rgba8: &[u8]) -> Result<TextPixels, RenderError> {
+        let picture = CpuImage::from_premultiplied_rgba8(size, rgba8)?;
+        Ok(TextPixels(TextStorage::Cpu(CpuSource::image(Arc::new(
+            picture,
+        )))))
+    }
+}
 
 /// One prepared text: its texture, pixel size, and where its layout box
 /// lies in it.
@@ -140,7 +192,7 @@ impl fmt::Display for TextError {
 impl std::error::Error for TextError {}
 
 struct TextEntry {
-    texture: UploadTexture,
+    texture: TextPixels,
     width: u32,
     height: u32,
     margin: [u32; 2],
@@ -255,7 +307,7 @@ impl TextTextures {
     /// with no fonts registered, only if the frame shows one.
     pub fn prepare(
         &mut self,
-        renderer: &Renderer,
+        renderer: &dyn TextUpload,
         frame: &FrameDesc,
         size: RenderSize,
     ) -> Result<(), TextError> {
@@ -302,7 +354,7 @@ impl TextTextures {
     /// Rasterizes `request` and uploads it as the text with `key`.
     fn rasterize(
         &mut self,
-        renderer: &Renderer,
+        renderer: &dyn TextUpload,
         key: u64,
         request: &TextRasterRequest,
     ) -> Result<(), TextError> {
@@ -320,7 +372,7 @@ impl TextTextures {
         // it, takes no part in placement.
         let margin = corner.map(|corner| corner.saturating_sub(request.decoration_margin()));
         let texture = renderer
-            .upload_rgba8(
+            .upload_text(
                 RenderSize::new(texture_size.width, texture_size.height)
                     .map_err(TextError::Render)?,
                 &raster.pixels.rgba8,
@@ -345,7 +397,7 @@ impl TextTextures {
     /// let go are rasterized again.
     fn prepare_layout(
         &mut self,
-        renderer: &Renderer,
+        renderer: &dyn TextUpload,
         plan: &LayoutPlan,
         time: alpha2_time::MediaTime,
         size: RenderSize,
@@ -475,7 +527,7 @@ impl TextTextures {
     /// [`crate::EngineError::Text`].
     pub fn prepare_at(
         &mut self,
-        renderer: &Renderer,
+        renderer: &dyn TextUpload,
         project: &crate::EngineProject,
         time: alpha2_time::MediaTime,
         size: RenderSize,
@@ -506,7 +558,7 @@ impl TextTextures {
     #[must_use]
     pub fn get(&self, key: u64) -> Option<TextTexture<'_>> {
         self.entries.get(&key).map(|entry| TextTexture {
-            texture: SourceView::from(&entry.texture),
+            texture: entry.texture.view(),
             width: entry.width,
             height: entry.height,
             margin: entry.margin,

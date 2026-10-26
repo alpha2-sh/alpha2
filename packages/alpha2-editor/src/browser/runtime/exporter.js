@@ -10,6 +10,7 @@ import {
   audioEncoderSampleRate,
   canEncodeVideoTrack,
   MediabunnySink,
+  videoEncoderProfiles,
 } from "alpha2/mediabunny";
 import {
   engineVideoCodec,
@@ -77,8 +78,9 @@ export { engineVideoCodec };
 
 /**
  * Which video codecs this browser encodes for an export at `width`x`height`, `frameRate`, and
- * `videoQuality` (default `high`), asked with the configuration that export would open its encoder
- * with: a codec answered `false` is refused when such an export starts.
+ * `videoQuality` (default `high`), asked with the configurations that export would open its encoder
+ * with (for H.264, High, Main or Constrained Baseline): a codec answered `false` is refused when
+ * such an export starts.
  */
 export async function probeEncoders(
   width,
@@ -87,17 +89,18 @@ export async function probeEncoders(
 ) {
   const results = {};
   for (const codec of VIDEO_CODECS)
-    results[codec.value] = await canEncodeVideoTrack(codec.value, {
-      width,
-      height,
-      rate: resolvedVideoRate({
-        codec: engineVideoCodec(codec.value),
+    results[codec.value] =
+      (await canEncodeVideoTrack(codec.value, {
         width,
         height,
-        frameRate,
-        quality: videoQuality,
-      }),
-    });
+        rate: resolvedVideoRate({
+          codec: engineVideoCodec(codec.value),
+          width,
+          height,
+          frameRate,
+          quality: videoQuality,
+        }),
+      })) !== null;
   return results;
 }
 
@@ -162,7 +165,11 @@ export async function exportTimeline({
     frameRate: rate,
     quality: videoQuality,
   });
-  await requireVideoEncoder(videoCodec, settings, videoRateControl);
+  const videoEncoding = await requireVideoEncoder(
+    videoCodec,
+    settings,
+    videoRateControl,
+  );
   const audioBitrate =
     audioCodec === undefined
       ? undefined
@@ -185,6 +192,9 @@ export async function exportTimeline({
     videoCodec,
     audioCodec,
     videoRateControl,
+    ...(videoEncoding.codecString === undefined
+      ? {}
+      : { videoCodecString: videoEncoding.codecString }),
     audioBitrate,
     audioSampleRate: audioEncoding?.sampleRate,
     audioResampler: engineBinding,
@@ -509,6 +519,12 @@ export async function exportTimeline({
       // `quantizer` when the encoder accepted constant-quantizer encoding, else the bitrate path.
       appliedVideoRateControl: sink.appliedVideoRateControl ?? null,
       videoLatencyMode: sink.videoLatencyMode ?? null,
+      // The codec string the encoder opened (for H.264, its profile and level), and the H.264
+      // profiles this browser refused before it: a lower profile of the same codec, not a switch.
+      videoCodecString:
+        sink.videoCodecString ?? videoEncoding.codecString ?? null,
+      videoCodecProfile: videoEncoding.profile ?? null,
+      videoEncoderFallbacks: videoEncoding.fallbacks,
       audioCodec,
       audioRateControl:
         audioBitrate === undefined
@@ -957,17 +973,25 @@ export async function chooseAudioCodec(
 }
 
 /**
- * Refuses an export whose video codec this browser does not encode at the export's size and rate,
- * before anything renders, as `INVALID_INPUT`: WebCodecs leaves the codecs to the browser, and a
- * retry would meet the same browser.
+ * How this browser encodes the export's video (`canEncodeVideoTrack` in `alpha2/mediabunny`: for
+ * H.264, the first of High, Main and Constrained Baseline it encodes). Refuses an export whose
+ * video codec this browser does not encode at the export's size and rate in any of them, before
+ * anything renders, as `INVALID_INPUT`: WebCodecs leaves the codecs to the browser, and a retry
+ * would meet the same browser.
  */
 export async function requireVideoEncoder(codec, { width, height }, rate) {
-  if (await canEncodeVideoTrack(codec, { width, height, rate })) return;
+  const encoding = await canEncodeVideoTrack(codec, { width, height, rate });
+  if (encoding !== null) return encoding;
   const label =
     VIDEO_CODECS.find((c) => c.value === codec)?.label ?? String(codec);
+  const profiles = videoEncoderProfiles(codec, { width, height, rate });
+  const tried =
+    profiles.length === 0
+      ? ""
+      : ` in any profile (tried ${profiles.map((p) => `${p.profile} ${p.codecString}`).join(", ")})`;
   throw new ExportFailureError({
     code: "INVALID_INPUT",
-    message: `This browser cannot encode ${label} video at ${width}x${height}. Choose another video codec, or use the native exporter.`,
+    message: `This browser cannot encode ${label} video at ${width}x${height}${tried}. Choose another video codec, or use the native exporter.`,
     origin: "browser",
     operation: "export",
     backend: "unknown",

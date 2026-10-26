@@ -131,7 +131,7 @@ static NEXT_GRAPH_ID: AtomicU32 = AtomicU32::new(1);
 
 #[derive(Debug)]
 pub(crate) enum RenderNode<'a> {
-    Source(&'a wgpu::TextureView),
+    Source(SourceView<'a>),
     Effect {
         effect: EffectId,
         source: RenderNodeId,
@@ -285,7 +285,7 @@ impl<'a> RenderGraph<'a> {
     /// Adds an externally owned source texture.
     pub fn add_source(&mut self, texture: SourceView<'a>) -> RenderNodeId {
         let key = transient_source_key(self.id, self.nodes.len());
-        self.push(RenderNode::Source(texture.wgpu_view()), key, false)
+        self.push(RenderNode::Source(texture), key, false)
     }
 
     /// Adds an externally owned texture with a cross-frame stable cache key.
@@ -298,7 +298,7 @@ impl<'a> RenderGraph<'a> {
         texture: SourceView<'a>,
         key: RenderCacheKey,
     ) -> RenderNodeId {
-        self.push(RenderNode::Source(texture.wgpu_view()), key, true)
+        self.push(RenderNode::Source(texture), key, true)
     }
 
     /// Adds a registered one-input effect node.

@@ -175,11 +175,20 @@ export interface WasmEffectRegistry {
  */
 export type AudioContinuity = "exact" | "continue-small-gaps";
 
-/** Generated wasm surface used by the concrete render-worker host. */
+/**
+ * Generated wasm surface used by the concrete render-worker host: the GPU renderer
+ * (`createForCanvas`) or the CPU one (`createCpu`), which answer the same calls.
+ */
 export interface WasmCanvasRenderer extends WasmEffectRegistry {
   /**
+   * Which renderer draws: `"gpu"` (WebGPU or WebGL2) or `"cpu"` (the engine's CPU renderer in
+   * wasm, which refuses runtime effects with `EFFECT_ERROR`). Absent means `"gpu"`.
+   */
+  readonly renderer?: "gpu" | "cpu";
+  /**
    * Whether the GPU device is gone: a WebGPU device-lost callback, or a WebGL canvas's
-   * `webglcontextlost` event. A lost renderer rejects export readbacks and must be recreated.
+   * `webglcontextlost` event. A lost renderer rejects export readbacks and must be recreated. The
+   * CPU renderer is never lost.
    */
   readonly deviceLost: boolean;
   readonly uploadedFrameCount: number;
@@ -528,6 +537,12 @@ export interface WasmEffectRegistryBinding {
   create(): Promise<WasmEffectRegistry>;
   createForCanvas?(canvas: OffscreenCanvas): Promise<WasmCanvasRenderer>;
   createForHtmlCanvas?(canvas: HTMLCanvasElement): Promise<WasmCanvasRenderer>;
+  /**
+   * The renderer that draws on the CPU, for a browser with no WebGPU adapter and no WebGL2
+   * context: it presents on `canvas`'s 2D context (nowhere without a canvas) and needs no GPU. It
+   * throws `INVALID_INPUT` for a canvas that already holds a WebGL or WebGPU context.
+   */
+  createCpu?(canvas?: OffscreenCanvas | HTMLCanvasElement): WasmCanvasRenderer;
 }
 
 /** Typed adapter that keeps JSON serialization out of product integrations. */

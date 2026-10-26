@@ -17,6 +17,9 @@ permissions:
 
 env:
   CARGO_INCREMENTAL: 0
+  # Runners have no GPU: `auto` would render on the CPU. Jobs that test the GPU renderer mean it on
+  # lavapipe; the cpu-renderer job runs the CPU renderer.
+  ALPHA2_RENDERER: gpu
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   SAVE_RUST_CACHE: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/prerelease-v') }}
 
@@ -149,6 +152,11 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run test:wasm-parity
+      # The CPU renderer's frames, natively, as wasm, and through the packaged binding.
+      - uses: taiki-e/cache-cargo-install-action@9ee83daaa7b96a6fab930949ecf1122bba04a389 # v3.0.8
+        with:
+          tool: wasm-bindgen-cli@0.2.128
+      - run: npm run test:render-determinism
       - run: npm run test:package
       - run: scripts/test-clean-consumers.sh
 
@@ -214,6 +222,141 @@ jobs:
           grep "hardware decode unavailable, using software" "$RUNNER_TEMP/lavapipe.log"
       - run: npm run test:node-e2e
       - run: python/alpha2/.venv/bin/pytest python/alpha2/tests/test_e2e.py
+
+  openh264:
+    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',openh264,') }}
+    name: OpenH264 (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64
+            runner: ubuntu-latest
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install native media build dependencies
+        run: >-
+          sudo apt-get update && sudo apt-get install --yes
+          libavcodec-dev libavformat-dev libavutil-dev libswresample-dev
+          libswscale-dev libasound2-dev pkg-config clang mesa-vulkan-drivers bzip2
+      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: openh264
+          cache-bin: false
+          save-if: ${{ env.SAVE_RUST_CACHE }}
+      - name: Pin the FFmpeg SDK
+        run: |
+          sdk_root="$(scripts/fetch-ffmpeg-sdk.sh ${{ matrix.target }})"
+          {
+            echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
+            echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
+            echo "FFMPEG_LINK_MODE=dynamic"
+            echo "LD_LIBRARY_PATH=$sdk_root/lib"
+          } >> "$GITHUB_ENV"
+      # Cisco's binary, downloaded from Cisco onto this runner, for these tests only: nothing this
+      # workflow builds or uploads carries it. The cache is keyed on the manifest that pins it, and
+      # the fetch checks both SHA-256s on every run, cached or not.
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ runner.temp }}/openh264
+          key: openh264-${{ matrix.target }}-${{ hashFiles('release/openh264/manifest.toml') }}
+      - name: Fetch Cisco's OpenH264 binary
+        run: |
+          library="$(scripts/fetch-openh264.sh ${{ matrix.target }} "$RUNNER_TEMP/openh264")"
+          echo "ALPHA2_OPENH264_LIBRARY=$library" >> "$GITHUB_ENV"
+      - name: Loader, encoder and sink tests
+        run: cargo test --release -p alpha2-native --lib openh264 --no-fail-fast
+      - name: Host tests
+        run: cargo test --release -p alpha2-host openh264 --no-fail-fast
+      - name: A GPU without an H.264 encoder exports H.264 through OpenH264, the same bytes twice
+        run: |
+          cargo build --release -p alpha2-host
+          set -- /usr/share/vulkan/icd.d/lvp_icd*.json
+          python3 - <<'EOF'
+          import json
+          project = json.load(open("tests/cases/host-parity-complex-project.json"))
+          project["settings"].update(width=1920, height=1080)
+          json.dump(project, open("/tmp/openh264-project.json", "w"))
+          EOF
+          for run in first second; do
+            VK_ICD_FILENAMES="$1" target/release/alpha2-host export \
+              --project /tmp/openh264-project.json \
+              --asset video=tests/corpus/parity-rgb.mov --asset still=tests/corpus/parity-image.png \
+              --out "$RUNNER_TEMP/$run.mp4" > "$RUNNER_TEMP/$run.json" 2> "$RUNNER_TEMP/$run.log" \
+              || { cat "$RUNNER_TEMP/$run.log"; exit 1; }
+          done
+          python3 - "$RUNNER_TEMP/first.json" <<'EOF'
+          import json, sys
+          result = json.load(open(sys.argv[1]))["result"]
+          assert result["videoEncoder"] == "openh264", result["videoEncoder"]
+          assert result["videoEncoderClass"] == "software"
+          assert result["videoThreadCount"] == 4, result["videoThreadCount"]
+          assert result["frames"] == 36, result["frames"]
+          assert result["videoEncoderLibrary"]["provider"] == "cisco-openh264"
+          assert not any(f["encoder"].endswith(("_vulkan", "_nvenc")) for f in result["videoEncoderFallbacks"])
+          EOF
+          cmp "$RUNNER_TEMP/first.mp4" "$RUNNER_TEMP/second.mp4"
+
+  cpu-renderer:
+    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',cpu-renderer,') }}
+    name: CPU renderer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install native media build dependencies
+        run: >-
+          sudo apt-get update && sudo apt-get install --yes
+          libavcodec-dev libavformat-dev libavutil-dev libswresample-dev
+          libswscale-dev libasound2-dev pkg-config clang mesa-vulkan-drivers
+      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: cpu-renderer
+          cache-bin: false
+          save-if: ${{ env.SAVE_RUST_CACHE }}
+      - name: Pin the FFmpeg SDK
+        run: |
+          sdk_root="$(scripts/fetch-ffmpeg-sdk.sh linux-x64)"
+          {
+            echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
+            echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
+            echo "FFMPEG_LINK_MODE=dynamic"
+            echo "LD_LIBRARY_PATH=$sdk_root/lib"
+          } >> "$GITHUB_ENV"
+      - name: Every CPU pass against the GPU's on lavapipe
+        run: cargo test --release -p alpha2-render --lib cpu_ --no-fail-fast
+      - name: The host suite on the CPU renderer
+        env:
+          ALPHA2_RENDERER: cpu
+        run: cargo test --release -p alpha2-host --no-fail-fast
+      - name: Without any graphics driver, and with only lavapipe, auto renders on the CPU
+        env:
+          ALPHA2_RENDERER: auto
+        run: |
+          cargo build --release -p alpha2-host
+          set -- /usr/share/vulkan/icd.d/lvp_icd*.json
+          for case in none lavapipe; do
+            if [ "$case" = none ]; then icd=/nonexistent; else icd="$1"; fi
+            VK_ICD_FILENAMES="$icd" WGPU_BACKEND=vulkan target/release/alpha2-host export \
+              --project tests/cases/host-parity-complex-project.json \
+              --asset video=tests/corpus/parity-rgb.mov --asset still=tests/corpus/parity-image.png \
+              --no-audio --video-codec mpeg4-part2 --out "$RUNNER_TEMP/$case.mp4" \
+              > "$RUNNER_TEMP/$case.json" 2> "$RUNNER_TEMP/$case.log" \
+              || { cat "$RUNNER_TEMP/$case.log"; exit 1; }
+            python3 - "$RUNNER_TEMP/$case.json" <<'EOF'
+          import json, sys
+          result = json.load(open(sys.argv[1]))["result"]
+          assert result["renderer"] == "cpu", result["renderer"]
+          assert result["rendererReason"], result
+          assert result["frames"] == 36, result["frames"]
+          EOF
+          done
 
   wasm-audio:
     if: >-
@@ -466,6 +609,8 @@ jobs:
           cache-bin: false
           save-if: ${{ env.SAVE_RUST_CACHE }}
       - run: cargo test -p alpha2-audio -p alpha2-audio-determinism -p alpha2-eval -p alpha2-text --no-fail-fast
+      - name: CPU renderer frames (no GPU needed)
+        run: cargo test -p alpha2-render --lib cpu_determinism --no-fail-fast
 
   security:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',security,') }}

@@ -34,6 +34,7 @@ mod encoders;
 mod frame_metadata;
 mod hardware_decode;
 mod muxing;
+mod openh264;
 mod outputs;
 mod seeking;
 

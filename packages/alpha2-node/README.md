@@ -53,18 +53,34 @@ The request's fields are typed and described in `ExportProjectRequest`; the [hos
 
 ## Capabilities
 
-`client.getCapabilities()` reports what the host can decode and encode, and `encode.containers` which codecs each container offers. An MP4, MOV or Matroska export without `videoCodec` gets H.264, and a host that cannot encode it refuses the export instead of writing another codec. A host encodes H.264 either with an encoder listed in `encode.video` or through its GPU-resident path, `encode.gpuOutputPath`, whose encoder takes frames on the GPU only (on Linux, `h264_vulkan`) and so is not in `encode.video`:
+`client.getCapabilities()` reports what the host can decode and encode, and `encode.containers` which codecs each container offers. An MP4, MOV or Matroska export without `videoCodec` gets H.264, and a host that cannot encode it refuses the export instead of writing another codec. A host encodes H.264 either with an encoder listed in `encode.video` or through its GPU-resident path, `encode.gpuOutputPath`, whose encoder takes frames on the GPU only (on Linux, `h264_vulkan`) and so is not in `encode.video`. `encode.h264` sums this up: `available` (every export can), `gpu-only` (only exports the GPU-resident path takes) or `unavailable`, with a `reason` and a `remedy`:
 
 ```js
 const { encode } = (await client.getCapabilities()).capabilities;
-const h264 =
-  encode.video.some((encoder) => encoder.id === "h264") ||
-  (encode.gpuOutputPath.codecs ?? []).some((codec) => codec.videoCodec === "h264");
+if (encode.h264.status !== "available") console.warn(encode.h264.reason, encode.h264.remedy);
 ```
 
-The first `getCapabilities` call for a decode mode starts a host; calls made while it runs share it, and its answer serves later calls for that mode.
+The first `getCapabilities` call for a decode mode and renderer starts a host; calls made while it runs share it, and its answer serves later calls for those modes.
 
 `videoDecode` (`software`, `auto`, `hardware-required`) chooses how the host decodes video, as a client option or per export; by default the host decides, `auto` on Linux and `software` on macOS and Windows. Under `auto`, an export whose hardware decoder stalls runs once more decoding in software.
+
+`renderer` (`auto`, `gpu`, `cpu`) chooses what draws the frames, as a client option or per export; unset, the host reads `ALPHA2_RENDERER`, else uses `auto`. `auto` renders on a hardware GPU when there is one and on the CPU otherwise, never on a software GPU adapter (lavapipe, llvmpipe, WARP, SwiftShader); `gpu` takes whatever adapter the host finds and fails with `GPU_INIT_FAILED` without one; `cpu` opens no graphics driver. Results and capabilities report `renderer` (`gpu` or `cpu`), `rendererReason` (why the host renders on the CPU) and, on the CPU, `rendererThreads`; `capabilities.features` has `renderer.gpu`, `renderer.cpu` and `effects.runtime`. A runtime WGSL effect cannot run on the CPU renderer: such an export fails with `EFFECT_ERROR`.
+
+## Software H.264 (OpenH264)
+
+Where no hardware H.264 encoder is available, `alpha2-host` can encode H.264 in software with Cisco's OpenH264 library, which it loads at run time. Neither this package nor the native archives include that library, and nothing downloads it unless you ask: Cisco's patent licence covers its binary only when the user fetches it from Cisco.
+
+```sh
+npx @alpha2-sh/node install --openh264
+```
+
+This downloads Cisco's OpenH264 2.7.0 binary for the platform from `https://ciscobinary.openh264.org`, checks the download and the library in it against their SHA-256s, and puts the library in the cache beside the host archives, in `openh264-2.7.0-<target>/`, where `alpha2-host` finds it. It installs only the library, not `alpha2-host`. `--force` downloads again, `installOpenH264(options)` does the same from code, and `ALPHA2_OPENH264_DOWNLOAD_URL` (or the `downloadUrl` option) names a mirror. Every run prints Cisco's notice:
+
+```text
+OpenH264 Video Codec provided by Cisco Systems, Inc.
+```
+
+The library is Cisco's binary, under [Cisco's terms](https://www.openh264.org/BINARY_LICENSE.txt). Set `ALPHA2_OPENH264=0` to keep `alpha2-host` from using it. `encode.openh264` in the capabilities says whether the host loaded it, and an export that used it names it as `videoEncoder: "openh264"` with `videoEncoderLibrary`.
 
 ## Errors
 
@@ -72,7 +88,7 @@ Every rejection is an `Alpha2HostError` with a `code`, the protocol's error code
 
 - `Alpha2ProjectValidationError`: the project is invalid (`problems`).
 - `Alpha2ConformError`: the media is not ready, so nothing was rendered (`report` says, per source, what is missing, offline or not the media the project recorded). `client.conform({ project, assets })` asks the same question without exporting.
-- `Alpha2GpuInitializationError`: the host could not create its GPU device.
+- `Alpha2GpuInitializationError`: the host could not create its GPU device (only with `renderer: "gpu"`).
 - `Alpha2AbortError`: the request's `signal` aborted it.
 
 ## Cancelling

@@ -129,14 +129,22 @@ impl FrameProvider for FrameStore<UploadedTexture> {
             .and_then(|texture| texture.pending.as_ref())
     }
 
-    /// The source and the upload generation: an upload is presented once,
-    /// so its texture is the same whenever and wherever it is drawn.
     fn source_key(&self, source: &SourceId, time: MediaTime) -> Option<RenderCacheKey> {
-        let generation = self.generation(source.as_str(), time.ticks())?;
-        let mut hash = std::hash::DefaultHasher::new();
-        std::hash::Hash::hash(&(source.as_str(), generation), &mut hash);
-        Some(RenderCacheKey::source(std::hash::Hasher::finish(&hash)))
+        upload_source_key(self, source, time)
     }
+}
+
+/// The source and the upload generation: an upload is presented once, so
+/// its picture is the same whenever and wherever it is drawn.
+pub(crate) fn upload_source_key<T>(
+    frames: &FrameStore<T>,
+    source: &SourceId,
+    time: MediaTime,
+) -> Option<RenderCacheKey> {
+    let generation = frames.generation(source.as_str(), time.ticks())?;
+    let mut hash = std::hash::DefaultHasher::new();
+    std::hash::Hash::hash(&(source.as_str(), generation), &mut hash);
+    Some(RenderCacheKey::source(std::hash::Hasher::finish(&hash)))
 }
 
 #[derive(serde::Serialize)]

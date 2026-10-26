@@ -456,7 +456,7 @@ pub struct YuvFrame<'a> {
 
 /// How an uploaded plane stores samples on the GPU.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum PlaneStorage {
+pub(crate) enum PlaneStorage {
     /// 8-bit samples as `R8Unorm`/`Rg8Unorm`.
     Unorm8,
     /// 16-bit containers as `R16Unorm`/`Rg16Unorm`.
@@ -487,7 +487,7 @@ impl PlaneStorage {
     /// reaches only `1023 / 65535` of full scale, and `P010`'s high-aligned
     /// one `65472 / 65535`.
     #[allow(clippy::cast_precision_loss)]
-    fn code_scale(self, format: YuvFormat) -> f32 {
+    pub(crate) fn code_scale(self, format: YuvFormat) -> f32 {
         match self {
             Self::Unorm8 => 1.0,
             Self::Unorm16 | Self::Uint16 => {
@@ -1301,7 +1301,7 @@ impl Renderer {
     }
 }
 
-fn validate_presentation(
+pub(crate) fn validate_presentation(
     source: RenderSize,
     presentation: SourcePresentation,
 ) -> Result<(), RenderError> {
@@ -1326,7 +1326,7 @@ fn validate_presentation(
 }
 
 /// What the conversion does with a source's signal.
-enum HdrHandling {
+pub(crate) enum HdrHandling {
     /// An SDR signal, decoded as SDR.
     Sdr,
     /// An HDR signal tone-mapped into the working space.
@@ -1336,7 +1336,7 @@ enum HdrHandling {
 }
 
 /// How `policy` takes `color`, with its diagnostic recorded.
-fn hdr_handling(
+pub(crate) fn hdr_handling(
     color: ColorMetadata,
     policy: ColorPolicy,
     diagnostics: &mut Vec<ColorDiagnostic>,
@@ -1367,7 +1367,7 @@ fn orientation_uniform(orientation: Orientation) -> u32 {
 }
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-fn presentation_uniform_bytes(
+pub(crate) fn presentation_uniform_bytes(
     source: RenderSize,
     presentation: SourcePresentation,
     encoding: PresentedEncoding,
@@ -1424,7 +1424,7 @@ fn presentation_uniform_bytes(
     clippy::cast_precision_loss,
     clippy::too_many_arguments
 )]
-fn uniform_bytes(
+pub(crate) fn uniform_bytes(
     color: ColorMetadata,
     tone: Option<HdrToneMap>,
     alpha: f32,

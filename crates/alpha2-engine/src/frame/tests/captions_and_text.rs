@@ -683,3 +683,41 @@ fn a_frame_of_text_and_captions_has_a_complete_cache_key() {
         Ok(alpha2_render::CacheEligibility::Eligible)
     );
 }
+
+/// The caption golden drawn by the CPU renderer: text rasterized once,
+/// kept as the CPU renderer's picture, composited between the tracks.
+#[test]
+fn captions_draw_the_same_cues_on_the_cpu() {
+    let renderer = alpha2_render::CpuRenderer::new(2);
+    let project = caption_project();
+    let mut captions = crate::TextTextures::new();
+    captions
+        .add_font(
+            "Alpha2 Fixture",
+            std::fs::read("../../tests/fonts/Alpha2Fixture.ttf").expect("fixture font"),
+            0,
+        )
+        .expect("font");
+    let size = RenderSize::new(160, 90).expect("size");
+    let mut render = |ticks: i64| {
+        let frame = project
+            .evaluate(MediaTime::from_ticks(ticks))
+            .expect("frame");
+        captions.prepare(&renderer, &frame, size).expect("captions");
+        renderer
+            .render_frame(size, &frame, &CaptionFrames(&captions))
+            .expect("frame renders")
+            .texture
+            .expect("complete")
+            .read_rgba8()
+    };
+    let (first, second) = (render(116_000), render(120_000));
+    let rows = (0..90)
+        .flat_map(|row| {
+            [&first, &second]
+                .into_iter()
+                .flat_map(move |pixels| pixels[row * 640..(row + 1) * 640].iter().copied())
+        })
+        .collect::<Vec<_>>();
+    alpha2_golden_support::assert_rgba8_golden("caption_cues", (320, 90), &rows, 2);
+}

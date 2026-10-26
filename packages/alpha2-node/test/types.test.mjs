@@ -49,9 +49,14 @@ const samples: number = result.performance.encodeChannelDepthSamples?.length ?? 
 const fallbacks: number = result.performance.hardwareFallbackReasons?.["unsupported-profile"] ?? 0;
 const reserved: number | undefined = result.performance.gpuEncodeBudget?.reservedBytes;
 const why: string | null = capabilities.capabilities.decode.hardwareUnavailable;
+const renderer: "gpu" | "cpu" = result.renderer;
+const fellBack: string | null = capabilities.rendererReason ?? result.rendererReason;
+const threads: number | undefined = capabilities.rendererThreads ?? result.rendererThreads;
+const cpuMs: number | undefined = result.performance.cpuRenderMs;
+const cpuBytes: number | undefined = result.performance.cpuImageHighWaterBytes;
 // A counter the declarations do not name is any of the values the host writes, null included.
 const other: number | boolean | string | null | object | undefined = result.performance.renderMs;
-export { samples, fallbacks, reserved, why, other };
+export { samples, fallbacks, reserved, why, renderer, fellBack, threads, cpuMs, cpuBytes, other };
 `),
     [],
   );

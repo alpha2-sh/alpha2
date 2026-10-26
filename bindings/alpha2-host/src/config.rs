@@ -528,6 +528,58 @@ impl VideoDecodePolicy {
     }
 }
 
+/// Which renderer a host draws with, chosen once when it starts.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub enum RendererPolicy {
+    /// A hardware GPU when there is one, else the CPU renderer; never a
+    /// software GPU adapter (lavapipe, llvmpipe, WARP, `SwiftShader`).
+    #[default]
+    Auto,
+    /// The GPU renderer on whatever adapter is found, software ones
+    /// included.
+    Gpu,
+    /// The CPU renderer, opening no graphics driver.
+    Cpu,
+}
+
+impl RendererPolicy {
+    /// Parses one of the three accepted identifiers.
+    ///
+    /// # Errors
+    /// Returns a message naming the accepted values for anything else.
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "auto" => Ok(Self::Auto),
+            "gpu" => Ok(Self::Gpu),
+            "cpu" => Ok(Self::Cpu),
+            other => Err(format!("renderer must be auto, gpu, or cpu; got {other}")),
+        }
+    }
+
+    /// Reads `ALPHA2_RENDERER`, defaulting to `auto`.
+    ///
+    /// # Errors
+    /// Returns a message when the variable holds an unknown value.
+    pub fn from_env() -> Result<Self, String> {
+        match env::var("ALPHA2_RENDERER") {
+            Ok(value) => Self::parse(&value),
+            Err(_) => Ok(Self::default()),
+        }
+    }
+}
+
+/// The CPU renderer's threads: `ALPHA2_RENDER_THREADS`, else every thread
+/// the process may run on (its affinity and cgroup quota counted).
+pub fn configured_render_threads() -> usize {
+    env::var("ALPHA2_RENDER_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|threads| *threads > 0)
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get)
+        })
+}
+
 /// Decoder surfaces one reverse window may retain before it uses software.
 ///
 /// Reverse playback holds every frame of a window at once, so the default is

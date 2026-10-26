@@ -167,7 +167,7 @@ pub(crate) struct PhysicalFrameKey {
 }
 
 impl PhysicalFrameKey {
-    fn new(generation: u64, source: &SourceId, frame: &NativeVideoFrame) -> Self {
+    pub(crate) fn new(generation: u64, source: &SourceId, frame: &NativeVideoFrame) -> Self {
         Self {
             generation,
             source: source.clone(),
@@ -1471,7 +1471,7 @@ impl ExternalTextureLease for HostD3D12Lease {
 
 /// Refuses an HDR frame in a project whose color pipeline refuses HDR, in
 /// words that say so.
-fn refuse_hdr(
+pub(crate) fn refuse_hdr(
     color: ColorPolicy,
     frame: Option<alpha2_media::ColorMetadata>,
 ) -> Result<(), String> {
@@ -1486,7 +1486,7 @@ fn refuse_hdr(
 
 /// The renderer's view of a decoded YCbCr frame: its luma and chroma planes,
 /// then its alpha plane when the format has one.
-fn yuv_source(
+pub(crate) fn yuv_source(
     frame: &DecodedVideoFrame,
     format: alpha2_media::YuvFormat,
     size: RenderSize,
@@ -1679,7 +1679,7 @@ pub fn packed_yuv420_bytes(size: RenderSize) -> u64 {
 /// shows one picture has one key, as it has one texture. Keys from different
 /// exports could collide, so the host clears the result cache when each
 /// export starts.
-fn export_source_key(
+pub(crate) fn export_source_key(
     source: &SourceId,
     picture: Option<&PhysicalFrameKey>,
     image: bool,

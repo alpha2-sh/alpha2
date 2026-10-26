@@ -556,7 +556,7 @@ fn plane_layout_js(
 
 /// `color` as a `WebCodecs` `VideoColorSpaceInit`, so a browser encoder tags
 /// what the pack encoded, as the native encoder does from the same value.
-fn video_color_space(color: alpha2_media::ColorMetadata) -> Result<JsValue, JsValue> {
+pub(crate) fn video_color_space(color: alpha2_media::ColorMetadata) -> Result<JsValue, JsValue> {
     use alpha2_media::{ColorMatrix, ColorPrimaries, ColorRange, TransferFunction};
     let space = web_sys::js_sys::Object::new();
     let primaries = match color.primaries {

@@ -43,6 +43,7 @@ mod audio;
 mod capture;
 mod cli;
 mod config;
+mod cpu_frames;
 #[cfg(all(target_os = "windows", feature = "hwencode"))]
 mod d3d12va_probe;
 mod decode;
@@ -68,6 +69,7 @@ mod protocol;
 mod providers;
 mod recovery;
 mod render_cache;
+mod renderer_backend;
 mod tag;
 mod teardown;
 mod termination;
@@ -90,7 +92,7 @@ use crate::protocol::{
     HostError, MAX_REQUEST_LINE_BYTES, operation_from_line, parse_request, request_id_from_line,
 };
 use alpha2_gpu::{GpuContext, GpuDiagnostic};
-use alpha2_native::{codec_capabilities, ffmpeg_runtime_identity};
+use alpha2_native::ffmpeg_runtime_identity;
 use alpha2_render::Renderer;
 use serde_json::{Value, json};
 
@@ -216,7 +218,7 @@ fn exit_if_gpu_lost(host: &Host) {
 /// submission, so without this check a host whose readback failed to map
 /// would keep taking exports that can only fail.
 fn gpu_unusable(host: &Host) -> Option<String> {
-    if let Some(lost) = host.renderer.gpu_lost() {
+    if let Some(lost) = host.renderer.gpu().and_then(Renderer::gpu_lost) {
         return Some(lost.to_string());
     }
     host.gpu_log
@@ -493,8 +495,120 @@ fn probe_metal_gpu_encode(args: Vec<String>) -> Result<(), HostError> {
     }))
 }
 
-#[allow(clippy::too_many_lines)]
+/// Makes the host the renderer policy (`ALPHA2_RENDERER`, default `auto`)
+/// asks for, decoding as `policy` says.
 fn create_host(policy: VideoDecodePolicy) -> Result<Host, HostError> {
+    let renderer = crate::config::RendererPolicy::from_env().map_err(HostError::invalid_input)?;
+    create_host_with(policy, renderer)
+}
+
+/// Makes the host `renderer` asks for.
+///
+/// `auto` takes a hardware GPU when one starts, and otherwise the CPU
+/// renderer: never a software adapter, which renders the same pictures an
+/// order of magnitude slower. A GPU host that came up on one anyway (the
+/// hardware adapters failed) is let go for the CPU renderer.
+pub(crate) fn create_host_with(
+    policy: VideoDecodePolicy,
+    renderer: crate::config::RendererPolicy,
+) -> Result<Host, HostError> {
+    use crate::config::RendererPolicy;
+    match renderer {
+        RendererPolicy::Gpu => create_gpu_host(policy),
+        RendererPolicy::Cpu => create_cpu_host(policy, "requested (--renderer cpu)".to_owned()),
+        RendererPolicy::Auto => {
+            if let Some(reason) = no_hardware_adapter() {
+                return create_cpu_host(policy, reason);
+            }
+            match create_gpu_host(policy) {
+                Ok(host) => {
+                    let software = host
+                        .renderer
+                        .gpu()
+                        .filter(|renderer| renderer.gpu_capabilities().software_rasterizer)
+                        .map(|renderer| renderer.gpu_capabilities().adapter_name.clone());
+                    match software {
+                        None => Ok(host),
+                        Some(adapter) => {
+                            drop(host);
+                            create_cpu_host(
+                                policy,
+                                format!("the GPU host started on the software adapter {adapter}"),
+                            )
+                        }
+                    }
+                }
+                Err(error) if error.code == "GPU_INIT_FAILED" => {
+                    create_cpu_host(policy, format!("no GPU host: {}", error.message))
+                }
+                Err(error) => Err(error),
+            }
+        }
+    }
+}
+
+/// Why there is no hardware adapter to render on, or `None` when there is
+/// one: every adapter the backends in use list is a software rasterizer, or
+/// none is listed (no driver, or no graphics loader at all).
+fn no_hardware_adapter() -> Option<String> {
+    let instance =
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let backends = wgpu::Backends::from_env().unwrap_or(wgpu::Backends::all());
+    let adapters = pollster::block_on(instance.enumerate_adapters(backends));
+    let mut software = Vec::new();
+    for adapter in &adapters {
+        let info = adapter.get_info();
+        if info.device_type != wgpu::DeviceType::Cpu {
+            return None;
+        }
+        software.push(info.name);
+    }
+    Some(if software.is_empty() {
+        "no GPU adapter was found".to_owned()
+    } else {
+        format!(
+            "no hardware GPU; only software adapters ({}), which auto does not use",
+            software.join(", ")
+        )
+    })
+}
+
+/// A host that renders on the CPU, for `reason`.
+fn create_cpu_host(policy: VideoDecodePolicy, reason: String) -> Result<Host, HostError> {
+    if policy.requires_hardware() {
+        return Err(HostError::new(
+            "HARDWARE_DECODE_UNAVAILABLE",
+            format!("hardware decode is required, but this host renders on the CPU ({reason})"),
+        ));
+    }
+    let renderer = alpha2_render::CpuRenderer::new(crate::config::configured_render_threads());
+    alpha2_os::diagnostic!(
+        "alpha2-host renderer: CPU, {} threads ({reason})",
+        renderer.threads()
+    );
+    log_runtime_codecs();
+    let builtins = alpha2_render::builtin_effect_definitions()
+        .into_iter()
+        .chain(alpha2_render::builtin_transition_definitions())
+        .filter(|definition| {
+            alpha2_render::EffectCatalog::project_effect_id(
+                &renderer,
+                &definition.id,
+                definition.version,
+            )
+            .is_some()
+        })
+        .map(|definition| (definition.id, definition.version))
+        .collect::<HashSet<_>>();
+    let host = Host::new_cpu(renderer, builtins, reason);
+    if let Err(reason) = crate::host::host_binary_digest() {
+        alpha2_os::diagnostic!("alpha2-host render cache unavailable: {reason}");
+    }
+    Ok(host)
+}
+
+#[allow(clippy::too_many_lines)]
+fn create_gpu_host(policy: VideoDecodePolicy) -> Result<Host, HostError> {
     // Nothing in a build without hardware decode can keep `hardware-required`: it would decode
     // every frame in software under the mode's name.
     if policy.requires_hardware()
@@ -615,46 +729,7 @@ fn create_host(policy: VideoDecodePolicy) -> Result<Host, HostError> {
         adapter.driver_info,
         adapter.tier
     );
-    let codecs = codec_capabilities();
-    let ffmpeg = ffmpeg_runtime_identity();
-    match ffmpeg.pinned_sdk_mismatch() {
-        None => alpha2_os::diagnostic!(
-            "alpha2-host FFmpeg: {}, pinned SDK {}",
-            ffmpeg.version,
-            ffmpeg.pinned_sdk_release
-        ),
-        Some(reason) => alpha2_os::diagnostic!(
-            "alpha2-host FFmpeg: {}, WARNING: not the pinned SDK {} ({reason}); this build \
-             linked whatever FFmpeg pkg-config found, so its encoders and exports differ from \
-             a release.",
-            ffmpeg.version,
-            ffmpeg.pinned_sdk_release
-        ),
-    }
-    alpha2_os::diagnostic!(
-        "alpha2-host MP4 encoders: video=[{}] audio=[{}]",
-        codecs
-            .video
-            .iter()
-            .map(|capability| format!(
-                "{}:{}{}",
-                capability.codec.as_str(),
-                capability.encoder_name,
-                if capability.hardware_accelerated {
-                    " (hw)"
-                } else {
-                    ""
-                }
-            ))
-            .collect::<Vec<_>>()
-            .join(", "),
-        codecs
-            .audio
-            .iter()
-            .map(|capability| format!("{}:{}", capability.codec.as_str(), capability.encoder_name))
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
+    log_runtime_codecs();
     let builtins = builtin_ids
         .into_iter()
         .map(|id| (id.as_str().to_owned(), id.version()))
@@ -704,6 +779,57 @@ fn create_host(policy: VideoDecodePolicy) -> Result<Host, HostError> {
         alpha2_os::diagnostic!("alpha2-host render cache unavailable: {reason}");
     }
     Ok(host)
+}
+
+/// Logs the `FFmpeg` runtime this host linked and the encoders it offers.
+fn log_runtime_codecs() {
+    // What is known without opening an encoder: an encoder that must be opened to prove it runs
+    // here (NVENC, Media Foundation, VideoToolbox) is opened when an export or `capabilities`
+    // first asks, not by every host that starts.
+    let (video_encoders, unprobed) = alpha2_native::video_encoders_without_probing();
+    let audio_encoders = alpha2_native::audio_encoder_capabilities();
+    let ffmpeg = ffmpeg_runtime_identity();
+    match ffmpeg.pinned_sdk_mismatch() {
+        None => alpha2_os::diagnostic!(
+            "alpha2-host FFmpeg: {}, pinned SDK {}",
+            ffmpeg.version,
+            ffmpeg.pinned_sdk_release
+        ),
+        Some(reason) => alpha2_os::diagnostic!(
+            "alpha2-host FFmpeg: {}, WARNING: not the pinned SDK {} ({reason}); this build \
+             linked whatever FFmpeg pkg-config found, so its encoders and exports differ from \
+             a release.",
+            ffmpeg.version,
+            ffmpeg.pinned_sdk_release
+        ),
+    }
+    alpha2_os::diagnostic!(
+        "alpha2-host MP4 encoders: video=[{}] audio=[{}]{}",
+        video_encoders
+            .iter()
+            .map(|capability| format!(
+                "{}:{}{}",
+                capability.codec.as_str(),
+                capability.encoder_name,
+                if capability.hardware_accelerated {
+                    " (hw)"
+                } else {
+                    ""
+                }
+            ))
+            .collect::<Vec<_>>()
+            .join(", "),
+        audio_encoders
+            .iter()
+            .map(|capability| format!("{}:{}", capability.codec.as_str(), capability.encoder_name))
+            .collect::<Vec<_>>()
+            .join(", "),
+        if unprobed.is_empty() {
+            String::new()
+        } else {
+            format!(" probed when first used=[{}]", unprobed.join(", "))
+        }
+    );
 }
 
 /// Creates the renderer's GPU on the backend hardware decode shares.

@@ -285,6 +285,31 @@ impl AppliedRateControl {
     }
 }
 
+/// How `OpenH264` runs `rate`, and which form of it that is.
+///
+/// `OpenH264` is driven through its own API rather than `AVOption`s, so it has
+/// no spelling above, and it needs none to honour a quantizer: its
+/// rate-control-off mode encodes every picture at the layer QP, the H.264
+/// scale the quality levels resolve to. Without a quantizer it runs the
+/// bitrate, capped at the target too when the rate is constant.
+pub(crate) fn openh264_rate(
+    rate: VideoRateControl,
+) -> (crate::openh264::OpenH264Rate, AppliedRateControl) {
+    match rate.quantizer {
+        Some(quantizer) => (
+            crate::openh264::OpenH264Rate::Quantizer(quantizer),
+            AppliedRateControl::Quantizer,
+        ),
+        None => (
+            crate::openh264::OpenH264Rate::Bitrate {
+                target: rate.bitrate,
+                constant: rate.mode == BitrateMode::Constant,
+            },
+            AppliedRateControl::Bitrate,
+        ),
+    }
+}
+
 /// The constant-quantizer request for `encoder_name`, when `rate` carries a
 /// quantizer; `Err` names why it cannot be asked for at all.
 pub(crate) fn quantizer_request(

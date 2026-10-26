@@ -1092,6 +1092,95 @@ pub fn decode_capabilities_json(
     })
 }
 
+/// Whether the `OpenH264` encoder loaded, for `capabilities`: its status
+/// (`available`, `not-installed`, `disabled`, `unusable`), what loaded, why
+/// not, and the remedy. The notice Cisco's licence requires is always there,
+/// since this is where a user sees and controls the codec.
+pub fn openh264_json() -> Value {
+    let status = alpha2_native::openh264_status();
+    let library = status.library();
+    json!({
+        "status": status.as_str(),
+        "encoder": alpha2_native::OPENH264_ENCODER_NAME,
+        "provider": library.map(|library| library.provider().as_str()),
+        "version": library.map(|library| library.version()),
+        "library": library.map(|library| library.path()),
+        "pinnedVersion": alpha2_native::OPENH264_VERSION,
+        "notice": alpha2_native::OPENH264_NOTICE,
+        "reason": status.reason(),
+        "remedy": status.remedy(),
+    })
+}
+
+/// Whether this host can export H.264, for `capabilities`: `available` when
+/// an encoder takes CPU frames (`video`, the `encode.video` list), so every
+/// export can; `gpu-only` when only the GPU-resident path encodes it, so an
+/// export that path declines fails; `unavailable` when nothing does. Unless
+/// it is available, `reason` says why and `remedy` what to do.
+pub fn h264_status_json(video: &Value, gpu_output_path: &Value) -> Value {
+    let id = NativeVideoCodec::H264.as_str();
+    let encoders = video
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|entry| entry["id"] == id)
+        .filter_map(|entry| entry["encoder"].as_str())
+        .collect::<Vec<_>>();
+    let gpu_encoder = gpu_output_path["codecs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|entry| entry["videoCodec"] == id)
+        .and_then(|entry| entry["encoder"].as_str());
+    let (status, reason) = match (encoders.is_empty(), gpu_encoder) {
+        (false, _) => ("available", None),
+        (true, Some(encoder)) => (
+            "gpu-only",
+            Some(format!(
+                "only the GPU-resident path encodes H.264 here ({encoder}), so an export it \
+                 declines (input policy cpu-readback, a size outside its limits, \
+                 ALPHA2_GPU_ENCODE=0) has no H.264 encoder"
+            )),
+        ),
+        (true, None) => (
+            "unavailable",
+            Some(format!(
+                "no H.264 encoder takes CPU frames, and the GPU-resident path is unavailable \
+                 ({})",
+                gpu_output_path["reason"]
+                    .as_str()
+                    .unwrap_or("it encodes no H.264 on this device")
+            )),
+        ),
+    };
+    json!({
+        "status": status,
+        "encoders": encoders,
+        "gpuEncoder": gpu_encoder,
+        "reason": reason,
+        "remedy": reason.is_some().then(alpha2_native::h264_encoder_remedy),
+    })
+}
+
+/// The run-time library behind encoder `name`, for an export result:
+/// `OpenH264`'s provider, version, path and notice, or null for an `FFmpeg`
+/// encoder.
+pub fn encoder_library_json(name: &str) -> Value {
+    if name != alpha2_native::OPENH264_ENCODER_NAME {
+        return Value::Null;
+    }
+    alpha2_native::openh264_status()
+        .library()
+        .map_or(Value::Null, |library| {
+            json!({
+                "provider": library.provider().as_str(),
+                "version": library.version(),
+                "library": library.path(),
+                "notice": alpha2_native::OPENH264_NOTICE,
+            })
+        })
+}
+
 /// Reports the containers an export can write, which codecs each offers,
 /// and the video and audio encoders this runtime registers, for the
 /// `capabilities` answer. The containers are the engine's policy, the same
@@ -1107,15 +1196,26 @@ pub fn codec_capabilities_json() -> Value {
             "defaultVideoCodec": container.default_video_codec().as_str(),
             "defaultAudioCodec": container.default_audio_codec().as_str(),
         })).collect::<Vec<_>>(),
-        "video": capabilities.video.into_iter().map(|capability| json!({
-            "id": capability.codec.as_str(),
-            "encoder": capability.encoder_name,
-            "encoderClass": capability.class.as_str(),
-            "hardwareAccelerated": capability.hardware_accelerated,
-            "preferred": capability.preferred,
-            "minimumWidth": capability.minimum_width,
-            "minimumHeight": capability.minimum_height,
-        })).collect::<Vec<_>>(),
+        "video": capabilities.video.into_iter().map(|capability| {
+            let library = capability.library.as_ref();
+            json!({
+                "id": capability.codec.as_str(),
+                "encoder": capability.encoder_name,
+                "encoderClass": capability.class.as_str(),
+                "hardwareAccelerated": capability.hardware_accelerated,
+                "preferred": capability.preferred,
+                "minimumWidth": capability.minimum_width,
+                "minimumHeight": capability.minimum_height,
+                // An encoder the user installed rather than one in the FFmpeg runtime (OpenH264):
+                // who provided it, its version, where it loaded from, and the notice its licence
+                // requires be shown. Null for FFmpeg's encoders.
+                "provider": library.map(|library| library.provider),
+                "version": library.map(|library| library.version.clone()),
+                "library": library.map(|library| library.path.clone()),
+                "notice": library.map(|library| library.notice),
+            })
+        }).collect::<Vec<_>>(),
+        "openh264": openh264_json(),
         "audio": capabilities.audio.into_iter().map(|capability| json!({
             "id": capability.codec.as_str(),
             "encoder": capability.encoder_name,

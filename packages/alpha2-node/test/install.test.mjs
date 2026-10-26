@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   mkdir,
@@ -14,14 +14,18 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 
 import {
   hostCacheDirectory,
   hostExecutableName,
   hostTarget,
   installHost,
+  installOpenH264,
   resolveHostBinary,
 } from "../dist/index.js";
+import { OPENH264_TARGETS } from "../dist/install.js";
 
 const { version } = JSON.parse(
   await readFile(new URL("../package.json", import.meta.url), "utf8"),
@@ -250,3 +254,242 @@ test(
     });
   },
 );
+
+/** `printf abracadabra | bzip2 -9`, which stands in for Cisco's archive. */
+const FAKE_OPENH264_ARCHIVE = Buffer.from(
+  "425a6839314159265359236d4bd800000101803c001000200030cd00947a" +
+    "9ea52c8478bb9229c284811b6a5ec0",
+  "hex",
+);
+const FAKE_OPENH264_LIBRARY = "abracadabra";
+
+const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
+
+/**
+ * Serves a stand-in for this platform's OpenH264 archive from localhost, as `<base>/<archive>`,
+ * and makes the target table expect it (or the checksums in `overrides`) until the test ends.
+ * Returns what a child process needs to see the same table: `preload`, a module to `--import`.
+ */
+async function serveOpenH264(t, overrides = {}) {
+  const target = hostTarget();
+  const original = OPENH264_TARGETS[target];
+  const entry = {
+    ...original,
+    archiveSha256: sha256(FAKE_OPENH264_ARCHIVE),
+    librarySha256: sha256(FAKE_OPENH264_LIBRARY),
+    ...overrides,
+  };
+  OPENH264_TARGETS[target] = entry;
+  t.after(() => {
+    OPENH264_TARGETS[target] = original;
+  });
+
+  const requests = [];
+  const server = createServer((request, response) => {
+    requests.push(request.url);
+    const body =
+      request.url === `/${entry.archive}` ? FAKE_OPENH264_ARCHIVE : undefined;
+    response.writeHead(body ? 200 : 404, {
+      "content-length": body?.length ?? 0,
+    });
+    response.end(body);
+  });
+  await new Promise((done) => server.listen(0, "127.0.0.1", done));
+  t.after(() => server.close());
+
+  const preload = join(await scratch("alpha2-node-openh264-"), "table.mjs");
+  const table = new URL("../dist/install.js", import.meta.url).href;
+  await writeFile(
+    preload,
+    `import { OPENH264_TARGETS } from ${JSON.stringify(table)};\n` +
+      `OPENH264_TARGETS[${JSON.stringify(target)}] = ${JSON.stringify(entry)};\n`,
+  );
+  return {
+    entry,
+    requests,
+    base: `openh264-2.7.0-${target}`,
+    downloadUrl: `http://127.0.0.1:${server.address().port}`,
+    preload: pathToFileURL(preload).href,
+  };
+}
+
+const unsupported =
+  !supported && "no OpenH264 binary is offered for this platform";
+
+test(
+  "OpenH264 installs into the cache and is not downloaded again",
+  { skip: unsupported },
+  async (t) => {
+    const served = await serveOpenH264(t);
+    const cacheDirectory = await scratch("alpha2-node-cache-");
+    let progress;
+    const result = await installOpenH264({
+      cacheDirectory,
+      downloadUrl: `${served.downloadUrl}/`,
+      onProgress: (update) => (progress = update),
+    });
+    const directory = join(cacheDirectory, served.base);
+    const libraryPath = join(directory, served.entry.library);
+    assert.deepEqual(result, {
+      libraryPath,
+      directory,
+      downloaded: true,
+      version: "2.7.0",
+      notice: "OpenH264 Video Codec provided by Cisco Systems, Inc.",
+    });
+    assert.equal(progress.received, FAKE_OPENH264_ARCHIVE.length);
+    assert.equal(await readFile(libraryPath, "utf8"), FAKE_OPENH264_LIBRARY);
+    assert.deepEqual(await readdir(cacheDirectory), [served.base]);
+    assert.deepEqual(await readdir(directory), [served.entry.library]);
+
+    const requests = served.requests.length;
+    const again = await installOpenH264({ cacheDirectory });
+    assert.equal(again.downloaded, false);
+    assert.equal(served.requests.length, requests);
+
+    // A library that is not the one expected is replaced.
+    await writeFile(libraryPath, "damaged");
+    const repaired = await installOpenH264({
+      cacheDirectory,
+      downloadUrl: served.downloadUrl,
+    });
+    assert.equal(repaired.downloaded, true);
+    assert.equal(await readFile(libraryPath, "utf8"), FAKE_OPENH264_LIBRARY);
+
+    const forced = await installOpenH264({
+      cacheDirectory,
+      downloadUrl: served.downloadUrl,
+      force: true,
+    });
+    assert.equal(forced.downloaded, true);
+    assert.equal(served.requests.length, requests + 2);
+    assert.deepEqual(await readdir(cacheDirectory), [served.base]);
+  },
+);
+
+test(
+  "an OpenH264 archive or library whose checksum does not match leaves nothing in the cache",
+  { skip: unsupported },
+  async (t) => {
+    for (const overrides of [
+      { archiveSha256: "a".repeat(64) },
+      { librarySha256: "b".repeat(64) },
+    ]) {
+      await t.test(Object.keys(overrides)[0], async (t) => {
+        const served = await serveOpenH264(t, overrides);
+        const cacheDirectory = await scratch("alpha2-node-cache-");
+        await assert.rejects(
+          installOpenH264({ cacheDirectory, downloadUrl: served.downloadUrl }),
+          { name: "Alpha2HostInstallError", code: "CHECKSUM_MISMATCH" },
+        );
+        assert.deepEqual(await readdir(cacheDirectory), []);
+      });
+    }
+  },
+);
+
+test(
+  "OpenH264 is downloaded from ALPHA2_OPENH264_DOWNLOAD_URL when no URL is given",
+  { skip: unsupported },
+  async (t) => {
+    const served = await serveOpenH264(t);
+    const cacheDirectory = await scratch("alpha2-node-cache-");
+    const saved = process.env.ALPHA2_OPENH264_DOWNLOAD_URL;
+    process.env.ALPHA2_OPENH264_DOWNLOAD_URL = `${served.downloadUrl}/missing`;
+    try {
+      await assert.rejects(installOpenH264({ cacheDirectory }), (error) => {
+        assert.equal(error.code, "DOWNLOAD_FAILED");
+        assert.match(error.message, /\/missing\/.* answered 404/);
+        return true;
+      });
+    } finally {
+      if (saved === undefined) delete process.env.ALPHA2_OPENH264_DOWNLOAD_URL;
+      else process.env.ALPHA2_OPENH264_DOWNLOAD_URL = saved;
+    }
+    assert.deepEqual(await readdir(cacheDirectory), []);
+  },
+);
+
+test(
+  "an aborted OpenH264 install leaves nothing in the cache",
+  { skip: unsupported },
+  async (t) => {
+    const served = await serveOpenH264(t);
+    const cacheDirectory = await scratch("alpha2-node-cache-");
+    await assert.rejects(
+      installOpenH264({
+        cacheDirectory,
+        downloadUrl: served.downloadUrl,
+        signal: AbortSignal.abort(),
+      }),
+      { code: "ABORTED" },
+    );
+    assert.deepEqual(await readdir(cacheDirectory), []);
+  },
+);
+
+test(
+  "a platform without an OpenH264 binary is refused before any download",
+  { skip: unsupported },
+  async (t) => {
+    const target = hostTarget();
+    const original = OPENH264_TARGETS[target];
+    delete OPENH264_TARGETS[target];
+    t.after(() => {
+      OPENH264_TARGETS[target] = original;
+    });
+    const cacheDirectory = await scratch("alpha2-node-cache-");
+    await assert.rejects(installOpenH264({ cacheDirectory }), {
+      code: "UNSUPPORTED_PLATFORM",
+    });
+    assert.deepEqual(await readdir(cacheDirectory), []);
+  },
+);
+
+const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
+const run = promisify(execFile);
+
+test(
+  "the command line installs OpenH264 and prints Cisco's notice every time",
+  { skip: unsupported },
+  async (t) => {
+    const served = await serveOpenH264(t);
+    const cacheDirectory = await scratch("alpha2-node-cache-");
+    const install = () =>
+      run(
+        process.execPath,
+        ["--import", served.preload, cli, "install", "--openh264"],
+        {
+          env: {
+            ...process.env,
+            ALPHA2_HOST_CACHE_DIR: cacheDirectory,
+            ALPHA2_OPENH264_DOWNLOAD_URL: served.downloadUrl,
+          },
+        },
+      );
+    const libraryPath = join(cacheDirectory, served.base, served.entry.library);
+    for (const first of [
+      `installed OpenH264 2.7.0: ${libraryPath}`,
+      `already installed: ${libraryPath}`,
+    ]) {
+      const lines = (await install()).stdout.trimEnd().split(/\r?\n/);
+      assert.equal(lines[0], first);
+      assert.equal(
+        lines[1],
+        "OpenH264 Video Codec provided by Cisco Systems, Inc.",
+      );
+      assert.match(lines.at(-1), /set ALPHA2_OPENH264=0 to turn it off\.$/);
+    }
+  },
+);
+
+test("the command line refuses --openh264 with --thin", async () => {
+  await assert.rejects(
+    run(process.execPath, [cli, "install", "--openh264", "--thin"]),
+    (error) => {
+      assert.equal(error.code, 2);
+      assert.match(error.stderr, /--thin/);
+      return true;
+    },
+  );
+});

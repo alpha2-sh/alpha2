@@ -875,6 +875,147 @@ def test_one_probe_answers_every_capability_call_for_a_mode_and_a_failed_one_is_
     assert lines_in(log) == ["capabilities auto", "capabilities auto", "capabilities software"]
 
 
+def renderer_host(log: Path) -> str:
+    """Records ``<operation> <decode mode> <renderer>`` per request, from its environment, and
+    answers at once: capabilities naming its renderer, or an export result."""
+    return f"""
+    request, _ = read_request()
+    decode = os.environ.get("ALPHA2_VIDEO_DECODE", "unset")
+    renderer = os.environ.get("ALPHA2_RENDERER", "unset")
+    record({str(log)!r}, request["operation"] + " " + decode + " " + renderer)
+    if request["operation"] == "capabilities":
+        send(request, ok=True, result={{"status": "ready", "renderer": renderer, "rendererReason": None, "capabilities": {{}}, "effectCatalog": {{}}}})
+    else:
+        send(request, ok=True, result={{"output": request.get("output")}})
+    """
+
+
+def test_a_renderer_that_is_not_one_is_refused_before_a_host_starts(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    starts = tmp_path / "starts"
+    host_path = fake_host(tmp_path, started_host(starts))
+    client = HostClient(host_path=host_path)
+    calls: list[Callable[[], object]] = [
+        lambda: HostClient(host_path=host_path, renderer="software"),  # type: ignore[arg-type]
+        lambda: client.export(**export_args(tmp_path / "c.mp4", renderer="vulkan")),
+        lambda: client.capabilities(renderer="GPU"),  # type: ignore[arg-type]
+        lambda: alpha2.export(
+            **export_args(tmp_path / "m.mp4", renderer="metal"), host_path=host_path
+        ),
+        lambda: alpha2.capabilities(host_path=host_path, renderer=""),  # type: ignore[arg-type]
+    ]
+    for call in calls:
+        with pytest.raises(Alpha2HostError) as caught:
+            call()
+        assert caught.value.code == "INVALID_INPUT"
+        assert "renderer must be auto, gpu, or cpu" in caught.value.message
+        assert caught.value.failure["code"] == "INVALID_INPUT"
+    assert lines_in(starts) == []
+
+
+def test_the_renderer_reaches_the_host_in_its_environment_per_request_over_the_clients(
+    tmp_path: Path, fake_host: FakeHost, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("ALPHA2_VIDEO_DECODE", raising=False)
+    monkeypatch.delenv("ALPHA2_RENDERER", raising=False)
+    log = tmp_path / "requests"
+    host_path = fake_host(tmp_path, renderer_host(log))
+    HostClient(host_path=host_path).export(**export_args(tmp_path / "unset.mp4"))
+    client = HostClient(host_path=host_path, renderer="cpu", video_decode="software")
+    client.export(**export_args(tmp_path / "client.mp4"))
+    client.export(**export_args(tmp_path / "request.mp4", renderer="gpu"))
+    client.conform(project_document())
+    alpha2.export(**export_args(tmp_path / "module.mp4", renderer="auto"), host_path=host_path)
+    assert lines_in(log) == [
+        "export unset unset",
+        "export software cpu",
+        "export software gpu",
+        "conform software cpu",
+        "export unset auto",
+    ]
+
+
+def test_one_probe_answers_every_capability_call_for_a_renderer_and_the_environments_is_its_own(
+    tmp_path: Path, fake_host: FakeHost, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("ALPHA2_VIDEO_DECODE", raising=False)
+    monkeypatch.delenv("ALPHA2_RENDERER", raising=False)
+    log = tmp_path / "requests"
+    host_path = fake_host(tmp_path, renderer_host(log))
+    client = HostClient(host_path=host_path, renderer="cpu")
+    cpu = client.capabilities()
+    assert cpu["renderer"] == "cpu"
+    assert client.capabilities() is cpu
+    assert client.capabilities(renderer="cpu") is cpu
+    gpu = client.capabilities(renderer="gpu")
+    assert gpu["renderer"] == "gpu"
+    assert client.capabilities(renderer="gpu") is gpu
+    # The decode mode and the renderer each start their own probe.
+    software = client.capabilities(video_decode="software")
+    assert software is not cpu
+    assert software["renderer"] == "cpu"
+    # Unset, the renderer is the one this process's environment names when the probe starts.
+    unset = HostClient(host_path=host_path)
+    host = unset.capabilities()
+    assert host["renderer"] == "unset"
+    assert unset.capabilities() is host
+    monkeypatch.setenv("ALPHA2_RENDERER", "cpu")
+    environment = unset.capabilities()
+    assert environment["renderer"] == "cpu"
+    assert environment is not host
+    assert lines_in(log) == [
+        "capabilities unset cpu",
+        "capabilities unset gpu",
+        "capabilities software cpu",
+        "capabilities unset unset",
+        "capabilities unset cpu",
+    ]
+
+
+def test_module_calls_that_differ_only_in_renderer_share_one_pool(
+    tmp_path: Path, fake_host: FakeHost, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("ALPHA2_VIDEO_DECODE", raising=False)
+    monkeypatch.delenv("ALPHA2_RENDERER", raising=False)
+    log = tmp_path / "requests"
+    host_path = fake_host(tmp_path, renderer_host(log))
+    with ThreadPoolExecutor(2) as pool:
+        cpu_call = pool.submit(alpha2.capabilities, host_path=host_path, renderer="cpu")
+        gpu_call = pool.submit(alpha2.capabilities, host_path=host_path, renderer="gpu")
+        cpu, gpu = cpu_call.result(), gpu_call.result()
+    assert (cpu["renderer"], gpu["renderer"]) == ("cpu", "gpu")
+    assert alpha2.capabilities(host_path=host_path, renderer="cpu") is cpu
+    assert sorted(lines_in(log)) == ["capabilities unset cpu", "capabilities unset gpu"]
+
+
+def test_an_export_run_again_in_software_after_a_decode_stall_keeps_its_renderer(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    runs = tmp_path / "runs"
+    host_path = fake_host(
+        tmp_path,
+        f"""
+        request, _ = read_request()
+        mode = os.environ.get("ALPHA2_VIDEO_DECODE", "unset")
+        record({str(runs)!r}, mode + " " + os.environ.get("ALPHA2_RENDERER", "unset"))
+        if mode == "software":
+            send(request, ok=True, result={{"frames": 9}})
+        else:
+            send(request, ok=False, error={{
+                "code": "DECODE_STALLED",
+                "message": "decode shard 0 has been inside one decoder operation for 40001 ms",
+                "failure": {{"code": "GPU_TIMEOUT", "origin": "native-host", "operation": "export",
+                             "backend": "native", "phase": "decode", "resource": "gpu"}},
+            }})
+        """,
+    )
+    HostClient(host_path=host_path, video_decode="auto", renderer="cpu").export(
+        **export_args(tmp_path / "out.mp4")
+    )
+    assert lines_in(runs) == ["auto cpu", "software cpu"]
+
+
 def test_an_answer_to_a_line_the_host_could_not_read_is_the_requests_answer(
     tmp_path: Path, fake_host: FakeHost
 ) -> None:

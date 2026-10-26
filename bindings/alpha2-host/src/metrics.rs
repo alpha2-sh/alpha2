@@ -622,8 +622,10 @@ fn append_render_work_metrics(
 #[allow(clippy::cast_precision_loss)]
 pub fn export_metrics_json(
     metrics: &ExportMetrics,
-    before: &alpha2_render::RenderDiagnostics,
-    after: &alpha2_render::RenderDiagnostics,
+    gpu: Option<(
+        &alpha2_render::RenderDiagnostics,
+        &alpha2_render::RenderDiagnostics,
+    )>,
     limits: &ExportPipelineLimits,
 ) -> Value {
     let mut value = json!({
@@ -684,8 +686,11 @@ pub fn export_metrics_json(
     value["reverseDecodeCacheHits"] = json!(metrics.reverse_cache_hits);
     value["reverseDecodeWindowsBuilt"] = json!(metrics.reverse_windows_built);
     value["peakReverseCacheBytes"] = json!(metrics.peak_reverse_cache_bytes);
-    append_render_work_metrics(&mut value, before, after);
-    append_buffer_pool_metrics(&mut value, before, after);
+    // The GPU renderer's pools and passes; the CPU renderer reports its own.
+    if let Some((before, after)) = gpu {
+        append_render_work_metrics(&mut value, before, after);
+        append_buffer_pool_metrics(&mut value, before, after);
+    }
     #[cfg(feature = "hwencode")]
     let gpu = limits.gpu;
     #[cfg(not(feature = "hwencode"))]

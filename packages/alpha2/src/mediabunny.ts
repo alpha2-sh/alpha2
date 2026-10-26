@@ -1492,6 +1492,12 @@ export interface MediabunnySinkOptions {
    * refuses it; `appliedVideoRateControl` says which ran.
    */
   readonly videoRateControl?: VideoRateControl;
+  /**
+   * The WebCodecs codec string the video encoder opens with: the `codecString`
+   * {@link canEncodeVideoTrack} chose, so H.264 opens in the profile this browser encodes. By
+   * default mediabunny's own (H.264 High at a level for the frame size and bitrate).
+   */
+  readonly videoCodecString?: string;
   /** The video encoder's latency mode; by default the one {@link videoEncoderLatencyMode} measures. */
   readonly videoLatencyMode?: VideoEncoderLatencyMode;
   /**
@@ -1547,10 +1553,120 @@ export function videoEncoderQuality(rate: VideoRateControl): Quality {
   });
 }
 
+/** An H.264 profile a browser export asks the encoder for, named as the standard names it. */
+export type AvcProfile = "High" | "Main" | "Constrained Baseline";
+
+/** One H.264 profile at the level an export needs, as {@link videoEncoderProfiles} lists it. */
+export interface VideoEncoderProfile {
+  readonly profile: AvcProfile;
+  /** The WebCodecs codec string, for example `avc1.4d0028`. */
+  readonly codecString: string;
+}
+
 /**
- * Whether this browser can encode `codec` video at `width`x`height` with `rate`, asked with the
- * configurations {@link MediabunnySink} would try. WebCodecs leaves the codecs to the browser
- * (Chrome on Linux encodes no HEVC, for one), so an export asks before it opens its encoder.
+ * A profile asked for before the one an export opens, and refused. Shaped like a native export's
+ * `videoEncoderFallbacks` entries; the codec is the same, only the profile differs.
+ */
+export interface VideoEncoderFallback {
+  /** The codec string asked for. */
+  readonly encoder: string;
+  readonly profile: AvcProfile;
+  readonly reason: "unsupported";
+  readonly detail: string;
+}
+
+/** How a video track is encoded, as {@link canEncodeVideoTrack} chose it. */
+export interface VideoTrackEncoding {
+  /**
+   * The codec string to open the encoder with ({@link MediabunnySinkOptions.videoCodecString}).
+   * Undefined for codecs other than H.264, which open with mediabunny's own.
+   */
+  readonly codecString?: string;
+  /** H.264: the profile `codecString` names. */
+  readonly profile?: AvcProfile;
+  /** H.264: the profiles asked for first and refused, in order; empty when High is encoded. */
+  readonly fallbacks: readonly VideoEncoderFallback[];
+}
+
+/** The H.264 profiles in the order they are asked for, with `profile_idc` and constraint flags. */
+const AVC_PROFILES: readonly {
+  readonly profile: AvcProfile;
+  readonly prefix: string;
+}[] = [
+  { profile: "High", prefix: "6400" },
+  { profile: "Main", prefix: "4d00" },
+  // constraint_set0, 1 and 2: decodable by Baseline, Main and Extended decoders.
+  { profile: "Constrained Baseline", prefix: "42e0" },
+];
+
+/**
+ * H.264 levels (`level_idc`) by frame size in macroblocks and bitrate: the table mediabunny picks
+ * its own High profile level from, so the High string asked for here is the one it would build.
+ */
+const AVC_LEVELS: readonly {
+  readonly macroblocks: number;
+  readonly bitrate: number;
+  readonly level: number;
+}[] = [
+  { macroblocks: 99, bitrate: 64_000, level: 0x0a },
+  { macroblocks: 396, bitrate: 192_000, level: 0x0b },
+  { macroblocks: 396, bitrate: 384_000, level: 0x0c },
+  { macroblocks: 396, bitrate: 768_000, level: 0x0d },
+  { macroblocks: 396, bitrate: 2_000_000, level: 0x14 },
+  { macroblocks: 792, bitrate: 4_000_000, level: 0x15 },
+  { macroblocks: 1_620, bitrate: 4_000_000, level: 0x16 },
+  { macroblocks: 1_620, bitrate: 10_000_000, level: 0x1e },
+  { macroblocks: 3_600, bitrate: 14_000_000, level: 0x1f },
+  { macroblocks: 5_120, bitrate: 20_000_000, level: 0x20 },
+  { macroblocks: 8_192, bitrate: 20_000_000, level: 0x28 },
+  { macroblocks: 8_192, bitrate: 50_000_000, level: 0x29 },
+  { macroblocks: 8_704, bitrate: 50_000_000, level: 0x2a },
+  { macroblocks: 22_080, bitrate: 135_000_000, level: 0x32 },
+  { macroblocks: 36_864, bitrate: 240_000_000, level: 0x33 },
+  { macroblocks: 36_864, bitrate: 240_000_000, level: 0x34 },
+  { macroblocks: 139_264, bitrate: 240_000_000, level: 0x3c },
+  { macroblocks: 139_264, bitrate: 480_000_000, level: 0x3d },
+  { macroblocks: 139_264, bitrate: 800_000_000, level: 0x3e },
+];
+
+/**
+ * The profiles {@link canEncodeVideoTrack} asks for, in order, at the level `width`x`height` at
+ * `rate`'s bitrate needs: for H.264, High, then Main, then Constrained Baseline, since a software
+ * encoder may take only the lower ones. Empty for the other codecs, which have one profile each
+ * (HEVC Main, VP9 profile 0, AV1 Main) at the level mediabunny picks.
+ */
+export function videoEncoderProfiles(
+  codec: "avc" | "hevc" | "vp9" | "av1",
+  options: {
+    readonly width: number;
+    readonly height: number;
+    readonly rate: VideoRateControl;
+  },
+): readonly VideoEncoderProfile[] {
+  if (codec !== "avc") return [];
+  const macroblocks =
+    Math.ceil(options.width / 16) * Math.ceil(options.height / 16);
+  const level = (
+    AVC_LEVELS.find(
+      (entry) =>
+        macroblocks <= entry.macroblocks &&
+        options.rate.bitrate <= entry.bitrate,
+    ) ?? AVC_LEVELS[AVC_LEVELS.length - 1]
+  ).level
+    .toString(16)
+    .padStart(2, "0");
+  return AVC_PROFILES.map(({ profile, prefix }) => ({
+    profile,
+    codecString: `avc1.${prefix}${level}`,
+  }));
+}
+
+/**
+ * How this browser encodes `codec` video at `width`x`height` with `rate`, or `null` when it does
+ * not, asked with the configurations {@link MediabunnySink} would try. WebCodecs leaves the codecs
+ * to the browser (Chrome on Linux encodes no HEVC, for one), so an export asks before it opens its
+ * encoder. H.264 is asked for in each of {@link videoEncoderProfiles} in turn, and the first one
+ * encoded is chosen: pass its `codecString` to the sink, and report its `fallbacks`.
  */
 export async function canEncodeVideoTrack(
   codec: "avc" | "hevc" | "vp9" | "av1",
@@ -1559,12 +1675,28 @@ export async function canEncodeVideoTrack(
     readonly height: number;
     readonly rate: VideoRateControl;
   },
-): Promise<boolean> {
-  return canEncodeVideo(codec, {
-    width: options.width,
-    height: options.height,
-    quality: videoEncoderQuality(options.rate),
-  }).catch(() => false);
+): Promise<VideoTrackEncoding | null> {
+  const encodes = (fullCodecString?: string) =>
+    canEncodeVideo(codec, {
+      width: options.width,
+      height: options.height,
+      quality: videoEncoderQuality(options.rate),
+      ...(fullCodecString === undefined ? {} : { fullCodecString }),
+    }).catch(() => false);
+  const profiles = videoEncoderProfiles(codec, options);
+  if (profiles.length === 0)
+    return (await encodes()) ? { fallbacks: [] } : null;
+  const fallbacks: VideoEncoderFallback[] = [];
+  for (const { profile, codecString } of profiles) {
+    if (await encodes(codecString)) return { codecString, profile, fallbacks };
+    fallbacks.push({
+      encoder: codecString,
+      profile,
+      reason: "unsupported",
+      detail: `this browser does not encode H.264 ${profile} profile at ${options.width}x${options.height}`,
+    });
+  }
+  return null;
 }
 
 /** How a browser's video encoder is opened: see {@link videoEncoderLatencyMode}. */
@@ -1919,6 +2051,7 @@ export class MediabunnySink
   #frameDuration?: number;
   #finished = false;
   #applied?: AppliedVideoRateControl;
+  #codecString?: string;
   /** Tracks whose runner finished, through {@link videoTrack} or {@link audioTrack}. */
   readonly #ended = new Set<"video" | "audio">();
   #videoTrack?: BrowserEncodeSink;
@@ -2030,9 +2163,13 @@ export class MediabunnySink
         codec,
         quality: videoEncoderQuality(rate),
         latencyMode,
+        ...(options.videoCodecString === undefined
+          ? {}
+          : { fullCodecString: options.videoCodecString }),
         // mediabunny reports each candidate config before it asks the browser whether it is
         // supported and stops at the first that is, so the last one reported is the one that runs.
         onEncoderConfig: (config) => {
+          this.#codecString = config.codec;
           const mode = config.bitrateMode as string | undefined;
           this.#applied = {
             bitrateMode:
@@ -2155,6 +2292,14 @@ export class MediabunnySink
    */
   get appliedVideoRateControl(): AppliedVideoRateControl | undefined {
     return this.#applied;
+  }
+
+  /**
+   * The WebCodecs codec string the video encoder was configured with (for H.264, its profile and
+   * level), once the first frame has been written. Undefined before then.
+   */
+  get videoCodecString(): string | undefined {
+    return this.#codecString;
   }
 
   /**

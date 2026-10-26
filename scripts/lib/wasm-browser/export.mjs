@@ -96,8 +96,8 @@ if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined") 
   const videoRateControl = { bitrate: 1000000, bitrateMode: "variable" };
   const formats = { mp4: "MP4", mov: "QuickTime File Format", mkv: "Matroska", webm: "WebM" };
   const exportOne = async (container, videoCodec, audioCodecs) => {
-    if (!(await canEncodeVideoTrack(videoCodec, { width: WIDTH, height: HEIGHT, rate: videoRateControl })))
-      return "no " + videoCodec + " encoder";
+    const videoEncoding = await canEncodeVideoTrack(videoCodec, { width: WIDTH, height: HEIGHT, rate: videoRateControl });
+    if (videoEncoding === null) return "no " + videoCodec + " encoder";
     let audioCodec;
     for (const codec of audioCodecs) {
       if ((await audioEncoderSampleRate(codec, { sampleRate: 48000, numberOfChannels: 2, bitrate: 128000 })) === 48000) {
@@ -109,6 +109,7 @@ if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined") 
       container,
       videoCodec,
       videoRateControl,
+      ...(videoEncoding.codecString === undefined ? {} : { videoCodecString: videoEncoding.codecString }),
       frameRate: { num: 30, den: 1 },
       ...(audioCodec === undefined ? {} : { audioCodec, audioBitrate: 128000 }),
       destination: { kind: "memory", maxBytes: 1 << 24 },

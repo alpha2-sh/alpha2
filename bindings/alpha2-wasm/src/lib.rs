@@ -42,6 +42,8 @@ mod panic_hook;
 mod playback;
 #[cfg(target_arch = "wasm32")]
 mod present;
+#[cfg(target_arch = "wasm32")]
+mod project_audio;
 #[cfg(any(target_arch = "wasm32", test))]
 mod project_cache;
 #[cfg(any(target_arch = "wasm32", test))]
@@ -56,3 +58,5 @@ mod text;
 mod waveform;
 #[cfg(target_arch = "wasm32")]
 mod web;
+#[cfg(target_arch = "wasm32")]
+mod web_cpu;

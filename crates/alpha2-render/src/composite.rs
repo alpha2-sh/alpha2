@@ -882,7 +882,10 @@ pub(crate) fn layer_bounds(visual: LayerTransform, size: RenderSize) -> Option<P
 /// 0.3 read back as 76 and the layer pass's 77 on every Vulkan driver
 /// tested), so an empty frame and the frame beside it would differ by a
 /// code.
-fn stored_background(background: Option<Color>, format: wgpu::TextureFormat) -> [f32; 4] {
+pub(crate) fn stored_background(
+    background: Option<Color>,
+    format: wgpu::TextureFormat,
+) -> [f32; 4] {
     let Some(color) = background else {
         return [0.0; 4];
     };
@@ -998,7 +1001,7 @@ fn composite_pipeline(
     })
 }
 
-fn validate_visual(visual: LayerTransform) -> Result<(), RenderError> {
+pub(crate) fn validate_visual(visual: LayerTransform) -> Result<(), RenderError> {
     let values = [
         visual.position[0],
         visual.position[1],
@@ -1021,7 +1024,7 @@ fn validate_visual(visual: LayerTransform) -> Result<(), RenderError> {
 /// A scale that passes through zero (an animation from 1 to -1, or an eased
 /// curve that overshoots) is a legitimate instant, not an error: the layer is
 /// not visible, and its transform has no inverse to sample with.
-fn is_degenerate(visual: LayerTransform) -> bool {
+pub(crate) fn is_degenerate(visual: LayerTransform) -> bool {
     visual.scale[0].abs() <= f32::EPSILON || visual.scale[1].abs() <= f32::EPSILON
 }
 
@@ -1032,6 +1035,6 @@ fn is_degenerate(visual: LayerTransform) -> bool {
 /// cost a pass of the layer's size and change the backdrop only by rounding
 /// it through the blend space. An inactive matte hides its clip this way, and
 /// a fade or hold reaches it.
-fn is_invisible(visual: LayerTransform) -> bool {
+pub(crate) fn is_invisible(visual: LayerTransform) -> bool {
     visual.opacity <= 0.0
 }

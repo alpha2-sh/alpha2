@@ -94,17 +94,27 @@ impl RenderedTexture {
     }
 }
 
-/// A texture the renderer draws from as a source, borrowed from whoever owns
-/// it: a [`RenderedTexture`], an [`crate::UploadTexture`] (what
+/// A picture the renderer draws from as a source, borrowed from whoever owns
+/// it: on the GPU a [`RenderedTexture`], an [`crate::UploadTexture`] (what
 /// [`crate::Renderer::upload_rgba8`] returns), or, through the `wgpu`
-/// interop, any texture view of the renderer's device.
+/// interop, any texture view of the renderer's device; on the CPU a
+/// [`crate::CpuSource`].
 ///
-/// A source texture stores premultiplied, sRGB-encoded RGBA in a non-sRGB
-/// format. The owner keeps it alive and unchanged for as long as the
-/// renderer may read it: until the frame drawn from it is submitted.
+/// A source stores premultiplied, sRGB-encoded RGBA (a GPU texture in a
+/// non-sRGB format). The owner keeps it alive and unchanged for as long as
+/// the renderer may read it: until the frame drawn from it is submitted, or
+/// on the CPU, rendered. A renderer given a source of the other backend
+/// fails with [`RenderError::InvalidSource`].
 #[derive(Clone, Copy, Debug)]
 pub struct SourceView<'a> {
-    view: &'a wgpu::TextureView,
+    kind: SourceKind<'a>,
+}
+
+/// Which backend's picture a [`SourceView`] borrows.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum SourceKind<'a> {
+    Gpu(&'a wgpu::TextureView),
+    Cpu(&'a crate::CpuSource),
 }
 
 impl<'a> SourceView<'a> {
@@ -113,30 +123,54 @@ impl<'a> SourceView<'a> {
     #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
     #[must_use]
     pub const fn from_wgpu(view: &'a wgpu::TextureView) -> Self {
-        Self { view }
+        Self {
+            kind: SourceKind::Gpu(view),
+        }
     }
 
-    /// The texture view the renderer samples.
+    /// A source the CPU renderer draws from.
+    #[must_use]
+    pub const fn cpu(source: &'a crate::CpuSource) -> Self {
+        Self {
+            kind: SourceKind::Cpu(source),
+        }
+    }
+
+    /// The texture view the GPU renderer samples; `None` for a CPU source.
     #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
     #[must_use]
-    pub const fn wgpu_view(self) -> &'a wgpu::TextureView {
-        self.view
+    pub const fn wgpu_view(self) -> Option<&'a wgpu::TextureView> {
+        match self.kind {
+            SourceKind::Gpu(view) => Some(view),
+            SourceKind::Cpu(_) => None,
+        }
+    }
+
+    /// The CPU source; `None` for a GPU texture.
+    #[must_use]
+    pub const fn cpu_source(self) -> Option<&'a crate::CpuSource> {
+        match self.kind {
+            SourceKind::Cpu(source) => Some(source),
+            SourceKind::Gpu(_) => None,
+        }
     }
 }
 
 impl<'a> From<&'a RenderedTexture> for SourceView<'a> {
     fn from(texture: &'a RenderedTexture) -> Self {
-        Self {
-            view: &texture.view,
-        }
+        Self::from_wgpu(&texture.view)
     }
 }
 
 impl<'a> From<&'a crate::UploadTexture> for SourceView<'a> {
     fn from(texture: &'a crate::UploadTexture) -> Self {
-        Self {
-            view: texture.view(),
-        }
+        Self::from_wgpu(texture.view())
+    }
+}
+
+impl<'a> From<&'a crate::CpuSource> for SourceView<'a> {
+    fn from(source: &'a crate::CpuSource) -> Self {
+        Self::cpu(source)
     }
 }
 

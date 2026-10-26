@@ -36,6 +36,13 @@ pub enum PendingMedia {
         frame: Box<BakedFrame>,
         trace: Box<VideoFrameTrace>,
     },
+    /// A frame the CPU renderer drew straight into its encoder frame.
+    Rendered {
+        index: u64,
+        time: MediaTime,
+        frame: crate::encode::PooledFrame,
+        trace: Box<VideoFrameTrace>,
+    },
     Audio(AudioBlock),
 }
 
@@ -156,6 +163,39 @@ impl PendingVideoReadback {
     }
 }
 
+/// Writes a frame drawn into its encoder frame to `capture`, and into `bake`
+/// for the render cache, as [`PendingVideoReadback::finish_into`] does for a
+/// readback.
+///
+/// # Errors
+/// Returns the frame's or the capture's failure.
+pub fn finish_drawn(
+    frame: &mut Yuv420pFrameBuffer,
+    capture: Option<&mut FrameCapture>,
+    bake: Option<&mut BakedFrame>,
+) -> Result<(), String> {
+    if capture.is_none() && bake.is_none() {
+        return Ok(());
+    }
+    let (width, height) = frame.dimensions();
+    let planes = frame.begin_write().map_err(error_message)?;
+    let (y_stride, chroma_stride) = (planes.y_stride, planes.chroma_stride);
+    if let Some(capture) = capture {
+        capture.write(
+            (&*planes.y, y_stride),
+            (&*planes.u, chroma_stride),
+            (&*planes.v, chroma_stride),
+        )?;
+    }
+    if let Some(bake) = bake {
+        let chroma = (width.div_ceil(2), height.div_ceil(2));
+        bake.y = pack_rows(planes.y, y_stride, (width, height));
+        bake.u = pack_rows(planes.u, chroma_stride, chroma);
+        bake.v = pack_rows(planes.v, chroma_stride, chroma);
+    }
+    Ok(())
+}
+
 /// Writes a baked frame's planes into the encoder frame that will carry it,
 /// and to `capture` as a rendered frame would be.
 pub fn unpack_baked(
@@ -214,7 +254,7 @@ fn unpack_rows(packed: &[u8], plane: &mut [u8], stride: usize, (width, height): 
 pub fn ready_pending_media(pending: &mut VecDeque<PendingMedia>) -> Result<Option<bool>, String> {
     match pending.front_mut() {
         Some(PendingMedia::Audio(_)) => Ok(Some(false)),
-        Some(PendingMedia::Baked { .. }) => Ok(Some(true)),
+        Some(PendingMedia::Baked { .. } | PendingMedia::Rendered { .. }) => Ok(Some(true)),
         Some(PendingMedia::Video {
             readback, index, ..
         }) => readback

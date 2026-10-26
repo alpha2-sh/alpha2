@@ -380,7 +380,7 @@ impl Host {
             gpu_selection.encoder_name
         );
 
-        let graph_before = self.renderer.diagnostics();
+        let graph_before = self.gpu_renderer().diagnostics();
         let cancel = crate::termination::export_cancel();
         let plan = crate::export_decode::ExportDecodePlan::new(
             self.export_codec_split(project, assets, range, true, false),
@@ -633,7 +633,7 @@ impl Host {
                 } else {
                     let prepare = Instant::now();
                     self.failure.enter(ExportPhase::Upload, Some(frame_index));
-                    let upload = gpu_frames.install(&self.renderer, decoded)?;
+                    let upload = gpu_frames.install(self.gpu_renderer(), decoded)?;
                     metrics.source_prepare =
                         metrics.source_prepare.saturating_add(prepare.elapsed());
                     metrics.record_install(&upload);
@@ -667,7 +667,7 @@ impl Host {
                 let step = if let Some(picture) = picture {
                     self.failure.enter(ExportPhase::Render, Some(frame_index));
                     let repack = gpu_frames.repack(
-                        &self.renderer,
+                        self.gpu_renderer(),
                         &picture,
                         targets,
                         exporter.encoding(),
@@ -690,9 +690,9 @@ impl Host {
                     decode_worker.release(bytes);
                     match exporter.take_next().map_err(error_message)? {
                         Some((index, time)) => {
-                            alpha2_engine::ExportNv12Step::Rendered { index, time }
+                            alpha2_engine::ExportPlaneStep::Rendered { index, time }
                         }
-                        None => alpha2_engine::ExportNv12Step::Complete,
+                        None => alpha2_engine::ExportPlaneStep::Complete,
                     }
                 } else {
                     let mut texts = self
@@ -701,7 +701,7 @@ impl Host {
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
                     if let Some(time) = exporter.pending_time() {
                         texts
-                            .prepare_at(&self.renderer, snapshot, time, size)
+                            .prepare_at(self.gpu_renderer(), snapshot, time, size)
                             .map_err(error_message)?;
                     }
                     let frame_provider = FramesWithText::new(&gpu_frames, &texts);
@@ -709,7 +709,7 @@ impl Host {
                     exporter
                         .render_next_nv12_timed(
                             snapshot,
-                            &self.renderer,
+                            self.gpu_renderer(),
                             &frame_provider,
                             targets,
                             &mut step_timings,
@@ -724,15 +724,15 @@ impl Host {
                     frame_trace.submitted = sink.now();
                 }
                 let (index, time) = match step {
-                    alpha2_engine::ExportNv12Step::Rendered { index, time } => (index, time),
-                    alpha2_engine::ExportNv12Step::Waiting {
+                    alpha2_engine::ExportPlaneStep::Rendered { index, time } => (index, time),
+                    alpha2_engine::ExportPlaneStep::Waiting {
                         missing_sources, ..
                     } => {
                         return Err(crate::protocol::missing_input(format!(
                             "native export is missing sources: {missing_sources:?}"
                         )));
                     }
-                    alpha2_engine::ExportNv12Step::Complete => break,
+                    alpha2_engine::ExportPlaneStep::Complete => break,
                 };
 
                 input
@@ -790,7 +790,9 @@ impl Host {
             // submitted; the last ones are checked here, so an export the GPU did not render fails
             // before the file is finished.
             self.failure.enter(ExportPhase::Render, None);
-            self.renderer.confirm_gpu_work().map_err(error_message)?;
+            self.gpu_renderer()
+                .confirm_gpu_work()
+                .map_err(error_message)?;
             Ok(())
         })();
         if let Err(error) = result {
@@ -809,7 +811,8 @@ impl Host {
             // platform's input owns nothing to drop.
             #[allow(clippy::drop_non_drop)]
             drop(input);
-            let reported = cancelled_export(&self.renderer, encode_state.completed_video);
+            let reported =
+                cancelled_export(Some(self.gpu_renderer()), encode_state.completed_video);
             return Err(GpuEncodeOutcome::Failed(match cancelled_at {
                 // A cancel is not a failure, and the worker's own "cancelled" notice would
                 // otherwise be reported as the cause of it.
@@ -861,7 +864,7 @@ impl Host {
         // Same order as the cancel path: handoffs are waited on before the planes they read drop.
         metrics.retired_leases_at_exit = self.clean_up_after_output(output, || {
             input.finish().map_err(error_message)?;
-            self.renderer
+            self.gpu_renderer()
                 .reclaim_external_leases()
                 .map_err(error_message)
         });
@@ -883,6 +886,7 @@ impl Host {
         result["videoEncoder"] = json!(gpu_selection.encoder_name);
         result["videoEncoderClass"] = json!(gpu_selection.class.as_str());
         result["videoEncoderHardware"] = json!(gpu_selection.hardware_accelerated);
+        result["videoEncoderLibrary"] = Value::Null;
         result["videoEncoderPreferred"] = json!(gpu_selection.encoder_name);
         result["videoEncoderFallbacks"] = json!([]);
         result["videoOutputPath"] = json!(VideoOutputPath::GpuResident.as_str());
@@ -911,11 +915,11 @@ impl Host {
             completed,
             started.elapsed().as_secs_f64()
         ));
-        let after = self.renderer.diagnostics();
+        let after = self.gpu_renderer().diagnostics();
         metrics.peak_provider_source_bytes = plan.providers.peak_bytes();
         metrics.provider_source_reopens = plan.providers.reopens();
         result["performance"] =
-            export_metrics_json(&metrics, &graph_before, &after, &pipeline_limits);
+            export_metrics_json(&metrics, Some((&graph_before, &after)), &pipeline_limits);
         Ok(result)
     }
 }

@@ -3,7 +3,7 @@
 Build, validate and render [alpha2](https://github.com/alpha2-sh/alpha2) project documents from
 Python. A project is a plain `dict` in the engine's `project.v1` shape (typed as
 `alpha2.types.Project`). Validation runs the engine's own validator in-process; rendering runs the
-native `alpha2-host` process on the GPU.
+native `alpha2-host` process on the GPU, or on the CPU where there is none.
 
 ```sh
 pip install alpha2
@@ -37,6 +37,23 @@ print(result["videoOutputPath"], result["frames"])
   `failure` dict for retry policies.
 - Options you write use snake_case (`loudness={"target_lufs": -14, ...}`); what the host reports
   keeps the protocol's camelCase keys (`result["effectiveRange"]`).
+
+## Renderer and video decode
+
+`renderer=` (`"auto"`, `"gpu"`, `"cpu"`; typed as `alpha2.client.RendererMode`) chooses what draws
+the frames, and `video_decode=` (`"software"`, `"auto"`, `"hardware-required"`) how video is
+decoded, on `HostClient(...)` for every request or per call to `export` and `capabilities`. Unset,
+the host reads `ALPHA2_RENDERER` and `ALPHA2_VIDEO_DECODE`, else decides: `auto` renderer, and
+`auto` decode on Linux, `software` on macOS and Windows.
+
+- `auto` renders on a hardware GPU when there is one and on the CPU otherwise, never on a software
+  GPU adapter (lavapipe, llvmpipe, WARP, SwiftShader). `gpu` takes whatever adapter the host finds
+  and fails with `GPU_INIT_FAILED` without one; `cpu` opens no graphics driver.
+- Results and capabilities report `renderer` (`"gpu"` or `"cpu"`), `rendererReason` (why the host
+  renders on the CPU) and, on the CPU, `rendererThreads`; the capability report's
+  `["capabilities"]["features"]` has `renderer.gpu`, `renderer.cpu` and `effects.runtime`. A
+  runtime WGSL effect cannot run on the CPU renderer: such an export fails with `EFFECT_ERROR`.
+- Under `auto` decode, an export whose hardware decoder stalls runs once more decoding in software.
 
 ## Compose: videos by intent
 
@@ -86,6 +103,31 @@ else `~/.cache/alpha2`, `~/Library/Caches/alpha2` or `%LOCALAPPDATA%\alpha2`), t
 `@alpha2-sh/node` uses, so one download serves both; `--thin` installs the archive that loads the
 system's FFmpeg 8. Or unpack the archive from the GitHub release yourself and point
 `ALPHA2_HOST_PATH` at its `bin/alpha2-host`.
+
+## Software H.264 (OpenH264)
+
+Where no hardware H.264 encoder is available, `alpha2-host` can encode H.264 in software with
+Cisco's OpenH264 library, which it loads at run time. Neither this package nor the `alpha2-host`
+wheel includes that library, and nothing downloads it unless you ask: Cisco's patent licence covers
+its binary only when the user fetches it from Cisco.
+
+```sh
+python -m alpha2 install --openh264
+```
+
+This downloads Cisco's OpenH264 2.7.0 binary for the platform from
+`https://ciscobinary.openh264.org`, checks the download and the library in it against their
+SHA-256s, and puts the library in the shared cache, in `openh264-2.7.0-<target>/`, where
+`alpha2-host` finds it. It installs only the library, not `alpha2-host`. `--force` downloads again,
+`alpha2.install_openh264()` does the same from code, and `ALPHA2_OPENH264_DOWNLOAD_URL` (or the
+`download_url` argument) names a mirror. Every run prints Cisco's notice:
+
+```text
+OpenH264 Video Codec provided by Cisco Systems, Inc.
+```
+
+The library is Cisco's binary, under [Cisco's terms](https://www.openh264.org/BINARY_LICENSE.txt).
+Set `ALPHA2_OPENH264=0` to keep `alpha2-host` from using it.
 
 ## Development
 

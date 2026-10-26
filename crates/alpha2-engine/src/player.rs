@@ -1,6 +1,6 @@
 use alpha2_eval::FrameNeed;
 use alpha2_media::SourceId;
-use alpha2_render::{CacheEligibility, RenderCacheKey, RenderSize, RenderedTexture, Renderer};
+use alpha2_render::{CacheEligibility, RenderCacheKey, RenderSize, RenderedTexture};
 use alpha2_time::MediaTime;
 
 use crate::schedule::frame_times;
@@ -10,15 +10,16 @@ use crate::{
 
 const MAX_PREFETCH_FRAMES: u32 = 120;
 
-/// Result of one real-time presentation attempt.
+/// Result of one real-time presentation attempt, with `I` the picture the
+/// renderer draws ([`FrameRenderer::Image`]).
 #[derive(Debug)]
-pub struct PlaybackFrame<'a> {
+pub struct PlaybackFrame<'a, I = RenderedTexture> {
     /// Timeline time requested by the host clock.
     pub requested_time: MediaTime,
     /// Timeline time of the returned texture, absent before the first success.
     pub presented_time: Option<MediaTime>,
-    /// Current or held texture. It remains owned by the player.
-    pub texture: Option<&'a RenderedTexture>,
+    /// Current or held picture. It remains owned by the player.
+    pub texture: Option<&'a I>,
     /// Sources unavailable for the requested time.
     pub missing_sources: Vec<SourceId>,
     /// Whether the texture is the previous successful frame.
@@ -33,22 +34,24 @@ pub struct PlaybackFrame<'a> {
 /// graph's cache key and the renderer's content epoch it was rendered at.
 type ShownKey = (RenderSize, RenderCacheKey, u64);
 
-/// Stateful real-time runner.
+/// Stateful real-time runner, holding the last picture its renderer drew:
+/// `I` is [`FrameRenderer::Image`], a [`RenderedTexture`] on the GPU and an
+/// `Arc<CpuImage>` on the [`alpha2_render::CpuRenderer`].
 ///
 /// [`MissingFramePolicy::HoldPrevious`] is the default; a host that would
 /// rather show its own loading state than a stale frame selects
 /// [`MissingFramePolicy::Wait`] through [`Player::with_missing_frame_policy`].
 #[derive(Debug)]
-pub struct Player {
+pub struct Player<I = RenderedTexture> {
     quality: QualityProfile,
     prefetch_frames: u32,
     missing_frame_policy: MissingFramePolicy,
-    last_frame: Option<(MediaTime, RenderedTexture)>,
+    last_frame: Option<(MediaTime, I)>,
     /// What `last_frame` shows, when its key names everything it depends on.
     shown: Option<ShownKey>,
 }
 
-impl Default for Player {
+impl<I> Default for Player<I> {
     fn default() -> Self {
         Self {
             quality: QualityProfile::preview(),
@@ -60,7 +63,7 @@ impl Default for Player {
     }
 }
 
-impl Player {
+impl<I> Player<I> {
     /// The size frames of `project` render at: where a host prepares their
     /// captions.
     ///
@@ -174,13 +177,13 @@ impl Player {
     /// Returns timeline evaluation, quality, or rendering failures, and
     /// [`EngineError::UnregisteredEffect`] naming an effect the frame draws
     /// that `renderer` has not registered.
-    pub fn render_at<'a>(
+    pub fn render_at<'a, R: FrameRenderer<Image = I> + ?Sized>(
         &'a mut self,
         project: &EngineProject,
-        renderer: &Renderer,
+        renderer: &R,
         frames: &dyn FrameProvider,
         time: MediaTime,
-    ) -> Result<PlaybackFrame<'a>, EngineError> {
+    ) -> Result<PlaybackFrame<'a, I>, EngineError> {
         let frame = project.evaluate(time)?;
         crate::frame::check_frame_effects(renderer, &frame)?;
         let size = self.quality.render_size(&project.project().settings)?;
@@ -202,7 +205,7 @@ impl Player {
             let unchanged = self.last_frame.is_some()
                 && key.is_some_and(|key| self.shown == Some((size, key, renderer.content_epoch())));
             if !unchanged {
-                let texture = renderer.render_graph(&graph, &built.pending)?;
+                let texture = renderer.render_frame_graph(&graph, &built.pending)?;
                 self.last_frame = Some((time, texture));
                 // Read after the render, which may itself have cleared the result cache.
                 self.shown = key.map(|key| (size, key, renderer.content_epoch()));
@@ -257,21 +260,22 @@ mod tests {
 
     #[test]
     fn prefetch_configuration_is_bounded() {
-        let player = Player::default().with_prefetch_frames(u32::MAX);
+        let player = Player::<RenderedTexture>::default().with_prefetch_frames(u32::MAX);
         assert_eq!(player.prefetch_frames, MAX_PREFETCH_FRAMES);
     }
 
     #[test]
     fn hold_previous_is_the_default_missing_frame_policy() {
         assert_eq!(
-            Player::default().missing_frame_policy(),
+            Player::<RenderedTexture>::default().missing_frame_policy(),
             MissingFramePolicy::HoldPrevious
         );
     }
 
     #[test]
     fn the_missing_frame_policy_is_configurable() {
-        let player = Player::default().with_missing_frame_policy(MissingFramePolicy::Wait);
+        let player = Player::<RenderedTexture>::default()
+            .with_missing_frame_policy(MissingFramePolicy::Wait);
         assert_eq!(player.missing_frame_policy(), MissingFramePolicy::Wait);
         assert_eq!(
             player
@@ -283,7 +287,7 @@ mod tests {
 
     #[test]
     fn configuring_the_policy_preserves_quality_and_prefetch() {
-        let player = Player::new(QualityProfile::export())
+        let player = Player::<RenderedTexture>::new(QualityProfile::export())
             .expect("valid quality")
             .with_prefetch_frames(7)
             .with_missing_frame_policy(MissingFramePolicy::Wait);

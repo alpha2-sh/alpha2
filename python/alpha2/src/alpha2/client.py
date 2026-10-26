@@ -51,6 +51,7 @@ __all__ = [
     "MemoryBudget",
     "ProxyFile",
     "RenderCacheOptions",
+    "RendererMode",
     "VideoDecodeMode",
     "capabilities",
     "conform",
@@ -63,6 +64,15 @@ VideoDecodeMode = Literal["software", "auto", "hardware-required"]
 Linux, "software" on macOS and Windows)."""
 
 _VIDEO_DECODE_MODES = ("software", "auto", "hardware-required")
+
+RendererMode = Literal["auto", "gpu", "cpu"]
+"""The renderer asked of the host. Unset, the host takes ``ALPHA2_RENDERER`` from its environment,
+else "auto": a hardware GPU when there is one and the CPU renderer otherwise, never a software GPU
+adapter (lavapipe, llvmpipe, WARP, SwiftShader). "gpu" renders on whatever adapter the host finds,
+software ones included, and fails with ``GPU_INIT_FAILED`` without one; "cpu" renders on the CPU
+and opens no graphics driver."""
+
+_RENDERER_MODES = ("auto", "gpu", "cpu")
 
 QUALITY_LEVELS = ("very-low", "low", "medium", "high", "very-high")
 """The engine's five quality levels, lowest first."""
@@ -161,6 +171,12 @@ def _check_video_decode(field: str, value: object) -> None:
     """Refuses a set ``field`` that is not a decode mode: the host would refuse it at its start."""
     if value is not None and value not in _VIDEO_DECODE_MODES:
         raise _invalid(f"{field} must be software, auto, or hardware-required")
+
+
+def _check_renderer(field: str, value: object) -> None:
+    """Refuses a set ``field`` that is not a renderer: the host would refuse it at its start."""
+    if value is not None and value not in _RENDERER_MODES:
+        raise _invalid(f"{field} must be auto, gpu, or cpu")
 
 
 def _is_file(path: Path) -> bool:
@@ -512,12 +528,12 @@ class HostClient:
 
     One process per request, at most ``concurrency`` at a time; further requests wait for a slot.
     The binary is resolved now (see :func:`resolve_host_binary`). ``video_decode`` is the decode
-    path for every request this client makes, unless a request names its own. A client is safe to
-    share between threads.
+    path and ``renderer`` the renderer (see :data:`RendererMode`) for every request this client
+    makes, unless a request names its own. A client is safe to share between threads.
 
     Raises ``ValueError`` for a ``concurrency`` that is not a positive integer, and
-    :class:`~alpha2.Alpha2HostError` when ``video_decode`` is not a mode (``INVALID_INPUT``) or the
-    binary cannot be found.
+    :class:`~alpha2.Alpha2HostError` when ``video_decode`` or ``renderer`` is not a mode
+    (``INVALID_INPUT``) or the binary cannot be found.
     """
 
     def __init__(
@@ -527,13 +543,16 @@ class HostClient:
         cache_directory: PathLike | None = None,
         concurrency: int = 1,
         video_decode: VideoDecodeMode | None = None,
+        renderer: RendererMode | None = None,
     ) -> None:
         if not _safe_integer(concurrency) or concurrency < 1:
             raise ValueError("concurrency must be a positive integer")
         _check_video_decode("video_decode", video_decode)
+        _check_renderer("renderer", renderer)
         self.host_path: Path = resolve_host_binary(host_path, cache_directory=cache_directory)
         self.concurrency = concurrency
         self.video_decode: VideoDecodeMode | None = video_decode
+        self.renderer: RendererMode | None = renderer
         self._slots = _Slots(concurrency)
         self._probes: dict[str, _Probe] = {}
         self._probes_lock = threading.Lock()
@@ -542,24 +561,35 @@ class HostClient:
         self,
         *,
         video_decode: VideoDecodeMode | None = None,
+        renderer: RendererMode | None = None,
         cancel: threading.Event | None = None,
     ) -> dict[str, Any]:
-        """What the host can decode, render and encode, for the client's decode mode or this one.
+        """What the host can decode, render and encode, for the client's decode mode and renderer
+        or these.
 
-        The first call for a mode starts a host, in a slot like any request; calls made while it
-        runs share it, and its report answers every later call for that mode on this client,
-        since the same binary and mode report the same. A probe that fails is not kept: the next
-        call starts another. ``cancel`` withdraws this call (:class:`~alpha2.Alpha2AbortError`); the
-        probe
-        goes on while another call still waits for it.
+        The first call for a pair of modes starts a host, in a slot like any request; calls made
+        while it runs share it, and its report answers every later call for those modes on this
+        client, since the same binary and modes report the same. A probe that fails is not kept:
+        the next call starts another. ``cancel`` withdraws this call
+        (:class:`~alpha2.Alpha2AbortError`); the probe goes on while another call still waits for
+        it.
         """
         _check_video_decode("video_decode", video_decode)
+        _check_renderer("renderer", renderer)
         if cancel is not None and cancel.is_set():
             raise Alpha2AbortError()
         mode = video_decode if video_decode is not None else self.video_decode
-        # Unset, the mode is the host's default or the one this process's environment names.
-        key = (
-            mode if mode is not None else f"environment:{os.environ.get('ALPHA2_VIDEO_DECODE', '')}"
+        drawn_by = renderer if renderer is not None else self.renderer
+        # Unset, a mode is the host's default or the one this process's environment names.
+        key = "\0".join(
+            (
+                mode
+                if mode is not None
+                else f"environment:{os.environ.get('ALPHA2_VIDEO_DECODE', '')}",
+                drawn_by
+                if drawn_by is not None
+                else f"environment:{os.environ.get('ALPHA2_RENDERER', '')}",
+            )
         )
         with self._probes_lock:
             probe = self._probes.get(key)
@@ -567,7 +597,7 @@ class HostClient:
                 probe = _Probe()
                 self._probes[key] = probe
                 threading.Thread(
-                    target=self._run_probe, args=(key, probe, mode), daemon=True
+                    target=self._run_probe, args=(key, probe, mode, drawn_by), daemon=True
                 ).start()
             if probe.done.is_set() and probe.error is None:
                 assert probe.result is not None
@@ -593,12 +623,23 @@ class HostClient:
         assert probe.result is not None
         return probe.result
 
-    def _run_probe(self, key: str, probe: _Probe, mode: VideoDecodeMode | None) -> None:
+    def _run_probe(
+        self,
+        key: str,
+        probe: _Probe,
+        mode: VideoDecodeMode | None,
+        renderer: RendererMode | None,
+    ) -> None:
         try:
             self._slots.acquire(probe.cancel)
             try:
                 probe.result = _request_host(
-                    self.host_path, "capabilities", {}, mode, probe.cancel, None
+                    self.host_path,
+                    "capabilities",
+                    {},
+                    _HostModes(mode, renderer),
+                    probe.cancel,
+                    None,
                 )
             finally:
                 self._slots.release()
@@ -640,7 +681,12 @@ class HostClient:
         self._slots.acquire(cancel)
         try:
             return _request_host(  # type: ignore[no-any-return]
-                self.host_path, "conform", payload, self.video_decode, cancel, None
+                self.host_path,
+                "conform",
+                payload,
+                _HostModes(self.video_decode, self.renderer),
+                cancel,
+                None,
             )
         finally:
             self._slots.release()
@@ -674,6 +720,7 @@ class HostClient:
         render_cache: RenderCacheOptions | None = None,
         memory: MemoryBudget | None = None,
         video_decode: VideoDecodeMode | None = None,
+        renderer: RendererMode | None = None,
         on_progress: ProgressCallback | None = None,
         cancel: threading.Event | None = None,
     ) -> dict[str, Any]:
@@ -696,7 +743,9 @@ class HostClient:
         :class:`~alpha2.Alpha2HostError` before a host starts when the project or request is
         invalid, and :class:`~alpha2.Alpha2HostError` otherwise. Under the ``auto`` decode mode, an
         export whose hardware decoder stalls (``DECODE_STALLED``) runs once more decoding in
-        software; its progress starts over.
+        software; its progress starts over. ``video_decode`` and ``renderer`` override the
+        client's for this export; a runtime WGSL effect cannot run on the CPU renderer and fails
+        with ``EFFECT_ERROR``.
 
         ``project`` may be a :class:`~alpha2.compose.Compiled` spec: its ``assets``, ``fonts`` and
         ``loudness`` are the defaults of those options.
@@ -763,6 +812,7 @@ class HostClient:
                     "MISSING_INPUT", f"missing effect asset path for resource {resource['id']}"
                 )
         _check_video_decode("video_decode", video_decode)
+        _check_renderer("renderer", renderer)
         # The engine's container policy, which the host applies to the same request: a container
         # the output's extension contradicts, or a codec the container does not offer, never starts
         # a host.
@@ -824,11 +874,17 @@ class HostClient:
                 payload[wire] = named_value
 
         mode = video_decode if video_decode is not None else self.video_decode
+        drawn_by = renderer if renderer is not None else self.renderer
         self._slots.acquire(cancel)
         try:
             try:
                 return _request_host(  # type: ignore[no-any-return]
-                    self.host_path, "export", payload, mode, cancel, on_progress
+                    self.host_path,
+                    "export",
+                    payload,
+                    _HostModes(mode, drawn_by),
+                    cancel,
+                    on_progress,
                 )
             except Alpha2HostError as stall:
                 # A hardware decoder stuck inside the driver cannot be recovered by its host, so the
@@ -843,7 +899,12 @@ class HostClient:
                     raise
                 try:
                     return _request_host(  # type: ignore[no-any-return]
-                        self.host_path, "export", payload, "software", cancel, on_progress
+                        self.host_path,
+                        "export",
+                        payload,
+                        _HostModes("software", drawn_by),
+                        cancel,
+                        on_progress,
                     )
                 except Alpha2HostError as retry_error:
                     raise _record_decode_stall(retry_error, stall) from stall
@@ -894,15 +955,29 @@ def _ended(returncode: int | None) -> tuple[int | None, str | None]:
     return returncode, None
 
 
+@dataclass(frozen=True)
+class _HostModes:
+    """What a host is started with; ``None`` leaves the host's default or its environment's."""
+
+    video_decode: str | None
+    renderer: str | None
+
+
 class _Host:
     """One ``alpha2-host serve`` process answering one request."""
 
-    def __init__(self, binary: Path, video_decode: str | None) -> None:
-        environment = None
-        if video_decode is not None:
-            # The host chooses its decode path while it creates the renderer device, before any
-            # request arrives, so the mode travels in the environment rather than in the request.
-            environment = {**os.environ, "ALPHA2_VIDEO_DECODE": video_decode}
+    def __init__(self, binary: Path, modes: _HostModes) -> None:
+        # The host chooses its renderer and decode path while it starts, before any request
+        # arrives, so the modes travel in the environment rather than in the request.
+        named = {
+            variable: value
+            for variable, value in (
+                ("ALPHA2_VIDEO_DECODE", modes.video_decode),
+                ("ALPHA2_RENDERER", modes.renderer),
+            )
+            if value is not None
+        }
+        environment = {**os.environ, **named} if named else None
         self.process = subprocess.Popen(
             [str(binary), "serve"],
             stdin=subprocess.PIPE,
@@ -1001,7 +1076,7 @@ def _request_host(
     binary: Path,
     operation: str,
     payload: dict[str, Any],
-    video_decode: str | None,
+    modes: _HostModes,
     cancel: threading.Event | None,
     on_progress: ProgressCallback | None,
 ) -> Any:
@@ -1036,7 +1111,7 @@ def _request_host(
             f"{_MAX_REQUEST_LINE_BYTES}"
         )
     try:
-        host = _Host(binary, video_decode)
+        host = _Host(binary, modes)
     except OSError as cause:
         raise Alpha2HostError(
             "HOST_START_FAILED", f"could not start alpha2-host: {cause}"
@@ -1214,8 +1289,8 @@ _shared_lock = threading.Lock()
 def _shared_client(
     host_path: PathLike | None, cache_directory: PathLike | None, concurrency: int
 ) -> HostClient:
-    """Clients by binary and ``concurrency``: the decode mode travels with each request, so calls
-    that differ only in it still share the bound."""
+    """Clients by binary and ``concurrency``: the decode mode and renderer travel with each
+    request, so calls that differ only in them still share the bound."""
     if not _safe_integer(concurrency) or concurrency < 1:
         raise ValueError("concurrency must be a positive integer")
     binary = resolve_host_binary(host_path, cache_directory=cache_directory)
@@ -1234,12 +1309,13 @@ def capabilities(
     cache_directory: PathLike | None = None,
     concurrency: int = 1,
     video_decode: VideoDecodeMode | None = None,
+    renderer: RendererMode | None = None,
     cancel: threading.Event | None = None,
 ) -> dict[str, Any]:
     """:meth:`HostClient.capabilities` on a client shared by every module-level call with the same
     resolved binary and ``concurrency``."""
     return _shared_client(host_path, cache_directory, concurrency).capabilities(
-        video_decode=video_decode, cancel=cancel
+        video_decode=video_decode, renderer=renderer, cancel=cancel
     )
 
 
@@ -1265,7 +1341,7 @@ def export(
     **options: Any,
 ) -> dict[str, Any]:
     """:meth:`HostClient.export` on a shared client (see :func:`capabilities`), so ``concurrency``
-    holds across calls whatever decode mode each asks for."""
+    holds across calls whatever decode mode and renderer each asks for."""
     return _shared_client(host_path, cache_directory, concurrency).export(
         project, output, **options
     )

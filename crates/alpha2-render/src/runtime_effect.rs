@@ -360,7 +360,7 @@ fn valid_scalar(spec: &ParamSpec, value: f32) -> bool {
         && spec.max.is_none_or(|maximum| value <= maximum)
 }
 
-fn validate_runtime(runtime: EffectRuntime) -> Result<(), RenderError> {
+pub(crate) fn validate_runtime(runtime: EffectRuntime) -> Result<(), RenderError> {
     if !runtime.progress.is_finite()
         || !(0.0..=1.0).contains(&runtime.progress)
         || !runtime.ratio.is_finite()

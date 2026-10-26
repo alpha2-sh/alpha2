@@ -16,7 +16,7 @@ fn an_export_survives_a_hardware_session_that_fails_on_its_first_packet() {
     let streams = [("vp9.webm", 128, 96), ("h264-high10.mp4", 128, 96)];
     #[cfg(target_os = "macos")]
     let streams = {
-        if !create_host(VideoDecodePolicy::Auto)
+        if !create_gpu_test_host(VideoDecodePolicy::Auto)
             .expect("host")
             .hardware_decode_ready()
         {
@@ -51,7 +51,7 @@ fn an_export_survives_a_hardware_session_that_fails_on_its_first_packet() {
         });
         let assets = HashMap::from([("video".to_owned(), corpus(name))]);
         for policy in [VideoDecodePolicy::Auto, VideoDecodePolicy::HardwareRequired] {
-            let mut host = create_host(policy).expect("host");
+            let mut host = create_gpu_test_host(policy).expect("host");
             let output = directory.join(format!("{name}-{}.mp4", policy.as_str()));
             let exported = host.export(
                 &project.to_string(),
@@ -109,7 +109,7 @@ fn imported_frames_reuse_their_vulkan_import_tickets() {
     if vulkan_video_context().is_none() {
         return;
     }
-    let mut host = create_host(VideoDecodePolicy::Auto).expect("host");
+    let mut host = create_gpu_test_host(VideoDecodePolicy::Auto).expect("host");
     let directory = scratch_directory("import-tickets");
     let second = alpha2_time::TICKS_PER_SECOND;
     let project = json!({
@@ -414,7 +414,7 @@ fn a_generated_source_exports_without_an_asset() {
             }]}
         ]}
     });
-    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let mut host = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
     let output = directory.join("generated.mp4");
     let result = host
         .export(
@@ -1026,7 +1026,7 @@ fn a_transcoded_picture_is_the_last_of_its_frame_set() {
 #[test]
 fn a_d3d12va_decoded_export_renders_copies_of_its_surfaces_as_software_decode_would() {
     let _gpu = gpu_test_lock();
-    let mut hardware = create_host(VideoDecodePolicy::Auto).expect("host");
+    let mut hardware = create_gpu_test_host(VideoDecodePolicy::Auto).expect("host");
     if !hardware.hardware_decode_ready() {
         assert!(
             std::env::var_os("ALPHA2_REQUIRE_D3D12").is_none(),
@@ -1035,7 +1035,7 @@ fn a_d3d12va_decoded_export_renders_copies_of_its_surfaces_as_software_decode_wo
         eprintln!("skipped: no D3D12VA device for the renderer's adapter");
         return;
     }
-    let mut software = create_host(VideoDecodePolicy::Software).expect("host");
+    let mut software = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
     let directory = scratch_directory("d3d12va-import");
     let end = alpha2_time::TICKS_PER_SECOND;
     let project = json!({

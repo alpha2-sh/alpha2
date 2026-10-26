@@ -1237,6 +1237,204 @@ test("one probe answers every capability call for a decode mode, and a failed on
   ]);
 });
 
+/**
+ * A host that records each request it reads in `log` as `<operation> <decode mode> <renderer>`,
+ * from its environment, and answers it at once: a capability report naming its renderer, or an
+ * export result.
+ */
+const RENDERER_HOST = (log) => `import { appendFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+createInterface({ input: process.stdin }).once("line", (line) => {
+  const request = JSON.parse(line);
+  const decode = process.env.ALPHA2_VIDEO_DECODE ?? "unset";
+  const renderer = process.env.ALPHA2_RENDERER ?? "unset";
+  appendFileSync(${JSON.stringify(log)}, request.operation + " " + decode + " " + renderer + "\\n");
+  const result = request.operation === "capabilities"
+    ? { status: "ready", renderer, rendererReason: null, capabilities: {}, effectCatalog: {} }
+    : { output: request.output };
+  process.stdout.write(JSON.stringify({ protocolVersion: 1, requestId: request.requestId, ok: true, result }) + "\\n", () => process.exit(0));
+});
+`;
+
+/** Runs `body` with `ALPHA2_RENDERER` set to `value`, or unset for `undefined`. */
+async function withRendererEnv(value, body) {
+  const saved = process.env.ALPHA2_RENDERER;
+  if (value === undefined) delete process.env.ALPHA2_RENDERER;
+  else process.env.ALPHA2_RENDERER = value;
+  try {
+    return await body();
+  } finally {
+    if (saved === undefined) delete process.env.ALPHA2_RENDERER;
+    else process.env.ALPHA2_RENDERER = saved;
+  }
+}
+
+test("a renderer that is not one is refused before a host starts", async () => {
+  const root = await scratch("alpha2-node-renderer-mode-");
+  const starts = join(root, "starts");
+  const hostPath = await fakeHost(root, STARTED_HOST(starts));
+  const refused = (error) => {
+    assert.equal(error.code, "INVALID_INPUT");
+    assert.match(error.message, /renderer must be auto, gpu, or cpu/);
+    assert.equal(failureOf(error)?.code, "INVALID_INPUT");
+    return true;
+  };
+  assert.throws(
+    () => new Alpha2NodeClient({ hostPath, renderer: "software" }),
+    refused,
+  );
+  const client = new Alpha2NodeClient({ hostPath });
+  await assert.rejects(
+    client.exportProject(
+      exportRequest(join(root, "client.mp4"), { renderer: "vulkan" }),
+    ),
+    refused,
+  );
+  await assert.rejects(client.getCapabilities({ renderer: "GPU" }), refused);
+  await assert.rejects(
+    exportProject(exportRequest(join(root, "module.mp4")), {
+      hostPath,
+      renderer: "metal",
+    }),
+    refused,
+  );
+  await assert.rejects(getCapabilities({ hostPath, renderer: "" }), refused);
+  assert.deepEqual(await startsIn(starts), []);
+});
+
+test("the renderer reaches the host in ALPHA2_RENDERER, per request over the client's", async () => {
+  const root = await scratch("alpha2-node-renderer-env-");
+  const log = join(root, "requests");
+  const hostPath = await fakeHost(root, RENDERER_HOST(log));
+  await withoutDecodeEnv(() =>
+    withRendererEnv(undefined, async () => {
+      await new Alpha2NodeClient({ hostPath }).exportProject(
+        exportRequest(join(root, "unset.mp4")),
+      );
+      const client = new Alpha2NodeClient({
+        hostPath,
+        renderer: "cpu",
+        videoDecode: "software",
+      });
+      await client.exportProject(exportRequest(join(root, "client.mp4")));
+      await client.exportProject(
+        exportRequest(join(root, "request.mp4"), { renderer: "gpu" }),
+      );
+      await client.conform({ project: exportRequest("x.mp4").project });
+      await exportProject(exportRequest(join(root, "module.mp4")), {
+        hostPath,
+        renderer: "auto",
+      });
+      await exportProject(
+        exportRequest(join(root, "module-request.mp4"), { renderer: "cpu" }),
+        { hostPath, renderer: "gpu" },
+      );
+    }),
+  );
+  assert.deepEqual(await startsIn(log), [
+    "export unset unset",
+    "export software cpu",
+    "export software gpu",
+    "conform software cpu",
+    "export unset auto",
+    "export unset cpu",
+  ]);
+});
+
+test("one probe answers every capability call for a renderer, and the environment's is its own", async () => {
+  const root = await scratch("alpha2-node-renderer-probe-");
+  const log = join(root, "requests");
+  const hostPath = await fakeHost(root, RENDERER_HOST(log));
+  const client = new Alpha2NodeClient({ hostPath, renderer: "cpu" });
+  await withoutDecodeEnv(() =>
+    withRendererEnv(undefined, async () => {
+      const cpu = await client.getCapabilities();
+      assert.equal(cpu.renderer, "cpu");
+      assert.equal(await client.getCapabilities(), cpu);
+      assert.equal(await client.getCapabilities({ renderer: "cpu" }), cpu);
+      const gpu = await client.getCapabilities({ renderer: "gpu" });
+      assert.equal(gpu.renderer, "gpu");
+      assert.equal(await client.getCapabilities({ renderer: "gpu" }), gpu);
+      // The decode mode and the renderer each start their own probe.
+      const software = await client.getCapabilities({
+        videoDecode: "software",
+      });
+      assert.notEqual(software, cpu);
+      assert.equal(software.renderer, "cpu");
+      // Unset, the renderer is the one this process's environment names when the probe starts.
+      const unset = new Alpha2NodeClient({ hostPath });
+      const host = await unset.getCapabilities();
+      assert.equal(host.renderer, "unset");
+      assert.equal(await unset.getCapabilities(), host);
+      const environment = await withRendererEnv("cpu", () =>
+        unset.getCapabilities(),
+      );
+      assert.equal(environment.renderer, "cpu");
+      assert.notEqual(environment, host);
+    }),
+  );
+  assert.deepEqual(await startsIn(log), [
+    "capabilities unset cpu",
+    "capabilities unset gpu",
+    "capabilities software cpu",
+    "capabilities unset unset",
+    "capabilities unset cpu",
+  ]);
+});
+
+test("module calls that differ only in renderer share one pool", async () => {
+  // A probe per renderer, each in the one slot.
+  const root = await scratch("alpha2-node-renderer-pool-");
+  const log = join(root, "requests");
+  const hostPath = await fakeHost(root, RENDERER_HOST(log));
+  const options = { hostPath, concurrency: 1 };
+  await withoutDecodeEnv(() =>
+    withRendererEnv(undefined, async () => {
+      const [cpu, gpu] = await Promise.all([
+        getCapabilities({ ...options, renderer: "cpu" }),
+        getCapabilities({ ...options, renderer: "gpu" }),
+      ]);
+      assert.equal(cpu.renderer, "cpu");
+      assert.equal(gpu.renderer, "gpu");
+      assert.equal(await getCapabilities({ ...options, renderer: "cpu" }), cpu);
+    }),
+  );
+  assert.deepEqual((await startsIn(log)).sort(), [
+    "capabilities unset cpu",
+    "capabilities unset gpu",
+  ]);
+});
+
+test("an export that runs again in software after a decode stall keeps its renderer", async () => {
+  const root = await scratch("alpha2-node-renderer-stall-");
+  const runs = join(root, "runs");
+  const hostPath = await fakeHost(
+    root,
+    `import { appendFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+createInterface({ input: process.stdin }).once("line", (line) => {
+  const request = JSON.parse(line);
+  const mode = process.env.ALPHA2_VIDEO_DECODE ?? "unset";
+  appendFileSync(${JSON.stringify(runs)}, mode + " " + (process.env.ALPHA2_RENDERER ?? "unset") + "\\n");
+  const send = (message) => process.stdout.write(JSON.stringify({ protocolVersion: 1, requestId: request.requestId, ...message }) + "\\n");
+  if (mode === "software") send({ ok: true, result: { frames: 9 } });
+  else send({ ok: false, error: {
+    code: "DECODE_STALLED",
+    message: "decode shard 0 has been inside one decoder operation for 40001 ms",
+    failure: { code: "GPU_TIMEOUT", origin: "native-host", operation: "export", backend: "native", phase: "decode", resource: "gpu" },
+  } });
+});
+`,
+  );
+  const client = new Alpha2NodeClient({
+    hostPath,
+    videoDecode: "auto",
+    renderer: "cpu",
+  });
+  await client.exportProject(exportRequest(join(root, "out.mp4")));
+  assert.deepEqual(await startsIn(runs), ["auto cpu", "software cpu"]);
+});
+
 test("an answer to a line the host could not read is the request's answer", async () => {
   // The host answers a line it cannot read an id from with requestId "unknown" and reads on; the
   // client ended its stdin, so the host then exits 0.

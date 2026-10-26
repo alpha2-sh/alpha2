@@ -1095,8 +1095,8 @@ pub struct Nv12PlaneTargets<'a> {
 /// A caller-owned destination for one packed plane.
 #[derive(Debug)]
 pub struct PlaneTarget<'a> {
-    bytes: &'a mut [u8],
-    stride: usize,
+    pub(crate) bytes: &'a mut [u8],
+    pub(crate) stride: usize,
 }
 
 impl<'a> PlaneTarget<'a> {
@@ -1112,7 +1112,7 @@ impl<'a> PlaneTarget<'a> {
         self.bytes
     }
 
-    fn fits(&self, width: usize, height: usize) -> Result<(), RenderError> {
+    pub(crate) fn fits(&self, width: usize, height: usize) -> Result<(), RenderError> {
         if self.stride < width {
             return Err(RenderError::TextureReadback(
                 ReadbackFailure::DestinationTooSmall,
@@ -1482,7 +1482,7 @@ fn yuv420_tight_bytes(size: RenderSize) -> Result<u64, RenderError> {
 /// luma weights and the range's levels, from the same definitions import
 /// decodes with, so a round trip through both is the identity; and the axes
 /// on which chroma is co-sited with luma, as import reads them back.
-fn yuv_uniform(encoding: YuvEncoding) -> [f32; 12] {
+pub(crate) fn yuv_uniform(encoding: YuvEncoding) -> [f32; 12] {
     let YuvEncoding { color, chroma } = encoding;
     // Components that are already RGB have no pack: they take BT.709's.
     let (kr, kb) = color

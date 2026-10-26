@@ -1,7 +1,7 @@
 schema = 2
 name = "alpha2-ffmpeg-lgpl-runtime"
 repository = "alpha2-sh/ffmpeg-builds"
-release_tag = "ffmpeg-8.1.3-shared-build3"
+release_tag = "ffmpeg-8.1.3-shared-build4"
 ffmpeg_version = "8.1.3"
 source_tag = "n8.1.3"
 source_url = "https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz"
@@ -33,6 +33,9 @@ required_configure = [
   "--enable-libvpx",
   "--enable-libsvtav1",
 ]
+# `cuda-nvcc`, `cuda-sdk` and `libnpp` are FFmpeg's nonfree NVIDIA components. NVENC is not one:
+# it loads the NVIDIA driver at run time, and the Linux and Windows builds enable it
+# (`verify-runtime.sh` requires it there).
 forbidden_configure = [
   "--enable-gpl",
   "--enable-nonfree",
@@ -44,6 +47,9 @@ forbidden_configure = [
   "--enable-libfdk-aac",
   "--enable-libvmaf",
   "--enable-mbedtls",
+  "--enable-cuda-nvcc",
+  "--enable-cuda-sdk",
+  "--enable-libnpp",
 ]
 
 libraries_linux = [
@@ -105,38 +111,42 @@ notices = [
   "licenses/SVT-AV1/LICENSE.md",
   "licenses/SVT-AV1/PATENTS.md",
 ]
-# Only the Linux builds compile against the Vulkan headers, so only they carry that notice. macOS
-# uses VideoToolbox and Windows uses D3D11VA/D3D12VA.
+# Only the Linux builds compile against the Vulkan headers, and only the Linux and Windows builds
+# against nv-codec-headers (NVENC), so only they carry those notices. macOS uses VideoToolbox.
 notices_linux = [
   "licenses/Vulkan-Headers/LICENSE.md",
   "licenses/Vulkan-Headers/LICENSES/Apache-2.0.txt",
   "licenses/Vulkan-Headers/LICENSES/MIT.txt",
+  "licenses/nv-codec-headers/LICENSE",
+]
+notices_windows = [
+  "licenses/nv-codec-headers/LICENSE",
 ]
 
 [assets.win-x64]
 archive = "ffmpeg-8.1.3-shared-win-x64.zip"
-sha256 = "8065fd48f62ce11c6ac255a0a8cfceb6591312a15cef8b57439dcfb1fb33d06b"
+sha256 = "6ac610fbbfbbad945a9efba06db452e6d2078fe98af012907d80bcc20347c0a9"
 report = "ffmpeg-8.1.3-shared-win-x64.configure.txt"
-report_sha256 = "1967f8afa9912a02fd2e5cb19eb914843cc27504d0ce8d93b081bf57b9e0b476"
+report_sha256 = "70459c6f9ca1dd65b5a993b6f46291f937ba84d0cd38e9f57cfd19db57c86931"
 minimum_os = "Windows 10"
 
 [assets.linux-x64]
 archive = "ffmpeg-8.1.3-shared-linux-x64.tar.gz"
-sha256 = "5810a7c8133c0b4bbbd67c01e7a4410cb1502ab6e37b377b11ebc5315a2200f4"
+sha256 = "37b9be99eef86f7e3e909510a83e0dd6d70ffa70e5df0c194452db099ee45f49"
 report = "ffmpeg-8.1.3-shared-linux-x64.configure.txt"
-report_sha256 = "06f08010e577be34cc1ecaf4930e9fb63a91b3d647b51fcc7e3b6063b3aefe0e"
+report_sha256 = "357c39d9e75b4febcea1d02101a1c091c1168a1e576b167571ce9038f47d65bf"
 minimum_os = "glibc 2.35"
 
 [assets.linux-arm64]
 archive = "ffmpeg-8.1.3-shared-linux-arm64.tar.gz"
-sha256 = "e011d7a983bdaf3f2d125b911a2cb1c461cfdc2e2f70b701d2ab01599aecd00e"
+sha256 = "9d732da1bd681625b27fa10ca4fe918922cc6b46d9ef3710f0142b2a1a15acaf"
 report = "ffmpeg-8.1.3-shared-linux-arm64.configure.txt"
-report_sha256 = "3bb81d80ffc7798612a5ab6f239b1f53626914227d25a08efabb89876902dc1b"
+report_sha256 = "7877ddf7c3a9c2f82e89f53caecd8d340f6d07c08f8933d4fc47e138f8152d8d"
 minimum_os = "glibc 2.35"
 
 [assets.macos-arm64]
 archive = "ffmpeg-8.1.3-shared-macos-arm64.tar.gz"
-sha256 = "375321e331550130878b3fb719863beece05b59e891ccfa8018b381cbe42412a"
+sha256 = "55f5f97493073d90ad69fc20473a8def4de5b2f7123f8e6859cb47ea9d5f489c"
 report = "ffmpeg-8.1.3-shared-macos-arm64.configure.txt"
-report_sha256 = "1f772a0638ae697ec91000a406204d528c489790d3a982f91e27dbc0fc4abd2c"
+report_sha256 = "2a2e4fb73c26bb2c47e34198a55b9af180956a9a06edef70b50579a89625bbb0"
 minimum_os = "macOS 11"

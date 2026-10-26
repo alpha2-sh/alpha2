@@ -212,7 +212,7 @@ fn old_validation_layer_host_child() {
         return;
     };
     drop(context);
-    let host = create_host(VideoDecodePolicy::Auto).expect("an auto host starts");
+    let host = create_gpu_test_host(VideoDecodePolicy::Auto).expect("an auto host starts");
     assert!(!host.hardware_decode_ready(), "{hazard}");
     assert_eq!(
         host.hardware_decode_unavailable.as_deref(),
@@ -223,7 +223,7 @@ fn old_validation_layer_host_child() {
         crate::assets::HardwareVideoDecode::None
     );
     drop(host);
-    let error = create_host(VideoDecodePolicy::HardwareRequired)
+    let error = create_gpu_test_host(VideoDecodePolicy::HardwareRequired)
         .err()
         .expect("hardware-required refuses to start");
     assert_eq!(error.code, "HARDWARE_DECODE_UNAVAILABLE");
@@ -373,7 +373,7 @@ fn import_parity_child() {
     let request = std::env::var("ALPHA2_IMPORT_PARITY").expect("a stream and a policy");
     let (name, policy) = request.split_once('|').expect("name|policy");
     let hardware = policy == "hardware";
-    let mut host = create_host(if hardware {
+    let mut host = create_gpu_test_host(if hardware {
         VideoDecodePolicy::HardwareRequired
     } else {
         VideoDecodePolicy::Software
@@ -854,7 +854,7 @@ fn a_synchronous_export_decodes_in_software() {
     };
     // The comparison path opens software decoders whatever the host may do, and says so.
     for policy in [VideoDecodePolicy::Software, VideoDecodePolicy::Auto] {
-        let mut host = create_host(policy).expect("host");
+        let mut host = create_gpu_test_host(policy).expect("host");
         let result = host
             .handle(
                 request(&format!("{}.mp4", policy.as_str())),
@@ -877,7 +877,7 @@ fn a_synchronous_export_decodes_in_software() {
         assert_eq!(performance["hardwareDecodedFrames"], json!(0));
     }
     // `hardware-required` cannot be kept by it, so it is refused before any output opens.
-    match create_host(VideoDecodePolicy::HardwareRequired) {
+    match create_gpu_test_host(VideoDecodePolicy::HardwareRequired) {
         Ok(mut host) => {
             let error = host
                 .handle(request("strict.mp4"), &mut |_| Ok(()))
@@ -942,7 +942,7 @@ fn a_build_without_hardware_decode_refuses_hardware_required_at_startup() {
         ),
         feature = "hwdecode"
     ));
-    match create_host(VideoDecodePolicy::HardwareRequired) {
+    match create_gpu_test_host(VideoDecodePolicy::HardwareRequired) {
         Err(error) if !built => {
             assert_eq!(
                 error.code, "HARDWARE_DECODE_UNAVAILABLE",

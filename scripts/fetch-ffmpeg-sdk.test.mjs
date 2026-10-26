@@ -56,14 +56,18 @@ const targets = {
     notices: [...array("notices"), ...array("notices_linux")],
     hardware: [
       "--enable-vulkan --disable-vaapi --disable-vdpau --disable-libdrm --disable-v4l2-m2m --disable-libmfx --disable-libvpl",
+      "--enable-ffnvcodec --enable-nvenc --disable-cuvid --disable-nvdec",
+      "hwdevice: cuda",
       "hwdevice: vulkan",
     ],
   },
   "win-x64": {
     libraries: array("libraries_windows").map((name) => `bin/${name}`),
-    notices: array("notices"),
+    notices: [...array("notices"), ...array("notices_windows")],
     hardware: [
       "--enable-d3d11va --enable-d3d12va --enable-dxva2 --enable-mediafoundation",
+      "--enable-ffnvcodec --enable-nvenc --disable-cuvid --disable-nvdec",
+      "hwdevice: cuda",
       "hwdevice: d3d11va",
       "hwdevice: d3d12va",
       "hwdevice: dxva2",
@@ -296,7 +300,8 @@ test("each target hardware option is found on its own, wherever the report puts 
     const linux = verifyRuntime(
       dir,
       sdkTree(dir, "linux-x64", [
-        "configuration: --enable-vulkan --enable-ffnvcodec --enable-cuda --enable-cuvid --enable-nvdec --enable-nvenc --disable-vaapi --disable-vdpau --disable-libdrm --disable-v4l2-m2m --disable-libmfx --disable-libvpl",
+        "configuration: --enable-vulkan --enable-ffnvcodec --disable-nvdec --disable-cuvid --enable-nvenc --disable-vaapi --disable-vdpau --disable-libdrm --disable-v4l2-m2m --disable-libmfx --disable-libvpl",
+        "hwdevice: cuda",
         "hwdevice: vulkan",
       ]),
     );
@@ -304,7 +309,8 @@ test("each target hardware option is found on its own, wherever the report puts 
     const windows = verifyRuntime(
       dir,
       sdkTree(dir, "win-x64", [
-        "configuration: --enable-dxva2 --enable-amf --enable-mediafoundation --enable-d3d12va --enable-d3d11va",
+        "configuration: --enable-dxva2 --enable-nvenc --enable-mediafoundation --disable-cuvid --enable-d3d12va --enable-ffnvcodec --disable-nvdec --enable-d3d11va",
+        "hwdevice: cuda",
         "hwdevice: d3d11va",
         "hwdevice: d3d12va",
         "hwdevice: dxva2",
@@ -316,7 +322,8 @@ test("each target hardware option is found on its own, wherever the report puts 
     const missing = verifyRuntime(
       dir,
       sdkTree(dir, "linux-x64", [
-        "configuration: --enable-vulkan --disable-vaapi --disable-vdpau --disable-v4l2-m2m --disable-libmfx --disable-libvpl",
+        "configuration: --enable-vulkan --disable-vaapi --disable-vdpau --disable-v4l2-m2m --disable-libmfx --disable-libvpl --enable-ffnvcodec --enable-nvenc --disable-cuvid --disable-nvdec",
+        "hwdevice: cuda",
         "hwdevice: vulkan",
       ]),
     );

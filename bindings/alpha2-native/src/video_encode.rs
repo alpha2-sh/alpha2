@@ -19,7 +19,6 @@ use alpha2_media::{
     EncodeEvent, EncodeSink, Orientation, PixelFormat, SampleAspectRatio, VideoRateControl,
 };
 use alpha2_time::{FrameRate, MediaTime};
-use rsmpeg::avcodec::AVCodecContext;
 use rsmpeg::avutil::{AVFrameWithImage, AVImage, AVRational, av_rescale_q, ra};
 use rsmpeg::error::RsmpegError;
 use rsmpeg::ffi;
@@ -107,7 +106,7 @@ pub(crate) fn check_video_config(config: &VideoEncodeConfig) -> Result<(), Encod
 /// the display matrix, the pixel aspect ratio, and the codec tag.
 pub(crate) fn describe_output_stream(
     stream: &mut rsmpeg::avformat::AVStreamMut<'_>,
-    encoder: &AVCodecContext,
+    codec_id: ffi::AVCodecID,
     display: VideoDisplay,
     container: Container,
 ) -> Result<(), EncodeError> {
@@ -124,7 +123,7 @@ pub(crate) fn describe_output_stream(
     }
     let tag = crate::convert::container_codec_tag(
         container,
-        encoder.codec_id,
+        codec_id,
         stream.codecpar().codec_tag,
         false,
     );
@@ -142,7 +141,7 @@ pub struct NativeVideoEncodeSink {
     /// Held until the partial file is renamed into place or removed.
     pub(crate) _partial_lock: crate::partial::PartialLock,
     pub(crate) output: Option<OutputFile>,
-    pub(crate) encoder: AVCodecContext,
+    pub(crate) encoder: crate::video_backend::VideoEncoderBackend,
     pub(crate) stream_index: i32,
     pub(crate) encoder_time_base: AVRational,
     /// One frame in `encoder_time_base`.
@@ -233,16 +232,21 @@ impl NativeVideoEncodeSink {
             height,
         })?;
         // The frame length, or the finest unit an encoder that cannot hold it takes.
-        let encoder_time_base = encoder.time_base;
+        let encoder_time_base = encoder.time_base();
         let mut stream_time_base;
         let stream_index;
         {
             let mut stream = output.new_stream();
             stream_time_base = encoder_time_base;
             stream.set_time_base(stream_time_base);
-            let parameters = encoder.extract_codecpar();
+            let parameters = encoder.codec_parameters();
             stream.set_codecpar(parameters);
-            describe_output_stream(&mut stream, &encoder, config.display, config.container)?;
+            describe_output_stream(
+                &mut stream,
+                encoder.codec_id(),
+                config.display,
+                config.container,
+            )?;
             stream_index = stream.index;
         }
         output

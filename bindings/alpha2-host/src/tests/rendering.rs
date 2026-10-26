@@ -797,7 +797,7 @@ fn an_export_draws_an_image_through_a_named_input() {
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("named-input");
     let bytes = |name: &str| sha256_hex(&directory.join(name));
-    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let mut host = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
     let effects = json!([
         {"id": "test.multiply-map", "version": 1, "kind": "effect", "inputs": [{"name": "map"}],
          "wgslBody": "fn effect(uv: vec2f, src: vec4f) -> vec4f { return src * sample_map(uv); }"},
@@ -851,7 +851,7 @@ fn each_export_renders_the_runtime_effects_its_own_request_defines() {
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("runtime-effects");
     let bytes = |name: &str| sha256_hex(&directory.join(name));
-    let mut fresh = create_host(VideoDecodePolicy::Software).expect("host");
+    let mut fresh = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
     export_tinted(
         &mut fresh,
         &json!([tint(GREEN_ONLY)]),
@@ -860,7 +860,7 @@ fn each_export_renders_the_runtime_effects_its_own_request_defines() {
     .expect("fresh export");
     drop(fresh);
 
-    let mut warm = create_host(VideoDecodePolicy::Software).expect("host");
+    let mut warm = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
     export_tinted(
         &mut warm,
         &json!([tint(RED_ONLY)]),

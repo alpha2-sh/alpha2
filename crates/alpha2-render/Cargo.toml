@@ -32,19 +32,33 @@ alpha2-shaders.workspace = true
 alpha2-time.workspace = true
 wgpu.workspace = true
 half = "2.7.1"
+libm = "0.2.16"
 bytemuck = "1.25.2"
 web-time = "1.1.0"
 serde_json.workspace = true
+
+# The CPU renderer's thread pool. A browser's wasm has no threads; it draws on one there.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = "1.11.0"
 
 [dev-dependencies]
 alpha2-model.workspace = true
 # Tests acquire devices one at a time (`alpha2_gpu::serialize_acquisition`).
 alpha2-gpu = { workspace = true, features = ["serial-acquisition"] }
 alpha2-golden-support.workspace = true
+png.workspace = true
 pollster.workspace = true
 
-[lints]
-workspace = true
+[lints.rust]
+# Allowed in one place: the CPU renderer's AVX2 dispatch (`cpu/workers.rs`).
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"
 
 [[bench]]
 name = "readback_and_pools"
@@ -60,4 +74,8 @@ harness = false
 
 [[bench]]
 name = "graph_encode"
+harness = false
+
+[[bench]]
+name = "cpu_frame"
 harness = false

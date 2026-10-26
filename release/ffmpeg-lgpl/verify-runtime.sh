@@ -78,19 +78,27 @@ test "$applied_patches" = "$expected_patches" || {
 }
 
 # The hardware options are the one policy not in the lock file: what each target accelerates with is
-# a build property, not a licence one. Each option is looked for on its own.
+# a build property, not a licence one. Each option is looked for on its own. NVENC (Linux and
+# Windows) loads the NVIDIA driver at run time and registers the `cuda` device type; NVDEC/CUVID
+# stay off, so decode is Vulkan or D3D only.
+nvenc_options='--enable-ffnvcodec
+--enable-nvenc
+--disable-cuvid
+--disable-nvdec'
 case "$target" in
   linux-*)
     platform=linux
     library_dir="$root/lib"
-    hardware_options='--enable-vulkan
+    hardware_options="--enable-vulkan
 --disable-vaapi
 --disable-vdpau
 --disable-libdrm
 --disable-v4l2-m2m
 --disable-libmfx
---disable-libvpl'
-    hardware_inventory='hwdevice: vulkan'
+--disable-libvpl
+$nvenc_options"
+    hardware_inventory='hwdevice: vulkan
+hwdevice: cuda'
     ;;
   macos-*)
     platform=macos
@@ -101,13 +109,15 @@ case "$target" in
   win-*)
     platform=windows
     library_dir="$root/bin"
-    hardware_options='--enable-d3d11va
+    hardware_options="--enable-d3d11va
 --enable-d3d12va
 --enable-dxva2
---enable-mediafoundation'
+--enable-mediafoundation
+$nvenc_options"
     hardware_inventory='hwdevice: d3d11va
 hwdevice: d3d12va
-hwdevice: dxva2'
+hwdevice: dxva2
+hwdevice: cuda'
     ;;
   *)
     echo "unsupported FFmpeg runtime target: $target" >&2
@@ -156,8 +166,8 @@ if find "$root" -type f \( -name 'libav*.a' -o -name 'libsw*.a' \) \
   exit 1
 fi
 
-# `notices` ships everywhere; `notices_<platform>` is the per-target addition, and only Linux
-# declares one.
+# `notices` ships everywhere; `notices_<platform>` is the per-target addition, which Linux and
+# Windows declare.
 notices=$(require_array notices)
 target_notices=$(read_array "notices_$platform")
 if [ -n "$target_notices" ]; then

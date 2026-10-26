@@ -2,11 +2,13 @@
 
 The cache layout is the one ``@alpha2-sh/node`` uses: each release archive unpacks into
 ``<cache>/alpha2-<version>-<target>-<kind>/`` with ``bin/alpha2-host`` beside the ``lib/`` it loads,
-so one download serves both clients.
+so one download serves both clients. Cisco's OpenH264 library, on request, goes into
+``<cache>/openh264-<version>-<target>/``, where the host looks for it.
 """
 
 from __future__ import annotations
 
+import bz2
 import hashlib
 import os
 import platform
@@ -30,13 +32,16 @@ from .errors import Alpha2HostInstallError
 
 __all__ = [
     "HOST_DOWNLOAD_URL",
+    "OPENH264_DOWNLOAD_URL",
     "HostArchiveKind",
     "InstallResult",
+    "OpenH264InstallResult",
     "cached_host_binary",
     "host_cache_directory",
     "host_executable_name",
     "host_target",
     "install_host",
+    "install_openh264",
     "package_version",
 ]
 
@@ -243,6 +248,183 @@ def install_host(
         shutil.rmtree(staging, ignore_errors=True)
 
 
+OPENH264_VERSION = "2.7.0"
+"""The OpenH264 release :func:`install_openh264` installs."""
+
+OPENH264_DOWNLOAD_URL = "https://ciscobinary.openh264.org"
+"""Where Cisco publishes its OpenH264 binaries: ``<base>/<archive>``."""
+
+OPENH264_NOTICE = "OpenH264 Video Codec provided by Cisco Systems, Inc."
+"""The text Cisco's binary licence requires wherever the user controls the codec."""
+
+OPENH264_LICENSE_URL = "https://www.openh264.org/BINARY_LICENSE.txt"
+"""Cisco's licence for its OpenH264 binaries."""
+
+
+@dataclass(frozen=True)
+class _OpenH264Archive:
+    """One target's OpenH264 binary: the ``.bz2`` file Cisco publishes and the library in it."""
+
+    archive: str
+    archive_sha256: str
+    library: str
+    library_sha256: str
+
+
+# Cisco's OpenH264 binaries by release target, with their SHA-256s. It mirrors
+# release/openh264/manifest.toml, which the published package does not carry.
+_OPENH264_TARGETS: dict[str, _OpenH264Archive] = {
+    "linux-x64": _OpenH264Archive(
+        "libopenh264-2.7.0-linux64.8.so.bz2",
+        "44ad0dd2c5af2bac84d26f89f2eb4e268708b8739323d15d33837f7221ce4980",
+        "libopenh264-2.7.0-linux64.8.so",
+        "1522f873a482923c5ec018a4415e1866898197528828c50f90fd300c94620df3",
+    ),
+    "linux-arm64": _OpenH264Archive(
+        "libopenh264-2.7.0-linux-arm64.8.so.bz2",
+        "74c7a1d02003d80daf2b4bc7bbb02f73e5548debd4c158b495e1f83d80ebd136",
+        "libopenh264-2.7.0-linux-arm64.8.so",
+        "9ac664b0154fd0868491c2a904397b8a05779874c0603b8b1f16ad15de1ffd82",
+    ),
+    "macos-arm64": _OpenH264Archive(
+        "libopenh264-2.7.0-mac-arm64.dylib.bz2",
+        "c9f2338359093a3e0628e01717be373c6948994a6070a706d303f052013e2b5f",
+        "libopenh264-2.7.0-mac-arm64.dylib",
+        "2e1ae3cd10c08328ca03a1f304fd2a1a2a7e5658c6d5a8582101a963f7995ef0",
+    ),
+    "win-x64": _OpenH264Archive(
+        "openh264-2.7.0-win64.dll.bz2",
+        "7073fda55e904ac515f787d9728c4bcf9965ec7c91c9f84eae3f260ef9b9b37c",
+        "openh264-2.7.0-win64.dll",
+        "0ef5e7f3b38753b15c13afa0418d4d7805fa228e6adfd3e425bbf758cff1c288",
+    ),
+}
+
+
+@dataclass(frozen=True)
+class OpenH264InstallResult:
+    """What :func:`install_openh264` installed."""
+
+    library_path: Path
+    """The installed library, which ``alpha2-host`` now loads."""
+    directory: Path
+    """Its directory in the cache, ``openh264-<version>-<target>/``."""
+    downloaded: bool
+    """Whether it was downloaded now; ``False`` when it was already installed."""
+    version: str
+    """The OpenH264 release."""
+    notice: str
+    """:data:`OPENH264_NOTICE`, which Cisco's licence requires be shown to the user."""
+
+
+def install_openh264(
+    *,
+    cache_directory: str | os.PathLike[str] | None = None,
+    force: bool = False,
+    download_url: str | None = None,
+    on_progress: Callable[[int, int | None], None] | None = None,
+    cancel: threading.Event | None = None,
+) -> OpenH264InstallResult:
+    """Downloads Cisco's prebuilt OpenH264 library for this platform.
+
+    It is the software H.264 encoder ``alpha2-host`` loads when no hardware encoder is available,
+    installed into the cache as ``openh264-<version>-<target>/<library>``, where the host looks for
+    it. Nothing else downloads it: Cisco's patent licence covers its binary only when the user
+    fetches it from Cisco. It comes from :data:`OPENH264_DOWNLOAD_URL` (or ``download_url``, a
+    mirror of it; default ``ALPHA2_OPENH264_DOWNLOAD_URL`` when set), and the ``.bz2`` file and the
+    library it unpacks to are both checked against their SHA-256s. A library already installed is
+    not downloaded again unless ``force`` is set. It appears in the cache whole or not at all, like
+    :func:`install_host`'s archives. ``on_progress(received, total)`` is called as it downloads;
+    ``total`` is ``None`` when the server did not say. Setting ``cancel`` stops the install.
+
+    Raises :class:`~alpha2.Alpha2HostInstallError`.
+    """
+    target = host_target()
+    entry = _OPENH264_TARGETS.get(target) if target is not None else None
+    if target is None or entry is None:
+        system, machine = _platform_key()
+        raise Alpha2HostInstallError(
+            "UNSUPPORTED_PLATFORM",
+            f"there is no OpenH264 binary for alpha2-host on {system}-{machine}",
+        )
+
+    cache = Path(cache_directory) if cache_directory is not None else host_cache_directory()
+    base = f"openh264-{OPENH264_VERSION}-{target}"
+    directory = cache / base
+    library_path = directory / entry.library
+
+    def installed() -> bool:
+        return _sha256_of_file(library_path) == entry.library_sha256
+
+    def result(downloaded: bool) -> OpenH264InstallResult:
+        return OpenH264InstallResult(
+            library_path, directory, downloaded, OPENH264_VERSION, OPENH264_NOTICE
+        )
+
+    if not force and installed():
+        return result(False)
+
+    from_environment = os.environ.get("ALPHA2_OPENH264_DOWNLOAD_URL", "")
+    url = download_url or (from_environment if from_environment.strip() else OPENH264_DOWNLOAD_URL)
+    url = f"{url.rstrip('/')}/{entry.archive}"
+
+    cache.mkdir(parents=True, exist_ok=True)
+    # Staged in the cache itself, so the finished directory moves into place with one rename.
+    staging = Path(tempfile.mkdtemp(prefix=".install-", dir=cache))
+    try:
+        archive_path = staging / entry.archive
+        actual = _download_file(
+            url, archive_path, on_progress, cancel, f"; {entry.archive} is not there"
+        )
+        if actual != entry.archive_sha256:
+            raise Alpha2HostInstallError(
+                "CHECKSUM_MISMATCH",
+                f"{entry.archive} has SHA-256 {actual}; "
+                f"OpenH264 {OPENH264_VERSION} has {entry.archive_sha256}",
+            )
+        _check_cancel(cancel)
+        try:
+            library = bz2.decompress(archive_path.read_bytes())
+        except (OSError, ValueError, EOFError) as error:
+            raise Alpha2HostInstallError(
+                "EXTRACT_FAILED", f"cannot decompress {entry.archive}: {error}"
+            ) from error
+        library_hash = hashlib.sha256(library).hexdigest()
+        if library_hash != entry.library_sha256:
+            raise Alpha2HostInstallError(
+                "CHECKSUM_MISMATCH",
+                f"{entry.library} has SHA-256 {library_hash}; "
+                f"OpenH264 {OPENH264_VERSION} has {entry.library_sha256}",
+            )
+        staged = staging / base
+        staged.mkdir()
+        (staged / entry.library).write_bytes(library)
+
+        # A directory there holds no valid library (or ``force`` replaces it).
+        if force or not installed():
+            shutil.rmtree(directory, ignore_errors=True)
+        try:
+            os.rename(staged, directory)
+        except OSError as error:
+            # Another install moved the same library into place first.
+            if not installed():
+                raise Alpha2HostInstallError(
+                    "EXTRACT_FAILED", f"cannot move {base} into {cache}: {error}"
+                ) from error
+        return result(True)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+def _sha256_of_file(path: Path) -> str | None:
+    """The SHA-256 of the file at ``path`` in lower-case hex, or ``None`` when there is none."""
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    return hashlib.sha256(data).hexdigest()
+
+
 def _checksum_of(listing: str, file: str) -> str | None:
     """The SHA-256 ``sha256sum`` output lists for ``file``, in lower case."""
     for line in listing.splitlines():
@@ -261,16 +443,17 @@ def _check_cancel(cancel: threading.Event | None) -> None:
         raise Alpha2HostInstallError("ABORTED", "the install was aborted")
 
 
-def _open(url: str, cancel: threading.Event | None):  # type: ignore[no-untyped-def]
+_RELEASE_NOT_FOUND = "; the release may not be published yet, or not for this platform"
+
+
+def _open(  # type: ignore[no-untyped-def]
+    url: str, cancel: threading.Event | None, not_found: str = _RELEASE_NOT_FOUND
+):
     _check_cancel(cancel)
     try:
         return urllib.request.urlopen(url, timeout=_TIMEOUT_SECONDS)
     except urllib.error.HTTPError as error:
-        hint = (
-            "; the release may not be published yet, or not for this platform"
-            if error.code == 404
-            else ""
-        )
+        hint = not_found if error.code == 404 else ""
         raise Alpha2HostInstallError(
             "DOWNLOAD_FAILED", f"{url} answered {error.code}{hint}"
         ) from error
@@ -296,10 +479,11 @@ def _download_file(
     path: Path,
     on_progress: Callable[[int, int | None], None] | None,
     cancel: threading.Event | None,
+    not_found: str = _RELEASE_NOT_FOUND,
 ) -> str:
     """Writes ``url`` to ``path`` and returns its SHA-256 in lower-case hex."""
     digest = hashlib.sha256()
-    with _open(url, cancel) as response, path.open("wb") as file:
+    with _open(url, cancel, not_found) as response, path.open("wb") as file:
         length = response.headers.get("Content-Length")
         total = int(length) if length and length.isdigit() and int(length) > 0 else None
         received = 0

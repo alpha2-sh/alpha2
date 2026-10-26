@@ -10,11 +10,17 @@ from pathlib import Path
 
 from .client import ExportProgress, HostClient
 from .errors import Alpha2HostError, Alpha2HostInstallError
-from .install import install_host
+from .install import (
+    OPENH264_LICENSE_URL,
+    OpenH264InstallResult,
+    install_host,
+    install_openh264,
+)
 
 
 def _install(arguments: argparse.Namespace) -> int:
     # Progress goes to standard error, in whole percents, and only to a terminal.
+    what = "OpenH264" if arguments.openh264 else "alpha2-host"
     shown = -1
 
     def progress(received: int, total: int | None) -> None:
@@ -24,13 +30,17 @@ def _install(arguments: argparse.Namespace) -> int:
         percent = received * 100 // total
         if percent != shown:
             shown = percent
-            sys.stderr.write(f"\rdownloading alpha2-host {percent}%")
+            sys.stderr.write(f"\rdownloading {what} {percent}%")
 
     try:
-        result = install_host(
-            kind="thin" if arguments.thin else "bundled",
-            force=arguments.force,
-            on_progress=progress,
+        result = (
+            install_openh264(force=arguments.force, on_progress=progress)
+            if arguments.openh264
+            else install_host(
+                kind="thin" if arguments.thin else "bundled",
+                force=arguments.force,
+                on_progress=progress,
+            )
         )
     except Alpha2HostInstallError as error:
         if shown >= 0:
@@ -39,6 +49,20 @@ def _install(arguments: argparse.Namespace) -> int:
         return 1
     if shown >= 0:
         sys.stderr.write("\n")
+    if isinstance(result, OpenH264InstallResult):
+        print(
+            f"installed OpenH264 {result.version}: {result.library_path}"
+            if result.downloaded
+            else f"already installed: {result.library_path}"
+        )
+        # Cisco's licence asks for its notice wherever the user controls the codec.
+        print(result.notice)
+        print(f"It is Cisco's binary, under Cisco's terms: {OPENH264_LICENSE_URL}")
+        print(
+            "alpha2-host uses it for H.264 when no hardware encoder is available; "
+            "set ALPHA2_OPENH264=0 to turn it off."
+        )
+        return 0
     print(
         f"installed {result.host_path}"
         if result.downloaded
@@ -119,8 +143,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         "cache (ALPHA2_HOST_CACHE_DIR, else the platform's cache directory), shared with "
         "@alpha2-sh/node.",
     )
-    install.add_argument(
+    what = install.add_mutually_exclusive_group()
+    what.add_argument(
         "--thin", action="store_true", help="the archive that loads the system's FFmpeg 8"
+    )
+    what.add_argument(
+        "--openh264",
+        action="store_true",
+        help="download Cisco's OpenH264 library instead, the software H.264 encoder "
+        "alpha2-host loads when no hardware encoder is available",
     )
     install.add_argument(
         "--force", action="store_true", help="download and unpack again when already installed"

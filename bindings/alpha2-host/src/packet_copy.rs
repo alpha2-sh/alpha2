@@ -548,6 +548,7 @@ impl Host {
         result["videoEncoder"] = Value::Null;
         result["videoEncoderClass"] = Value::Null;
         result["videoEncoderHardware"] = json!(false);
+        result["videoEncoderLibrary"] = Value::Null;
         result["videoEncoderPreferred"] = Value::Null;
         result["videoEncoderFallbacks"] = json!([]);
         result["videoOutputPath"] = json!(VideoOutputPath::PacketCopy.as_str());

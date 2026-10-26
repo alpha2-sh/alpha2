@@ -57,6 +57,9 @@ alpha2-native-gpu = { workspace = true, features = ["hwdevice"], optional = true
 wgpu = { workspace = true, optional = true }
 rsmpeg = { version = "0.18.0", features = ["link_system_ffmpeg"] }
 png.workspace = true
+# OpenH264 is a library the user installs; it is loaded at run time, never linked.
+libloading = "0.8.9"
+sha2 = "0.11"
 cpal = { version = "0.17.3", optional = true }
 
 [dev-dependencies]
@@ -83,8 +86,17 @@ wgpu.workspace = true
 [build-dependencies]
 alpha2-build-support.workspace = true
 
-[lints]
-workspace = true
+# The workspace's lints, except that `unsafe_code` is denied rather than forbidden: `openh264::ffi`
+# alone allows it, to call the OpenH264 library the host loads at run time.
+[lints.rust]
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"
 
 [[bench]]
 name = "media_io"

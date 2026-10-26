@@ -45,6 +45,12 @@ import {
   wasmFeatureProbe,
 } from "./binding.mjs";
 import {
+  cpuGrid,
+  cpuRuntimeEffectRefused,
+  cpuWorkerHost,
+  rendererWorker,
+} from "./cpu.mjs";
+import {
   exportEveryContainer,
   exportEveryProjectRate,
   exportSchedule,
@@ -146,6 +152,14 @@ export const cases = {
   "webgpu-unconfigured-surface": webgpuUnconfiguredSurface,
   "preview-unchanged-frame": previewUnchangedFrame,
   "preview-full-resolution": previewFullResolution,
+  "cpu-worker-host": () => cpuWorkerHost("cpu", 640, 360),
+  "cpu-worker-host-1080p": () => cpuWorkerHost("cpu", 1920, 1080),
+  "renderer-auto": () => cpuWorkerHost("auto", 640, 360),
+  "renderer-auto-worker": () => rendererWorker("auto"),
+  "cpu-worker": () => rendererWorker("cpu"),
+  "cpu-grid-1080p": cpuGrid,
+  "cpu-runtime-effect-refused": cpuRuntimeEffectRefused,
+  "cpu-fixed-audio-mix": () => fixedAudioMix(true),
 };
 
 // Cases that import a VideoFrame into WebGPU, which some browsers cannot do.

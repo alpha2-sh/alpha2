@@ -204,7 +204,7 @@ fn encoder_candidates_are_ordered_and_a_missing_codec_names_the_runtime() {
                 assert_eq!(
                     candidates
                         .iter()
-                        .map(crate::capabilities::VideoEncoderCandidate::name)
+                        .map(crate::capabilities::VideoEncoderChoice::name)
                         .collect::<Vec<_>>(),
                     advertised
                 );
@@ -774,7 +774,7 @@ fn a_runtime_other_than_the_pinned_sdk_says_why() {
     let identity = |version: &str, configuration: &str| crate::FfmpegRuntimeIdentity {
         version: version.to_owned(),
         configuration: configuration.to_owned(),
-        pinned_sdk_release: "ffmpeg-8.1.3-shared-build3",
+        pinned_sdk_release: "ffmpeg-8.1.3-shared-build4",
     };
     let pinned = "--disable-gpl --disable-nonfree --disable-autodetect --enable-libdav1d \
                   --enable-libopus --enable-libvpx --enable-libsvtav1 --enable-videotoolbox";
@@ -1002,12 +1002,16 @@ fn an_encoder_config_is_refused_for_the_reason_that_fails() {
 }
 
 /// The candidates `name` names, run as `FFmpeg` declares them.
-fn named_candidates(names: &[&std::ffi::CStr]) -> Vec<crate::capabilities::VideoEncoderCandidate> {
+fn named_candidates(names: &[&std::ffi::CStr]) -> Vec<crate::capabilities::VideoEncoderChoice> {
     names
         .iter()
-        .map(|name| crate::capabilities::VideoEncoderCandidate {
-            encoder: AVCodec::find_encoder_by_name(name).expect("the SDK registers it"),
-            on_hardware: false,
+        .map(|name| {
+            crate::capabilities::VideoEncoderChoice::Ffmpeg(
+                crate::capabilities::VideoEncoderCandidate {
+                    encoder: AVCodec::find_encoder_by_name(name).expect("the SDK registers it"),
+                    on_hardware: false,
+                },
+            )
         })
         .collect()
 }
@@ -1215,11 +1219,14 @@ fn a_software_encoder_reached_after_a_hardware_one_opens_with_the_software_share
         width: 64,
         height: 48,
     };
-    let candidate =
-        |name: &std::ffi::CStr, on_hardware| crate::capabilities::VideoEncoderCandidate {
-            encoder: AVCodec::find_encoder_by_name(name).expect("the SDK registers it"),
-            on_hardware,
-        };
+    let candidate = |name: &std::ffi::CStr, on_hardware| {
+        crate::capabilities::VideoEncoderChoice::Ffmpeg(
+            crate::capabilities::VideoEncoderCandidate {
+                encoder: AVCodec::find_encoder_by_name(name).expect("the SDK registers it"),
+                on_hardware,
+            },
+        )
+    };
     let (encoder, selection) = crate::capabilities::open_first_video_encoder(
         &request(),
         vec![candidate(c"png", true), candidate(c"mpeg4", false)],
@@ -1234,6 +1241,9 @@ fn a_software_encoder_reached_after_a_hardware_one_opens_with_the_software_share
     );
     assert_eq!(selection.rejected.len(), 1);
     assert_eq!(selection.software_threads, Some(3));
+    let crate::video_backend::VideoEncoderBackend::Ffmpeg(encoder) = encoder else {
+        panic!("MPEG-4 Part 2 is an FFmpeg encoder");
+    };
     assert_eq!(encoder.thread_count, 3, "the encoder runs what was decided");
     assert_eq!(asked.get(), 1);
 

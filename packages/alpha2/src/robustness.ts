@@ -1,6 +1,7 @@
 /** Observable browser capability/degradation categories. */
 export type BrowserCapabilityDiagnostic =
   | "webgpu-unavailable"
+  | "webgl2-unavailable"
   | "webcodecs-unavailable"
   | "offscreen-canvas-unavailable"
   | "wasm-simd-unavailable"
@@ -22,7 +23,13 @@ export interface BrowserResourceBudget {
 export interface BrowserCapabilities {
   /** The browser hands out a WebGPU adapter, so the engine renders through WebGPU. */
   readonly webgpu: boolean;
+  /** A WebGL2 context can be made, which the engine renders through without WebGPU. */
   readonly webgl2: boolean;
+  /**
+   * The renderer a render worker host's `renderer: "auto"` draws with here: `"gpu"` (WebGPU, else
+   * WebGL2) when either is available, else `"cpu"`, the engine's CPU renderer in wasm.
+   */
+  readonly renderer: "gpu" | "cpu";
   readonly webcodecs: boolean;
   readonly offscreenCanvas: boolean;
   /**
@@ -39,8 +46,9 @@ export interface BrowserCapabilities {
  *
  * `webgpu` asks for an adapter, as the engine does when it picks its backend: a browser can expose
  * `navigator.gpu` and still have no adapter to give (Chrome on Linux without its flag, a
- * blocklisted GPU, acceleration turned off), and then the engine runs on WebGL2. `webgl2` is probed
- * on a canvas of its own, since a canvas's first context fixes its kind for good: a caller's canvas
+ * blocklisted GPU, acceleration turned off), and then the engine runs on WebGL2; with neither (a
+ * browser with no usable GPU, such as Chrome with acceleration off), it runs on the CPU, which
+ * `renderer` says and `diagnostics` explains. `webgl2` is probed on a canvas of its own, since a canvas's first context fixes its kind for good: a caller's canvas
  * probed for WebGL2 could no longer render WebGPU or be transferred to a worker. `wasm` validates
  * two tiny modules, one per WebAssembly feature the packaged modules need past what every WebCodecs
  * browser has (SIMD and reference types; Chrome 94 and 95 have WebCodecs and SIMD but no reference
@@ -57,6 +65,7 @@ export async function detectBrowserCapabilities(): Promise<BrowserCapabilities> 
   const referenceTypes = validatesWasm(WASM_REFERENCE_TYPES_PROBE);
   const diagnostics: BrowserCapabilityDiagnostic[] = [];
   if (!webgpu) diagnostics.push("webgpu-unavailable");
+  if (!webgl2) diagnostics.push("webgl2-unavailable");
   if (!webcodecs) diagnostics.push("webcodecs-unavailable");
   if (!offscreenCanvas) diagnostics.push("offscreen-canvas-unavailable");
   if (!simd) diagnostics.push("wasm-simd-unavailable");
@@ -64,6 +73,7 @@ export async function detectBrowserCapabilities(): Promise<BrowserCapabilities> 
   return {
     webgpu,
     webgl2,
+    renderer: webgpu || webgl2 ? "gpu" : "cpu",
     webcodecs,
     offscreenCanvas,
     wasm: simd && referenceTypes,

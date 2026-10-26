@@ -48,15 +48,19 @@ from .errors import (
 )
 from .install import (
     HOST_DOWNLOAD_URL,
+    OPENH264_DOWNLOAD_URL,
     InstallResult,
+    OpenH264InstallResult,
     host_cache_directory,
     host_target,
     install_host,
+    install_openh264,
 )
 from .protocol import PROTOCOL_VERSION
 
 __all__ = [
     "HOST_DOWNLOAD_URL",
+    "OPENH264_DOWNLOAD_URL",
     "PROTOCOL_VERSION",
     "QUALITY_LEVELS",
     "TICKS_PER_SECOND",
@@ -71,6 +75,7 @@ __all__ = [
     "ExportProgress",
     "HostClient",
     "InstallResult",
+    "OpenH264InstallResult",
     "ProjectBuilder",
     "Ticks",
     "TrackBuilder",
@@ -82,6 +87,7 @@ __all__ = [
     "host_cache_directory",
     "host_target",
     "install_host",
+    "install_openh264",
     "resolve_host_binary",
     "seconds_to_ticks",
     "sequential_ids",

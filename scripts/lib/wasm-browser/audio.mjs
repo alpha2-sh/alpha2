@@ -255,7 +255,7 @@ report({
 `;
 }
 
-export function fixedAudioMix() {
+export function fixedAudioMix(cpu = false) {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
@@ -280,7 +280,8 @@ const generate = {
       Math.fround(Math.fround(((index * (2 * plane + 3)) % 400) / 400) - 0.5)));
   },
 };
-const engine = await WebEffectRegistry.create();
+// The CPU renderer mixes as the GPU one does: the mix needs no GPU.
+const engine = ${cpu ? "WebEffectRegistry.createCpu()" : "await WebEffectRegistry.create()"};
 engine.loadProject(JSON.stringify(fixture.project));
 for (const source of fixture.sources) {
   const planes = generate[source.generator](source.channels);

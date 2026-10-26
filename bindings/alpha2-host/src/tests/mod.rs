@@ -42,6 +42,7 @@ use serde_json::{Value, json};
 mod audio;
 mod conform;
 mod copy;
+mod cpu_renderer;
 #[cfg(all(target_os = "windows", feature = "hwencode"))]
 mod d3d12va_encode;
 mod decode_plan;
@@ -50,6 +51,7 @@ mod failures;
 mod gpu_encode;
 mod gpu_resident;
 mod hardware_decode;
+mod openh264;
 mod providers;
 mod render_cache;
 mod rendering;
@@ -66,6 +68,13 @@ fn gpu_test_lock() -> std::sync::MutexGuard<'static, ()> {
     GPU_TEST_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// A host that renders on the GPU whatever `ALPHA2_RENDERER` says: for the
+/// tests of what only the GPU renderer does (GPU-resident output, decoder
+/// surface imports, runtime WGSL effects) or reports (its pools and passes).
+fn create_gpu_test_host(policy: VideoDecodePolicy) -> Result<Host, HostError> {
+    crate::create_host_with(policy, crate::config::RendererPolicy::Gpu)
 }
 
 /// A file of the checked-in corpus. Like [`gpu_test_lock`] and

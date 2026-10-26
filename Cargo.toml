@@ -30,6 +30,7 @@ members = [
     "tests/facade_without_wgpu",
     "tests/golden_support",
     "tests/provider_contract",
+    "tests/render_determinism",
     "tests/scaling_support",
 ]
 resolver = "3"

@@ -46,6 +46,11 @@ pub use passthrough::{
 mod hwdecode;
 #[cfg(feature = "hwencode")]
 mod hwencode;
+mod openh264;
+pub use openh264::{
+    OPENH264_ENCODER_NAME, OPENH264_INSTALL_COMMAND, OPENH264_NOTICE, OPENH264_VERSION,
+    OpenH264Library, OpenH264Provider, OpenH264Status, openh264_status,
+};
 mod rate_control;
 pub use rate_control::{AppliedRateControl, RateControlMechanism};
 #[cfg(test)]
@@ -54,6 +59,7 @@ mod tools;
 pub use tools::{
     FrameScore, THUMBNAIL_LUMA_RANGE, choose_thumbnail, downscale_frame, resize_rgba, score_frame,
 };
+mod video_backend;
 mod video_encode;
 mod video_frame;
 pub use alpha2_ffmpeg_bridge::Yuv420pFrameBuffer;
@@ -67,12 +73,13 @@ pub use audio_host::{
 pub use audio_host::{ProjectAudioRequest, render_project_audio};
 pub use capabilities::{
     AvEncodeConfig, NativeAudioCodec, NativeAudioEncoderCapability, NativeCodecCapabilities,
-    NativeEncoderClass, NativeEncoderHardwareConfig, NativeEncoderRejection,
+    NativeEncoderClass, NativeEncoderHardwareConfig, NativeEncoderLibrary, NativeEncoderRejection,
     NativeHardwareDecodeCapabilities, NativeHardwareDecodeCapability, NativeRateControlProbe,
     NativeVideoCodec, NativeVideoEncoderCapability, NativeVideoEncoderFallback,
-    NativeVideoEncoderProbe, NativeVideoEncoderSelection, codec_capabilities,
-    hardware_decode_backend, hardware_decode_capabilities, hybrid_encoders_use_hardware,
-    probe_video_encoders,
+    NativeVideoEncoderProbe, NativeVideoEncoderSelection, audio_encoder_capabilities,
+    codec_capabilities, h264_encoder_remedy, hardware_decode_backend, hardware_decode_capabilities,
+    hybrid_encoders_use_hardware, no_video_encoder_message, probe_video_encoders,
+    video_encoder_capabilities, video_encoders_without_probing,
 };
 pub use convert::{
     CodecThreadAllocation, CodecThreadRequest, codec_thread_allocation, codec_thread_budget,
@@ -224,6 +231,6 @@ pub fn ffmpeg_runtime_identity() -> FfmpegRuntimeIdentity {
     FfmpegRuntimeIdentity {
         version: alpha2_ffmpeg_bridge::runtime_version(),
         configuration: alpha2_ffmpeg_bridge::runtime_configuration(),
-        pinned_sdk_release: "ffmpeg-8.1.3-shared-build3",
+        pinned_sdk_release: "ffmpeg-8.1.3-shared-build4",
     }
 }

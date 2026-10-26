@@ -266,6 +266,52 @@ fn text_panel() -> String {
     ))
 }
 
+/// [`render`] on the CPU renderer.
+fn render_cpu(
+    renderer: &alpha2_render::CpuRenderer,
+    texts: &mut TextTextures,
+    project: &EngineProject,
+    ticks: i64,
+) -> Vec<u8> {
+    let size = RenderSize::new(W, H).expect("size");
+    let frame = project.evaluate(MediaTime(ticks)).expect("evaluates");
+    texts.prepare(renderer, &frame, size).expect("prepared");
+    renderer
+        .render_frame(size, &frame, &FramesWithText::new(&MissingFrames, texts))
+        .expect("frame renders")
+        .texture
+        .expect("a complete frame")
+        .read_rgba8()
+}
+
+/// The same goldens drawn by the CPU renderer: layouts are vectors and text, which it draws as
+/// the GPU does.
+#[test]
+fn layout_goldens_on_the_cpu() {
+    let renderer = alpha2_render::CpuRenderer::new(3);
+    let mut texts = texts();
+    let title = render_cpu(&renderer, &mut texts, &project(&title_card(), "", ""), 0);
+    alpha2_golden_support::assert_rgba8_golden("layout_title_card", (W, H), &title, 2);
+    let third = project(&lower_third(), "", "");
+    let mid = render_cpu(&renderer, &mut texts, &third, 15_000);
+    let end = render_cpu(&renderer, &mut texts, &third, 60_000);
+    alpha2_golden_support::assert_rgba8_golden(
+        "layout_lower_third",
+        (W * 2, H),
+        &side_by_side(&[&mid, &end]),
+        2,
+    );
+    let panel = render_cpu(&renderer, &mut texts, &project(&text_panel(), "", ""), 0);
+    alpha2_golden_support::assert_rgba8_golden("layout_text_panel", (W, H), &panel, 2);
+    let grid = render_cpu(
+        &renderer,
+        &mut texts,
+        &project(&grid_dashboard(), "", ""),
+        0,
+    );
+    alpha2_golden_support::assert_rgba8_golden("layout_grid", (W, H), &grid, 2);
+}
+
 #[test]
 fn layout_goldens() {
     let _lock = gpu_test_lock();

@@ -1,0 +1,50 @@
+schema = 1
+name = "openh264-cisco-binary"
+# Cisco's prebuilt OpenH264, the software H.264 encoder the native host loads at run time. It is
+# never part of anything alpha2 publishes: Cisco's patent licence covers its binary only when the
+# end user downloads it separately, so `npx @alpha2-sh/node install --openh264` and
+# `python -m alpha2 install --openh264` fetch it from Cisco on the user's machine, on request.
+version = "2.7.0"
+# The API the host's FFI is written against (`codec_api.h` of source tag v2.7.0). A library that is
+# not hash-verified must report it through `WelsGetCodecVersionEx`, or 2.6, whose API headers are
+# identical (both are the `.8` ABI).
+api_version = "2.7"
+source_tag = "v2.7.0"
+source_url = "https://github.com/cisco/openh264/archive/refs/tags/v2.7.0.tar.gz"
+source_sha256 = "5178775c8b440073e70920e97d195efff721c0e56d0a78cc82c919e95d54924d"
+download_url = "https://ciscobinary.openh264.org"
+license_url = "https://www.openh264.org/BINARY_LICENSE.txt"
+# Cisco's binary licence requires this text wherever the user controls the codec.
+notice = "OpenH264 Video Codec provided by Cisco Systems, Inc."
+
+# Per target: the compressed file under `download_url`, its SHA-256, and the SHA-256 of the
+# library it unpacks to, which equals Cisco's `<library>.signed.sha256.txt`. The install unpacks it
+# into `<host cache>/openh264-<version>-<target>/<library>`. `system_library` is the name the host
+# asks the system loader for when neither `ALPHA2_OPENH264_LIBRARY` nor the cache has one (a distro
+# package); Windows has no such package, so the host looks for none there.
+[targets.linux-x64]
+archive = "libopenh264-2.7.0-linux64.8.so.bz2"
+archive_sha256 = "44ad0dd2c5af2bac84d26f89f2eb4e268708b8739323d15d33837f7221ce4980"
+library = "libopenh264-2.7.0-linux64.8.so"
+library_sha256 = "1522f873a482923c5ec018a4415e1866898197528828c50f90fd300c94620df3"
+system_library = "libopenh264.so.8"
+
+[targets.linux-arm64]
+archive = "libopenh264-2.7.0-linux-arm64.8.so.bz2"
+archive_sha256 = "74c7a1d02003d80daf2b4bc7bbb02f73e5548debd4c158b495e1f83d80ebd136"
+library = "libopenh264-2.7.0-linux-arm64.8.so"
+library_sha256 = "9ac664b0154fd0868491c2a904397b8a05779874c0603b8b1f16ad15de1ffd82"
+system_library = "libopenh264.so.8"
+
+[targets.macos-arm64]
+archive = "libopenh264-2.7.0-mac-arm64.dylib.bz2"
+archive_sha256 = "c9f2338359093a3e0628e01717be373c6948994a6070a706d303f052013e2b5f"
+library = "libopenh264-2.7.0-mac-arm64.dylib"
+library_sha256 = "2e1ae3cd10c08328ca03a1f304fd2a1a2a7e5658c6d5a8582101a963f7995ef0"
+system_library = "libopenh264.8.dylib"
+
+[targets.win-x64]
+archive = "openh264-2.7.0-win64.dll.bz2"
+archive_sha256 = "7073fda55e904ac515f787d9728c4bcf9965ec7c91c9f84eae3f260ef9b9b37c"
+library = "openh264-2.7.0-win64.dll"
+library_sha256 = "0ef5e7f3b38753b15c13afa0418d4d7805fa228e6adfd3e425bbf758cff1c288"

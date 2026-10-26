@@ -20,7 +20,7 @@ fn a_repeated_frame_is_drawn_once_per_export() {
         "image".to_owned(),
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus/cross_topology_parity.png"),
     )]);
-    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let mut host = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
     let mut export = |name: &str| {
         host.export(
             &project.to_string(),
@@ -63,7 +63,7 @@ fn a_still_under_a_constant_effect_or_a_held_caption_is_drawn_once_per_export() 
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("result-cache-effects");
     let font = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fonts/Alpha2Fixture.ttf");
-    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let mut host = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
     let look = |effect: &str, name: &str, value: f64| {
         json!([{"id": "look", "output": "effect", "nodes": [
             {"id": "clip", "op": {"type": "clip"}},
@@ -143,7 +143,7 @@ fn a_still_under_a_constant_effect_or_a_held_caption_is_drawn_once_per_export() 
 fn a_picture_shown_over_several_output_frames_is_drawn_once() {
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("result-cache-pictures");
-    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let mut host = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
     let request = json!({
         "protocolVersion": 1, "requestId": "pictures", "operation": "export",
         "project": conform_project(&json!({})),
@@ -258,7 +258,7 @@ fn baked_frames_replace_rendering_bit_for_bit() {
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("baked");
     let cache = directory.join("cache");
-    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let mut host = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
     let project = still_project([0.0, 0.0, 0.0], "auto");
     let first = export_with_render_cache(&mut host, &project, &cache, &directory.join("a.mp4"), 6);
     assert_eq!(
@@ -384,7 +384,7 @@ fn slideshow_request(
 fn an_export_holds_only_the_stills_its_frame_shows() {
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("slideshow");
-    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let mut host = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
     let pictures = [
         ("a", "golden/blend_modes.png"),
         ("b", "golden/chroma_key.png"),
@@ -473,7 +473,7 @@ fn a_copy_and_a_gpu_resident_export_report_the_render_cache_unavailable() {
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("render-cache-unavailable");
     let cache = directory.join("cache");
-    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let mut host = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
     let second = alpha2_time::TICKS_PER_SECOND;
     let render_cache = json!({"directory": cache, "quotaBytes": 1 << 30, "backlog": "wait"});
     let copy = parse_request(
@@ -512,7 +512,7 @@ fn a_copy_and_a_gpu_resident_export_report_the_render_cache_unavailable() {
 
     #[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "hwencode"))]
     {
-        let mut host = create_host(VideoDecodePolicy::Auto).expect("host");
+        let mut host = create_gpu_test_host(VideoDecodePolicy::Auto).expect("host");
         match host.gpu_output_capability() {
             Ok(_) => {
                 let shows = [("a", "auto"), ("a", "auto")];
@@ -553,7 +553,7 @@ fn a_frame_the_render_cache_holds_uploads_no_source() {
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("cached-uploads");
     let cache = directory.join("cache");
-    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let mut host = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
     let project: Value = serde_json::from_str(include_str!(
         "../../../../tests/cases/host-video-export-project.json"
     ))
@@ -623,7 +623,7 @@ fn the_render_cache_evicts_old_unpinned_frames_first() {
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("evict");
     let cache = directory.join("cache");
-    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let mut host = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
     let pinned = still_project([0.0, 0.0, 0.0], "pin");
     export_with_render_cache(&mut host, &pinned, &cache, &directory.join("a.mp4"), 3);
     let unpinned = still_project([0.2, 0.0, 0.0], "auto");
@@ -1283,7 +1283,7 @@ fn a_render_cache_that_cannot_be_opened_never_fails_the_export() {
     let directory = scratch_directory("cache-unopenable");
     let blocker = directory.join("not-a-directory");
     std::fs::write(&blocker, b"a file where the cache would go").expect("blocker");
-    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let mut host = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
     let project = still_project([0.0, 0.0, 0.0], "auto");
     let result = export_with_render_cache(
         &mut host,
@@ -1314,7 +1314,7 @@ fn an_unreadable_executable_leaves_the_render_cache_unused() {
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("unreadable-binary");
     let cache = directory.join("cache");
-    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let mut host = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
     let project = still_project([0.0, 0.0, 0.0], "auto");
     crate::host::INJECT_UNREADABLE_BINARY.with(|inject| inject.set(true));
     let result = export_with_render_cache(&mut host, &project, &cache, &directory.join("a.mp4"), 3);
@@ -1386,7 +1386,7 @@ fn a_render_cache_writer_stuck_in_its_filesystem_is_left_and_the_export_succeeds
     // export after its output is published.
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("stuck-cache");
-    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let mut host = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
     let project = still_project([0.0, 0.0, 0.0], "auto");
     for backlog in ["skip", "wait"] {
         let cache = directory.join(format!("cache-{backlog}"));
@@ -1489,7 +1489,7 @@ fn a_baked_frame_is_read_and_checked_off_the_exports_own_thread() {
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("cache-read-thread");
     let cache = directory.join("cache");
-    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let mut host = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
     let project = still_project([0.0, 0.0, 0.0], "auto");
     let first = export_with_render_cache(&mut host, &project, &cache, &directory.join("a.mp4"), 6);
     assert_eq!(first["renderCache"]["writes"], json!(6), "{first}");
@@ -1603,7 +1603,7 @@ fn a_render_cache_reader_stuck_in_its_filesystem_is_left_and_the_export_renders(
     let _gpu = gpu_test_lock();
     let directory = scratch_directory("stuck-cache-reader");
     let cache = directory.join("cache");
-    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let mut host = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
     let project = still_project([0.0, 0.0, 0.0], "auto");
     let baked = export_with_render_cache(&mut host, &project, &cache, &directory.join("a.mp4"), 12);
     assert_eq!(baked["renderCache"]["writes"], json!(12), "{baked}");

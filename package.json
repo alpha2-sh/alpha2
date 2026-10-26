@@ -17,6 +17,7 @@
     "test:gpu-export": "cargo build --release -p alpha2-host && node scripts/test-gpu-export.mjs",
     "test:audio-determinism": "node scripts/test-audio-determinism.mjs",
     "test:wasm-parity": "node scripts/test-wasm-parity.mjs",
+    "test:render-determinism": "node scripts/test-render-determinism.mjs",
     "test:wgsl-browser": "node scripts/test-wgsl-browser.mjs",
     "test:gpu-validation": "node scripts/test-gpu-validation.mjs",
     "test:vulkan-validation": "cargo build --release -p alpha2-host && cargo build --release -p alpha2-native --features hwdecode && node scripts/test-vulkan-validation.mjs",

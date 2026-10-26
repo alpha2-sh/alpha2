@@ -180,6 +180,43 @@ impl CapabilityReport {
         }
     }
 
+    /// The report of `renderer`, the CPU renderer, running on `runtime`: its
+    /// "GPU" is the CPU, tier A, storing half floats as the GPU's usual
+    /// intermediate.
+    #[must_use]
+    pub fn cpu(runtime: Runtime, renderer: &alpha2_render::CpuRenderer) -> Self {
+        Self {
+            schema: CAPABILITY_SCHEMA,
+            version: CAPABILITY_VERSION,
+            runtime,
+            gpu: GpuReport {
+                adapter: format!("alpha2 CPU renderer ({} threads)", renderer.threads()),
+                backend: "cpu".to_owned(),
+                driver: "alpha2".to_owned(),
+                driver_info: env!("CARGO_PKG_VERSION").to_owned(),
+                tier: "a",
+                intermediate_format: "rgba16float",
+                max_texture_dimension_2d: alpha2_render::RenderSize::MAX_DIMENSION,
+                timestamp_queries: false,
+                texture_budget_bytes: 0,
+            },
+            color: ColorReport {
+                working_space: "linear_bt709_sdr",
+                hdr_sources: true,
+                hdr_output: false,
+                extended_range_sources: true,
+            },
+            playback: PlaybackReport {
+                policies: PlaybackPolicy::ALL.to_vec(),
+                default_policy: PlaybackPolicy::default(),
+                audio_at_non_unit_rate: false,
+            },
+            decode: serde_json::Value::Null,
+            encode: serde_json::Value::Null,
+            features: BTreeMap::new(),
+        }
+    }
+
     /// Records a feature.
     #[must_use]
     pub fn with_feature(mut self, name: &str, feature: Feature) -> Self {

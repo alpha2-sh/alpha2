@@ -1,11 +1,20 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createWriteStream, existsSync, readFileSync, statSync } from "node:fs";
-import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
+
+import { bunzip2 } from "./bzip2.js";
 
 /**
  * The file name `alpha2-host` has on `platform`: Windows executables carry `.exe`, and nothing
@@ -233,32 +242,11 @@ export async function installHost(
       );
 
     const archivePath = join(staging, archive);
-    const response = await download(`${releaseUrl}/${archive}`, options.signal);
-    const length = Number(response.headers.get("content-length"));
-    const total = Number.isFinite(length) && length > 0 ? length : undefined;
-    const hash = createHash("sha256");
-    let received = 0;
-    const meter = new Transform({
-      transform(chunk: Buffer, _encoding, callback) {
-        hash.update(chunk);
-        received += chunk.length;
-        options.onProgress?.({ received, total });
-        callback(null, chunk);
-      },
-    });
-    try {
-      await pipeline(
-        Readable.fromWeb(
-          response.body as import("node:stream/web").ReadableStream,
-        ),
-        meter,
-        createWriteStream(archivePath),
-        ...(options.signal ? [{ signal: options.signal }] : []),
-      );
-    } catch (error) {
-      throw downloadError(`${releaseUrl}/${archive}`, error, options.signal);
-    }
-    const actual = hash.digest("hex");
+    const actual = await downloadFile(
+      `${releaseUrl}/${archive}`,
+      archivePath,
+      options,
+    );
     if (actual !== expected)
       throw new Alpha2HostInstallError(
         "CHECKSUM_MISMATCH",
@@ -293,6 +281,216 @@ export async function installHost(
   }
 }
 
+/** The OpenH264 release {@link installOpenH264} installs. */
+export const OPENH264_VERSION = "2.7.0";
+
+/** Where Cisco publishes its OpenH264 binaries: `<base>/<archive>`. */
+export const OPENH264_DOWNLOAD_URL = "https://ciscobinary.openh264.org";
+
+/** The text Cisco's binary licence requires wherever the user controls the codec. */
+export const OPENH264_NOTICE =
+  "OpenH264 Video Codec provided by Cisco Systems, Inc.";
+
+/** Cisco's licence for its OpenH264 binaries. */
+export const OPENH264_LICENSE_URL =
+  "https://www.openh264.org/BINARY_LICENSE.txt";
+
+/** One target's OpenH264 binary: the `.bz2` file Cisco publishes and the library it unpacks to. */
+export interface OpenH264Archive {
+  readonly archive: string;
+  readonly archiveSha256: string;
+  readonly library: string;
+  readonly librarySha256: string;
+}
+
+/**
+ * Cisco's OpenH264 binaries by release target, with their SHA-256s. It mirrors
+ * release/openh264/manifest.toml, which the published package does not carry. Exported for this
+ * package's tests, which serve their own files; the package's entry point does not export it.
+ */
+export const OPENH264_TARGETS: Record<string, OpenH264Archive> = {
+  "linux-x64": {
+    archive: "libopenh264-2.7.0-linux64.8.so.bz2",
+    archiveSha256:
+      "44ad0dd2c5af2bac84d26f89f2eb4e268708b8739323d15d33837f7221ce4980",
+    library: "libopenh264-2.7.0-linux64.8.so",
+    librarySha256:
+      "1522f873a482923c5ec018a4415e1866898197528828c50f90fd300c94620df3",
+  },
+  "linux-arm64": {
+    archive: "libopenh264-2.7.0-linux-arm64.8.so.bz2",
+    archiveSha256:
+      "74c7a1d02003d80daf2b4bc7bbb02f73e5548debd4c158b495e1f83d80ebd136",
+    library: "libopenh264-2.7.0-linux-arm64.8.so",
+    librarySha256:
+      "9ac664b0154fd0868491c2a904397b8a05779874c0603b8b1f16ad15de1ffd82",
+  },
+  "macos-arm64": {
+    archive: "libopenh264-2.7.0-mac-arm64.dylib.bz2",
+    archiveSha256:
+      "c9f2338359093a3e0628e01717be373c6948994a6070a706d303f052013e2b5f",
+    library: "libopenh264-2.7.0-mac-arm64.dylib",
+    librarySha256:
+      "2e1ae3cd10c08328ca03a1f304fd2a1a2a7e5658c6d5a8582101a963f7995ef0",
+  },
+  "win-x64": {
+    archive: "openh264-2.7.0-win64.dll.bz2",
+    archiveSha256:
+      "7073fda55e904ac515f787d9728c4bcf9965ec7c91c9f84eae3f260ef9b9b37c",
+    library: "openh264-2.7.0-win64.dll",
+    librarySha256:
+      "0ef5e7f3b38753b15c13afa0418d4d7805fa228e6adfd3e425bbf758cff1c288",
+  },
+};
+
+/** Options of {@link installOpenH264}. */
+export interface InstallOpenH264Options {
+  /** The cache to install into. Defaults to {@link hostCacheDirectory}. */
+  readonly cacheDirectory?: string;
+  /** Downloads and unpacks again when the library is already installed. */
+  readonly force?: boolean;
+  /**
+   * The base the binary is downloaded from, as `<base>/<archive>`: a mirror of
+   * {@link OPENH264_DOWNLOAD_URL}. Defaults to `ALPHA2_OPENH264_DOWNLOAD_URL` when it is set, else
+   * {@link OPENH264_DOWNLOAD_URL}.
+   */
+  readonly downloadUrl?: string;
+  /** Called as the binary downloads; `total` is `undefined` when the server did not say. */
+  readonly onProgress?: (progress: {
+    received: number;
+    total: number | undefined;
+  }) => void;
+  readonly signal?: AbortSignal;
+}
+
+/** What {@link installOpenH264} installed. */
+export interface InstallOpenH264Result {
+  /** The installed library, which `alpha2-host` now loads. */
+  readonly libraryPath: string;
+  /** Its directory in the cache, `openh264-<version>-<target>/`. */
+  readonly directory: string;
+  /** Whether it was downloaded now; `false` when it was already installed. */
+  readonly downloaded: boolean;
+  /** The OpenH264 release, {@link OPENH264_VERSION}. */
+  readonly version: string;
+  /** {@link OPENH264_NOTICE}, which Cisco's licence requires be shown to the user. */
+  readonly notice: string;
+}
+
+/**
+ * Downloads Cisco's prebuilt OpenH264 library for this platform, the software H.264 encoder
+ * `alpha2-host` loads when no hardware encoder is available, into the cache as
+ * `openh264-<version>-<target>/<library>`, where the host looks for it. Nothing else downloads it:
+ * Cisco's patent licence covers its binary only when the user fetches it from Cisco. The `.bz2`
+ * file and the library it unpacks to are both checked against their SHA-256s. A library already
+ * installed is not downloaded again unless `force` is set. It appears in the cache whole or not at
+ * all, like {@link installHost}'s archives.
+ *
+ * Throws an {@link Alpha2HostInstallError}.
+ */
+export async function installOpenH264(
+  options: InstallOpenH264Options = {},
+): Promise<InstallOpenH264Result> {
+  const target = hostTarget();
+  const entry = target === undefined ? undefined : OPENH264_TARGETS[target];
+  if (target === undefined || entry === undefined)
+    throw new Alpha2HostInstallError(
+      "UNSUPPORTED_PLATFORM",
+      `there is no OpenH264 binary for alpha2-host on ${process.platform}-${process.arch}`,
+    );
+
+  const cacheDirectory = options.cacheDirectory ?? hostCacheDirectory();
+  const base = `openh264-${OPENH264_VERSION}-${target}`;
+  const directory = join(cacheDirectory, base);
+  const libraryPath = join(directory, entry.library);
+  const result = (downloaded: boolean): InstallOpenH264Result => ({
+    libraryPath,
+    directory,
+    downloaded,
+    version: OPENH264_VERSION,
+    notice: OPENH264_NOTICE,
+  });
+  const installed = async () =>
+    (await sha256OfFile(libraryPath)) === entry.librarySha256;
+  if (!options.force && (await installed())) return result(false);
+
+  const fromEnvironment = process.env.ALPHA2_OPENH264_DOWNLOAD_URL;
+  const downloadUrl = (
+    options.downloadUrl ??
+    (fromEnvironment?.trim() ? fromEnvironment : OPENH264_DOWNLOAD_URL)
+  ).replace(/\/+$/, "");
+  const url = `${downloadUrl}/${entry.archive}`;
+
+  await mkdir(cacheDirectory, { recursive: true });
+  // Staged in the cache itself, so the finished directory moves into place with one rename.
+  const staging = await mkdtemp(join(cacheDirectory, ".install-"));
+  try {
+    const archivePath = join(staging, entry.archive);
+    const actual = await downloadFile(
+      url,
+      archivePath,
+      options,
+      `; ${entry.archive} is not there`,
+    );
+    if (actual !== entry.archiveSha256)
+      throw new Alpha2HostInstallError(
+        "CHECKSUM_MISMATCH",
+        `${entry.archive} has SHA-256 ${actual}; OpenH264 ${OPENH264_VERSION} has ${entry.archiveSha256}`,
+      );
+    if (options.signal?.aborted)
+      throw new Alpha2HostInstallError("ABORTED", "the install was aborted");
+
+    let library: Uint8Array;
+    try {
+      library = bunzip2(await readFile(archivePath));
+    } catch (error) {
+      throw new Alpha2HostInstallError(
+        "EXTRACT_FAILED",
+        `cannot decompress ${entry.archive}`,
+        { cause: error },
+      );
+    }
+    const libraryHash = createHash("sha256").update(library).digest("hex");
+    if (libraryHash !== entry.librarySha256)
+      throw new Alpha2HostInstallError(
+        "CHECKSUM_MISMATCH",
+        `${entry.library} has SHA-256 ${libraryHash}; OpenH264 ${OPENH264_VERSION} has ${entry.librarySha256}`,
+      );
+    const staged = join(staging, base);
+    await mkdir(staged);
+    await writeFile(join(staged, entry.library), library);
+
+    // A directory there holds no valid library (or `force` replaces it).
+    if (options.force || !(await installed()))
+      await rm(directory, { recursive: true, force: true });
+    try {
+      await rename(staged, directory);
+    } catch (error) {
+      // Another install moved the same library into place first.
+      if (!(await installed()))
+        throw new Alpha2HostInstallError(
+          "EXTRACT_FAILED",
+          `cannot move ${base} into ${cacheDirectory}`,
+          { cause: error },
+        );
+    }
+    return result(true);
+  } finally {
+    await rm(staging, { recursive: true, force: true });
+  }
+}
+
+/** The SHA-256 of the file at `path` in lower-case hex, or `undefined` when there is none. */
+async function sha256OfFile(path: string): Promise<string | undefined> {
+  let bytes: Buffer;
+  try {
+    bytes = await readFile(path);
+  } catch {
+    return undefined;
+  }
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
 /** The SHA-256 `sha256sum` output lists for `file`, in lower case. */
 function checksumOf(listing: string, file: string): string | undefined {
   for (const line of listing.split(/\r?\n/)) {
@@ -302,7 +500,11 @@ function checksumOf(listing: string, file: string): string | undefined {
   return undefined;
 }
 
-async function download(url: string, signal?: AbortSignal): Promise<Response> {
+async function download(
+  url: string,
+  signal?: AbortSignal,
+  notFound = "; the release may not be published yet, or not for this platform",
+): Promise<Response> {
   let response: Response;
   try {
     response = await fetch(url, signal ? { signal } : {});
@@ -313,11 +515,44 @@ async function download(url: string, signal?: AbortSignal): Promise<Response> {
     throw new Alpha2HostInstallError(
       "DOWNLOAD_FAILED",
       `${url} answered ${response.status}` +
-        (response.status === 404
-          ? "; the release may not be published yet, or not for this platform"
-          : ""),
+        (response.status === 404 ? notFound : ""),
     );
   return response;
+}
+
+/** Writes `url` to `path`, reporting progress, and returns its SHA-256 in lower-case hex. */
+async function downloadFile(
+  url: string,
+  path: string,
+  options: Pick<InstallHostOptions, "onProgress" | "signal">,
+  notFound?: string,
+): Promise<string> {
+  const response = await download(url, options.signal, notFound);
+  const length = Number(response.headers.get("content-length"));
+  const total = Number.isFinite(length) && length > 0 ? length : undefined;
+  const hash = createHash("sha256");
+  let received = 0;
+  const meter = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      hash.update(chunk);
+      received += chunk.length;
+      options.onProgress?.({ received, total });
+      callback(null, chunk);
+    },
+  });
+  try {
+    await pipeline(
+      Readable.fromWeb(
+        response.body as import("node:stream/web").ReadableStream,
+      ),
+      meter,
+      createWriteStream(path),
+      ...(options.signal ? [{ signal: options.signal }] : []),
+    );
+  } catch (error) {
+    throw downloadError(url, error, options.signal);
+  }
+  return hash.digest("hex");
 }
 
 function downloadError(

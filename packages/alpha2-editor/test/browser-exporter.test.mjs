@@ -395,6 +395,76 @@ test(
 );
 
 test(
+  "an H.264 export where the browser refuses High opens Main and reports High as a fallback",
+  { skip },
+  async () => {
+    encodes = ["avc1.4d", "vp09"];
+    try {
+      // An explicit rate of its own: mediabunny remembers each answer by its configuration.
+      const { log, run } = scripted({ frames: 2 });
+      const { result } = await quiet(() =>
+        run({ options: { videoQuality: { bitrate: 777_000 } } }),
+      );
+      assert.equal(log.sinkOptions.videoCodecString, "avc1.4d0014");
+      assert.equal(result.videoCodec, "avc");
+      assert.equal(result.videoCodecString, "avc1.4d0014");
+      assert.equal(result.videoCodecProfile, "Main");
+      assert.deepEqual(result.videoEncoderFallbacks, [
+        {
+          encoder: "avc1.640014",
+          profile: "High",
+          reason: "unsupported",
+          detail: `this browser does not encode H.264 High profile at ${WIDTH}x${HEIGHT}`,
+        },
+      ]);
+
+      // VP9 has one profile: nothing to report, and the sink opens mediabunny's own string.
+      const webm = scripted({ frames: 2 });
+      const { result: vp9 } = await quiet(() =>
+        webm.run({
+          options: { container: "webm", videoQuality: { bitrate: 777_000 } },
+        }),
+      );
+      assert.equal("videoCodecString" in webm.log.sinkOptions, false);
+      assert.equal(vp9.videoCodecProfile, null);
+      assert.deepEqual(vp9.videoEncoderFallbacks, []);
+    } finally {
+      encodes = null;
+    }
+  },
+);
+
+test(
+  "an H.264 export the browser encodes in no profile is refused with the profiles it tried",
+  { skip },
+  async () => {
+    encodes = ["vp09", "av01"];
+    try {
+      assert.equal(
+        (
+          await probeEncoders(WIDTH * 3, HEIGHT * 3, {
+            frameRate: { num: 30, den: 1 },
+          })
+        ).avc,
+        false,
+      );
+      const { run } = scripted({ frames: 2 });
+      await assert.rejects(
+        quiet(() => run({ options: { videoQuality: { bitrate: 555_000 } } })),
+        (error) =>
+          error.failure?.code === "INVALID_INPUT" &&
+          error.failure.phase === "prepare" &&
+          error.failure.message ===
+            `This browser cannot encode H.264 (AVC) video at ${WIDTH}x${HEIGHT} in any profile (tried High avc1.64000d, Main avc1.4d000d, Constrained Baseline avc1.42e00d). Choose another video codec, or use the native exporter.` &&
+          !isRetryableFailure(error.failure),
+      );
+    } finally {
+      encodes = null;
+    }
+  },
+);
+
+test(
   "an export whose video codec the browser does not encode is refused before it renders, and not retried",
   {
     skip,

@@ -119,7 +119,7 @@ impl Lut3dData {
         })
     }
 
-    fn is_valid(&self, maximum: u32) -> bool {
+    pub(crate) fn is_valid(&self, maximum: u32) -> bool {
         self.edge_length >= 2
             && self.edge_length <= maximum
             && usize::try_from(self.edge_length)

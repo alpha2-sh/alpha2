@@ -160,6 +160,25 @@ pub(crate) fn renderer_cache_key(
     RenderCacheKey(hash.finish())
 }
 
+/// A graph's key as [`crate::CpuRenderer`] gives it: as
+/// [`renderer_cache_key`], with the CPU renderer's storage and version in
+/// place of an intermediate format. CPU pictures are the same on every
+/// machine, so the key names no device.
+pub(crate) fn cpu_renderer_cache_key(
+    structural: RenderCacheKey,
+    blend_space: f32,
+    quality: crate::RenderQualityControls,
+) -> RenderCacheKey {
+    let mut hash = StableHash::new();
+    hash.bytes(b"renderer");
+    hash.u128(structural.value());
+    hash.f32(blend_space);
+    hash.u32(quality.max_filter_samples);
+    hash.u32(quality.motion_blur_subframes);
+    hash.string("cpu/rgba16float/1");
+    RenderCacheKey(hash.finish())
+}
+
 struct StableHash([u64; 2]);
 
 impl StableHash {

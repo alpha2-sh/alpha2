@@ -1,0 +1,26 @@
+[package]
+name = "alpha2-render-determinism"
+version.workspace = true
+description = "Frames of alpha2's CPU renderer whose hashes must be identical on every platform the engine runs on."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+alpha2-engine.workspace = true
+alpha2-media.workspace = true
+alpha2-model.workspace = true
+alpha2-render.workspace = true
+alpha2-time.workspace = true
+
+# The renderer reads the browser's clock (`web-time`) on wasm, so the module needs its JS glue.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen.workspace = true
+
+[lints]
+workspace = true

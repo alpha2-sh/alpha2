@@ -182,7 +182,7 @@ pub struct NativeAvEncodeSink {
     /// Held until the partial file is renamed into place or removed.
     pub(crate) _partial_lock: crate::partial::PartialLock,
     pub(crate) output: Option<OutputFile>,
-    pub(crate) video_encoder: AVCodecContext,
+    pub(crate) video_encoder: crate::video_backend::VideoEncoderBackend,
     pub(crate) video_stream_index: i32,
     pub(crate) video_encoder_time_base: AVRational,
     /// One frame in `video_encoder_time_base`.
@@ -389,7 +389,7 @@ impl NativeAvEncodeSink {
             height,
         })?;
         // The frame length, or the finest unit an encoder that cannot hold it takes.
-        let video_encoder_time_base = video_encoder.time_base;
+        let video_encoder_time_base = video_encoder.time_base();
 
         let audio = open_audio_encoder(
             AudioStreamConfig {
@@ -406,10 +406,10 @@ impl NativeAvEncodeSink {
         {
             let mut stream = output.new_stream();
             stream.set_time_base(video_encoder_time_base);
-            stream.set_codecpar(video_encoder.extract_codecpar());
+            stream.set_codecpar(video_encoder.codec_parameters());
             crate::video_encode::describe_output_stream(
                 &mut stream,
-                &video_encoder,
+                video_encoder.codec_id(),
                 config.video.display,
                 config.video.container,
             )?;

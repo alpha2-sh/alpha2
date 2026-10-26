@@ -720,7 +720,7 @@ fn transcode(
         .and_then(|extension| extension.to_str())
         .and_then(Container::from_extension)
         .ok_or_else(|| "the output must end in .mp4, .m4v, .mov, .mkv or .webm".to_owned())?;
-    let codec = transcode_codec(requested_codec.as_deref(), container)?;
+    let codec = transcode_codec(requested_codec.as_deref(), container, (width, height))?;
     let mut decoder = decoding.video(path)?;
     let mut sink = NativeVideoEncodeSink::create(
         &output,
@@ -787,19 +787,22 @@ fn transcode(
     Ok(())
 }
 
-/// The codec `transcode` writes into `container`: the one asked for by its
-/// id, else the container's default, else the first this runtime encodes
-/// that the container offers.
+/// The codec `transcode` writes into `container` at `size`: the one asked
+/// for by its id, else the container's default, else the first this runtime
+/// encodes that the container offers. An encoder whose smallest frame is
+/// larger than `size` (NVENC's) does not count.
 fn transcode_codec(
     requested: Option<&str>,
     container: Container,
+    (width, height): (u32, u32),
 ) -> Result<NativeVideoCodec, String> {
     let capabilities = codec_capabilities();
     let offered = || {
-        capabilities
-            .video
-            .iter()
-            .filter(|capability| container.offers_video(capability.codec.model()))
+        capabilities.video.iter().filter(|capability| {
+            container.offers_video(capability.codec.model())
+                && capability.minimum_width <= width
+                && capability.minimum_height <= height
+        })
     };
     let available = || {
         offered()

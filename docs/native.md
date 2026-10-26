@@ -40,7 +40,7 @@ Keep `bin/` and `lib/` together when the archive is moved or packaged into an ap
 
 ## `alpha2-host`
 
-`alpha2-host` renders a project on the GPU and encodes it to MP4, MOV, Matroska or WebM. Run it without arguments to print every flag.
+`alpha2-host` renders a project on the GPU, or on the CPU where there is no GPU, and encodes it to MP4, MOV, Matroska or WebM. Run it without arguments to print every flag.
 
 - `alpha2-host export` exports one project and prints the result as JSON on standard output; progress goes to standard error.
 
@@ -52,6 +52,18 @@ Keep `bin/` and `lib/` together when the archive is moved or packaged into an ap
 - `alpha2-host conform` checks a project's media without rendering: it prints what each source would read and what is missing or unusable, and exits with status 1 when something blocks the export.
 - `alpha2-host serve` reads requests on standard input and answers on standard output, one JSON object per line: the [host protocol](host-protocol.md).
 
+### GPU or CPU rendering
+
+`alpha2-host` chooses its renderer when it starts, from `--renderer <mode>` (`export`) or `ALPHA2_RENDERER` (`serve`, and the Node and Python clients' `renderer` option):
+
+- `auto` (the default) renders on a hardware GPU when the machine has one, and otherwise on the CPU. It never takes a software GPU adapter (lavapipe, llvmpipe, WARP, SwiftShader), which draws the same pictures many times slower.
+- `cpu` renders on the CPU and opens no graphics driver at all: a CPU-only server, a container or a serverless function needs nothing but the host archive.
+- `gpu` renders on whatever GPU adapter it finds, software ones included, and fails with `GPU_INIT_FAILED` when there is none.
+
+The CPU renderer draws the same render graph as the GPU, pass for pass, and its pictures are the same bytes on every machine and for any number of threads. It draws every built-in effect and transition; an effect defined as WGSL in the export request needs a GPU, and an export that uses one on a CPU host fails with `EFFECT_ERROR` before any output is written (render it with `--renderer gpu`). It decodes video in software and feeds the encoders that take frames in memory, so H.264 needs an H.264 encoder that does (OpenH264 below, NVENC, or `libx264` from a system FFmpeg). `ALPHA2_RENDER_THREADS` sets its threads; it takes every thread the process may run on by default.
+
+Every result says which renderer drew it: `renderer` (`gpu` or `cpu`), `rendererReason` (why `auto` chose the CPU), and on the CPU `rendererThreads` and, in `performance`, `cpuRenderMs`. `capabilities` reports `renderer.gpu`, `renderer.cpu` and `effects.runtime` in `features`.
+
 ### Hardware decoding and encoding
 
 `alpha2-host` decodes video in one of three modes, chosen when it starts: `software` decodes every frame on the CPU; `auto` decodes on the GPU where the device and the stream allow it and on the CPU otherwise; `hardware-required` fails instead of decoding a frame on the CPU. The default is `auto` on Linux and `software` on macOS and Windows. `export` and `conform` take `--video-decode <mode>`; `@alpha2-sh/node` takes the `videoDecode` option.
@@ -60,7 +72,39 @@ An export hands its frames to the encoder either by reading them back from the G
 
 ### Encoders
 
-The pinned FFmpeg runtime encodes on the CPU with `libvpx-vp9` (VP9), `libsvtav1` (AV1), `mpeg4` (MPEG-4 Part 2), `aac` and `libopus` (Opus), so a host without a GPU encoder still writes VP9 or AV1 in MP4, Matroska or WebM. H.264 and HEVC come from the platform's hardware encoders: Vulkan Video on Linux, VideoToolbox on macOS, Media Foundation and D3D12 Video on Windows. VP9 and AV1 run at one fixed speed setting each, so the quality level chooses only the rate; software AV1 is slow at 4K.
+The pinned FFmpeg runtime encodes on the CPU with `libvpx-vp9` (VP9), `libsvtav1` (AV1), `mpeg4` (MPEG-4 Part 2), `aac` and `libopus` (Opus), so a host without a GPU encoder still writes VP9 or AV1 in MP4, Matroska or WebM. VP9 and AV1 run at one fixed speed setting each, so the quality level chooses only the rate; software AV1 is slow at 4K.
+
+The runtime is LGPL and has no software H.264 encoder of its own. H.264 (the default codec of MP4, MOV and Matroska) and HEVC come from:
+
+- Linux: Vulkan Video (`h264_vulkan`), on the GPU-resident path only, and NVENC (`h264_nvenc`, `hevc_nvenc`, `av1_nvenc`) on NVIDIA GPUs that have an encoder, with driver 530.41.03 or newer. NVENC is offered only after it has encoded a test frame on the machine, so an NVIDIA GPU without an encoder (A100, H100) or a container without the driver's `video` capability gets a clear refusal instead of a failed export.
+- macOS: VideoToolbox, the Mac's hardware encoder.
+- Windows: Media Foundation's `h264_mf`, which is a software transform unless `ALPHA2_VIDEO_ENCODER_HYBRID=hardware` asks for the hardware one, D3D12 Video on the GPU-resident path, and NVENC (driver 531.61 or newer).
+- Everywhere: OpenH264, when it is installed (below).
+
+The order is hardware encoders first, then `libx264` (from a thin archive's system FFmpeg), then OpenH264. When no encoder takes the export's frames, the export fails with `INVALID_INPUT` naming why the GPU-resident path was not taken, what the runtime offers, whether OpenH264 is installed, and the ways out. `capabilities` reports the same before any export: `encode.h264.status` is `available`, `gpu-only` (only the GPU-resident path encodes H.264, so an export it declines fails) or `unavailable`, with `reason` and `remedy`.
+
+### OpenH264 (software H.264)
+
+On a machine without an H.264 encoder (CPU-only servers, serverless, arm64 servers, NVIDIA datacenter GPUs), install Cisco's OpenH264 library. It is opt-in, and it is never part of anything alpha2 publishes: the user downloads it from Cisco, which is what Cisco's patent licence for its binary requires.
+
+```sh
+python -m alpha2 install --openh264      # or: npx @alpha2-sh/node install --openh264
+```
+
+- The command downloads Cisco's OpenH264 2.7.0 for the platform from `https://ciscobinary.openh264.org` (or `ALPHA2_OPENH264_DOWNLOAD_URL`), checks the SHA-256 of the download and of the library against the pins in `release/openh264/manifest.toml`, and unpacks it into the host cache as `<cache>/openh264-<version>-<target>/<library>`. It prints the notice "OpenH264 Video Codec provided by Cisco Systems, Inc.".
+- `alpha2-host` loads it at run time, and looks, in order, at `ALPHA2_OPENH264_LIBRARY` (a path; its SHA-256 must be Cisco's unless `ALPHA2_OPENH264_UNVERIFIED=1`, for a distro package that fetched Cisco's binary itself), the cache, and the system loader's `libopenh264.so.8` (`libopenh264.8.dylib` on macOS), which is reported as provider `system`. A library that is not hash-verified must report the 2.6 or 2.7 API. `ALPHA2_OPENH264=0` turns it off.
+- It is the encoder `openh264` (`--video-encoder openh264` pins it), distinct from FFmpeg's `libopenh264`. It encodes 8-bit 4:2:0 High profile with CABAC, a keyframe every two seconds, and a quality level as a constant QP. Its slice and thread count follow the frame height alone, so an export is the same bytes on every machine.
+- `capabilities` lists it in `encode.video` with `provider`, `version`, `library` and `notice`, and reports `encode.openh264` (`available`, `not-installed`, `disabled` or `unusable`, with `reason` and `remedy`). An export that used it reports `videoEncoderLibrary`.
+- The library needs `libstdc++.so.6`; on an image without it (distroless, musl) the host says it was found but is not loadable, with the loader's message.
+
+In a container image, the image build runs the install, which is the download Cisco's terms ask for. It goes into the build user's cache, so run the host as the same user or set `ALPHA2_HOST_CACHE_DIR` for both. Do not copy the library into an image you publish.
+
+```dockerfile
+RUN pip install alpha2
+RUN python -m alpha2 install --openh264
+```
+
+Cisco's binary is under Cisco's own licence, reproduced in `THIRD_PARTY_NOTICES.md`.
 
 ## `alpha2`
 

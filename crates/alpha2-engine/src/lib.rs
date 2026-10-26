@@ -38,12 +38,12 @@ pub use capabilities::{
 pub use error::EngineError;
 pub use error_code::{ErrorCode, gpu_error_of, gpu_fault_of};
 pub use exporter::{
-    ExportAudioWindow, ExportFrameNeeds, ExportNv12Step, ExportProgress, ExportStep,
+    ExportAudioWindow, ExportFrameNeeds, ExportPlaneStep, ExportProgress, ExportStep,
     ExportStepTimings, ExportTextureStep, Exporter, MAX_EXPORT_FRAMES, export_audio_window,
 };
 pub use frame::{
     FrameGraph, FrameNv12Render, FrameProvider, FrameRender, FrameRenderer, FrameYuv420pRender,
-    RenderReport,
+    GpuFrameRenderer, RenderReport, check_frame_effects,
 };
 pub use layout::{LAYOUT_WRAP_SLACK, LayoutBounds, NodeBounds, PreparedLayout, measure_layout};
 pub use passthrough::{PassthroughAudio, PassthroughPlan, PassthroughSegment, passthrough_plan};
@@ -53,6 +53,6 @@ pub use policy::{MissingFramePolicy, color_policy};
 pub use quality::QualityProfile;
 pub use snapshot::EngineProject;
 pub use text::{
-    CanvasRect, FramesWithText, TextBounds, TextError, TextTexture, TextTextures, layout_key,
-    measure_text, text_key,
+    CanvasRect, FramesWithText, TextBounds, TextError, TextPixels, TextTexture, TextTextures,
+    TextUpload, layout_key, measure_text, text_key,
 };

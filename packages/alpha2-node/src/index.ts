@@ -51,12 +51,16 @@ export {
   hostExecutableName,
   hostTarget,
   installHost,
+  installOpenH264,
+  OPENH264_DOWNLOAD_URL,
 } from "./install.js";
 export type {
   HostArchiveKind,
   HostInstallErrorCode,
   InstallHostOptions,
   InstallHostResult,
+  InstallOpenH264Options,
+  InstallOpenH264Result,
 } from "./install.js";
 export type { ProgressPhase } from "./protocol.js";
 export type { ExportFailure } from "alpha2/export-failure";
@@ -84,6 +88,14 @@ export interface Alpha2NodeOptions extends ResolveHostBinaryOptions {
    * decoding a video frame on the CPU.
    */
   readonly videoDecode?: VideoDecodeMode;
+  /**
+   * Renderer for every request this client makes. When it is unset the host takes
+   * `ALPHA2_RENDERER` from the environment, else `auto`: a hardware GPU when there is one and the
+   * CPU renderer otherwise, never a software GPU adapter (lavapipe, llvmpipe, WARP, SwiftShader).
+   * `gpu` renders on whatever adapter the host finds, software ones included, and fails with
+   * `GPU_INIT_FAILED` without one; `cpu` renders on the CPU and opens no graphics driver.
+   */
+  readonly renderer?: RendererMode;
 }
 
 /** Video decode path requested from the native host. */
@@ -107,6 +119,26 @@ function checkVideoDecode(field: string, value: unknown): void {
     throw new Alpha2HostError(
       "INVALID_INPUT",
       `${field} must be software, auto, or hardware-required`,
+    );
+}
+
+/** Renderer requested from the native host; see {@link Alpha2NodeOptions.renderer}. */
+export type RendererMode = "auto" | "gpu" | "cpu";
+
+const RENDERER_MODES: readonly RendererMode[] = ["auto", "gpu", "cpu"];
+
+/**
+ * Refuses a `field` that is set and not a {@link RendererMode}: the host would refuse it at its
+ * start, after the process was made.
+ */
+function checkRenderer(field: string, value: unknown): void {
+  if (
+    value !== undefined &&
+    !(RENDERER_MODES as readonly unknown[]).includes(value)
+  )
+    throw new Alpha2HostError(
+      "INVALID_INPUT",
+      `${field} must be auto, gpu, or cpu`,
     );
 }
 
@@ -199,6 +231,15 @@ export interface NativeExportResult {
   readonly frames: number;
   readonly audio: boolean;
   readonly fps: number;
+  /** The renderer that drew the frames. */
+  readonly renderer: "gpu" | "cpu";
+  /**
+   * Why the host renders on the CPU: `auto` found no hardware GPU, or `cpu` was asked for. `null`
+   * when it renders on a GPU it chose without falling back.
+   */
+  readonly rendererReason: string | null;
+  /** The CPU renderer's threads; absent on a GPU host. */
+  readonly rendererThreads?: number;
   /**
    * Which output path produced this export. Several `performance` counters are structurally absent
    * on one of them rather than merely zero, so a reader comparing two exports needs this to tell
@@ -212,6 +253,16 @@ export interface NativeExportResult {
    * `null` on the GPU-resident path.
    */
   readonly gpuOutputPathUnavailable: string | null;
+  /**
+   * The installed library behind the video encoder (`openh264`): its provider, version, path and
+   * the notice its licence requires. `null` for FFmpeg's encoders and when no video was encoded.
+   */
+  readonly videoEncoderLibrary?: {
+    readonly provider: "cisco-openh264" | "system";
+    readonly version: string;
+    readonly library: string;
+    readonly notice: string;
+  } | null;
   /** The request's {@link ExportProjectRequest.inputPolicy}. */
   readonly inputPolicy: InputPolicy;
   /** What the export did: rendered and encoded every frame, or copied the source's packets. */
@@ -355,6 +406,14 @@ export interface ExportPerformance {
   readonly encodeChannelDepthSamples?: readonly number[];
   /** What the GPU-resident path reserved from the in-flight budget; `null` on the readback path. */
   readonly gpuEncodeBudget?: GpuEncodeBudget | null;
+  /** Time the CPU renderer spent drawing this export's graphs, in milliseconds. CPU hosts only. */
+  readonly cpuRenderMs?: number;
+  /** Graph nodes the CPU renderer drew, those found in the result cache not counted. */
+  readonly cpuRenderNodes?: number;
+  /** Decoded source frames the CPU renderer converted to pictures. */
+  readonly cpuPresentedSources?: number;
+  /** Bytes of the largest set of pictures one graph held at once on the CPU renderer. */
+  readonly cpuImageHighWaterBytes?: number;
   readonly [counter: string]: PerformanceValue | undefined;
 }
 
@@ -593,6 +652,8 @@ export interface ExportProjectRequest {
   readonly memory?: ExportMemoryBudget;
   /** Overrides the client's decode mode for this export. */
   readonly videoDecode?: VideoDecodeMode;
+  /** Overrides the client's renderer for this export. */
+  readonly renderer?: RendererMode;
   /**
    * The file to write. Its extension (`.mp4`, `.m4v`, `.mov`, `.mkv` or `.webm`) names the
    * container, and must be one of `container`'s when that is given.
@@ -656,6 +717,50 @@ export interface EncodeCapability {
   /** Smallest output the encoder accepts, in pixels; `null` when it reports none. */
   readonly minimumWidth?: number | null;
   readonly minimumHeight?: number | null;
+  /**
+   * For an encoder the user installed rather than one in the FFmpeg runtime (`openh264`): who
+   * provided it (`cisco-openh264` for Cisco's verified binary, `system` for a distro library), its
+   * version, the path it loaded from, and the notice its licence requires be shown. `null` for
+   * FFmpeg's encoders.
+   */
+  readonly provider?: "cisco-openh264" | "system" | null;
+  readonly version?: string | null;
+  readonly library?: string | null;
+  readonly notice?: string | null;
+}
+
+/**
+ * Whether a native host can export H.264. `available`: an encoder takes CPU frames, so every
+ * export can. `gpu-only`: only the GPU-resident path encodes it (`gpuEncoder`), so an export that
+ * path declines fails. `unavailable`: nothing does. `reason` and `remedy` are `null` when it is
+ * available.
+ */
+export interface H264EncodeStatus {
+  readonly status: "available" | "gpu-only" | "unavailable";
+  /** The encoders that take CPU frames, most preferred first. */
+  readonly encoders: readonly string[];
+  readonly gpuEncoder: string | null;
+  readonly reason: string | null;
+  readonly remedy: string | null;
+}
+
+/**
+ * The OpenH264 software encoder, which the user installs (`npx @alpha2-sh/node install --openh264`) and
+ * the host loads at run time.
+ */
+export interface OpenH264Capability {
+  readonly status: "available" | "not-installed" | "disabled" | "unusable";
+  /** The name `videoEncoder` takes: `openh264`. */
+  readonly encoder: string;
+  readonly provider: "cisco-openh264" | "system" | null;
+  readonly version: string | null;
+  readonly library: string | null;
+  /** The OpenH264 release the host's install command and checks are pinned to. */
+  readonly pinnedVersion: string;
+  /** "OpenH264 Video Codec provided by Cisco Systems, Inc.", which Cisco's licence requires. */
+  readonly notice: string;
+  readonly reason: string | null;
+  readonly remedy: string | null;
 }
 
 /**
@@ -790,6 +895,9 @@ export interface HostEncodeCapabilities {
   readonly video: readonly EncodeCapability[];
   readonly audio: readonly EncodeCapability[];
   readonly gpuOutputPath: GpuOutputPathCapability;
+  /** Whether H.264, the default codec of MP4, MOV and MKV, can be exported, and how to fix it. */
+  readonly h264: H264EncodeStatus;
+  readonly openh264: OpenH264Capability;
 }
 
 /** How a native host decodes video. */
@@ -813,6 +921,15 @@ export interface HostDecodeCapabilities {
 /** What {@link Alpha2NodeClient.getCapabilities} reports about the host. */
 export interface HostCapabilities {
   readonly status: "ready";
+  /**
+   * The renderer the host started with. `capabilities.features` says the same as `renderer.gpu`
+   * and `renderer.cpu`, and whether runtime WGSL effects run (`effects.runtime`, not on the CPU).
+   */
+  readonly renderer: "gpu" | "cpu";
+  /** As {@link NativeExportResult.rendererReason}. */
+  readonly rendererReason: string | null;
+  /** The CPU renderer's threads; absent on a GPU host. */
+  readonly rendererThreads?: number;
   /** What the host can do, in the report every alpha2 runtime gives. */
   readonly capabilities: CapabilityReport<
     HostDecodeCapabilities,
@@ -900,6 +1017,8 @@ export interface CapabilitiesOptions {
   readonly signal?: AbortSignal;
   /** The decode mode to report for, in place of the client's. */
   readonly videoDecode?: VideoDecodeMode;
+  /** The renderer to report for, in place of the client's. */
+  readonly renderer?: RendererMode;
 }
 
 /** One capability probe and the calls waiting for it with a signal. */
@@ -928,7 +1047,10 @@ export interface ConformResult {
   readonly report: ConformReport;
 }
 
-/** The host could not create its GPU device (`GPU_INIT_FAILED`). */
+/**
+ * The host could not create its GPU device (`GPU_INIT_FAILED`). Only `renderer: "gpu"` asks for
+ * one that must start: `auto` renders on the CPU instead.
+ */
 export class Alpha2GpuInitializationError extends Alpha2HostError {
   constructor(message: string, options?: Alpha2HostErrorOptions) {
     super("GPU_INIT_FAILED", message, options);
@@ -1036,13 +1158,14 @@ export class Alpha2NodeClient {
   readonly #binary: string;
   readonly #slots: Semaphore;
   readonly #videoDecode: VideoDecodeMode | undefined;
-  /** Capability probes by decode mode: running, or answered. */
+  readonly #renderer: RendererMode | undefined;
+  /** Capability probes by decode mode and renderer: running, or answered. */
   readonly #probes = new Map<string, CapabilityProbe>();
 
   /**
    * Resolves the host binary now. Throws a `RangeError` for a `concurrency` that is not a positive
-   * integer, and an {@link Alpha2HostError} when `videoDecode` is not a mode (`INVALID_INPUT`) or
-   * the binary cannot be found.
+   * integer, and an {@link Alpha2HostError} when `videoDecode` or `renderer` is not a mode
+   * (`INVALID_INPUT`) or the binary cannot be found.
    */
   constructor(options: Alpha2NodeOptions = {}) {
     const concurrency = options.concurrency ?? 1;
@@ -1050,17 +1173,19 @@ export class Alpha2NodeClient {
       throw new RangeError("concurrency must be a positive integer");
     }
     checkVideoDecode("videoDecode", options.videoDecode);
+    checkRenderer("renderer", options.renderer);
     this.#binary = resolveHostBinary(options);
     this.#slots = new Semaphore(concurrency);
     this.#videoDecode = options.videoDecode;
+    this.#renderer = options.renderer;
   }
 
   /**
-   * What the host can decode, render and encode, for the client's decode mode or
-   * `options.videoDecode`. The first call for a mode starts a host, in a slot like any request;
-   * calls made while it runs share it, and its report answers every later call for that mode on
-   * this client, since the same binary and mode report the same. A probe that fails is not kept:
-   * the next call starts another.
+   * What the host can decode, render and encode, for the client's decode mode and renderer or
+   * `options.videoDecode` and `options.renderer`. The first call for a pair of modes starts a host,
+   * in a slot like any request; calls made while it runs share it, and its report answers every
+   * later call for those modes on this client, since the same binary and modes report the same.
+   * A probe that fails is not kept: the next call starts another.
    *
    * `options.signal` withdraws this call (`Alpha2AbortError`); the probe goes on while another call
    * still waits for it, and is withdrawn, from its slot or its host, when none does.
@@ -1069,12 +1194,16 @@ export class Alpha2NodeClient {
     options: CapabilitiesOptions = {},
   ): Promise<HostCapabilities> {
     checkVideoDecode("videoDecode", options.videoDecode);
+    checkRenderer("renderer", options.renderer);
     const { signal } = options;
     if (signal?.aborted) throw new Alpha2AbortError();
     const videoDecode = options.videoDecode ?? this.#videoDecode;
-    // Unset, the mode is the host's default or the one this process's environment names.
-    const key =
-      videoDecode ?? `environment:${process.env.ALPHA2_VIDEO_DECODE ?? ""}`;
+    const renderer = options.renderer ?? this.#renderer;
+    // Unset, a mode is the host's default or the one this process's environment names.
+    const key = [
+      videoDecode ?? `environment:${process.env.ALPHA2_VIDEO_DECODE ?? ""}`,
+      renderer ?? `environment:${process.env.ALPHA2_RENDERER ?? ""}`,
+    ].join("\0");
     let probe = this.#probes.get(key);
     if (probe === undefined) {
       const controller = new AbortController();
@@ -1085,7 +1214,7 @@ export class Alpha2NodeClient {
             this.#binary,
             "capabilities",
             {},
-            { videoDecode },
+            { videoDecode, renderer },
             controller.signal,
           )) as HostCapabilities;
         } finally {
@@ -1162,7 +1291,7 @@ export class Alpha2NodeClient {
           frames: request.frames ?? {},
           purpose: (request.purpose ?? "export_original").replace(/_/g, "-"),
         },
-        { videoDecode: this.#videoDecode },
+        { videoDecode: this.#videoDecode, renderer: this.#renderer },
         request.signal,
       )) as ConformResult;
     } finally {
@@ -1187,6 +1316,7 @@ export class Alpha2NodeClient {
     validateExportRequest(request);
     const release = await this.#slots.acquire(request.signal);
     const videoDecode = request.videoDecode ?? this.#videoDecode;
+    const renderer = request.renderer ?? this.#renderer;
     try {
       const run = (mode: VideoDecodeMode | undefined) =>
         requestHost(
@@ -1226,7 +1356,7 @@ export class Alpha2NodeClient {
             ...(request.memory === undefined ? {} : { memory: request.memory }),
             output: request.output,
           },
-          { videoDecode: mode },
+          { videoDecode: mode, renderer },
           request.signal,
           request.onProgress,
         );
@@ -1309,7 +1439,7 @@ const convenienceClients = new Map<string, Alpha2NodeClient>();
 
 /**
  * {@link Alpha2NodeClient.getCapabilities} on a client shared by every module-level call with the
- * same `concurrency` and resolved binary, for `options.videoDecode`.
+ * same `concurrency` and resolved binary, for `options.videoDecode` and `options.renderer`.
  */
 export async function getCapabilities(
   options: Alpha2NodeOptions & CapabilitiesOptions = {},
@@ -1319,28 +1449,34 @@ export async function getCapabilities(
     ...(options.videoDecode === undefined
       ? {}
       : { videoDecode: options.videoDecode }),
+    ...(options.renderer === undefined ? {} : { renderer: options.renderer }),
   });
 }
 
 /**
  * {@link Alpha2NodeClient.exportProject} on a client shared by every module-level call with the
  * same `concurrency` and resolved binary, so `concurrency` holds across calls whatever decode mode
- * each asks for. `options.videoDecode` applies where the request names none.
+ * and renderer each asks for. `options.videoDecode` and `options.renderer` apply where the request
+ * names none.
  */
 export async function exportProject(
   request: ExportProjectRequest,
   options: Alpha2NodeOptions = {},
 ): Promise<string> {
-  return sharedClient(options).exportProject(
-    request.videoDecode === undefined && options.videoDecode !== undefined
-      ? { ...request, videoDecode: options.videoDecode }
-      : request,
-  );
+  return sharedClient(options).exportProject({
+    ...request,
+    ...(request.videoDecode === undefined && options.videoDecode !== undefined
+      ? { videoDecode: options.videoDecode }
+      : {}),
+    ...(request.renderer === undefined && options.renderer !== undefined
+      ? { renderer: options.renderer }
+      : {}),
+  });
 }
 
 /**
- * The pool is the host binary and `concurrency`: the decode mode travels with each request, so
- * calls that differ only in it still share the bound.
+ * The pool is the host binary and `concurrency`: the decode mode and renderer travel with each
+ * request, so calls that differ only in them still share the bound.
  */
 function sharedClient(options: Alpha2NodeOptions): Alpha2NodeClient {
   const concurrency = options.concurrency ?? 1;
@@ -1348,6 +1484,7 @@ function sharedClient(options: Alpha2NodeOptions): Alpha2NodeClient {
     throw new RangeError("concurrency must be a positive integer");
   }
   checkVideoDecode("videoDecode", options.videoDecode);
+  checkRenderer("renderer", options.renderer);
   const binary = resolveHostBinary(options);
   const key = `${concurrency}\0${binary}`;
   let client = convenienceClients.get(key);
@@ -1450,6 +1587,7 @@ function validateExportRequest(request: ExportProjectRequest): void {
     throw new Alpha2HostError("INVALID_INPUT", "output must not be empty");
   }
   checkVideoDecode("videoDecode", request.videoDecode);
+  checkRenderer("renderer", request.renderer);
   // The engine's container policy, which the host applies to the same request: a container the
   // output's extension contradicts, or a codec the container does not offer, never starts a host.
   for (const field of ["container", "videoCodec", "audioCodec"] as const) {
@@ -1677,7 +1815,10 @@ async function requestHost(
   binary: string,
   operation: "capabilities" | "export" | "conform",
   payload: Readonly<Record<string, unknown>>,
-  settings: { readonly videoDecode?: VideoDecodeMode },
+  settings: {
+    readonly videoDecode?: VideoDecodeMode | undefined;
+    readonly renderer?: RendererMode | undefined;
+  },
   signal?: AbortSignal,
   onProgress?: ExportProgressCallback,
 ): Promise<unknown> {
@@ -1733,12 +1874,20 @@ async function requestHost(
       child = spawn(binary, ["serve"], {
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
-        // The host chooses its decode path while it creates the renderer device, before any request
-        // arrives, so the mode travels in the environment rather than in the request.
+        // The host chooses its renderer and decode path while it starts, before any request
+        // arrives, so the modes travel in the environment rather than in the request.
         env:
-          settings.videoDecode === undefined
+          settings.videoDecode === undefined && settings.renderer === undefined
             ? process.env
-            : { ...process.env, ALPHA2_VIDEO_DECODE: settings.videoDecode },
+            : {
+                ...process.env,
+                ...(settings.videoDecode === undefined
+                  ? {}
+                  : { ALPHA2_VIDEO_DECODE: settings.videoDecode }),
+                ...(settings.renderer === undefined
+                  ? {}
+                  : { ALPHA2_RENDERER: settings.renderer }),
+              },
       });
     } catch (cause) {
       rejectPromise(startFailed(cause));

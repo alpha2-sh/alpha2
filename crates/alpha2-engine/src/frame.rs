@@ -14,18 +14,19 @@ use alpha2_model::{
     ClipBlendMode, EffectValue, Generator, MaskMode, MatteMode, Rgb, ShapeMask, TextStyle,
 };
 use alpha2_render::{
-    BlendMode, CacheIntent, Color, EffectId, EffectInputs, EffectParams, EffectResources,
-    EffectRuntime, FrameSubmitTimings, GENERATOR_EFFECT_ID, GraphError, GraphLayer, LayerTransform,
-    MASK_COMBINE_EFFECT_IDS, MASK_COMBINE_NAMES, MAX_SHAPE_MASKS, Nv12PlaneTargets, ParamSpec,
-    ParamValue, PendingSourceWork, RenderCacheKey, RenderError, RenderGraph, RenderNodeId,
-    RenderNodeKind, RenderSize, RenderedTexture, Renderer, SourceView, TRACK_MATTE_EFFECT_ID,
-    Yuv420pReadback,
+    BlendMode, CacheIntent, Color, CpuImage, CpuRenderer, EffectCatalog, EffectId, EffectInputs,
+    EffectParams, EffectResources, EffectRuntime, FrameSubmitTimings, GENERATOR_EFFECT_ID,
+    GraphError, GraphLayer, LayerTransform, MASK_COMBINE_EFFECT_IDS, MASK_COMBINE_NAMES,
+    MAX_SHAPE_MASKS, Nv12PlaneTargets, ParamSpec, ParamValue, PendingSourceWork, RenderCacheKey,
+    RenderControls, RenderError, RenderGraph, RenderNodeId, RenderNodeKind, RenderSize,
+    RenderedTexture, Renderer, SourceView, TRACK_MATTE_EFFECT_ID, Yuv420pReadback, Yuv420pTargets,
 };
 use alpha2_time::MediaTime;
 
 use crate::TextTexture;
 use crate::layout::draw::LaidOut;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Duration;
 use web_time::Instant;
 
@@ -105,14 +106,14 @@ impl RenderReport {
 
 /// Result of attempting to render one evaluated timeline frame.
 #[derive(Debug)]
-pub struct FrameRender {
-    /// Availability information collected before any GPU work is submitted.
+pub struct FrameRender<I = RenderedTexture> {
+    /// Availability information collected before anything is drawn.
     pub report: RenderReport,
     /// Rendered output, absent when one or more source frames are unavailable.
-    pub texture: Option<RenderedTexture>,
+    pub texture: Option<I>,
 }
 
-impl FrameRender {
+impl<I> FrameRender<I> {
     /// Returns whether a texture was rendered from a complete source set.
     #[must_use]
     pub fn is_complete(&self) -> bool {
@@ -159,20 +160,28 @@ pub struct FrameGraph<'a> {
     pub pending: Vec<&'a PendingSourceWork>,
 }
 
-/// Timeline-frame rendering on top of a [`Renderer`].
+/// Timeline-frame rendering on whichever renderer draws the frames: the GPU
+/// [`Renderer`] or the [`alpha2_render::CpuRenderer`].
 ///
-/// Implemented for [`Renderer`]; import it to call these methods on one.
-pub trait FrameRenderer {
+/// Implemented for both; import it to call these methods on one. The GPU's
+/// readback and hardware-encoder paths are [`GpuFrameRenderer`].
+pub trait FrameRenderer: EffectCatalog + RenderControls {
+    /// The picture a frame renders to: a [`RenderedTexture`] on the GPU, a
+    /// [`alpha2_render::CpuImage`] on the CPU.
+    type Image;
+
     /// Resolves the textures required by an evaluated frame.
     ///
     /// This performs no fallback rendering: it is the common availability pass
     /// used by a real-time player (which may reuse an older image) and a
     /// deterministic exporter (which waits and retries).
     #[must_use]
-    fn inspect_frame(&self, frame: &FrameDesc, frames: &dyn FrameProvider) -> RenderReport;
+    fn inspect_frame(&self, frame: &FrameDesc, frames: &dyn FrameProvider) -> RenderReport {
+        available_textures(frame, frames).0
+    }
 
     /// Compiles one evaluator result into the render graph every render
-    /// method below submits, without encoding GPU work.
+    /// method below submits, without drawing anything.
     ///
     /// The graph borrows the frame's effect and parameter names and the
     /// provider's textures; an incomplete source set returns its report and
@@ -188,12 +197,23 @@ pub trait FrameRenderer {
         frames: &'a dyn FrameProvider,
     ) -> Result<FrameGraph<'a>, RenderError>;
 
-    /// Renders one pure evaluator result using textures supplied by the host.
+    /// Draws a graph [`Self::build_frame_graph`] built, with the source work
+    /// behind it.
     ///
-    /// Source availability is checked before encoding GPU work. An incomplete
-    /// attempt returns its missing-source report with no partially rendered
-    /// texture, allowing real-time and deterministic runners to apply their
-    /// own hold or wait policy.
+    /// # Errors
+    /// Returns [`RenderError`] when a pass fails.
+    fn render_frame_graph(
+        &self,
+        graph: &RenderGraph<'_>,
+        pending: &[&PendingSourceWork],
+    ) -> Result<Self::Image, RenderError>;
+
+    /// Renders one pure evaluator result using sources supplied by the host.
+    ///
+    /// Source availability is checked before anything is drawn. An
+    /// incomplete attempt returns its missing-source report with no partially
+    /// rendered picture, allowing real-time and deterministic runners to
+    /// apply their own hold or wait policy.
     ///
     /// # Errors
     /// Returns [`RenderError`] when a visual or render target is invalid.
@@ -202,8 +222,40 @@ pub trait FrameRenderer {
         size: RenderSize,
         frame: &FrameDesc,
         frames: &dyn FrameProvider,
-    ) -> Result<FrameRender, RenderError>;
+    ) -> Result<FrameRender<Self::Image>, RenderError> {
+        let FrameGraph {
+            report,
+            graph,
+            pending,
+        } = self.build_frame_graph(size, frame, frames)?;
+        let texture = match graph {
+            Some(graph) => Some(self.render_frame_graph(&graph, &pending)?),
+            None => None,
+        };
+        Ok(FrameRender { report, texture })
+    }
 
+    /// Renders one evaluator result and converts it to planar YUV420 in
+    /// `targets`, caller-owned plane memory such as an encoder's frame.
+    ///
+    /// An incomplete source set writes nothing and returns its report. The
+    /// output size must be even for chroma subsampling.
+    ///
+    /// # Errors
+    /// Returns [`RenderError`] for an invalid graph or a target too small.
+    fn render_frame_into_yuv420p(
+        &self,
+        size: RenderSize,
+        frame: &FrameDesc,
+        frames: &dyn FrameProvider,
+        encoding: YuvEncoding,
+        targets: &mut Yuv420pTargets<'_>,
+    ) -> Result<RenderReport, RenderError>;
+}
+
+/// The GPU renderer's frame paths that end on the GPU: a YUV420 readback
+/// still to be mapped, and hardware-encoder NV12 planes.
+pub trait GpuFrameRenderer: FrameRenderer<Image = RenderedTexture> {
     /// Renders one evaluator result, converts it to YUV420, and submits both
     /// workloads in one command buffer.
     ///
@@ -222,7 +274,7 @@ pub trait FrameRenderer {
 
     /// Renders one frame for YUV420 readback and reports where the call went.
     ///
-    /// This produces exactly what [`FrameRenderer::render_frame_yuv420p`]
+    /// This produces exactly what [`GpuFrameRenderer::render_frame_yuv420p`]
     /// produces; the only difference is that it reads a clock between stages
     /// and writes the spans to `timings`. An incomplete source set leaves
     /// `timings` holding only the stages that ran.
@@ -241,8 +293,8 @@ pub trait FrameRenderer {
     /// Renders one frame and packs it straight into caller-owned NV12 plane
     /// textures, with no readback.
     ///
-    /// This is [`FrameRenderer::render_frame_yuv420p_timed`] with the staging
-    /// buffer removed: the same sources, the same graph and the same
+    /// This is [`GpuFrameRenderer::render_frame_yuv420p_timed`] with the
+    /// staging buffer removed: the same sources, the same graph and the same
     /// conversion, ending in two textures a hardware encoder can be fed from
     /// instead of a mapped buffer. An incomplete source set submits nothing.
     ///
@@ -260,10 +312,35 @@ pub trait FrameRenderer {
     ) -> Result<FrameNv12Render, RenderError>;
 }
 
-impl FrameRenderer for Renderer {
-    fn inspect_frame(&self, frame: &FrameDesc, frames: &dyn FrameProvider) -> RenderReport {
-        available_textures(frame, frames).0
+/// [`FrameRenderer::build_frame_graph`] for any renderer: the graph depends
+/// on the renderer only through what its catalog says about effects.
+fn build_frame_graph<'a>(
+    catalog: &dyn EffectCatalog,
+    size: RenderSize,
+    frame: &'a FrameDesc<'a>,
+    frames: &'a dyn FrameProvider,
+) -> Result<FrameGraph<'a>, RenderError> {
+    validate_project_effects(catalog, frame)?;
+    let (report, mut available) = available_textures(frame, frames);
+    if !report.is_complete() {
+        return Ok(FrameGraph {
+            report,
+            graph: None,
+            pending: Vec::new(),
+        });
     }
+    attach_texts(&mut available, frames, size);
+    let captions = caption_layers(frame, frames, size)?;
+    let graph = frame_graph(catalog, size, frame, &available, &captions)?;
+    Ok(FrameGraph {
+        report,
+        graph: Some(graph),
+        pending: pending_source_work(&available, frames),
+    })
+}
+
+impl FrameRenderer for Renderer {
+    type Image = RenderedTexture;
 
     fn build_frame_graph<'a>(
         &self,
@@ -271,43 +348,84 @@ impl FrameRenderer for Renderer {
         frame: &'a FrameDesc<'a>,
         frames: &'a dyn FrameProvider,
     ) -> Result<FrameGraph<'a>, RenderError> {
-        validate_project_effects(self, frame)?;
-        let (report, mut available) = available_textures(frame, frames);
-        if !report.is_complete() {
-            return Ok(FrameGraph {
-                report,
-                graph: None,
-                pending: Vec::new(),
-            });
-        }
-        attach_texts(&mut available, frames, size);
-        let captions = caption_layers(frame, frames, size)?;
-        let graph = frame_graph(self, size, frame, &available, &captions)?;
-        Ok(FrameGraph {
-            report,
-            graph: Some(graph),
-            pending: pending_source_work(&available, frames),
-        })
+        build_frame_graph(self, size, frame, frames)
     }
 
-    fn render_frame(
+    fn render_frame_graph(
+        &self,
+        graph: &RenderGraph<'_>,
+        pending: &[&PendingSourceWork],
+    ) -> Result<RenderedTexture, RenderError> {
+        self.render_graph(graph, pending)
+    }
+
+    fn render_frame_into_yuv420p(
         &self,
         size: RenderSize,
         frame: &FrameDesc,
         frames: &dyn FrameProvider,
-    ) -> Result<FrameRender, RenderError> {
-        let FrameGraph {
-            report,
-            graph,
-            pending,
-        } = self.build_frame_graph(size, frame, frames)?;
-        let texture = match graph {
-            Some(graph) => Some(self.render_graph(&graph, &pending)?),
-            None => None,
-        };
-        Ok(FrameRender { report, texture })
+        encoding: YuvEncoding,
+        targets: &mut Yuv420pTargets<'_>,
+    ) -> Result<RenderReport, RenderError> {
+        let render = self.render_frame_yuv420p(size, frame, frames, encoding)?;
+        if let Some(readback) = render.readback {
+            // A browser maps a buffer only on its event loop, which a blocking call never
+            // yields to: there the readback of `render_frame_yuv420p` is awaited instead.
+            #[cfg(target_arch = "wasm32")]
+            {
+                drop((readback, targets));
+                return Err(RenderError::TextureReadback(
+                    alpha2_render::ReadbackFailure::NotMapped,
+                ));
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                readback.wait_ready()?;
+                readback.finish_into(targets)?;
+            }
+        }
+        Ok(render.report)
+    }
+}
+
+impl FrameRenderer for CpuRenderer {
+    type Image = Arc<CpuImage>;
+
+    fn build_frame_graph<'a>(
+        &self,
+        size: RenderSize,
+        frame: &'a FrameDesc<'a>,
+        frames: &'a dyn FrameProvider,
+    ) -> Result<FrameGraph<'a>, RenderError> {
+        build_frame_graph(self, size, frame, frames)
     }
 
+    fn render_frame_graph(
+        &self,
+        graph: &RenderGraph<'_>,
+        _pending: &[&PendingSourceWork],
+    ) -> Result<Arc<CpuImage>, RenderError> {
+        self.execute_graph(graph)
+            .map_err(GraphError::into_render_error)
+    }
+
+    fn render_frame_into_yuv420p(
+        &self,
+        size: RenderSize,
+        frame: &FrameDesc,
+        frames: &dyn FrameProvider,
+        encoding: YuvEncoding,
+        targets: &mut Yuv420pTargets<'_>,
+    ) -> Result<RenderReport, RenderError> {
+        let FrameGraph { report, graph, .. } = self.build_frame_graph(size, frame, frames)?;
+        if let Some(graph) = graph {
+            self.render_graph_into_yuv420p(&graph, encoding, targets)?;
+        }
+        Ok(report)
+    }
+}
+
+impl GpuFrameRenderer for Renderer {
     fn render_frame_yuv420p(
         &self,
         size: RenderSize,
@@ -406,7 +524,10 @@ impl StageClock {
     }
 }
 
-fn validate_project_effects(renderer: &Renderer, frame: &FrameDesc) -> Result<(), RenderError> {
+fn validate_project_effects(
+    renderer: &dyn EffectCatalog,
+    frame: &FrameDesc,
+) -> Result<(), RenderError> {
     require_effects(renderer, frame_effects(frame)).map_err(|_| RenderError::UnknownEffect)
 }
 
@@ -432,16 +553,16 @@ fn frame_effects<'a>(frame: &'a FrameDesc) -> impl Iterator<Item = (&'a str, u32
 ///
 /// # Errors
 /// Returns [`crate::EngineError::UnregisteredEffect`].
-pub(crate) fn check_frame_effects(
-    renderer: &Renderer,
+pub fn check_frame_effects<C: EffectCatalog + ?Sized>(
+    renderer: &C,
     frame: &FrameDesc,
 ) -> Result<(), crate::EngineError> {
     require_effects(renderer, frame_effects(frame))
 }
 
 /// The first of `effects` `renderer` does not draw, as an error.
-pub(crate) fn require_effects<'a>(
-    renderer: &Renderer,
+pub(crate) fn require_effects<'a, C: EffectCatalog + ?Sized>(
+    renderer: &C,
     effects: impl IntoIterator<Item = (&'a str, u32)>,
 ) -> Result<(), crate::EngineError> {
     for (effect, version) in effects {
@@ -755,7 +876,7 @@ fn frame_runtime(frame: &FrameDesc, size: RenderSize) -> EffectRuntime {
 }
 
 fn frame_graph<'a>(
-    renderer: &Renderer,
+    renderer: &dyn EffectCatalog,
     size: RenderSize,
     frame: &'a FrameDesc<'a>,
     available: &[(&'a ActiveClip<'a>, ClipFrames<'a>)],
@@ -881,7 +1002,7 @@ const fn cache_intent(intent: alpha2_model::CacheIntent) -> CacheIntent {
 
 /// `layer` kept where `matte` says, the matte clip drawn only into it.
 fn apply_matte<'a, 'c>(
-    renderer: &Renderer,
+    renderer: &dyn EffectCatalog,
     graph: &mut RenderGraph<'a>,
     mut layer: GraphLayer,
     matte: &'c alpha2_model::Matte,
@@ -928,7 +1049,7 @@ struct FrameInput<'a> {
 }
 
 fn clip_layer<'a>(
-    renderer: &Renderer,
+    renderer: &dyn EffectCatalog,
     graph: &mut RenderGraph<'a>,
     clip: &'a ActiveClip<'a>,
     textures: &ClipFrames<'a>,
@@ -968,7 +1089,7 @@ fn clip_layer<'a>(
 /// The clip's own picture: its composition source, its generated source,
 /// or its source frame.
 fn clip_picture<'a>(
-    renderer: &Renderer,
+    renderer: &dyn EffectCatalog,
     graph: &mut RenderGraph<'a>,
     clip: &'a ActiveClip<'a>,
     textures: &ClipFrames<'a>,
@@ -1038,7 +1159,7 @@ fn generator_node(
 /// with its settings sampled at the composition time plus its offset. Its
 /// clip steps draw `clip`'s picture; a plan without them takes none.
 fn plan_node<'a>(
-    renderer: &Renderer,
+    renderer: &dyn EffectCatalog,
     graph: &mut RenderGraph<'a>,
     composition: ActiveComposition<'a>,
     media: &[Option<StepFrame<'a>>],
@@ -1100,7 +1221,7 @@ fn step_input(built: &[RenderNodeId], step: usize) -> Result<RenderNodeId, Rende
 
 /// The node for a step that draws from its inputs, or from nothing.
 fn step_node<'a>(
-    renderer: &Renderer,
+    renderer: &dyn EffectCatalog,
     graph: &mut RenderGraph<'a>,
     op: &'a StepOp,
     built: &[RenderNodeId],
@@ -1340,7 +1461,11 @@ fn alone(graph: &mut RenderGraph<'_>, layer: GraphLayer) -> Result<RenderNodeId,
 /// result then has the same cache key in every frame that draws it from the
 /// same inputs and parameters, and is found again there; an effect that
 /// reads the time keeps a key of its own in each frame.
-fn effect_runtime(renderer: &Renderer, effect: &EffectId, runtime: EffectRuntime) -> EffectRuntime {
+fn effect_runtime(
+    renderer: &dyn EffectCatalog,
+    effect: &EffectId,
+    runtime: EffectRuntime,
+) -> EffectRuntime {
     if renderer.effect_reads_time(effect) {
         runtime
     } else {
@@ -1407,7 +1532,7 @@ fn compile_frame_input<'a>(
     backdrop: &[GraphLayer],
     background: Option<Color>,
     runtime: EffectRuntime,
-    renderer: &Renderer,
+    renderer: &dyn EffectCatalog,
 ) -> Result<RenderNodeId, RenderError> {
     if index >= inputs.len() {
         return Err(RenderError::InvalidGraph);
@@ -1511,7 +1636,7 @@ const fn layer_transform(visual: EvaluatedVisual) -> LayerTransform {
 /// keyframe) is passed as written, and the renderer rejects one outside the
 /// range.
 fn effect_params<'a>(
-    renderer: &Renderer,
+    renderer: &dyn EffectCatalog,
     id: &EffectId,
     effect: ActiveEffect<'a>,
 ) -> EffectParams<'a> {
@@ -1532,7 +1657,11 @@ fn effect_params<'a>(
 
 /// The identity a project's effect is registered under, which the graph
 /// holds without copying its text.
-fn project_effect_id(renderer: &Renderer, id: &str, version: u32) -> Result<EffectId, RenderError> {
+fn project_effect_id(
+    renderer: &dyn EffectCatalog,
+    id: &str,
+    version: u32,
+) -> Result<EffectId, RenderError> {
     renderer
         .project_effect_id(id, version)
         .cloned()

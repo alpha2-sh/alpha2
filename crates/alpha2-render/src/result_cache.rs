@@ -91,17 +91,29 @@ pub struct ResultCacheStats {
     pub invalidations: [u64; 5],
 }
 
-struct Entry {
-    texture: RenderedTexture,
+struct Entry<T> {
+    texture: T,
     bytes: u64,
     pinned: bool,
     last_used: u64,
 }
 
 /// Kept results by renderer-level key, bounded by bytes.
-#[derive(Default)]
-pub(crate) struct ResultCache {
-    entries: HashMap<u128, Entry>,
+/// A picture the result cache can keep: cloned out on a hit, and charged
+/// its bytes against the budget.
+pub(crate) trait CachedPicture: Clone {
+    /// Bytes the picture holds.
+    fn cached_bytes(&self) -> u64;
+}
+
+impl CachedPicture for RenderedTexture {
+    fn cached_bytes(&self) -> u64 {
+        texture_bytes(self)
+    }
+}
+
+pub(crate) struct ResultCache<T = RenderedTexture> {
+    entries: HashMap<u128, Entry<T>>,
     clock: u64,
     /// Clears for any reason, whether or not anything was kept: each is an
     /// event that changes pixels without changing graph keys.
@@ -109,7 +121,18 @@ pub(crate) struct ResultCache {
     stats: ResultCacheStats,
 }
 
-impl std::fmt::Debug for ResultCache {
+impl<T> Default for ResultCache<T> {
+    fn default() -> Self {
+        Self {
+            entries: HashMap::new(),
+            clock: 0,
+            clears: 0,
+            stats: ResultCacheStats::default(),
+        }
+    }
+}
+
+impl<T> std::fmt::Debug for ResultCache<T> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("ResultCache")
@@ -118,7 +141,7 @@ impl std::fmt::Debug for ResultCache {
     }
 }
 
-impl ResultCache {
+impl<T: CachedPicture> ResultCache<T> {
     pub(crate) const fn enabled(&self) -> bool {
         self.stats.budget_bytes > 0
     }
@@ -139,7 +162,7 @@ impl ResultCache {
     /// A kept result, marked as just used and pinned as the node that asks
     /// for it now is: a cache intent is not part of the key, so a clip pinned
     /// or unpinned after its picture was kept finds the same entry.
-    pub(crate) fn get(&mut self, key: RenderCacheKey, pinned: bool) -> Option<RenderedTexture> {
+    pub(crate) fn get(&mut self, key: RenderCacheKey, pinned: bool) -> Option<T> {
         self.clock += 1;
         let clock = self.clock;
         let entry = self.entries.get_mut(&key.value())?;
@@ -158,8 +181,8 @@ impl ResultCache {
     /// Keeps `texture` under `key`, evicting least recently used results
     /// (unpinned before pinned) to make room. A result larger than the whole
     /// budget is not kept.
-    pub(crate) fn insert(&mut self, key: RenderCacheKey, texture: &RenderedTexture, pinned: bool) {
-        let bytes = texture_bytes(texture);
+    pub(crate) fn insert(&mut self, key: RenderCacheKey, texture: &T, pinned: bool) {
+        let bytes = texture.cached_bytes();
         if bytes > self.stats.budget_bytes {
             return;
         }

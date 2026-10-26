@@ -133,6 +133,8 @@ export interface RenderWorkerHost {
     codec: EngineVideoCodec,
     outputTimeTicks: bigint,
   ): ExportTicket;
+  /** The renderer the host draws with; `initialize` answers it. Absent for a host that does not say. */
+  readonly rendererChoice?: RendererChoice;
   /** Checked after every request; must not throw (a throw is read as lost). */
   isDeviceLost(): boolean;
   /** Replaces a lost device; the request loop calls it only while `isDeviceLost()` is true. */
@@ -172,6 +174,29 @@ export interface WasmRenderWorkerHostOptions {
    * default), or the browser (`"browser"`); see {@link VideoConversion}.
    */
   readonly videoConversion?: VideoConversion;
+  /**
+   * Which renderer draws. `"auto"` (the default) draws on the GPU, through WebGPU or else WebGL2,
+   * and on the engine's CPU renderer in wasm when the browser offers neither (Chrome with
+   * acceleration off, a blocklisted GPU); `"gpu"` never falls back, and `"cpu"` draws on the CPU
+   * and opens no GPU context. The CPU renderer previews at half resolution and refuses runtime
+   * effects (`effects`) with `EFFECT_ERROR`; it needs the binding's `createCpu`, without which
+   * `"auto"` is `"gpu"`. The host reports the renderer it chose ({@link RendererChoice}).
+   */
+  readonly renderer?: RendererMode;
+}
+
+/** The renderer a browser render host is asked for; see {@link WasmRenderWorkerHostOptions}. */
+export type RendererMode = "auto" | "gpu" | "cpu";
+
+/** The renderer a render host draws with, as the native host reports it. */
+export interface RendererChoice {
+  /** The renderer that draws the frames. */
+  readonly renderer: "gpu" | "cpu";
+  /**
+   * Why it draws on the CPU: `"auto"` found neither WebGPU nor WebGL2, or `"cpu"` was asked for.
+   * `null` when it draws on a GPU.
+   */
+  readonly rendererReason: string | null;
 }
 
 /**
@@ -207,6 +232,7 @@ export function installRenderWorker(
         switch (request.type) {
           case "initialize":
             host = await createHost(request.canvas);
+            result = host.rendererChoice;
             break;
           case "upload-video-frame":
             // The frame was transferred here; with no host to take it over, it is closed here.
@@ -326,9 +352,13 @@ export function installRenderWorker(
  * binding. The callback makes a canvas renderer, registers `options`' effects, resources and
  * fonts, then loads `projectJson`.
  *
- * The callback rejects when the binding has no `createForCanvas`, or when making the renderer,
- * compiling an effect or loading the project fails. After a device loss, `recover()` repeats the
- * same registration on a new renderer.
+ * The renderer is the one `options.renderer` picks (see {@link WasmRenderWorkerHostOptions}); the
+ * host's `rendererChoice` says which, and `initialize` answers it.
+ *
+ * The callback rejects when the binding lacks the constructor the renderer needs
+ * (`createForCanvas`, or `createCpu` for `"cpu"`), or when making the renderer, compiling an
+ * effect or loading the project fails. After a device loss, `recover()` repeats the same
+ * registration on a new renderer of the same kind.
  */
 export function createWasmRenderWorkerHost(
   binding: WasmEffectRegistryBinding,
@@ -340,10 +370,10 @@ export function createWasmRenderWorkerHost(
   const videoConversion = options.videoConversion ?? "engine";
   if (videoConversion !== "engine" && videoConversion !== "browser")
     throw new RangeError('videoConversion must be "engine" or "browser"');
+  const renderer = options.renderer ?? "auto";
+  if (renderer !== "auto" && renderer !== "gpu" && renderer !== "cpu")
+    throw new RangeError('renderer must be "auto", "gpu" or "cpu"');
   return async (canvas) => {
-    if (binding.createForCanvas === undefined) {
-      throw new Error("wasm binding does not expose createForCanvas");
-    }
     return WasmRenderWorkerHost.create(
       binding,
       canvas,
@@ -353,6 +383,7 @@ export function createWasmRenderWorkerHost(
       options.fonts ?? [],
       options.uploadRetention,
       videoConversion,
+      renderer,
     );
   };
 }
@@ -368,6 +399,7 @@ class WasmRenderWorkerHost implements RenderWorkerHost {
   readonly #uploadedFrames: FrameGenerationRetainer;
   readonly #physicalFrames = new PhysicalFrameAliases();
   readonly #videoConversion: VideoConversion;
+  readonly rendererChoice: RendererChoice;
   #pendingUploads: FrameUploadReceipt[] = [];
   /** Buffers the planar copies reuse; each is given back once its upload has taken it. */
   readonly #planarCopies = new PlanarCopyPool();
@@ -390,8 +422,10 @@ class WasmRenderWorkerHost implements RenderWorkerHost {
     wasm: WasmCanvasRenderer,
     uploadRetention: FrameRetentionOptions | undefined,
     videoConversion: VideoConversion,
+    rendererChoice: RendererChoice,
   ) {
     this.#binding = binding;
+    this.rendererChoice = rendererChoice;
     this.#canvas = canvas;
     this.#projectJson = projectJson;
     this.#effects = effects;
@@ -417,9 +451,9 @@ class WasmRenderWorkerHost implements RenderWorkerHost {
     fonts: readonly TextFont[],
     uploadRetention: FrameRetentionOptions | undefined,
     videoConversion: VideoConversion,
+    mode: RendererMode,
   ): Promise<WasmRenderWorkerHost> {
-    const wasm = await binding.createForCanvas?.(canvas);
-    if (wasm === undefined) throw new Error("createForCanvas is unavailable");
+    const { wasm, choice } = await makeRenderer(binding, canvas, mode);
     await registerEffects(wasm, effects);
     registerResources(wasm, resources);
     registerFonts(wasm, fonts);
@@ -434,6 +468,7 @@ class WasmRenderWorkerHost implements RenderWorkerHost {
       wasm,
       uploadRetention,
       videoConversion,
+      choice,
     );
   }
 
@@ -608,6 +643,7 @@ class WasmRenderWorkerHost implements RenderWorkerHost {
     const lost = this.#registry;
     this.#registry = undefined;
     lost?.free?.();
+    // Only a GPU renderer is ever lost; the CPU one has no device.
     if (this.#binding.createForCanvas === undefined) {
       throw new Error("createForCanvas is unavailable");
     }
@@ -639,6 +675,57 @@ class WasmRenderWorkerHost implements RenderWorkerHost {
     this.#pendingUploads = [];
     this.#uploadedFrames.discardAll();
     this.#physicalFrames.clear();
+  }
+}
+
+/**
+ * Makes the renderer `mode` asks for on `canvas` and says which it is. `"auto"` falls back to the
+ * CPU only when the GPU renderer could not be made for want of a GPU (`GPU_INIT_FAILED`, or a
+ * canvas that takes no GPU surface: `INVALID_INPUT`); a canvas whose failed WebGL2 request left it
+ * without a context still takes the CPU renderer's 2D one.
+ */
+async function makeRenderer(
+  binding: WasmEffectRegistryBinding,
+  canvas: OffscreenCanvas,
+  mode: RendererMode,
+): Promise<{ wasm: WasmCanvasRenderer; choice: RendererChoice }> {
+  const cpu = (rendererReason: string) => {
+    if (binding.createCpu === undefined)
+      throw new Error("wasm binding does not expose createCpu");
+    return {
+      wasm: binding.createCpu(canvas),
+      choice: { renderer: "cpu", rendererReason } as const,
+    };
+  };
+  if (mode === "cpu")
+    return cpu('the CPU renderer was asked for (renderer "cpu")');
+  if (binding.createForCanvas === undefined) {
+    if (mode === "auto" && binding.createCpu !== undefined)
+      return cpu("the wasm binding has no GPU renderer");
+    throw new Error("wasm binding does not expose createForCanvas");
+  }
+  try {
+    return {
+      wasm: await binding.createForCanvas(canvas),
+      choice: { renderer: "gpu", rendererReason: null },
+    };
+  } catch (error) {
+    const code = (error as { code?: unknown } | null)?.code;
+    if (
+      mode !== "auto" ||
+      binding.createCpu === undefined ||
+      (code !== "GPU_INIT_FAILED" && code !== "INVALID_INPUT")
+    )
+      throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    try {
+      return cpu(
+        `the browser offers no WebGPU adapter and no WebGL2 context (${message})`,
+      );
+    } catch {
+      // The GPU's failure is the one to report: it says why there is no renderer at all.
+      throw error;
+    }
   }
 }
 
@@ -749,6 +836,7 @@ export class WorkerRenderBackend implements RenderBackend {
   readonly #pending = new Map<number, PendingRequest>();
   readonly #pendingExportReadbacks = new Map<number, PendingExportReadback>();
   #nextId = 1;
+  #rendererChoice: RendererChoice | undefined;
   #deviceLost = false;
   #disposed = false;
   /** Set once the worker raised an uncaught error; see `#onWorkerError`. */
@@ -760,9 +848,20 @@ export class WorkerRenderBackend implements RenderBackend {
     worker.addEventListener("error", this.#onWorkerError);
   }
 
+  /**
+   * The renderer the worker's host draws with, once {@link WorkerRenderBackend.initialize} has
+   * resolved; `undefined` before, or for a host that does not say.
+   */
+  get rendererChoice(): RendererChoice | undefined {
+    return this.#rendererChoice;
+  }
+
   /** Transfers `canvas` to the worker and creates its host there. */
   async initialize(canvas: OffscreenCanvas): Promise<void> {
-    await this.#request({ type: "initialize", canvas }, [canvas]);
+    const choice = await this.#request({ type: "initialize", canvas }, [
+      canvas,
+    ]);
+    this.#rendererChoice = choice as RendererChoice | undefined;
   }
 
   /**

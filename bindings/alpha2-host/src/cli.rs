@@ -12,13 +12,13 @@ use crate::protocol::{
     AudioQualityRequest, ExportMedia, ExportRequest, HostError, LoudnessRequest, ProjectJson,
     PurposeRequest, RateRequest, Request, VideoQualityRequest,
 };
-use crate::{PROTOCOL_VERSION, create_host, write_stdout};
+use crate::{PROTOCOL_VERSION, create_host_with, write_stdout};
 use alpha2_media::{AudioCodec, Container, VideoCodec};
 use serde_json::{Value, json};
 
 /// The command-line synopsis, returned as the error for an unrecognized command line or `--help`.
 pub fn usage() -> String {
-    "usage: alpha2-host serve\n       alpha2-host conform --project <project.json> --asset <source-id>=<path> [--proxy <source-id>=<path>]... [--purpose preview|preview-proxy|thumbnail|remote-edit|export-original|export-proxy]\n       alpha2-host export --project <project.json> --asset <source-id>=<path> [--proxy <source-id>=<path>]... [--frames <source-id>=<path>,...]... [--resource <source-id> <locator> <path>]... [--media original|proxies] --effect-asset <resource-id>=<path> [--font <font-file>]... --out <output.mp4|.mov|.mkv|.webm> [--container mp4|mov|mkv|webm] [--effects <effects.json>] [--start-ticks <ticks>] [--end-ticks <ticks>] [--frame-rate <num>/<den>] [--no-audio] [--video-codec <id>] [--video-encoder <ffmpeg-name>] [--input-policy auto|gpu-required|cpu-readback] [--strategy render|prefer-copy|require-copy] [--video-quality very-low|low|medium|high|very-high|<bits-per-second>] [--video-quantizer <n>] [--audio-codec aac|opus] [--audio-quality very-low|low|medium|high|very-high|<bits-per-second>] [--loudness-target <LUFS> [--true-peak-ceiling <dBTP>]] [--video-decode software|auto|hardware-required] [--render-cache <dir> [--render-cache-quota <bytes>] [--render-cache-backlog skip|wait]]".to_owned()
+    "usage: alpha2-host serve\n       alpha2-host conform --project <project.json> --asset <source-id>=<path> [--proxy <source-id>=<path>]... [--purpose preview|preview-proxy|thumbnail|remote-edit|export-original|export-proxy]\n       alpha2-host export --project <project.json> --asset <source-id>=<path> [--proxy <source-id>=<path>]... [--frames <source-id>=<path>,...]... [--resource <source-id> <locator> <path>]... [--media original|proxies] --effect-asset <resource-id>=<path> [--font <font-file>]... --out <output.mp4|.mov|.mkv|.webm> [--container mp4|mov|mkv|webm] [--effects <effects.json>] [--start-ticks <ticks>] [--end-ticks <ticks>] [--frame-rate <num>/<den>] [--no-audio] [--video-codec <id>] [--video-encoder <ffmpeg-name>] [--input-policy auto|gpu-required|cpu-readback] [--strategy render|prefer-copy|require-copy] [--video-quality very-low|low|medium|high|very-high|<bits-per-second>] [--video-quantizer <n>] [--audio-codec aac|opus] [--audio-quality very-low|low|medium|high|very-high|<bits-per-second>] [--loudness-target <LUFS> [--true-peak-ceiling <dBTP>]] [--video-decode software|auto|hardware-required] [--renderer auto|gpu|cpu] [--render-cache <dir> [--render-cache-quota <bytes>] [--render-cache-backlog skip|wait]]".to_owned()
 }
 
 /// The flags shared by `conform` and `export`, as parsed. `include_audio` is true unless
@@ -52,6 +52,7 @@ pub struct ExportCliOptions {
     pub loudness_target: Option<f64>,
     pub true_peak_ceiling: Option<f64>,
     pub video_decode: Option<VideoDecodePolicy>,
+    pub renderer: Option<crate::config::RendererPolicy>,
     pub render_cache: Option<PathBuf>,
     pub render_cache_quota: Option<u64>,
     pub render_cache_backlog: Option<crate::render_cache::Backlog>,
@@ -113,11 +114,15 @@ pub fn export_cli(args: Vec<String>, host: &mut Option<Host>) -> Result<(), Host
         Some(policy) => policy,
         None => VideoDecodePolicy::from_env().map_err(HostError::invalid_input)?,
     };
+    let renderer = match options.renderer {
+        Some(renderer) => renderer,
+        None => crate::config::RendererPolicy::from_env().map_err(HostError::invalid_input)?,
+    };
     let (request, output) = export_request(options)?;
     // A termination cancels the export, which `main` then reports with the signal's status.
     crate::install_termination();
     crate::termination::terminations().hold_busy();
-    let host = host.insert(create_host(policy)?);
+    let host = host.insert(create_host_with(policy, renderer)?);
     let result = host.handle(request, &mut report_progress)?;
     write_stdout(&json!({
         "ok": true,
@@ -416,6 +421,12 @@ pub fn parse_export_args(args: Vec<String>) -> Result<ExportCliOptions, HostErro
                     )));
                 }
                 options.video_quantizer = Some(quantizer);
+            }
+            "--renderer" => {
+                options.renderer = Some(
+                    crate::config::RendererPolicy::parse(&value(&mut args)?)
+                        .map_err(HostError::invalid_input)?,
+                );
             }
             "--video-decode" => {
                 options.video_decode = Some(
