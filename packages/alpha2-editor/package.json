@@ -1,6 +1,6 @@
 {
   "name": "@alpha2-sh/editor",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Headless Project-based editing sessions and browser adapters for alpha2.",
   "type": "module",
   "license": "MIT",
@@ -60,11 +60,11 @@
     "build": "rm -rf dist && tsc -p tsconfig.json"
   },
   "peerDependencies": {
-    "alpha2": "0.4.2",
+    "alpha2": "0.4.3",
     "react": "^19.3.0"
   },
   "devDependencies": {
-    "alpha2": "0.4.2",
+    "alpha2": "0.4.3",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "@types/react": "19.3.0",
