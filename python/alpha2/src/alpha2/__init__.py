@@ -13,6 +13,7 @@ engine's own validator in-process; rendering runs the native ``alpha2-host`` pro
     alpha2.export(project.build(), "intro.mp4", assets=project.assets())
 """
 
+from . import compose
 from ._native import __version__
 from .builder import (
     TICKS_PER_SECOND,
@@ -38,6 +39,7 @@ from .client import (
 )
 from .errors import (
     Alpha2AbortError,
+    Alpha2ComposeError,
     Alpha2ConformError,
     Alpha2GpuInitializationError,
     Alpha2HostError,
@@ -59,6 +61,7 @@ __all__ = [
     "QUALITY_LEVELS",
     "TICKS_PER_SECOND",
     "Alpha2AbortError",
+    "Alpha2ComposeError",
     "Alpha2ConformError",
     "Alpha2GpuInitializationError",
     "Alpha2HostError",
@@ -73,6 +76,7 @@ __all__ = [
     "TrackBuilder",
     "__version__",
     "capabilities",
+    "compose",
     "conform",
     "export",
     "host_cache_directory",

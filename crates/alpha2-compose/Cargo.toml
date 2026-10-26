@@ -1,0 +1,42 @@
+[package]
+name = "alpha2-compose"
+version.workspace = true
+description = "Compiles alpha2 compose specs (sequences, stacks, grids, presets) into project documents."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["video", "timeline", "templates", "compose"]
+categories = ["multimedia::video"]
+# Builds from its sources and license alone: tests stay in the repository, where `cargo test` runs.
+include = [
+  "/src/**",
+  "/README.md",
+  "/LICENSE.md",
+  "!/src/**/tests.rs",
+  "!/src/**/*_tests.rs",
+  "!/src/**/tests/**",
+]
+
+[dependencies]
+alpha2-media.workspace = true
+alpha2-model.workspace = true
+alpha2-text.workspace = true
+alpha2-time.workspace = true
+schemars = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+# Names where in a spec a value that does not parse lies (`spec.body.children[2]`).
+serde_path_to_error = "0.1.20"
+
+[lints]
+workspace = true
+
+[features]
+# Derives `schemars::JsonSchema` for the spec and exposes `compose_json_schema`, the published
+# compose schema.
+schema = ["dep:schemars", "alpha2-model/schema", "alpha2-media/schema", "alpha2-time/schema"]
+
+[[example]]
+name = "emit-schema"
+required-features = ["schema"]

@@ -52,7 +52,7 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
-extend-exclude = ["src/alpha2/types.py"]
+extend-exclude = ["src/alpha2/types.py", "src/alpha2/compose_types.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "A", "BLE", "RUF"]

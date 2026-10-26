@@ -25,7 +25,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 from . import _native
 from .errors import (
@@ -38,6 +38,9 @@ from .errors import (
 )
 from .install import cached_host_binary, host_cache_directory, host_executable_name, package_version
 from .protocol import UNREAD_REQUEST_ID, create_request, loader_refused, parse_host_message
+
+if TYPE_CHECKING:
+    from .compose import Compiled
 
 __all__ = [
     "QUALITY_LEVELS",
@@ -644,7 +647,7 @@ class HostClient:
 
     def export(
         self,
-        project: Mapping[str, Any],
+        project: Mapping[str, Any] | Compiled,
         output: PathLike,
         *,
         assets: Mapping[str, PathLike] | None = None,
@@ -695,9 +698,21 @@ class HostClient:
         export whose hardware decoder stalls (``DECODE_STALLED``) runs once more decoding in
         software; its progress starts over.
 
+        ``project`` may be a :class:`~alpha2.compose.Compiled` spec: its ``assets``, ``fonts`` and
+        ``loudness`` are the defaults of those options.
+
         The result's keys are the host protocol's (``videoOutputPath``, ``effectiveRange``,
         ``performance``, ...).
         """
+        from .compose import Compiled  # here: compose imports this module
+
+        if isinstance(project, Compiled):
+            compiled = project
+            project = compiled.project
+            assets = compiled.assets if assets is None else assets
+            fonts = compiled.fonts if fonts is None else fonts
+            if loudness is None and include_audio:
+                loudness = compiled.loudness
         problems = _project_problems(project)
         if problems:
             raise Alpha2ProjectValidationError(problems)
@@ -1241,7 +1256,7 @@ def conform(
 
 
 def export(
-    project: Mapping[str, Any],
+    project: Mapping[str, Any] | Compiled,
     output: PathLike,
     *,
     host_path: PathLike | None = None,

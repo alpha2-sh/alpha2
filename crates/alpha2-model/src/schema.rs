@@ -31,9 +31,17 @@ pub fn project_json_schema() -> Value {
         )),
     );
     let mut value = schema.to_value();
-    bound_unsigned_integers(&mut value);
-    shortest_defaults(&mut value);
+    finish_json_schema(&mut value);
     value
+}
+
+/// The passes the published project schema gets after schemars writes it,
+/// for a schema that embeds the model's types (the compose spec's) to state
+/// them as this one does: every `uint32` bounded, every default spelled as
+/// the engine writes it.
+pub fn finish_json_schema(value: &mut Value) {
+    bound_unsigned_integers(value);
+    shortest_defaults(value);
 }
 
 /// What a CSS hex color string looks like.

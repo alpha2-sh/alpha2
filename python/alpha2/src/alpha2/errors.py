@@ -13,6 +13,7 @@ from typing import Any, Literal
 
 __all__ = [
     "Alpha2AbortError",
+    "Alpha2ComposeError",
     "Alpha2ConformError",
     "Alpha2GpuInitializationError",
     "Alpha2HostError",
@@ -227,3 +228,16 @@ class Alpha2HostInstallError(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+class Alpha2ComposeError(ValueError):
+    """A compose spec that does not compile: ``path`` is where in it (``spec.body.items[3]``),
+    ``problem`` what is wrong there, and the message both."""
+
+    path: str
+    problem: str
+
+    def __init__(self, message: str, path: str, problem: str) -> None:
+        super().__init__(message)
+        self.path = path
+        self.problem = problem

@@ -23,12 +23,14 @@ from conftest import ROOT, corpus
 
 from alpha2 import (
     Alpha2AbortError,
+    Alpha2ComposeError,
     Alpha2ConformError,
     Alpha2GpuInitializationError,
     Alpha2HostError,
     Alpha2ProjectValidationError,
     HostClient,
 )
+from alpha2 import compose as c
 
 HOST = Path(
     os.environ.get("ALPHA2_HOST_BINARY")
@@ -150,6 +152,39 @@ def test_the_client_exports_a_project_through_the_host_binary(
     assert isinstance(result["performance"]["frameSubmitMs"], (int, float))
     assert_declared_performance(result["performance"], result["videoOutputPath"])
     assert result["decodeDiagnostics"] == []
+
+
+def test_a_compose_spec_compiles_from_the_hosts_facts_and_exports(
+    client: HostClient, tmp_path: Path
+) -> None:
+    clip = ROOT / "tests/corpus/h264-bt709-audio-longer.mp4"
+    music = ROOT / "tests/corpus/audio-only-aac-priming.m4a"
+    video = c.Video(
+        c.Sequence(
+            [c.TitleCard("Compose", duration=1), c.Media(clip, fit="cover")],
+            transition=c.Crossfade(0.25),
+        ),
+        canvas={"preset": "youtube-720p", "frame_rate": 24},
+        overlays=[
+            c.Logo(ASSET, size=96, opacity=0.8),
+            c.Captions([{"start": 0.2, "end": 0.9, "text": "Hello"}], style="boxed"),
+        ],
+        audio=c.MusicBed(music, volume=0.5, duck_under="body"),
+    )
+    compiled = video.compile(fonts=[ROOT / "tests/fonts/Alpha2Fixture.ttf"], client=client)
+    assert compiled.warnings == []
+    facts = c.gather_facts(video, client=client)
+    assert facts["media"][str(clip)]["has_audio"] is True
+    assert facts["media"][str(ASSET)]["width"] > 0
+    assert video.compile(facts=facts, fonts=[ROOT / "tests/fonts/Alpha2Fixture.ttf"]) == compiled
+    output = tmp_path / "compose.mp4"
+    result = client.export(compiled, output, video_codec="mpeg4-part2")
+    assert output.read_bytes()[4:8] == b"ftyp"
+    # The clip after the 1 s card, overlapping it by the 0.25 s crossfade.
+    clip_ticks = facts["media"][str(clip)]["duration_ticks"]
+    assert result["effectiveRange"]["endTicks"] == 120_000 - 30_000 + clip_ticks
+    with pytest.raises(Alpha2ComposeError, match="cannot read"):
+        c.Video(c.Media(tmp_path / "missing.mp4")).compile(client=client)
 
 
 def test_a_failed_readback_reaches_the_client_classified_with_the_hosts_evidence(

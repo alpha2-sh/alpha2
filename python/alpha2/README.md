@@ -38,6 +38,44 @@ print(result["videoOutputPath"], result["frames"])
 - Options you write use snake_case (`loudness={"target_lufs": -14, ...}`); what the host reports
   keeps the protocol's camelCase keys (`result["effectiveRange"]`).
 
+## Compose: videos by intent
+
+`alpha2.compose` describes a video by what it is made of and compiles it into a project. Times are
+seconds, lengths are pixels of the canvas, and files are paths: the compiled project carries its
+assets, fonts and loudness to `alpha2.export`.
+
+```python
+from pathlib import Path
+
+import alpha2
+from alpha2 import compose as c
+
+video = c.Video(
+    canvas="youtube-1080p",
+    body=c.Slideshow(
+        sorted(Path("photos").glob("*.jpg")), seconds=6, transition=c.Crossfade(1), ken_burns=1.15
+    ),
+    overlays=[c.Title("Summer 2026", at=0.5, duration=4)],
+    audio=c.MusicBed("music.m4a", fade_out=3),
+)
+compiled = video.compile(fonts=["DejaVuSans-Bold.ttf"])  # compiled.project is a plain dict
+alpha2.export(compiled, "summer.mp4")
+```
+
+- Nodes: `Sequence`, `Stack`, `Grid`, `Media`, `Text`, `Color`, `Captions` (SubRip, WebVTT, cues
+  or word timestamps), `Layout`, `Audio`, `Raw` (part of a project, as an overlay); components
+  `Slideshow`, `CaptionedVideo`, `Title`, `TitleCard`, `LowerThird`, `EndCard`,
+  `ComparisonGrid`, `Reframe`, `Logo`, `MusicBed`. Themes `clean-dark` and `clean-light`, or your
+  own (`theme={"base": "clean-light", "accent": "#e63946"}`).
+- Compiling needs each file's size and length. `compile` asks the host's `conform` for them (no
+  GPU), or takes them as `facts=`; with every fact given it runs without a host. The same spec,
+  facts and fonts compile to the same project.
+- Templates are Python: loops, conditions and arithmetic build the lists the nodes take. A spec is
+  JSON (`video.to_json()`, typed as `alpha2.compose_types.VideoSpec`) that every binding compiles
+  the same way.
+- An error names where in the spec it lies (`alpha2.Alpha2ComposeError`, `.path ==
+  "spec.body.items[3].path"`).
+
 ## Finding `alpha2-host`
 
 In this order: the `host_path` argument, `ALPHA2_HOST_PATH`, the `alpha2-host` wheel of this
@@ -63,5 +101,6 @@ uv pip install --no-deps -e .         # rebuild after changing the Rust crate
 
 `--no-deps` because the pinned `alpha2-host` wheel exists only once a release is published; the
 tests find a host through `ALPHA2_HOST_BINARY`, `ALPHA2_HOST_PATH` or the cache instead.
-`src/alpha2/types.py` is generated from the project schema by `npm run generate:schema`.
+`src/alpha2/types.py` and `src/alpha2/compose_types.py` are generated from the project and compose
+schemas by `npm run generate:schema`.
 `python/alpha2-host` builds the `alpha2-host` wheel from a release archive.

@@ -4,6 +4,8 @@ __version__: str
 SCHEMA_VERSION: int
 MAX_PROJECT_JSON_BYTES: int
 TICKS_PER_SECOND: int
+COMPOSE_VERSION: int
+COMPOSE_THEMES: list[str]
 
 def validate_project_json(json: str) -> list[str]:
     """The problems the engine finds in a project document, as JSON text: empty when it is valid."""
@@ -23,4 +25,17 @@ def resolve_export_format(
     """An export's container, video codec and audio codec, as the host resolves them.
 
     Raises ValueError with the engine's message for a request it refuses.
+    """
+
+def compose_requirements(spec: str) -> str:
+    """The files a compose spec (JSON text) names, as JSON text: ``{"media", "texts"}``.
+
+    Raises ValueError(message, path, problem) for a spec that does not parse.
+    """
+
+def compose(spec: str, facts: str, fonts: list[bytes]) -> str:
+    """A compose spec compiled with facts about its files and the export's font files, as JSON
+    text: ``{"project", "assets", "loudness", "warnings"}``.
+
+    Raises ValueError(message, path, problem) for a spec that does not compile.
     """

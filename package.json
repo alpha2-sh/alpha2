@@ -21,7 +21,7 @@
     "test:gpu-validation": "node scripts/test-gpu-validation.mjs",
     "test:vulkan-validation": "cargo build --release -p alpha2-host && cargo build --release -p alpha2-native --features hwdecode && node scripts/test-vulkan-validation.mjs",
     "test:wasm-browser": "npm run build && node scripts/test-wasm-browser.mjs",
-    "generate:schema": "cargo run --quiet -p alpha2-model --features schema --example emit-schema -- schema && node scripts/generate-project-types.mjs",
+    "generate:schema": "cargo run --quiet -p alpha2-model --features schema --example emit-schema -- schema && cargo run --quiet -p alpha2-compose --features schema --example emit-schema -- schema && node scripts/generate-project-types.mjs",
     "generate:goldens": "node scripts/generate-goldens.mjs",
     "generate:corpus": "bash tests/corpus/generate/generate.sh",
     "version:set": "node scripts/set-version.mjs",

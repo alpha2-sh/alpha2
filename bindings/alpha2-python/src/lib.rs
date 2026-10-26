@@ -2,13 +2,15 @@
 //!
 //! It gives Python the engine's own answers where a second implementation would drift: whether a
 //! project document is valid (`alpha2_model`, the validator the host runs), where a project ends,
-//! and which container and codecs an export resolves to (`alpha2_media`). It links neither a GPU
-//! nor `FFmpeg`; rendering is the `alpha2-host` process's.
+//! which container and codecs an export resolves to (`alpha2_media`), and what a compose spec
+//! compiles to (`alpha2_compose`, the compiler every binding shares). It links neither a GPU nor
+//! `FFmpeg`; rendering is the `alpha2-host` process's.
 //!
 //! Documents cross the boundary as JSON text, which the Python side writes once with the same
 //! rules it sends the host.
 
 use std::str::FromStr;
+use std::sync::Arc;
 
 use alpha2_media::{AudioCodec, Container, VideoCodec};
 use alpha2_model::{CURRENT_SCHEMA_VERSION, MAX_PROJECT_JSON_BYTES, Project};
@@ -66,6 +68,32 @@ fn resolve_export_format(
     Ok((container.as_str(), video.as_str(), audio.as_str()))
 }
 
+/// A compose error as `ValueError(message, path, problem)`: the whole message, where in the spec,
+/// and what is wrong there.
+fn compose_error(error: &alpha2_compose::ComposeError) -> PyErr {
+    PyValueError::new_err((error.to_string(), error.path.clone(), error.message.clone()))
+}
+
+/// The files a compose spec (JSON text) names, as JSON text: `{"media": [{path, kind}], "texts":
+/// [path]}`. Raises `ValueError(message, path, problem)` for a spec that does not parse.
+#[pyfunction]
+fn compose_requirements(py: Python<'_>, spec: &str) -> PyResult<String> {
+    py.detach(|| alpha2_compose::requirements_json(spec))
+        .map_err(|error| compose_error(&error))
+}
+
+/// A compose spec compiled with facts about its files (both JSON text) and the font files an
+/// export registers, as JSON text: `{"project", "assets", "loudness", "warnings"}`. Raises
+/// `ValueError(message, path, problem)` for a spec that does not compile.
+#[pyfunction]
+fn compose(py: Python<'_>, spec: &str, facts: &str, fonts: Vec<Vec<u8>>) -> PyResult<String> {
+    py.detach(|| {
+        let fonts = fonts.into_iter().map(Arc::from).collect::<Vec<Arc<[u8]>>>();
+        alpha2_compose::compile_json(spec, facts, &fonts)
+    })
+    .map_err(|error| compose_error(&error))
+}
+
 #[pymodule]
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
@@ -75,5 +103,9 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(validate_project_json, module)?)?;
     module.add_function(wrap_pyfunction!(project_end_ticks, module)?)?;
     module.add_function(wrap_pyfunction!(resolve_export_format, module)?)?;
+    module.add("COMPOSE_VERSION", alpha2_compose::COMPOSE_VERSION)?;
+    module.add("COMPOSE_THEMES", alpha2_compose::THEMES.to_vec())?;
+    module.add_function(wrap_pyfunction!(compose_requirements, module)?)?;
+    module.add_function(wrap_pyfunction!(compose, module)?)?;
     Ok(())
 }

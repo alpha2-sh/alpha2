@@ -12,6 +12,7 @@ members = [
     "crates/alpha2-engine",
     "crates/alpha2-assets",
     "crates/alpha2-geometry",
+    "crates/alpha2-compose",
     "extensions",
     "extensions/web",
     "bindings/alpha2-wasm",
@@ -58,6 +59,7 @@ wasm-bindgen-futures = "=0.4.78"
 alpha2 = { version = "0.4.2", path = "crates/alpha2" }
 alpha2-assets = { version = "0.4.2", path = "crates/alpha2-assets" }
 alpha2-audio = { version = "0.4.2", path = "crates/alpha2-audio" }
+alpha2-compose = { version = "0.4.2", path = "crates/alpha2-compose" }
 alpha2-engine = { version = "0.4.2", path = "crates/alpha2-engine" }
 alpha2-eval = { version = "0.4.2", path = "crates/alpha2-eval" }
 alpha2-geometry = { version = "0.4.2", path = "crates/alpha2-geometry" }
