@@ -182,6 +182,19 @@ export class ProjectBuilder {
     return id;
   }
 
+  /**
+   * Each media source's id mapped to its locator: the `assets` a native export (`@alpha2-sh/node`)
+   * reads, when the locators are file paths. A relative path resolves against the exporting
+   * process's working directory. Sources added to the built document by hand are not in it.
+   */
+  assets(): Record<string, string> {
+    return Object.fromEntries(
+      this.#sources.flatMap((source) =>
+        source.locator === undefined ? [] : [[source.id, source.locator]],
+      ),
+    );
+  }
+
   /** Adds a source the engine draws itself; returns its id. */
   generated(
     generator: Generator,

@@ -6,6 +6,7 @@ Times are in seconds (or exact :func:`ticks`) and ids are generated deterministi
     video = project.source("video", "intro.mp4")
     project.video_track().clip(video, at=0, duration=5, source_in=12)
     document = project.build()  # a valid project.v1 dict, or ValueError
+    alpha2.export(document, "out.mp4", assets=project.assets())
 
 The result is a plain ``dict`` in the shape of :class:`alpha2.types.Project`: edit it freely.
 """
@@ -185,6 +186,15 @@ class ProjectBuilder:
             source["has_audio"] = has_audio
         self._sources.append(source)
         return source_id
+
+    def assets(self) -> dict[str, str]:
+        """Each media source's id mapped to its locator: the ``assets`` an export reads, when the
+        locators are file paths.
+
+        A relative path resolves against the exporting process's working directory. Sources added
+        to the built document by hand are not in it.
+        """
+        return {source["id"]: source["locator"] for source in self._sources if "locator" in source}
 
     def generated(self, generator: Generator, *, id: str | None = None) -> str:
         """Adds a source the engine draws itself; returns its id."""

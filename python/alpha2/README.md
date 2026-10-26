@@ -23,7 +23,7 @@ project.video_track().clip(title, at=0, duration=3)
 result = alpha2.export(
     project.build(),
     "intro.mp4",
-    assets={title: "title.png"},
+    assets=project.assets(),
     on_progress=lambda p: print(f"{p.completed}/{p.total}"),
 )
 print(result["videoOutputPath"], result["frames"])

@@ -10,7 +10,7 @@ engine's own validator in-process; rendering runs the native ``alpha2-host`` pro
     project = alpha2.ProjectBuilder("Intro", width=1280, height=720, frame_rate=30)
     image = project.source("image", "title.png")
     project.video_track().clip(image, at=0, duration=3)
-    alpha2.export(project.build(), "intro.mp4", assets={image: "title.png"})
+    alpha2.export(project.build(), "intro.mp4", assets=project.assets())
 """
 
 from ._native import __version__

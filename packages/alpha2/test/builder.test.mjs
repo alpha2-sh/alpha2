@@ -37,6 +37,28 @@ test("the builder writes the minimal one-second tutorial project", async () => {
   assert.deepEqual(validateProject(built), []);
 });
 
+test("assets maps each media source the builder added to its locator", () => {
+  const builder = new ProjectBuilder({
+    name: "Assets",
+    width: 640,
+    height: 360,
+    frameRate: 30,
+  });
+  const image = builder.source("image", "title.png");
+  const music = builder.source("audio", "/media/music.m4a", { id: "music" });
+  builder.generated({
+    type: "fill",
+    paint: {
+      type: "solid",
+      color: { red: 0, green: 0, blue: 0, alpha: 1 },
+    },
+  });
+  assert.deepEqual(builder.assets(), {
+    [image]: "title.png",
+    [music]: "/media/music.m4a",
+  });
+});
+
 test("seconds round to ticks, ticks are exact, and ids are deterministic", () => {
   assert.equal(toTicks(1 / 3), 40_000);
   assert.equal(toTicks(ticks(40_001)), 40_001);

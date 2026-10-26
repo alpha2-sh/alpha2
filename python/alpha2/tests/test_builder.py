@@ -22,6 +22,19 @@ def test_the_builder_writes_the_minimal_one_second_tutorial_project() -> None:
     assert validate_project(built) == []
 
 
+def test_assets_maps_each_media_source_the_builder_added_to_its_locator() -> None:
+    builder = ProjectBuilder("Assets", width=640, height=360, frame_rate=30)
+    image = builder.source("image", "title.png")
+    music = builder.source("audio", "/media/music.m4a", id="music")
+    builder.generated(
+        {
+            "type": "fill",
+            "paint": {"type": "solid", "color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}},
+        }
+    )
+    assert builder.assets() == {image: "title.png", music: "/media/music.m4a"}
+
+
 def test_seconds_round_to_ticks_ticks_are_exact_and_ids_are_deterministic() -> None:
     assert to_ticks(1 / 3) == 40_000
     assert to_ticks(ticks(40_001)) == 40_001
