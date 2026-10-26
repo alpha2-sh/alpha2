@@ -1,0 +1,9 @@
+# Virtual environments, tool caches, and the extension module an editable install builds in place.
+.venv/
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+dist/
+*.so
+*.pyd

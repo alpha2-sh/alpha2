@@ -192,9 +192,19 @@ jobs:
         with:
           name: alpha2-build
           path: packages
+      - name: Build the Python package the parity and end-to-end checks run
+        working-directory: python/alpha2
+        # --no-deps: the alpha2-host wheel it pins is published with the release; these checks run
+        # the host built here.
+        run: |
+          pipx install uv==0.9.17
+          uv venv -p 3.11 .venv
+          uv pip install --group dev
+          uv pip install --no-deps -e .
       - run: npm run test:host-parity
         env:
           ALPHA2_REQUIRE_BROWSER: "1"
+          ALPHA2_REQUIRE_PYTHON: "1"
       - name: A Vulkan device without Vulkan Video falls back to software
         run: |
           set -- /usr/share/vulkan/icd.d/lvp_icd*.json
@@ -208,6 +218,7 @@ jobs:
             2> "$RUNNER_TEMP/lavapipe.log" || { cat "$RUNNER_TEMP/lavapipe.log"; exit 1; }
           grep "hardware decode unavailable, using software" "$RUNNER_TEMP/lavapipe.log"
       - run: npm run test:node-e2e
+      - run: python/alpha2/.venv/bin/pytest python/alpha2/tests/test_e2e.py
 
   msrv:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',msrv,') }}
@@ -378,6 +389,42 @@ jobs:
         run: npm run build:js --workspace alpha2
       - run: npm run build --workspace @alpha2-sh/node
       - run: node --test packages/alpha2-node/test/*.test.mjs
+
+  python:
+    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',python,') }}
+    name: Python package (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+        working-directory: python/alpha2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: false
+          save-if: ${{ env.RUST_CACHE_SAVE }}
+      # The oldest Python the package supports, which the abi3 module is built for.
+      - name: Build the package into a Python 3.11 environment
+        run: |
+          pipx install uv==0.9.17
+          uv venv -p 3.11 .venv
+          uv pip install --group dev
+          uv pip install --no-deps -e .
+          if [ -d .venv/Scripts ]; then echo "PY=.venv/Scripts" >> "$GITHUB_ENV"; else echo "PY=.venv/bin" >> "$GITHUB_ENV"; fi
+      - if: runner.os == 'Linux'
+        run: |
+          "$PY/ruff" check src tests ../alpha2-host
+          "$PY/ruff" format --check src tests ../alpha2-host
+          "$PY/mypy"
+      # The end-to-end tests skip: there is no host here (the host job runs them).
+      - run: '"$PY/pytest"'
 
   determinism:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',determinism,') }}

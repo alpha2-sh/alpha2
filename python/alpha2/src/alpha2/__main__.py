@@ -1,0 +1,155 @@
+"""``python -m alpha2``: install the host, and render or inspect from the command line."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from collections.abc import Sequence
+from pathlib import Path
+
+from .client import ExportProgress, HostClient
+from .errors import Alpha2HostError, Alpha2HostInstallError
+from .install import install_host
+
+
+def _install(arguments: argparse.Namespace) -> int:
+    # Progress goes to standard error, in whole percents, and only to a terminal.
+    shown = -1
+
+    def progress(received: int, total: int | None) -> None:
+        nonlocal shown
+        if not sys.stderr.isatty() or total is None:
+            return
+        percent = received * 100 // total
+        if percent != shown:
+            shown = percent
+            sys.stderr.write(f"\rdownloading alpha2-host {percent}%")
+
+    try:
+        result = install_host(
+            kind="thin" if arguments.thin else "bundled",
+            force=arguments.force,
+            on_progress=progress,
+        )
+    except Alpha2HostInstallError as error:
+        if shown >= 0:
+            sys.stderr.write("\n")
+        print(f"alpha2 install: {error}", file=sys.stderr)
+        return 1
+    if shown >= 0:
+        sys.stderr.write("\n")
+    print(
+        f"installed {result.host_path}"
+        if result.downloaded
+        else f"already installed: {result.host_path}"
+    )
+    return 0
+
+
+def _pairs(values: Sequence[str], flag: str) -> dict[str, str]:
+    pairs: dict[str, str] = {}
+    for value in values:
+        key, separator, path = value.partition("=")
+        if not separator or not key or not path:
+            raise SystemExit(f"alpha2: {flag} takes <id>=<path>, not {value}")
+        pairs[key] = path
+    return pairs
+
+
+def _export(arguments: argparse.Namespace) -> int:
+    project = json.loads(Path(arguments.project).read_text(encoding="utf-8"))
+    shown = -1
+
+    def progress(report: ExportProgress) -> None:
+        nonlocal shown
+        if not sys.stderr.isatty() or report.total == 0:
+            return
+        percent = report.completed * 100 // report.total
+        if percent != shown:
+            shown = percent
+            sys.stderr.write(f"\rexporting {percent}%")
+
+    try:
+        client = HostClient(host_path=arguments.host)
+        result = client.export(
+            project,
+            arguments.output,
+            assets=_pairs(arguments.asset, "--asset"),
+            fonts=arguments.font,
+            end_ticks=arguments.end_ticks,
+            start_ticks=arguments.start_ticks,
+            include_audio=not arguments.no_audio,
+            video_codec=arguments.video_codec,
+            video_quality=arguments.video_quality,
+            on_progress=progress,
+        )
+    except Alpha2HostError as error:
+        if shown >= 0:
+            sys.stderr.write("\n")
+        print(f"alpha2 export: {error.code}: {error}", file=sys.stderr)
+        return 1
+    if shown >= 0:
+        sys.stderr.write("\n")
+    if arguments.json:
+        print(json.dumps(result, indent=2))
+    else:
+        print(f"wrote {arguments.output} ({result['frames']} frames, {result['renderMs']} ms)")
+    return 0
+
+
+def _capabilities(arguments: argparse.Namespace) -> int:
+    try:
+        report = HostClient(host_path=arguments.host).capabilities()
+    except Alpha2HostError as error:
+        print(f"alpha2 capabilities: {error.code}: {error}", file=sys.stderr)
+        return 1
+    print(json.dumps(report, indent=2))
+    return 0
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="alpha2", description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    install = commands.add_parser(
+        "install",
+        help="download alpha2-host for this version and platform into the shared cache",
+        description="Downloads alpha2-host for this package's version and platform into the "
+        "cache (ALPHA2_HOST_CACHE_DIR, else the platform's cache directory), shared with "
+        "@alpha2-sh/node.",
+    )
+    install.add_argument(
+        "--thin", action="store_true", help="the archive that loads the system's FFmpeg 8"
+    )
+    install.add_argument(
+        "--force", action="store_true", help="download and unpack again when already installed"
+    )
+    install.set_defaults(run=_install)
+
+    export = commands.add_parser("export", help="render a project JSON file")
+    export.add_argument("project", help="the project.v1 JSON file")
+    export.add_argument("output", help="the file to write (.mp4, .m4v, .mov, .mkv or .webm)")
+    export.add_argument("--asset", action="append", default=[], metavar="ID=PATH")
+    export.add_argument("--font", action="append", default=[], metavar="PATH")
+    export.add_argument("--start-ticks", type=int, default=0)
+    export.add_argument("--end-ticks", type=int, help="default: where the project ends")
+    export.add_argument("--no-audio", action="store_true")
+    export.add_argument("--video-codec")
+    export.add_argument(
+        "--video-quality", choices=["very-low", "low", "medium", "high", "very-high"]
+    )
+    export.add_argument("--json", action="store_true", help="print the host's export result")
+    export.add_argument("--host", help="the alpha2-host binary to run")
+    export.set_defaults(run=_export)
+
+    report = commands.add_parser("capabilities", help="print what the host can decode and encode")
+    report.add_argument("--host", help="the alpha2-host binary to run")
+    report.set_defaults(run=_capabilities)
+
+    arguments = parser.parse_args(argv)
+    return int(arguments.run(arguments))
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,68 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "alpha2"
+description = "Python client for the alpha2 video engine: build, validate, and render project documents."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE.md"]
+# 3.11 is the first with NotRequired and generic TypedDicts, which the project types are written in;
+# 3.10 reached its end of life in October 2026.
+requires-python = ">=3.11"
+# The renderer, as a platform wheel of the same version where a native archive is published (the
+# release targets of python/alpha2-host/build_wheel.py). Elsewhere `python -m alpha2 install` or
+# ALPHA2_HOST_PATH provides it. `npm run version:set` keeps the pin at the workspace version.
+dependencies = [
+  "alpha2-host==0.4.2; (sys_platform == 'linux' and platform_machine == 'x86_64') or (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64') or (sys_platform == 'win32' and platform_machine == 'AMD64')",
+]
+dynamic = ["version"]
+keywords = ["video", "rendering", "video-editing", "timeline", "gpu"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Rust",
+  "Topic :: Multimedia :: Video",
+  "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/alpha2-sh/alpha2"
+Repository = "https://github.com/alpha2-sh/alpha2"
+Issues = "https://github.com/alpha2-sh/alpha2/issues"
+
+[project.scripts]
+alpha2 = "alpha2.__main__:main"
+
+[dependency-groups]
+dev = ["maturin==1.15.0", "mypy==2.4.0", "pytest==9.1.1", "ruff==0.17.2"]
+
+[tool.maturin]
+# The extension module is the Rust crate in bindings/; its version is the Cargo workspace's, so the
+# package's version moves with every other alpha2 package.
+manifest-path = "../../bindings/alpha2-python/Cargo.toml"
+module-name = "alpha2._native"
+python-source = "src"
+# Bytecode a local run left beside the sources is not part of the package.
+exclude = ["src/alpha2/__pycache__/**"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["src/alpha2/types.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "A", "BLE", "RUF"]
+# Builder arguments are named after the document's fields, `id` among them.
+ignore = ["A002"]
+
+[tool.ruff.lint.per-file-ignores]
+# The fake hosts are Python source in strings, which the formatter leaves as written.
+"tests/*" = ["E501"]
+
+[tool.mypy]
+strict = true
+files = ["src/alpha2"]

@@ -23,6 +23,11 @@ allow = [
   "Unlicense",
   "Zlib",
 ]
+# Each a license for one crate only, with what brings it in.
+exceptions = [
+  # Run by pyo3-build-config's build script while the Python module builds; linked into nothing.
+  { allow = ["Apache-2.0 WITH LLVM-exception"], crate = "target-lexicon" },
+]
 
 [bans]
 multiple-versions = "warn"

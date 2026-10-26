@@ -1,5 +1,5 @@
 {
-  "description": "The failure class (export-failure's `code`) and memory region each error code is evidence of on its own, with nothing else known: no message, no device diagnostics, no typed evidence. `protocol` is every host protocol code, read by alpha2-host's classify_failure test and by alpha2's failureForCode test; `node` the codes only @alpha2-sh/node makes; `editor` @alpha2-sh/editor's EditorError codes, read by its test. A code missing here is a test failure, so a new code is classified when it is added.",
+  "description": "The failure class (export-failure's `code`) and memory region each error code is evidence of on its own, with nothing else known: no message, no device diagnostics, no typed evidence. `protocol` is every host protocol code, read by alpha2-host's classify_failure test and by alpha2's failureForCode test; `node` the codes only the host clients make (@alpha2-sh/node, read by its test, and the alpha2 Python package, read by its tests, which make the same ones); `editor` @alpha2-sh/editor's EditorError codes, read by its test. A code missing here is a test failure, so a new code is classified when it is added.",
   "protocol": {
     "UNSUPPORTED_PROTOCOL": { "code": "INVALID_INPUT", "resource": "unknown" },
     "INVALID_REQUEST": { "code": "INVALID_INPUT", "resource": "unknown" },

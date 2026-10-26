@@ -1,5 +1,6 @@
-// Sets the version of every npm package and inter-package dependency, and the Cargo workspace's
-// version with its crates in `[workspace.dependencies]`, then updates the lock files:
+// Sets the version of every npm package and inter-package dependency, the Cargo workspace's
+// version with its crates in `[workspace.dependencies]`, and the Python package's pin of
+// `alpha2-host` (its own version is the workspace's), then updates the lock files:
 //
 //   npm run version:set -- 0.2.0
 //
@@ -62,6 +63,19 @@ const cargo = readFileSync(cargoPath, "utf8")
 if (cargoLines < 2) throw new Error("Cargo.toml: no workspace version to set");
 writeFileSync(cargoPath, cargo);
 console.log(`Cargo workspace and its crates@${version} (${cargoLines} lines)`);
+
+// The Python package takes its version from the Cargo workspace; only its `alpha2-host` pin is
+// written here. PEP 440 reads `0.5.0-rc.1` as `0.5.0rc1`, the wheel's version.
+const pyprojectPath = join(root, "python", "alpha2", "pyproject.toml");
+const pyproject = readFileSync(pyprojectPath, "utf8");
+const pinned = pyproject.replace(
+  /"alpha2-host==[^;"]+;/g,
+  `"alpha2-host==${version};`,
+);
+if (pinned === pyproject && !pyproject.includes(`"alpha2-host==${version};`))
+  throw new Error("python/alpha2/pyproject.toml: no alpha2-host pin to set");
+writeFileSync(pyprojectPath, pinned);
+console.log(`alpha2 (Python) depends on alpha2-host==${version}`);
 
 // Resolving again writes the new versions of the path crates into each lock file.
 for (const manifest of ["Cargo.toml", "fuzz/Cargo.toml"])

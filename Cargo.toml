@@ -23,6 +23,7 @@ members = [
     "bindings/alpha2-os",
     "bindings/alpha2-text",
     "bindings/alpha2-host",
+    "bindings/alpha2-python",
     "tests/alloc_budget",
     "tests/audio_determinism",
     "tests/facade_without_wgpu",

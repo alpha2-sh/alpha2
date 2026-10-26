@@ -110,6 +110,42 @@ jobs:
           if-no-files-found: error
           path: target/alpha2-native-release/archives/*
 
+      # The Python wheels of this target: `alpha2-host` repackages the bundled archive just built,
+      # and `alpha2` is the abi3 extension module with the client, which depends on it. Not
+      # published here.
+      - name: Build Python wheels
+        run: |
+          pipx install uv==0.9.17
+          uv run --no-project --python 3.12 python/alpha2-host/build_wheel.py \
+            target/alpha2-native-release/archives/alpha2-*-bundled.* target/python-wheels
+          # From the package directory: maturin takes the name, metadata and crate from its
+          # pyproject.toml, which a bare --manifest-path would skip.
+          (cd python/alpha2 && uvx maturin@1.15.0 build --release --out ../../target/python-wheels)
+          ls -l target/python-wheels
+
+      # From the two wheels alone, `pip install alpha2` brings the host it pins, and the client
+      # finds it inside the alpha2-host package, which starts with the libraries beside it.
+      - name: Install the Python wheels and find the host
+        run: |
+          check="$RUNNER_TEMP/wheel-check"
+          uv venv --python 3.11 "$check"
+          uv pip install --python "$check" --no-index --find-links target/python-wheels alpha2
+          python="$check/bin/python"
+          [ -d "$check/Scripts" ] && python="$check/Scripts/python"
+          host="$("$python" -c '
+          import pathlib, alpha2, alpha2_host
+          found = alpha2.resolve_host_binary()
+          assert found == pathlib.Path(alpha2_host.host_path()), found
+          print(found)')"
+          { "$host" 2>&1 || true; } | grep "usage: alpha2-host"
+
+      - name: Upload Python wheels
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: alpha2-python-${{ matrix.target }}
+          if-no-files-found: error
+          path: target/python-wheels/*.whl
+
   publish-crates:
     name: Publish crates
     if: startsWith(github.ref, 'refs/tags/v')
@@ -211,10 +247,41 @@ jobs:
             npm publish "$tarball" --provenance --access public --tag "$dist_tag"
           done
 
+  publish-pypi:
+    name: Publish Python packages
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [version, package]
+    runs-on: ubuntu-latest
+    # PyPI trusts this workflow (release.yml) in this environment for `alpha2` and `alpha2-host`.
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: alpha2-python-*
+          path: wheels
+          merge-multiple: true
+      - name: Publish the wheels not on PyPI at this version
+        run: |
+          pipx install uv==0.9.17
+          ls -l wheels
+          # Every target's alpha2-host wheel and alpha2 wheel, or nothing: alpha2 pins the host of
+          # its own version on these four platforms.
+          test "$(ls wheels/alpha2_host-*.whl | wc -l)" -eq 4
+          test "$(ls wheels/alpha2-*.whl | wc -l)" -eq 4
+          # The host first, so no moment has an alpha2 whose pinned host is missing. A file already
+          # on PyPI (a rerun) is skipped.
+          for wheels in "wheels/alpha2_host-*.whl" "wheels/alpha2-*.whl"; do
+            # shellcheck disable=SC2086
+            uv publish --trusted-publishing always --check-url https://pypi.org/simple/ $wheels
+          done
+
   release:
     name: Publish GitHub release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [publish-crates, publish-npm]
+    needs: [publish-crates, publish-npm, publish-pypi]
     runs-on: ubuntu-latest
     permissions:
       contents: write

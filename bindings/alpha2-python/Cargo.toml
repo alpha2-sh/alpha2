@@ -1,0 +1,26 @@
+[package]
+name = "alpha2-python"
+version.workspace = true
+description = "The native module of the alpha2 Python package: project validation and the engine's export policy."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+test = false
+doctest = false
+
+[dependencies]
+alpha2-media.workspace = true
+alpha2-model.workspace = true
+alpha2-time.workspace = true
+# abi3: one wheel per platform for every CPython from 3.11. `extension-module` leaves libpython
+# unlinked, as an extension module must be.
+pyo3 = { version = "0.30.1", features = ["abi3-py311", "extension-module"] }
+
+[lints]
+workspace = true

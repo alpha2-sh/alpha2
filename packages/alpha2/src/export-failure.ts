@@ -43,8 +43,11 @@ export type ExportPhase =
   | "download"
   | "cleanup";
 
-/** Which process reported the failure. */
-export type ExportOrigin = "browser" | "node" | "native-host";
+/**
+ * Which process reported the failure: `node` is `@alpha2-sh/node` and `python` the `alpha2` Python
+ * package, each a client of the native host.
+ */
+export type ExportOrigin = "browser" | "node" | "python" | "native-host";
 
 /**
  * The memory a failure's evidence names. `js` is JavaScript `ArrayBuffer` and object memory, `wasm`

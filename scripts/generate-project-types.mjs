@@ -5,7 +5,8 @@
 //
 // Reads `schema/project.v1.schema.json` and `schema/project-limits.v1.json` (written by
 // `cargo run -p alpha2-model --features schema --example emit-schema`) and writes
-// `packages/alpha2/src/generated/project-schema.ts` and `project-shape.ts`. With `--check` it
+// `packages/alpha2/src/generated/project-schema.ts` and `project-shape.ts`, and the Python package's
+// `python/alpha2/src/alpha2/types.py` (scripts/lib/python-project-types.mjs). With `--check` it
 // writes nothing and exits non-zero when a committed file is stale.
 //
 // Unsupported schema constructs are rejected rather than emitted as incorrect types.
@@ -15,11 +16,14 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { format, resolveConfig } from "prettier";
 
+import { pythonProjectTypes } from "./lib/python-project-types.mjs";
+
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const schemaPath = join(root, "schema/project.v1.schema.json");
 const limitsPath = join(root, "schema/project-limits.v1.json");
 const outPath = join(root, "packages/alpha2/src/generated/project-schema.ts");
 const shapePath = join(root, "packages/alpha2/src/generated/project-shape.ts");
+const pythonPath = join(root, "python/alpha2/src/alpha2/types.py");
 
 /**
  * Rust generic types. schemars names an instance `Name_Arg` (see the
@@ -398,13 +402,17 @@ const shapeSource =
 const outputs = [
   [outPath, source],
   [shapePath, shapeSource],
+  [pythonPath, pythonProjectTypes(schema, limits)],
 ];
 let stale = false;
 for (const [path, text] of outputs) {
-  const formatted = await format(text, {
-    ...(await resolveConfig(path)),
-    filepath: path,
-  });
+  // Prettier formats the TypeScript; the Python is written formatted.
+  const formatted = path.endsWith(".py")
+    ? text
+    : await format(text, {
+        ...(await resolveConfig(path)),
+        filepath: path,
+      });
   if (process.argv.includes("--check")) {
     let committed = "";
     try {
