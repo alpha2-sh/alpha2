@@ -204,6 +204,10 @@ package_mode() {
   if [ -d "$sdk_root/licenses/Vulkan-Headers" ]; then
     cp -R "$sdk_root/licenses/Vulkan-Headers" "$package/licenses/Vulkan-Headers"
   fi
+  # Only the Linux and Windows SDKs build against nv-codec-headers (NVENC).
+  if [ -d "$sdk_root/licenses/nv-codec-headers" ]; then
+    cp -R "$sdk_root/licenses/nv-codec-headers" "$package/licenses/nv-codec-headers"
+  fi
   cp -R "$sdk_root/licenses/zlib" "$package/licenses/zlib"
   for library in dav1d opus libvpx SVT-AV1; do
     cp -R "$sdk_root/licenses/$library" "$package/licenses/$library"
