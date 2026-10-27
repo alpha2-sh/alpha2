@@ -48,8 +48,9 @@ export interface BrowserCapabilities {
  * `navigator.gpu` and still have no adapter to give (Chrome on Linux without its flag, a
  * blocklisted GPU, acceleration turned off), and then the engine runs on WebGL2; with neither (a
  * browser with no usable GPU, such as Chrome with acceleration off), it runs on the CPU, which
- * `renderer` says and `diagnostics` explains. `webgl2` is probed on a canvas of its own, since a canvas's first context fixes its kind for good: a caller's canvas
- * probed for WebGL2 could no longer render WebGPU or be transferred to a worker. `wasm` validates
+ * `renderer` says and `diagnostics` explains. `webgl2` is probed on a canvas of its own, since a
+ * canvas's first context fixes its kind for good: a caller's canvas probed for WebGL2 could no
+ * longer render WebGPU or be transferred to a worker. `wasm` validates
  * two tiny modules, one per WebAssembly feature the packaged modules need past what every WebCodecs
  * browser has (SIMD and reference types; Chrome 94 and 95 have WebCodecs and SIMD but no reference
  * types), so a browser that cannot load the engine is told so before it fetches and compiles it.

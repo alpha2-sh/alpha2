@@ -133,7 +133,10 @@ export interface RenderWorkerHost {
     codec: EngineVideoCodec,
     outputTimeTicks: bigint,
   ): ExportTicket;
-  /** The renderer the host draws with; `initialize` answers it. Absent for a host that does not say. */
+  /**
+   * The renderer the host draws with; `initialize` answers it. Absent for a host that does not
+   * say.
+   */
   readonly rendererChoice?: RendererChoice;
   /** Checked after every request; must not throw (a throw is read as lost). */
   isDeviceLost(): boolean;
@@ -178,9 +181,9 @@ export interface WasmRenderWorkerHostOptions {
    * Which renderer draws. `"auto"` (the default) draws on the GPU, through WebGPU or else WebGL2,
    * and on the engine's CPU renderer in wasm when the browser offers neither (Chrome with
    * acceleration off, a blocklisted GPU); `"gpu"` never falls back, and `"cpu"` draws on the CPU
-   * and opens no GPU context. The CPU renderer previews at half resolution and refuses runtime
-   * effects (`effects`) with `EFFECT_ERROR`; it needs the binding's `createCpu`, without which
-   * `"auto"` is `"gpu"`. The host reports the renderer it chose ({@link RendererChoice}).
+   * and opens no GPU context. The CPU renderer previews at half resolution by default and refuses
+   * runtime effects (`effects`) with `EFFECT_ERROR`; it needs the binding's `createCpu`, without
+   * which `"auto"` is `"gpu"`. The host reports the renderer it chose ({@link RendererChoice}).
    */
   readonly renderer?: RendererMode;
 }

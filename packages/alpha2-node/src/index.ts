@@ -745,8 +745,8 @@ export interface H264EncodeStatus {
 }
 
 /**
- * The OpenH264 software encoder, which the user installs (`npx @alpha2-sh/node install --openh264`) and
- * the host loads at run time.
+ * The OpenH264 software encoder, which the user installs
+ * (`npx @alpha2-sh/node install --openh264`) and the host loads at run time.
  */
 export interface OpenH264Capability {
   readonly status: "available" | "not-installed" | "disabled" | "unusable";

@@ -2,7 +2,7 @@
 //!
 //! The shaders call `pow`, which GPUs approximate. Here each curve is a table
 //! built once with `libm` (the same bits on every target) and read with
-//! linear interpolation between entries a 1/1024 of an octave apart, which
+//! linear interpolation between entries 1/1024 of an octave apart, which
 //! keeps the error orders of magnitude below a half float's step.
 
 use std::sync::OnceLock;

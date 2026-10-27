@@ -15,7 +15,7 @@ use crate::{
 /// How far the CPU picture may be from the GPU's, in 8-bit codes.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Tolerance {
-    /// Exact.
+    /// No sample differs.
     Exact,
     /// At most one code; at most 0.01 % of the samples two.
     Close,

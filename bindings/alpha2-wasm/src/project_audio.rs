@@ -312,8 +312,8 @@ impl ProjectAudio {
         self.audio.as_ref().map_or(0, AudioRenderer::sample_rate)
     }
 
-    /// Readies the mixer for an export: fresh DSP state, exact, and blocks a
-    /// source is missing from held back.
+    /// Readies the mixer for an export: fresh DSP state, exact continuity, and
+    /// a block held back until every source it reads has arrived.
     pub(crate) fn begin_export(&mut self) {
         // The renderer resets on any jump by itself; this covers an export starting exactly where
         // preview stopped.

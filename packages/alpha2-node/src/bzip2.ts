@@ -17,7 +17,10 @@ const GROUP_SIZE = 50;
 const MIN_GROUPS = 2;
 const MAX_GROUPS = 6;
 const MAX_CODE_LENGTH = 20;
-/** The selectors bzip2 uses at most; a stream may list more, which bzip2 1.0.8 reads and ignores. */
+/**
+ * The selectors bzip2 uses at most; a stream may list more, which bzip2 1.0.8 reads and
+ * ignores.
+ */
 const MAX_SELECTORS = 18_002;
 /** A zero run's next weight may not reach this, as in bzip2. */
 const MAX_RUN_WEIGHT = 2 * 1024 * 1024;

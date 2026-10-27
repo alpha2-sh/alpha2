@@ -495,8 +495,8 @@ fn probe_metal_gpu_encode(args: Vec<String>) -> Result<(), HostError> {
     }))
 }
 
-/// Makes the host the renderer policy (`ALPHA2_RENDERER`, default `auto`)
-/// asks for, decoding as `policy` says.
+/// Makes the host that `ALPHA2_RENDERER` (default `auto`) asks for,
+/// decoding as `policy` says.
 fn create_host(policy: VideoDecodePolicy) -> Result<Host, HostError> {
     let renderer = crate::config::RendererPolicy::from_env().map_err(HostError::invalid_input)?;
     create_host_with(policy, renderer)

@@ -19,8 +19,9 @@ use crate::{BlendMode, BlendSpace, Color, LayerTransform, RenderError, RenderSiz
 /// equal positions in `f32`, as the shader does, so a minified opaque layer
 /// reaches the composite up to a few 1e-4 short of opaque (on the GPU too).
 /// From 2^-8 short, the backdrop that shows through is mixed in the encoded
-/// space instead of in linear light: the curve bends less than 1e-3 over
-/// what so little of it adds, under a tenth of an 8-bit code.
+/// space instead of in linear light. Over a contribution that small the
+/// curve's bend changes the result by less than 1e-3, under a tenth of an
+/// 8-bit code.
 const NEARLY_OPAQUE: f32 = 1.0 - 1.0 / 256.0;
 
 /// One layer as the composite node draws it.

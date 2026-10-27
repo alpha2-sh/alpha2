@@ -1,7 +1,9 @@
 // CPU renderer cases: a browser with no WebGPU adapter and no WebGL2 context previews and exports
 // on the engine's CPU renderer in wasm. `renderer` is the render host's option: "cpu" runs in any
-// browser; "auto" draws on the CPU only where the browser has no GPU, e.g. Chrome run with
-//   ALPHA2_CHROME_GPU_FLAGS="--disable-gpu" node scripts/test-wasm-browser.mjs --case renderer-auto
+// browser; "auto" draws on the CPU only where the browser has no GPU. With `--disable-gpu` alone,
+// headless Chrome still offers SwiftShader WebGPU and WebGL2; turn that off as well:
+//   ALPHA2_CHROME_GPU_FLAGS="--disable-gpu --disable-software-rasterizer" \
+//     node scripts/test-wasm-browser.mjs --case renderer-auto
 
 // A project of one decoded video (planar I420 frames, as WebCodecs decodes them), shown whole, then
 // blurred, then scaled down and turned over itself.

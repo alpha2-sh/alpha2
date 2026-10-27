@@ -844,7 +844,8 @@ pub(crate) const fn mode_label(on_hardware: bool) -> &'static str {
 /// requirement: without one, nothing is probed, so a machine without an
 /// NVIDIA GPU pays nothing for the NVENC encoders the runtime registers. A
 /// node whose device still does not open costs the export one failed open,
-/// and the encoder it falls through to is given the split for what it is.
+/// and the encoder it falls through to gets the thread split for its own
+/// kind (software or hardware).
 #[cfg(target_os = "linux")]
 fn hardware_device_node(name: &str) -> Option<bool> {
     if name.ends_with("_nvenc") {
@@ -1211,9 +1212,10 @@ pub(crate) fn open_first_video_encoder(
 /// Opens `OpenH264` for `request`: on its constant QP when the rate control
 /// has a quantizer, which `OpenH264` always honours, else on its bitrate.
 ///
-/// Its thread count is fixed by the picture (`openh264::encoder`), so the
-/// software budget is decided, for the rest of the export to divide, but is
-/// not what it runs with.
+/// Its thread count comes from the picture height
+/// (`openh264::encoder::slice_count`), not from the CPU budget. The software
+/// budget is still decided here, since the rest of the export divides the
+/// CPU from that decision, but the encoder does not run with it.
 fn open_openh264(
     request: &VideoEncoderOpenRequest<'_>,
     library: &crate::OpenH264Library,
