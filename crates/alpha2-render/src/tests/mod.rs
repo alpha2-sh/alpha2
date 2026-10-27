@@ -101,6 +101,18 @@ static SHARED_GPU: OnceLock<GpuContext> = OnceLock::new();
 /// test adapter is one, so this is the only way the suite reaches it. Any
 /// other value is refused rather than ignored.
 fn gpu() -> GpuContext {
+    let shared = adapter_gpu();
+    match std::env::var("ALPHA2_TEST_INTERMEDIATE").as_deref() {
+        Err(std::env::VarError::NotPresent) => shared,
+        Ok("rgba8unorm") => shared.with_rgba8_intermediate(),
+        other => panic!("ALPHA2_TEST_INTERMEDIATE must be unset or rgba8unorm, not {other:?}"),
+    }
+}
+
+/// The shared device with the intermediate its adapter chose, whatever
+/// `ALPHA2_TEST_INTERMEDIATE` says: for tests that compare against a
+/// reference of that intermediate.
+fn adapter_gpu() -> GpuContext {
     let shared = SHARED_GPU
         .get_or_init(|| {
             pollster::block_on(GpuContext::request_high_performance())
@@ -112,11 +124,7 @@ fn gpu() -> GpuContext {
         "render tests on {} ({}, {})",
         capabilities.adapter_name, capabilities.backend, capabilities.driver_info
     );
-    match std::env::var("ALPHA2_TEST_INTERMEDIATE").as_deref() {
-        Err(std::env::VarError::NotPresent) => shared,
-        Ok("rgba8unorm") => shared.with_rgba8_intermediate(),
-        other => panic!("ALPHA2_TEST_INTERMEDIATE must be unset or rgba8unorm, not {other:?}"),
-    }
+    shared
 }
 
 /// The shared device as each intermediate format: as the adapter chose, then

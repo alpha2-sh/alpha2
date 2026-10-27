@@ -6,10 +6,10 @@
 
 use std::sync::Arc;
 
-use super::{gpu, gpu_test_lock};
+use super::{adapter_gpu, gpu_test_lock};
 use crate::{
-    CpuImage, CpuRenderer, CpuSource, GraphError, RenderGraph, RenderNodeId, RenderSize, Renderer,
-    SourceView, UploadTexture,
+    CpuImage, CpuRenderer, CpuSource, GraphError, RenderControls, RenderGraph, RenderNodeId,
+    RenderSize, Renderer, SourceView, UploadTexture,
 };
 
 /// How far the CPU picture may be from the GPU's, in 8-bit codes.
@@ -97,13 +97,21 @@ pub(crate) struct Parity {
 }
 
 impl Parity {
+    /// The GPU renderer draws on the adapter's own intermediate even under
+    /// `ALPHA2_TEST_INTERMEDIATE=rgba8unorm`: the CPU renderer stores
+    /// pictures as the half-float intermediate does and has no 8-bit one to
+    /// compare with. The CPU renderer takes the filter sample budget the GPU
+    /// applies, which a Tier-B device (GL) caps at 16.
     pub(crate) fn new() -> Self {
         let lock = gpu_test_lock();
-        let mut gpu = Renderer::new(gpu());
+        let mut gpu = Renderer::new(adapter_gpu());
         pollster::block_on(gpu.register_builtins()).expect("built-ins register");
+        let cpu = CpuRenderer::new(3);
+        let quality = gpu.quality_controls();
+        cpu.set_quality_controls(quality.max_filter_samples, quality.motion_blur_subframes);
         Self {
             gpu,
-            cpu: CpuRenderer::new(3),
+            cpu,
             _lock: lock,
         }
     }
