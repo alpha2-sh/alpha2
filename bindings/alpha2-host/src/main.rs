@@ -994,7 +994,7 @@ fn report_dx12_adapters(host: &Host, dx12: &crate::dx12_adapters::Dx12Choice, en
     let encodes = "not in this build".to_owned();
     alpha2_os::diagnostic!(
         "alpha2-host GPU: {} (renders, decodes: {}, encodes: {encodes})",
-        host.renderer.diagnostics().adapter.name,
+        host.renderer.adapter().name,
         if host.hardware_decode_ready() {
             "yes"
         } else {
@@ -1008,7 +1008,7 @@ fn report_dx12_adapters(host: &Host, dx12: &crate::dx12_adapters::Dx12Choice, en
     }
     #[cfg(feature = "hwencode")]
     let encode = gpu_encode_diagnostic(
-        &host.renderer.diagnostics().adapter.name,
+        &host.renderer.adapter().name,
         &host.gpu_output_codecs(),
         host.gpu_output_capability().err(),
     );

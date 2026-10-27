@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use alpha2_media::{ColorMetadata, SampleAspectRatio};
 use alpha2_time::FrameRate;
@@ -281,7 +281,7 @@ fn an_unverified_file_that_is_not_a_library_is_reported_with_the_loader_message(
 /// A shared object built from `source` with the system C compiler, or `None`
 /// where there is none (the tests that need one say so and pass).
 #[cfg(unix)]
-fn fake_library(dir: &Path, name: &str, source: &str) -> Option<PathBuf> {
+fn fake_library(dir: &std::path::Path, name: &str, source: &str) -> Option<PathBuf> {
     let c = dir.join(format!("{name}.c"));
     std::fs::write(&c, source).unwrap();
     let library = dir.join(format!("{name}.so"));
