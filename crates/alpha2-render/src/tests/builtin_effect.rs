@@ -1048,11 +1048,12 @@ fn every_builtin_effect_draws_its_reviewed_picture() {
     let labels: Vec<&str> = effects.iter().map(|(id, _)| *id).collect();
     assert_rgba8_golden_tiles(
         // Thresholds and argmins (solarize, halftone, VHS, oil paint) land on either side of a
-        // step on other GPUs.
+        // step on other GPUs; Metal compiles with fast math as well.
         &[
             "builtin_effects",
             "builtin_effects_lavapipe",
             "builtin_effects_radv",
+            "builtin_effects_metal",
         ],
         RenderSize::new(
             size.width * u32::try_from(effects.len()).expect("a few tiles"),

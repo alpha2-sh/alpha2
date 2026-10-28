@@ -13,11 +13,14 @@ fn turbulent_fbm(p: vec2f, seed: u32) -> f32 {
 }
 
 // Each pixel displaced by two noise fields; `evolution` slides them over the picture with time
-// (a translation, not a third noise dimension), its offset kept below 100 lattice cells.
+// (a translation, not a third noise dimension), its offset kept below 100 lattice cells. The
+// wrap rests on one rounded product: Metal's fast math may regroup `time * evolution * 0.01`,
+// which at a whole number of wraps (90000 s at evolution 5) tips `fract` to the other side.
 fn effect(uv: vec2f, _src: vec4f) -> vec4f {
     let seed = builtin_seed(params.seed);
     let aspect = builtin_aspect();
-    let drift = fract(time() * params.evolution * 0.01) * 100.0;
+    let travel = time() * params.evolution;
+    let drift = travel - 100.0 * floor(travel * 0.01);
     let p = (uv - 0.5) * aspect / params.size + vec2f(drift);
     let d = vec2f(turbulent_fbm(p, seed), turbulent_fbm(p + vec2f(31.7, 47.3), seed + 1u)) * 2.0 - 1.0;
     let source = uv + d * params.amount / aspect;
