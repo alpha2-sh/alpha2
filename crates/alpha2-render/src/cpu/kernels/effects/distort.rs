@@ -569,7 +569,7 @@ impl CpuKernel for TurbulentDisplace {
         let weights = [(2.0, 0.5), (3.0, 0.25), (4.0, 0.125)]
             .map(|(least, weight)| if octaves >= least { weight } else { 0.0 });
         let travel = context.time() * context.float("evolution");
-        let drift = travel - 100.0 * (travel * 0.01).floor();
+        let drift = (travel - 100.0 * (travel * 0.01).floor()).max(0.0);
         let size = context.float("size");
         let amount = context.float("amount");
         warp_row(context, y, x0, out, context.choice("edge"), |uv| {
