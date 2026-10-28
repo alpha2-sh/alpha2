@@ -183,6 +183,22 @@ export function colorMetadataFromVideoColorSpace(
  */
 export type VideoConversion = "engine" | "browser";
 
+/**
+ * A frame with no planar YUV format the engine reads: an opaque frame (a hardware frame the
+ * browser does not map to the CPU, `format` null) or an RGB one. Reading it again cannot help;
+ * decoding it again in software can.
+ */
+export class NonPlanarVideoFrameError extends Error {
+  readonly format: VideoPixelFormat | null;
+  constructor(format: VideoPixelFormat | null) {
+    super(
+      `frame has no planar YUV format the engine reads (${format ?? "opaque"}); decode HDR sources, and sources whose color the project declares, in software`,
+    );
+    this.name = "NonPlanarVideoFrameError";
+    this.format = format;
+  }
+}
+
 /** Whether `frame` has a planar format the engine converts (`copyPlanarYuvFrame` can copy it). */
 export function isPlanarVideoFrame(frame: VideoFrame): boolean {
   return frame.format !== null && PLANAR_FORMATS.has(frame.format);
@@ -249,9 +265,10 @@ export class PlanarCopyPool {
  * CPU-readable planar format (a hardware frame the browser will not map) is
  * refused rather than converted by the browser.
  *
- * `frame` is closed whether the copy succeeds or not. Rejects when the frame
- * has no planar format the engine reads or no visible rectangle, or when
- * `copyTo` fails.
+ * `frame` is closed whether the copy succeeds or not. Rejects with
+ * {@link NonPlanarVideoFrameError} when the frame has no planar format the
+ * engine reads, and otherwise when it has no visible rectangle or `copyTo`
+ * fails.
  *
  * With `pool`, the copy's `data` is a buffer from it, which the caller gives back with
  * {@link PlanarCopyPool.release} after uploading; a failed copy gives it back itself.
@@ -272,7 +289,8 @@ export async function copyPlanarYuvFrame(
 /**
  * {@link copyPlanarYuvFrame} without closing `frame`: the caller owns it whether the copy succeeds
  * or not, so a frame whose planes the browser could not read back can be read again. Rejects as
- * {@link copyPlanarYuvFrame} does; with `pool`, a failed copy gives its buffer back.
+ * {@link copyPlanarYuvFrame} does, with {@link NonPlanarVideoFrameError} for a frame no read can
+ * copy; with `pool`, a failed copy gives its buffer back.
  *
  * @internal For `FrameSupply`.
  */
@@ -283,11 +301,8 @@ export async function readPlanarYuvFrame(
   pool?: PlanarCopyPool,
 ): Promise<PlanarYuvFrame> {
   const format = frame.format;
-  if (format === null || !isPlanarVideoFrame(frame)) {
-    throw new Error(
-      `frame has no planar YUV format the engine reads (${format ?? "opaque"}); decode HDR sources, and sources whose color the project declares, in software`,
-    );
-  }
+  if (format === null || !isPlanarVideoFrame(frame))
+    throw new NonPlanarVideoFrameError(format);
   const visible = frame.visibleRect;
   if (!visible) throw new Error("frame has no visible rectangle");
   // copyTo copies the visible rectangle by default, so the copy is exactly the picture.

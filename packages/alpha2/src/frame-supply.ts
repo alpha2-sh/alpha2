@@ -7,6 +7,7 @@ import {
   type ChromaSiting,
   isHdrVideoFrame,
   isPlanarVideoFrame,
+  NonPlanarVideoFrameError,
   PlanarCopyPool,
   type PlanarFrameIdentity,
   type PlanarYuvEngine,
@@ -153,8 +154,9 @@ export interface FrameSupplyDecodeOptions {
   /**
    * `"software"`: decode this frame on the CPU, on a cursor of its own beside `consumerId`'s, and
    * resolve with a `VideoFrame`. The supply asks for it when the browser could not read a
-   * hardware-decoded frame back; a host that cannot decode the source in software rejects. Absent
-   * for every other request.
+   * hardware-decoded frame back, and when a frame the engine must convert (HDR, or color the
+   * project declares) has no planar format it reads (an opaque hardware frame); a host that cannot
+   * decode the source in software rejects. Absent for every other request.
    */
   readonly decode?: "software";
 }
@@ -227,14 +229,19 @@ export interface FrameSupplyConfig extends FrameRetentionOptions {
    * has failed: `"redecode"` (the default) decodes it again in software, which decodes the same
    * picture, and fails the supply if that fails too; `"present"` gives it to the browser's
    * conversion instead, unless the engine must convert it (HDR, or color the project declares),
-   * for a preview, where a frame shown at once matters more than the engine's conversion.
+   * for a preview, where a frame shown at once matters more than the engine's conversion. A frame
+   * the engine must convert that has no planar format it reads is decoded again in software either
+   * way.
    */
   readonly unreadableFrames?: "redecode" | "present";
 }
 
 /** How a {@link FrameSupply} recovered frames the browser could not read back; cumulative. */
 export interface ReadbackRecoveryStats {
-  /** Frames whose planes the browser still could not read back after the repeated reads. */
+  /**
+   * Frames whose planes the browser still could not read back after the repeated reads, and frames
+   * the engine had to convert that had no planar format it reads.
+   */
   readonly unreadableFrames: number;
   /** Reads repeated on the same frame. */
   readonly readbackRetries: number;
@@ -1007,8 +1014,10 @@ export class FrameSupply {
    * frames) is read again, then decoded again in software and copied from that decode: the codecs
    * define their decoding exactly, so the engine converts the planes it would have. With
    * `unreadableFrames: "present"`, a frame the engine need not convert resolves `undefined`
-   * instead, left open for the browser's conversion. Rejects, the frame closed, when the copy
-   * fails otherwise or the software decode cannot serve it.
+   * instead, left open for the browser's conversion. A frame with no planar format the engine
+   * reads (an opaque hardware frame, routed here only when the engine must convert it) is decoded
+   * again in software at once. Rejects, the frame closed, when the copy fails otherwise or the
+   * software decode cannot serve it.
    */
   async #copyPlanar(
     need: FrameNeed,
@@ -1021,12 +1030,14 @@ export class FrameSupply {
     try {
       copied = await this.#readPlanes(source, planar.declared);
     } catch (error) {
-      if (!isUnreadableFrame(error)) {
+      const nonPlanar = error instanceof NonPlanarVideoFrameError;
+      if (!nonPlanar && !isUnreadableFrame(error)) {
         source.frame.close();
         throw error;
       }
       this.#readback.unreadableFrames += 1;
       if (
+        !nonPlanar &&
         this.#unreadableFrames === "present" &&
         !planar.required &&
         takesPresentedFrames(this.#engine)
@@ -1091,11 +1102,16 @@ export class FrameSupply {
     pixelsFor: FrameSupplyOptions["pixelsFor"],
     cause: unknown,
   ): Promise<PlanarYuvFrame> {
+    const what =
+      cause instanceof NonPlanarVideoFrameError
+        ? `the browser decoded the frame of ${need.sourceId} at ${need.mediaTimeTicks} to ${
+            cause.format === null
+              ? "an opaque frame"
+              : `a ${cause.format} frame`
+          } the engine must convert from planes (HDR, or color the project declares)`
+        : `the browser could not read back the frame of ${need.sourceId} at ${need.mediaTimeTicks}`;
     const unrecovered = (reason: string, error: unknown = cause) =>
-      new Error(
-        `the browser could not read back the frame of ${need.sourceId} at ${need.mediaTimeTicks}, and ${reason}`,
-        { cause: error },
-      );
+      new Error(`${what}, and ${reason}`, { cause: error });
     let decoded: FrameSupplySource | null;
     try {
       decoded = await this.#decodeCursor(

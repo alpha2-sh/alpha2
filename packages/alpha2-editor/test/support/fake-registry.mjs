@@ -1,6 +1,7 @@
 // The wasm binding the editor's renderer module sees in tests (registry-hook.mjs): a registry that
 // records what it is asked, and refuses a LUT as the engine's parser does when the test says so
-// (`globalThis.fakeRegistry.refuseLut(id, text)` returns a reason or nothing).
+// (`globalThis.fakeRegistry.refuseLut(id, text)` returns a reason or nothing). It asks for the
+// frames a test puts in `needs`, and records how each video frame was uploaded.
 globalThis.fakeRegistry ??= {
   registries: [],
   refuseLut: () => undefined,
@@ -14,6 +15,8 @@ class FakeRegistry {
     this.luts = new Map();
     this.effects = new Set();
     this.budgets = [];
+    this.needs = [];
+    this.supportsExternalVideoFrame = true;
     globalThis.fakeRegistry.registries.push(this);
   }
   static async createForCanvas(canvas) {
@@ -73,6 +76,21 @@ class FakeRegistry {
     this.calls.push(["unregisterEffect", `${id}@${version}`]);
     return this.effects.delete(`${id}@${version}`);
   }
+  frameNeeds() {
+    return JSON.stringify(this.needs);
+  }
+  uploadYuvFrame(sourceId, ticks, format) {
+    this.calls.push(["uploadYuvFrame", sourceId, ticks, format]);
+    return { generation: 1n, retainedBytes: 32 };
+  }
+  uploadPresentedVideoFrame(sourceId, ticks) {
+    this.calls.push(["uploadPresentedVideoFrame", sourceId, ticks]);
+    return { generation: 1n, retainedBytes: 32 };
+  }
+  aliasVideoFrame() {
+    return false;
+  }
+  releaseFrameGeneration() {}
   loadProject(json) {
     this.calls.push(["loadProject", JSON.parse(json)]);
   }

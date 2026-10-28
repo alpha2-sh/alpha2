@@ -761,7 +761,9 @@ export class SourcePixels {
     if (!asset.video)
       throw Object.assign(
         new Error(
-          `No worker decoder for ${asset.id}; use the main-thread media fallback`,
+          asset.video === null
+            ? `${asset.id} has no media element to seek (the browser's media pipeline could not open it)`
+            : `No worker decoder for ${asset.id}; use the main-thread media fallback`,
         ),
         { code: "unsupported_codec" },
       );

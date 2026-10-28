@@ -44,11 +44,13 @@ export class Engine {
     sources,
     library,
     runtimeAssets = {},
-    { unreadableFrames } = {},
+    { unreadableFrames, videoConversion } = {},
   ) {
     this.runtimeAssets = runtimeAssets;
     /** What the frame supply does with a frame the browser cannot read back (`FrameSupply`). */
     this.unreadableFrames = unreadableFrames;
+    /** Who converts decoded SDR frames, the engine or the browser (`FrameSupply`). */
+    this.videoConversion = videoConversion;
     this.canvas = canvas;
     this.sources = sources;
     this.library = library;
@@ -78,6 +80,9 @@ export class Engine {
       ...(this.unreadableFrames === undefined
         ? {}
         : { unreadableFrames: this.unreadableFrames }),
+      ...(this.videoConversion === undefined
+        ? {}
+        : { videoConversion: this.videoConversion }),
     });
     // `engine.traceUploads = true` in the console logs every source upload, to tell a host decode
     // bug from an engine one when a clip shows another clip's picture.

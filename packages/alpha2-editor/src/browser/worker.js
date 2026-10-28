@@ -77,7 +77,10 @@ export function installEditorWorker(scope) {
             pixels,
             library,
             request.runtimeAssets,
-            { unreadableFrames: "present" },
+            {
+              unreadableFrames: "present",
+              videoConversion: request.videoConversion,
+            },
           );
           audio = new AudioWindowSupplier(library);
           engine.backend = "worker";
@@ -224,6 +227,7 @@ export function createWorkerPreview(
     bitmapOutput = false,
     width = 16,
     height = 16,
+    videoConversion,
   } = {},
 ) {
   let nextId = 0,
@@ -275,6 +279,7 @@ export function createWorkerPreview(
       bitmapOutput,
       width,
       height,
+      ...(videoConversion === undefined ? {} : { videoConversion }),
       ...(canvas ? { canvas } : {}),
     },
     canvas ? [canvas] : [],

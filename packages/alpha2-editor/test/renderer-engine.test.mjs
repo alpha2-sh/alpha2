@@ -189,3 +189,79 @@ test("a runtime effect refused before compiling, or by a full registry, leaves n
     globalThis.fakeRegistry.refuseEffect = () => undefined;
   }
 });
+
+/** A CPU-backed I420 BT.709 frame in the shape WebCodecs hands out. */
+function sdrFrame() {
+  const frame = {
+    format: "I420",
+    codedWidth: 4,
+    codedHeight: 2,
+    displayWidth: 4,
+    displayHeight: 2,
+    timestamp: 0,
+    duration: 40_000,
+    visibleRect: { x: 0, y: 0, width: 4, height: 2 },
+    colorSpace: {
+      primaries: "bt709",
+      transfer: "bt709",
+      matrix: "bt709",
+      fullRange: false,
+    },
+    closed: false,
+    allocationSize: () => 12,
+    async copyTo() {
+      return [
+        { offset: 0, stride: 4 },
+        { offset: 8, stride: 2 },
+        { offset: 10, stride: 2 },
+      ];
+    },
+    close() {
+      frame.closed = true;
+    },
+  };
+  return frame;
+}
+
+test("the renderer leaves SDR frames to the browser when told to", async () => {
+  /** How the renderer, made with `options`, uploads one decoded SDR frame. */
+  const uploads = async (options) => {
+    const frame = sdrFrame();
+    const sources = {
+      release: async () => {},
+      pixelsFor: async () => ({
+        kind: "video-frame",
+        frame,
+        chromaSiting: "left",
+      }),
+    };
+    const engine = new Engine(
+      new globalThis.OffscreenCanvas(4, 2),
+      sources,
+      { get: () => null },
+      {},
+      options,
+    );
+    await engine.start();
+    const registry = globalThis.fakeRegistry.registries.at(-1);
+    registry.needs = [{ clipId: "a", sourceId: "v", mediaTimeTicks: "0" }];
+    await engine.supply(0, {
+      context: {
+        width: 4,
+        height: 2,
+        liveSourceIds: new Set(["v"]),
+        getLayer: () => ({ id: "v", kind: "video" }),
+      },
+    });
+    return registry.calls
+      .filter(([call]) => call.startsWith("upload"))
+      .map(([call]) => call);
+  };
+  assert.deepEqual(await uploads({ videoConversion: "browser" }), [
+    "uploadPresentedVideoFrame",
+  ]);
+  assert.deepEqual(await uploads(), ["uploadYuvFrame"]);
+  assert.deepEqual(await uploads({ videoConversion: "engine" }), [
+    "uploadYuvFrame",
+  ]);
+});

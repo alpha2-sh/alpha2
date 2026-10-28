@@ -173,6 +173,26 @@ test("a browser export decode mode other than auto or software is refused before
   await bridge.dispose();
   await editor.dispose();
 });
+test("a browser export conversion other than engine or browser is refused before the export starts", async () => {
+  const editor = createEditor();
+  const bridge = createBrowserBridge({ editor });
+  for (const videoConversion of ["gpu", "", 1])
+    assert.throws(() => bridge.startExport({ videoConversion }), {
+      code: "invalid_video_conversion",
+    });
+  await bridge.dispose();
+  await editor.dispose();
+});
+test("a bridge conversion other than engine or browser is refused when the bridge is made", async () => {
+  const editor = createEditor();
+  for (const videoConversion of ["gpu", "", 1])
+    assert.throws(() => createBrowserBridge({ editor, videoConversion }), {
+      code: "invalid_video_conversion",
+    });
+  const bridge = createBrowserBridge({ editor, videoConversion: "browser" });
+  await bridge.dispose();
+  await editor.dispose();
+});
 test("a browser export rate the engine cannot read is refused before the export starts", async () => {
   const editor = createEditor();
   const bridge = createBrowserBridge({ editor });

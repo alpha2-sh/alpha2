@@ -263,8 +263,13 @@ export function createBrowserBridge(options) {
     onError = () => {},
     assetDecisions,
     previewScale: initialPreviewScale = 0.5,
+    videoConversion: initialVideoConversion = "engine",
   } = options;
   let previewScale = checkedPreviewScale(initialPreviewScale);
+  const videoConversion = checkedVideoConversion(
+    initialVideoConversion,
+    "bridge",
+  );
   // A test's stand-in for origin storage, kept out of the public options.
   const proxyStore =
     /** @type {{ proxyStore?: ProxyStore }} */ (options).proxyStore ??
@@ -1527,7 +1532,7 @@ export function createBrowserBridge(options) {
       library,
       runtimeAssets,
       // A frame shown at once matters more in a preview than the engine's conversion of it.
-      { unreadableFrames: "present" },
+      { unreadableFrames: "present", videoConversion },
     );
     mixer = new EngineAudioMixer(runtimeAssets, { enabled: audio });
     mixer.setMasterVolume(monitorVolume);
@@ -1554,6 +1559,7 @@ export function createBrowserBridge(options) {
           bitmapOutput: true,
           width: canvas.width,
           height: canvas.height,
+          videoConversion,
         });
         // A worker that cannot start leaves the surface to the main renderer.
         try {
@@ -2019,6 +2025,10 @@ export function createBrowserBridge(options) {
         `Export videoDecode must be "auto" or "software"; received ${JSON.stringify(videoDecode)}`,
         "export",
       );
+    const exportConversion = checkedVideoConversion(
+      options.videoConversion ?? videoConversion,
+      "export",
+    );
     materializeText(editor.document);
     const snapshot = editor.document,
       revision = editor.revision,
@@ -2076,6 +2086,7 @@ export function createBrowserBridge(options) {
           pixels,
           lib,
           runtimeAssets,
+          { videoConversion: exportConversion },
         );
         const audio = new AudioWindowSupplier(lib);
         try {
@@ -2155,6 +2166,7 @@ export function createBrowserBridge(options) {
             report: {
               ...result,
               videoDecode,
+              videoConversion: exportConversion,
               decodeFallbacks: pixels.decodeFallbacks,
             },
           };
@@ -2750,6 +2762,17 @@ function checkedPreviewScale(scale) {
       "preview",
     );
   return scale;
+}
+
+/** `value` as who converts decoded SDR frames: `engine` or `browser`. */
+function checkedVideoConversion(value, operation) {
+  if (value !== "engine" && value !== "browser")
+    throw new EditorError(
+      "invalid_video_conversion",
+      `videoConversion must be "engine" or "browser"; received ${JSON.stringify(value)}`,
+      operation,
+    );
+  return value;
 }
 
 /**

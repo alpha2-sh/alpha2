@@ -3,7 +3,11 @@ import test from "node:test";
 import { runInNewContext } from "node:vm";
 
 import { FrameSupply, decoderCursorKey } from "../dist/frame-supply.js";
-import { chromaSitingForCodec } from "../dist/hdr-frames.js";
+import {
+  chromaSitingForCodec,
+  copyPlanarYuvFrame,
+  NonPlanarVideoFrameError,
+} from "../dist/hdr-frames.js";
 
 test("independent decoder cursors run concurrently and upload in need order", async () => {
   const needs = [
@@ -637,6 +641,15 @@ function fakeHdrFrame({ transfer, timestamp, displayWidth = 4 }) {
   return frame;
 }
 
+/** `frame` as a hardware frame the browser does not map to the CPU: no format, and no planes. */
+function opaque(frame) {
+  frame.format = null;
+  frame.copyTo = async () => {
+    throw new Error("an opaque frame has no planes to copy");
+  };
+  return frame;
+}
+
 test("HDR frames reach the engine as planar YUV with their color, never through the browser", async () => {
   const needs = [
     { clipId: "a", sourceId: "hdr", mediaTimeTicks: "0" },
@@ -726,6 +739,18 @@ test("HDR frames reach the engine as planar YUV with their color, never through 
     { planarCopyFrames: 1, planarCopyBytes: 24 },
     "only the uploaded picture is copied out planar: the alias needs no copy",
   );
+});
+
+test("a planar copy of an opaque frame is refused by class, and the frame is closed", async () => {
+  const frame = opaque(fakeHdrFrame({ transfer: "pq", timestamp: 0 }));
+  await assert.rejects(
+    copyPlanarYuvFrame(frame, null),
+    (error) =>
+      error instanceof NonPlanarVideoFrameError &&
+      error.format === null &&
+      /\(opaque\)/.test(error.message),
+  );
+  assert.ok(frame.closed);
 });
 
 test("SDR frames are converted by the engine from their planes, at their stream's siting, unless the supply leaves them to the browser", async () => {
@@ -1850,6 +1875,90 @@ test("a planar copy that fails otherwise is neither retried nor decoded again", 
   assert.ok(frame.closed);
   assert.equal(requests.length, 1);
   assert.equal(supply.readbackRecovery.readbackRetries, 0);
+});
+
+test("an HDR frame with no planar format is decoded again in software and converted by the engine", async () => {
+  const engine = recoveryEngine();
+  const supply = new FrameSupply(engine);
+  const hardware = opaque(fakeHdrFrame({ transfer: "hlg", timestamp: 0 }));
+  const software = fakeHdrFrame({ transfer: "hlg", timestamp: 0 });
+  const { done, requests } = supplyOne(supply, hardware, () => software);
+  await done;
+  assert.equal(engine.yuv.length, 1);
+  assert.equal(engine.yuv[0][2], "I420P10", "the software decode's planes");
+  assert.equal(engine.direct.length, 0, "never the browser's conversion");
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].decode, "software");
+  assert.ok(hardware.closed && software.closed);
+  assert.deepEqual(supply.readbackRecovery, {
+    unreadableFrames: 1,
+    readbackRetries: 0,
+    redecodedFrames: 1,
+    presentedFrames: 0,
+  });
+});
+
+test("a preview decodes an opaque HDR frame again too and never presents it", async () => {
+  const engine = recoveryEngine();
+  engine.uploadPresentedVideoFrame = () => {
+    throw new Error("an HDR frame must not take the browser's conversion");
+  };
+  const supply = new FrameSupply(engine, { unreadableFrames: "present" });
+  const hardware = opaque(fakeHdrFrame({ transfer: "hlg", timestamp: 0 }));
+  const software = fakeHdrFrame({ transfer: "hlg", timestamp: 0 });
+  const { done, requests } = supplyOne(supply, hardware, () => software);
+  await done;
+  assert.equal(engine.yuv.length, 1);
+  assert.equal(engine.direct.length, 0);
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].decode, "software");
+  assert.ok(hardware.closed && software.closed);
+  assert.deepEqual(supply.readbackRecovery, {
+    unreadableFrames: 1,
+    readbackRetries: 0,
+    redecodedFrames: 1,
+    presentedFrames: 0,
+  });
+});
+
+test("an opaque frame of a source the host cannot decode in software fails the supply, saying it had no planar format", async () => {
+  const supply = new FrameSupply(recoveryEngine());
+  const hardware = opaque(fakeHdrFrame({ transfer: "pq", timestamp: 0 }));
+  const { done } = supplyOne(supply, hardware, () => {
+    throw new Error("this browser has no software decoder for hev1");
+  });
+  await assert.rejects(
+    done,
+    (error) =>
+      /an opaque frame/.test(error.message) &&
+      /decoding it again in software failed/.test(error.message) &&
+      /no software decoder/.test(error.cause?.message),
+  );
+  assert.ok(hardware.closed);
+});
+
+test("an opaque frame of a source whose color the project declares is decoded again in software", async () => {
+  const declared = {
+    dynamic_range: "sdr",
+    matrix: "bt601",
+    primaries: "bt601",
+    range: "full",
+    transfer: "bt709",
+  };
+  const engine = recoveryEngine();
+  engine.sourceColorMetadata = () => JSON.stringify(declared);
+  const supply = new FrameSupply(engine);
+  const hardware = opaque(sdrFrame("NV12"));
+  const software = sdrFrame("I420");
+  const { done, requests } = supplyOne(supply, hardware, () => software);
+  await done;
+  assert.equal(engine.yuv.length, 1);
+  assert.equal(engine.yuv[0][2], "I420");
+  assert.deepEqual(JSON.parse(engine.yuv[0][10]), declared);
+  assert.equal(engine.direct.length, 0);
+  assert.equal(requests[1].decode, "software");
+  assert.ok(hardware.closed && software.closed);
+  assert.equal(supply.readbackRecovery.redecodedFrames, 1);
 });
 
 test("unreadableFrames takes only redecode or present", () => {

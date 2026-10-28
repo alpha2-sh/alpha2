@@ -191,6 +191,19 @@ export interface BrowserBridgeOptions {
    * `BrowserBridge.setPreviewScale`.
    */
   readonly previewScale?: number;
+  /**
+   * Who converts decoded SDR video frames to the engine's pixels, in the preview and in exports
+   * (an export may choose otherwise, see `BrowserExportOptions.videoConversion`). `engine` (the
+   * default) copies each frame's planes out and converts them with the engine's shader, as a
+   * native export converts the same stream. `browser` hands the frame to the browser instead,
+   * which saves that copy (1 to 4 ms a frame per video layer) but leaves the conversion to the
+   * browser, which does not read the stream's chroma siting: Chrome places H.264 and HEVC chroma
+   * half a sample off (27 codes on a chroma stripe), so sharp chroma edges differ from a native
+   * export's. HDR frames, and frames of a source whose color the project declares, are the
+   * engine's either way. Another value is refused when the bridge is made, with an `EditorError`
+   * `invalid_video_conversion`.
+   */
+  readonly videoConversion?: "engine" | "browser";
 }
 /** Options of `BrowserBridge.startExport`. */
 export interface BrowserExportOptions {
@@ -268,6 +281,13 @@ export interface BrowserExportOptions {
    * `invalid_video_decode`.
    */
   readonly videoDecode?: "auto" | "software";
+  /**
+   * Who converts decoded SDR video frames for this export, `engine` or `browser`; default the
+   * bridge's (see `BrowserBridgeOptions.videoConversion`). The result's `report.videoConversion`
+   * says which ran. Another value is refused when the export starts, with an `EditorError`
+   * `invalid_video_conversion`.
+   */
+  readonly videoConversion?: "engine" | "browser";
 }
 /** Where a browser export writes its file. */
 export type ExportOutputTarget =
@@ -646,7 +666,8 @@ export interface BrowserBridge {
    *
    * Throws synchronously when the bridge is disposed (`disposed`), another export runs
    * (`export_busy`), `frameRate` is not one the engine reads (`invalid_frame_rate`), `videoDecode`
-   * is not `auto` or `software` (`invalid_video_decode`), the asset
+   * is not `auto` or `software` (`invalid_video_decode`), `videoConversion` is not `engine` or
+   * `browser` (`invalid_video_conversion`), the asset
    * decisions are not loaded (`conform_pending`), the media is not ready (`ConformError`), or the
    * document does not compile. Everything later is reported through the job's `result`.
    */
@@ -669,6 +690,11 @@ export interface WorkerPreviewOptions {
   readonly runtimeAssets?: RuntimeAssets;
   /** A canvas to render into, transferred to the worker. */
   readonly canvas?: OffscreenCanvas;
+  /**
+   * Who converts decoded SDR video frames, `engine` (the default) or `browser`; see
+   * `BrowserBridgeOptions.videoConversion`.
+   */
+  readonly videoConversion?: "engine" | "browser";
 }
 /** The main-thread side of a preview renderer running in a worker. */
 export interface WorkerPreview {

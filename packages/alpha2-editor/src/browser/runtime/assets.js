@@ -3,7 +3,14 @@
 
 import { colorMetadataFromVideoColorSpace } from "alpha2/hdr-frames";
 import { OffscreenTextRasterizer } from "alpha2/text";
-import { ALL_FORMATS, AudioSampleSink, BlobSource, Input } from "mediabunny";
+import {
+  ALL_FORMATS,
+  AudioSampleSink,
+  BlobSource,
+  CanvasSink,
+  EncodedPacketSink,
+  Input,
+} from "mediabunny";
 const uid = (prefix) => `${prefix}-${crypto.randomUUID()}`;
 import { drawGenerator, generatorLabel } from "./generators.js";
 import { seekVideoFrame } from "./preview-utils.js";
@@ -241,7 +248,11 @@ export class AssetLibrary {
     return asset;
   }
 
-  /** `probe` is null when the container was unreadable; an element with no picture is refused. */
+  /**
+   * `probe` is null when the container was unreadable; an element with no picture is refused. A
+   * file the media element cannot open still imports when WebCodecs decodes its picture, with no
+   * element (`video: null`).
+   */
   async #importVideo(file, reference = null, probe = null) {
     if (probe && !probe.video)
       throw new Error("the file has neither a picture nor sound");
@@ -255,11 +266,18 @@ export class AssetLibrary {
       preload: "auto",
       loop: false,
     });
-    await new Promise((resolve, reject) => {
-      video.onloadeddata = resolve;
+    const failed = await new Promise((resolve) => {
+      video.onloadeddata = () => resolve(null);
       video.onerror = () =>
-        reject(video.error ?? new Error("video decode failed"));
+        resolve(video.error ?? new Error("video decode failed"));
     });
+    // The element is a fallback reader, not the gate: Chrome's media pipeline refuses some files
+    // WebCodecs decodes (a stream copy cut inside an open GOP), which preview and export read.
+    if (failed) {
+      if (!probe?.video?.decodable) throw failed;
+      video.removeAttribute("src");
+    }
+    const element = failed ? null : video;
     if (!probe && !video.videoWidth)
       throw new Error("the browser found no picture in it");
     const read = probe?.video ?? {
@@ -269,9 +287,10 @@ export class AssetLibrary {
       colorMetadata: null,
     };
     // A chunked WebM (MediaRecorder timeslice) has no Duration and the element reports +Infinity.
-    const duration = Number.isFinite(video.duration)
-      ? video.duration
-      : ((await containerDuration(file)) ?? 0);
+    const duration =
+      element && Number.isFinite(element.duration)
+        ? element.duration
+        : ((await containerDuration(file)) ?? 0);
     const asset = {
       id: reference?.id ?? uid("src"),
       kind: "video",
@@ -279,7 +298,7 @@ export class AssetLibrary {
       locator: reference?.locator ?? localLocator(file, file.name),
       file,
       url,
-      video,
+      video: element,
       width: read.width,
       height: read.height,
       frameRate: read.frameRate,
@@ -292,7 +311,9 @@ export class AssetLibrary {
       thumbnail: null,
       peaks: null,
     };
-    asset.thumbnail = await videoThumbnail(video, read.width, read.height);
+    asset.thumbnail = element
+      ? await videoThumbnail(element, read.width, read.height)
+      : await decodedThumbnail(file, read.width, read.height);
     this.#assets.set(asset.id, asset);
     return asset;
   }
@@ -463,8 +484,8 @@ function mediaKindForFile(file) {
 
 /**
  * What a video container holds, read by the demuxer: its picture (`video`: size, frame rate, an HDR
- * declaration), or null when it has no video track, and whether it has an audio stream. Null when
- * the demuxer cannot read the container.
+ * declaration, and whether WebCodecs decodes it), or null when it has no video track, and whether
+ * it has an audio stream. Null when the demuxer cannot read the container.
  */
 export async function probeVideo(file) {
   const input = new Input({
@@ -488,6 +509,7 @@ export async function probeVideo(file) {
         width: shown.width,
         height: shown.height,
         frameRate: stats?.averagePacketRate ?? 30,
+        decodable: await track.canDecode().catch(() => false),
       };
     }
     return {
@@ -645,6 +667,35 @@ async function videoThumbnail(video, width, height) {
     return null;
   } finally {
     clone.removeAttribute("src");
+  }
+}
+
+/** A thumbnail decoded with WebCodecs, for a file the media element cannot open; null on failure. */
+async function decodedThumbnail(file, width, height) {
+  const input = new Input({
+    source: new BlobSource(file),
+    formats: ALL_FORMATS,
+  });
+  try {
+    const track = await input.getPrimaryVideoTrack();
+    if (!track) return null;
+    const duration = (await input.computeDuration().catch(() => 0)) || 1;
+    // Rotated as drawing the element is.
+    const sink = new CanvasSink(track, { width: THUMBNAIL_WIDTH, poolSize: 1 });
+    // A stream that starts on frames referencing a cut-away keyframe shows from its first real one.
+    const first = async () => {
+      const key = await new EncodedPacketSink(track).getFirstKeyPacket({
+        verifyKeyPackets: true,
+      });
+      return key && sink.getCanvas(key.timestamp);
+    };
+    const wrapped =
+      (await sink.getCanvas(Math.min(0.25 * duration, 1))) ?? (await first());
+    return wrapped ? thumbnailFrom(wrapped.canvas, width, height) : null;
+  } catch {
+    return null;
+  } finally {
+    input.dispose();
   }
 }
 
