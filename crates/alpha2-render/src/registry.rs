@@ -211,6 +211,15 @@ pub(crate) struct RegisteredEffect {
     pub(crate) uniform_layout: UniformLayout,
     /// Whether the body can read the frame time ([`body_reads_time`]).
     reads_time: bool,
+    /// Made when a host's effect registers, its verdict awaited then; a
+    /// built-in's the first time it is drawn or warmed
+    /// ([`Renderer::effect_pipeline`]).
+    pipeline: std::sync::OnceLock<EffectPipeline>,
+}
+
+/// What a registered effect draws with on the device.
+#[derive(Debug)]
+pub(crate) struct EffectPipeline {
     _shader: wgpu::ShaderModule,
     pub(crate) bind_group_layout: wgpu::BindGroupLayout,
     pub(crate) pipeline: wgpu::RenderPipeline,
@@ -250,9 +259,57 @@ impl Renderer {
         &self,
         definition: EffectDef,
     ) -> Result<PendingEffect, ShaderDiagnostics> {
-        validate_definition(&definition)?;
-        self.validate_parameter_uniform(&definition)?;
-        self.validate_texture_bindings(&definition)?;
+        let id = self.check_registration(&definition)?;
+        let device = self.gpu.device();
+        let shader_scope = CreationErrorScopes::push(device);
+        let shader = effect_shader(device, &definition);
+        let compilation: Answer<wgpu::CompilationInfo> = Box::pin(shader.get_compilation_info());
+        let shader_errors = shader_scope.pop();
+        let pipeline_scope = CreationErrorScopes::push(device);
+        let pipeline = effect_pipeline(device, &definition, shader, self.intermediate_format());
+        let pipeline_errors = pipeline_scope.pop();
+        Ok(PendingEffect {
+            compiled: CompiledEffect {
+                device: device.clone(),
+                id,
+                effect: RegisteredEffect {
+                    pipeline: std::sync::OnceLock::from(pipeline),
+                    ..registered_effect(definition)
+                },
+            },
+            compilation,
+            shader_errors,
+            pipeline_errors,
+        })
+    }
+
+    /// Validates a built-in definition and registers it without touching the
+    /// device: its shader module and pipeline are made the first time it is
+    /// drawn or warmed ([`Self::warmup`]). Compiling every built-in at once
+    /// would cost each renderer seconds on a software adapter, most of them for
+    /// effects a project never draws; the engine's own shaders are checked on
+    /// every backend before they ship.
+    ///
+    /// # Errors
+    /// Returns schema diagnostics, or refuses an effect already registered or
+    /// a full registry.
+    pub(crate) fn register_lazily(
+        &mut self,
+        definition: EffectDef,
+    ) -> Result<EffectId, ShaderDiagnostics> {
+        let id = self.check_registration(&definition)?;
+        self.effects
+            .entries
+            .insert(id.clone(), registered_effect(definition));
+        Ok(id)
+    }
+
+    /// Everything registering `definition` checks before it touches the
+    /// device, and the identity it registers under.
+    fn check_registration(&self, definition: &EffectDef) -> Result<EffectId, ShaderDiagnostics> {
+        validate_definition(definition)?;
+        self.validate_parameter_uniform(definition)?;
+        self.validate_texture_bindings(definition)?;
         if definition.tier_min == CapabilityTier::TierA
             && self.gpu.capabilities().tier == CapabilityTier::TierB
         {
@@ -262,55 +319,20 @@ impl Renderer {
         }
         let id = EffectId::new(definition.id.clone(), definition.version);
         self.effects.check_room(&id)?;
-        let uniform_layout = uniform_layout(&definition.params);
-        let source = build_shader(&definition);
-        let device = self.gpu.device();
-        let shader_scope = CreationErrorScopes::push(device);
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some(&definition.id),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
-        });
-        let compilation: Answer<wgpu::CompilationInfo> = Box::pin(shader.get_compilation_info());
-        let shader_errors = shader_scope.pop();
-        let pipeline_scope = CreationErrorScopes::push(device);
-        let bind_group_layout = runtime_bind_group_layout(
-            device,
-            &definition.params,
-            &definition.resources,
-            &definition.inputs,
-        );
-        let pipeline = runtime_pipeline(
-            device,
-            &bind_group_layout,
-            &shader,
-            self.intermediate_format(),
-        );
-        let pipeline_errors = pipeline_scope.pop();
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("alpha2 runtime effect sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-        Ok(PendingEffect {
-            compiled: CompiledEffect {
-                device: device.clone(),
-                id,
-                effect: RegisteredEffect {
-                    reads_time: body_reads_time(&definition.wgsl_body),
-                    definition,
-                    uniform_layout,
-                    _shader: shader,
-                    bind_group_layout,
-                    pipeline,
-                    sampler,
-                },
-            },
-            compilation,
-            shader_errors,
-            pipeline_errors,
+        Ok(id)
+    }
+
+    /// What a registered effect draws with, made now when it was not yet.
+    pub(crate) fn effect_pipeline<'a>(&self, effect: &'a RegisteredEffect) -> &'a EffectPipeline {
+        effect.pipeline.get_or_init(|| {
+            let device = self.gpu.device();
+            let shader = effect_shader(device, &effect.definition);
+            effect_pipeline(
+                device,
+                &effect.definition,
+                shader,
+                self.intermediate_format(),
+            )
         })
     }
 
@@ -466,21 +488,27 @@ impl Renderer {
         self.clear_result_cache_for(crate::CacheInvalidation::Effects);
     }
 
-    /// Confirms that all requested effect versions have compiled pipelines.
-    ///
-    /// Registration eagerly compiles pipelines, so this operation is
-    /// deterministic and primarily validates a project's dependency set.
+    /// Confirms that all requested effect versions are registered, and makes
+    /// the pipelines of the built-ins among them (and of the passes a built-in
+    /// draws as) not drawn yet, so a project's first frame does not wait for
+    /// their compiler. A host's effect compiled when it registered.
     ///
     /// # Errors
     /// Returns a diagnostic naming the first unregistered effect.
     pub fn warmup(&self, effects: &[EffectId]) -> Result<(), ShaderDiagnostics> {
         for effect in effects {
-            if !self.is_effect_registered(effect) {
+            let Some(registered) = self.effects.get(effect) else {
                 return Err(ShaderDiagnostics::error(format!(
                     "effect {} version {} is not registered",
                     effect.as_str(),
                     effect.version()
                 )));
+            };
+            self.effect_pipeline(registered);
+            for pass in crate::gaussian_blur::expanded_passes(effect.as_str()).unwrap_or_default() {
+                if let Some(registered) = self.effects.get(&EffectId::from_static(pass, 1)) {
+                    self.effect_pipeline(registered);
+                }
             }
         }
         Ok(())
@@ -504,6 +532,52 @@ impl EffectRegistry {
     pub(crate) fn mark_internal(&mut self, id: EffectId) {
         debug_assert!(self.entries.contains_key(&id));
         self.internal.insert(id);
+    }
+}
+
+/// A registry entry for `definition`, its pipeline not made yet.
+fn registered_effect(definition: EffectDef) -> RegisteredEffect {
+    RegisteredEffect {
+        uniform_layout: uniform_layout(&definition.params),
+        reads_time: body_reads_time(&definition.wgsl_body),
+        definition,
+        pipeline: std::sync::OnceLock::new(),
+    }
+}
+
+fn effect_shader(device: &wgpu::Device, definition: &EffectDef) -> wgpu::ShaderModule {
+    device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some(&definition.id),
+        source: wgpu::ShaderSource::Wgsl(build_shader(definition).into()),
+    })
+}
+
+fn effect_pipeline(
+    device: &wgpu::Device,
+    definition: &EffectDef,
+    shader: wgpu::ShaderModule,
+    format: wgpu::TextureFormat,
+) -> EffectPipeline {
+    let bind_group_layout = runtime_bind_group_layout(
+        device,
+        &definition.params,
+        &definition.resources,
+        &definition.inputs,
+    );
+    let pipeline = runtime_pipeline(device, &bind_group_layout, &shader, format);
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("alpha2 runtime effect sampler"),
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        ..Default::default()
+    });
+    EffectPipeline {
+        _shader: shader,
+        bind_group_layout,
+        pipeline,
+        sampler,
     }
 }
 

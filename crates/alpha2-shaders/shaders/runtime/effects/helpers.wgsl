@@ -69,13 +69,16 @@ fn builtin_unit(hash: u32) -> f32 { return f32(hash >> 8u) / 16777216.0; }
 
 fn builtin_seed(seed: f32) -> u32 { return u32(clamp(round(seed), 0.0, 16777215.0)); }
 
-// Value noise in [0, 1] on the integer lattice, smooth (C1) between lattice points.
+// Value noise in [0, 1] on the integer lattice, smooth (C1) between lattice points. The cell is
+// clamped to the range `i32()` saturates to, not left to it: the GL backend's `int()` is
+// undefined past it, and noise far from the origin gets there.
 fn builtin_value_noise(p: vec2f, seed: u32) -> f32 {
     let cell = floor(p);
     let f = p - cell;
     let w = f * f * (3.0 - 2.0 * f);
-    let x = bitcast<u32>(i32(cell.x));
-    let y = bitcast<u32>(i32(cell.y));
+    let lattice = vec2i(clamp(cell, vec2f(-2147483648.0), vec2f(2147483520.0)));
+    let x = bitcast<u32>(lattice.x);
+    let y = bitcast<u32>(lattice.y);
     let a = builtin_unit(builtin_hash3(x, y, seed));
     let b = builtin_unit(builtin_hash3(x + 1u, y, seed));
     let c = builtin_unit(builtin_hash3(x, y + 1u, seed));

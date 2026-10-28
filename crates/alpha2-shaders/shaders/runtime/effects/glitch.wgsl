@@ -1,7 +1,7 @@
 // Rows of blocks jump sideways with their red and blue split, a new pattern `speed` times a
 // second; at speed zero the pattern holds still.
 fn effect(uv: vec2f, src: vec4f) -> vec4f {
-    let frame = u32(max(floor(time() * params.speed), 0.0));
+    let frame = u32(clamp(floor(time() * params.speed), 0.0, 4294967040.0));
     let row = u32(max(floor(uv.y / params.block_size), 0.0));
     let h = builtin_hash3(row, frame, builtin_seed(params.seed));
     let jumping = select(0.0, 1.0, builtin_unit(h) < params.amount * 0.5);

@@ -381,7 +381,7 @@ impl WebEffectRegistry {
         let health = watch_device(&device);
         let device_lost = Arc::clone(&health.lost);
         Ok(Self {
-            renderer: renderer_with_builtins(gpu, &health).await?,
+            renderer: renderer_with_builtins(gpu, &health)?,
             device,
             gpu: context,
             frames: FrameStore::sized(
@@ -514,7 +514,7 @@ impl WebEffectRegistry {
             Some(ContextLossListener::new(canvas, health.clone())?)
         };
         let presenter = Presenter::new(&device, config.format);
-        let renderer = renderer_with_builtins(gpu, &health).await?;
+        let renderer = renderer_with_builtins(gpu, &health)?;
         Ok(Self {
             renderer,
             device,

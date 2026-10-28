@@ -19,7 +19,7 @@ fn effect(uv: vec2f, _src: vec4f) -> vec4f {
     let luma = builtin_luminance(rgb0);
     let chroma = mix(rgb0 - vec3f(luma), rgb1 - vec3f(builtin_luminance(rgb1)), params.bleed);
     let pixel = vec2u(max(floor(uv * resolution()), vec2f(0.0)));
-    let frame = builtin_hash(u32(max(floor(t * 30.0), 0.0))) ^ seed;
+    let frame = builtin_hash(u32(clamp(floor(t * 30.0), 0.0, 4294967040.0))) ^ seed;
     let grain = builtin_unit(builtin_hash3(pixel.x, pixel.y, frame)) - 0.5;
     let rgb = vec3f(luma) + chroma + vec3f(grain * params.noise + band * 0.15 * params.amount);
     return builtin_output(rgb, c0.a);

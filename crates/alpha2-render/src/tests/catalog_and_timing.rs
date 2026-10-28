@@ -6,7 +6,8 @@ use super::*;
 fn builtin_transition_catalog_compiles_and_preserves_endpoints() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    let ids = pollster::block_on(renderer.register_builtin_transitions())
+    let ids = renderer
+        .register_builtin_transitions()
         .expect("built-in transitions compile");
     assert_eq!(ids.len(), crate::builtin_transition_definitions().len());
     renderer.warmup(&ids).expect("catalog is warm");
@@ -94,8 +95,13 @@ fn builtin_transition_catalog_compiles_and_preserves_endpoints() {
     assert_rgba8_golden_tiles(
         // One golden for every GPU: anti-aliasing uses `fwidthFine`; plain `fwidth` differs between
         // coarse-derivative GPUs (RADV, lavapipe) and fine ones (NVIDIA, Metal).
-        // Thresholds (edge detection) land on either side of a step on other GPUs.
-        &["builtin_transitions", "builtin_transitions_lavapipe"],
+        // Thresholds (edge detection) land on either side of a step on other GPUs, and GL is a
+        // few levels off every other backend.
+        &[
+            "builtin_transitions",
+            "builtin_transitions_lavapipe",
+            "builtin_transitions_gl",
+        ],
         RenderSize::new(
             preview_size.width * u32::try_from(ids.len()).expect("catalog size fits u32"),
             preview_size.height,
@@ -111,7 +117,8 @@ fn builtin_transition_catalog_compiles_and_preserves_endpoints() {
 fn complete_builtin_catalog_compiles_and_survives_host_cleanup() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    let ids = pollster::block_on(renderer.register_builtins())
+    let ids = renderer
+        .register_builtins()
         .expect("the complete built-in catalog compiles");
     assert_eq!(
         ids.len(),
@@ -128,6 +135,20 @@ fn complete_builtin_catalog_compiles_and_survives_host_cleanup() {
     for id in crate::MASK_COMBINE_EFFECT_IDS {
         assert!(renderer.is_effect_registered(&crate::EffectId::from_static(id, 1)));
     }
+    // Registering compiled none of them; warming them all is where a backend's compiler speaks.
+    let every = crate::builtins::internal_effect_definitions()
+        .into_iter()
+        .map(|definition| crate::EffectId::new(definition.id, definition.version))
+        .chain(ids.iter().cloned())
+        .collect::<Vec<_>>();
+    let device = renderer.gpu.device();
+    let internal_errors = device.push_error_scope(wgpu::ErrorFilter::Internal);
+    let validation_errors = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    renderer
+        .warmup(&every)
+        .expect("every built-in is registered");
+    assert!(pollster::block_on(validation_errors.pop()).is_none());
+    assert!(pollster::block_on(internal_errors.pop()).is_none());
     renderer.clear_effects();
     for definition in crate::builtin_effect_definitions()
         .into_iter()

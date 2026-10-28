@@ -169,7 +169,7 @@ fn edge_test_params(name: &str) -> EffectParams<'static> {
 fn geometric_transition_edges_have_partial_coverage() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    let ids = pollster::block_on(renderer.register_builtin_transitions()).unwrap();
+    let ids = renderer.register_builtin_transitions().unwrap();
     let from = rgba_texture(&renderer, [0; 4]);
     let to = rgba_texture(&renderer, [255; 4]);
     let a = from.create_view(&wgpu::TextureViewDescriptor::default());
@@ -269,7 +269,7 @@ fn geometric_transition_edges_have_partial_coverage() {
 fn wipe_coverage_is_one_pixel_wide_at_multiple_resolutions() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    let ids = pollster::block_on(renderer.register_builtin_transitions()).unwrap();
+    let ids = renderer.register_builtin_transitions().unwrap();
     let id = ids
         .iter()
         .find(|id| id.as_str().ends_with(".wipe-right"))
@@ -311,7 +311,7 @@ fn wipe_coverage_is_one_pixel_wide_at_multiple_resolutions() {
 fn antialiasing_preserves_patterned_transition_endpoints() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    let ids = pollster::block_on(renderer.register_builtin_transitions()).unwrap();
+    let ids = renderer.register_builtin_transitions().unwrap();
     let size = RenderSize::new(16, 16).unwrap();
     let from: Vec<u8> = (0..256)
         .flat_map(|i| {

@@ -32,5 +32,5 @@ pub const OUTLINE: &str = include_str!("../../shaders/runtime/effects/outline.wg
 pub const LIGHT_LEAK: &str = include_str!("../../shaders/runtime/effects/light-leak.wgsl");
 /// Built-in letterbox body: opaque bars around a window of a given aspect.
 pub const LETTERBOX: &str = include_str!("../../shaders/runtime/effects/letterbox.wgsl");
-/// Built-in oil-paint body: a Kuwahara filter.
+/// Built-in oil-paint body: a Kuwahara filter, its quadrants weighted.
 pub const OIL_PAINT: &str = include_str!("../../shaders/runtime/effects/oil-paint.wgsl");

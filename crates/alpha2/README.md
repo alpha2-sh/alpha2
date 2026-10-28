@@ -34,7 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let gpu = pollster::block_on(GpuContext::request_high_performance())?;
     let mut renderer = Renderer::new(gpu);
     // The built-in effects and transitions a project can name.
-    pollster::block_on(renderer.register_builtins()).expect("the built-in shaders compile");
+    renderer.register_builtins().expect("the built-in definitions register");
 
     // Opaque mid gray, premultiplied sRGB RGBA8, at the project's size.
     let size = RenderSize::new(1280, 720)?;
@@ -74,7 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 - `Project::from_json` reads and checks a document; `EngineProject` is an immutable snapshot of it, indexed for evaluation, which the player and the exporter render.
 - `GpuContext::request_high_performance()` opens a device, preferring a discrete, high-performance adapter. When it fails, `GpuError::step()` says whether no adapter was found or the adapter refused a device (`GpuAcquisitionStep`), and its `source()` gives the platform's reason.
 - A `FrameProvider` lends the renderer a frame for each source at the exact source time the engine asks for. `Renderer::upload_rgba8` makes one from pixels.
-- `register_builtins` compiles the built-in effects and transitions; a frame that draws an effect the renderer has not registered fails.
+- `register_builtins` registers the built-in effects and transitions, each compiled the first time a frame draws it or `warmup` names it; a frame that draws an effect the renderer has not registered fails.
 - `Player::render_at` renders the frame shown at a time. When a source frame is missing, it names the source (`missing_sources`) and, by the player's missing-frame policy, shows the last frame again (`repeated`) or none.
 - `Exporter` walks the project's frame grid at export quality. `ExportStep::Waiting` names the sources the frame lacked: supply them and call `render_next` again, and the export continues at the same frame.
 

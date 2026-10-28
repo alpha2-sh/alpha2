@@ -9,7 +9,7 @@ use super::*;
 fn film_grain_is_the_same_on_every_gpu_and_changes_with_time() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    pollster::block_on(renderer.register_builtins()).expect("built-ins compile");
+    renderer.register_builtins().expect("built-ins compile");
     let id = crate::EffectId::new("alpha2.effect.film-grain".into(), 1);
     let size = RenderSize::new(8, 8).expect("non-zero size");
     let gray = rgba_image_texture(&renderer, size, &[128, 128, 128, 255].repeat(64));
@@ -70,7 +70,9 @@ fn separable_gaussian_blur_matches_golden_when_a_gpu_is_available() {
     let _lock = gpu_test_lock();
     let gpu = gpu();
     let mut renderer = Renderer::new(gpu);
-    pollster::block_on(renderer.register_builtin_gaussian_blur()).expect("built-in blur compiles");
+    renderer
+        .register_builtin_gaussian_blur()
+        .expect("built-in blur compiles");
     let size = RenderSize::new(8, 8).expect("non-zero size");
     let pixels = (0..size.height)
         .flat_map(|y| {
@@ -96,7 +98,9 @@ fn separable_gaussian_blur_matches_golden_when_a_gpu_is_available() {
 fn gaussian_blur_rejects_invalid_normalized_radius() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    pollster::block_on(renderer.register_builtin_gaussian_blur()).expect("built-in blur compiles");
+    renderer
+        .register_builtin_gaussian_blur()
+        .expect("built-in blur compiles");
     let texture = rgba_texture(&renderer, [255, 255, 255, 255]);
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let size = RenderSize::new(1, 1).expect("non-zero size");
@@ -114,7 +118,9 @@ fn gaussian_blur_rejects_invalid_normalized_radius() {
 fn normalized_blur_matches_between_proxy_and_full_resolution() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    pollster::block_on(renderer.register_builtin_gaussian_blur()).expect("built-in blur compiles");
+    renderer
+        .register_builtin_gaussian_blur()
+        .expect("built-in blur compiles");
     let proxy_size = RenderSize::new(16, 16).expect("non-zero size");
     let full_size = RenderSize::new(32, 32).expect("non-zero size");
     let proxy = centered_square(proxy_size);
@@ -148,7 +154,8 @@ fn normalized_blur_matches_between_proxy_and_full_resolution() {
 fn chroma_key_removes_green_and_preserves_red_when_a_gpu_is_available() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    let id = pollster::block_on(renderer.register_builtin_chroma_key())
+    let id = renderer
+        .register_builtin_chroma_key()
         .expect("built-in chroma key compiles");
     let size = RenderSize::new(2, 1).expect("non-zero size");
     let texture = rgba_image_texture(&renderer, size, &[0, 255, 0, 255, 255, 0, 0, 255]);
@@ -180,7 +187,8 @@ fn builtin_chroma_key_effect_keys_the_srgb_encoded_color_when_a_gpu_is_available
         &[51, 179, 77, 255, 124, 218, 149, 255, 255, 0, 0, 255],
     );
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    let id = pollster::block_on(renderer.register_builtin_chroma_key())
+    let id = renderer
+        .register_builtin_chroma_key()
         .expect("built-in chroma key compiles");
     let scope = renderer
         .gpu
@@ -212,7 +220,8 @@ fn builtin_chroma_key_effect_keys_the_srgb_encoded_color_when_a_gpu_is_available
 fn chroma_key_rejects_zero_softness() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    let id = pollster::block_on(renderer.register_builtin_chroma_key())
+    let id = renderer
+        .register_builtin_chroma_key()
         .expect("built-in chroma key compiles");
     let texture = rgba_texture(&renderer, [0, 255, 0, 255]);
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -292,7 +301,8 @@ fn render_inverting_lut(
     source: &wgpu::TextureView,
     size: RenderSize,
 ) -> Vec<u8> {
-    let id = pollster::block_on(renderer.register_builtin_lut_3d())
+    let id = renderer
+        .register_builtin_lut_3d()
         .expect("built-in LUT effect compiles");
     // .cube order, red varying fastest.
     let data = crate::Lut3dData::from_cube(

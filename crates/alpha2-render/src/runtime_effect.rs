@@ -83,6 +83,7 @@ impl Renderer {
             output,
         } = pass;
         let registered = self.effects.get(id).ok_or(RenderError::UnknownEffect)?;
+        let drawn = self.effect_pipeline(registered);
         let source_b = match (registered.definition.kind, source_b) {
             (EffectKind::Transition, Some(source)) => source,
             (EffectKind::Transition, None) => return Err(RenderError::MissingEffectInput),
@@ -116,7 +117,7 @@ impl Renderer {
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: wgpu::BindingResource::Sampler(&registered.sampler),
+                resource: wgpu::BindingResource::Sampler(&drawn.sampler),
             },
             wgpu::BindGroupEntry {
                 binding: 3,
@@ -173,7 +174,7 @@ impl Renderer {
             .device()
             .create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("alpha2 runtime effect bind group"),
-                layout: &registered.bind_group_layout,
+                layout: &drawn.bind_group_layout,
                 entries: &entries,
             });
         // One reusable probe, never one per pass: a query set per pass exhausts driver counter
@@ -189,7 +190,7 @@ impl Renderer {
             .filter(|(_, probe)| probe.acquire());
         encode_pass(
             encoder,
-            &registered.pipeline,
+            &drawn.pipeline,
             &bind_group,
             output,
             probe.map(|(_, probe)| &probe.queries),

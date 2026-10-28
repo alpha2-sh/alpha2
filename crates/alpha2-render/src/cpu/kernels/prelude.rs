@@ -263,9 +263,9 @@ pub(crate) fn builtin_unit(hash: u32) -> f32 {
     (hash >> 8) as f32 / 16_777_216.0
 }
 
-/// `builtin_cell`: a lattice cell index of either sign as a hash input.
-/// WGSL's `i32(..)` clamps to the f32 values an `i32` holds, so past 2^31
-/// it is 2147483520, not `i32::MAX`.
+/// `builtin_cell`: a lattice cell index of either sign as a hash input,
+/// clamped as the WGSL clamps it to the f32 values an `i32` holds: past
+/// 2^31 it is 2147483520, not `i32::MAX`.
 #[inline]
 #[allow(clippy::cast_possible_truncation)]
 pub(crate) fn builtin_cell(value: f32) -> u32 {

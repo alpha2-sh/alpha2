@@ -211,7 +211,7 @@ fn measure(vectors: bool) -> Vec<u64> {
     let gpu = pollster::block_on(GpuContext::request_high_performance())
         .expect("these budgets need a GPU adapter");
     let mut renderer = Renderer::new(gpu);
-    pollster::block_on(renderer.register_builtins()).expect("built-ins");
+    renderer.register_builtins().expect("built-ins");
     let project = project(vectors);
     let index = ActiveIndex::build(&project).expect("valid project");
     let frame = evaluate(&project, &index, MediaTime::from_ticks(60_000)).expect("evaluation");

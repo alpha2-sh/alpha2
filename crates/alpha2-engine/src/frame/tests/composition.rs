@@ -481,7 +481,9 @@ fn effect_with_inputs(
 /// `test.displace`.
 fn renderer_with_inputs() -> Renderer {
     let mut renderer = renderer();
-    pollster::block_on(renderer.register_builtin_gaussian_blur()).expect("blur compiles");
+    renderer
+        .register_builtin_gaussian_blur()
+        .expect("blur compiles");
     for definition in [
         effect_with_inputs(
             "test.multiply-map",

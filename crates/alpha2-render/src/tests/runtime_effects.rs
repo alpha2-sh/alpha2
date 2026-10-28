@@ -240,7 +240,8 @@ fn registered_effect_executes_with_named_parameters() {
 fn resource_backed_lut_effect_executes_from_a_cube_resource() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    let id = pollster::block_on(renderer.register_builtin_lut_3d())
+    let id = renderer
+        .register_builtin_lut_3d()
         .expect("built-in LUT effect compiles");
     let data = crate::Lut3dData::from_cube(
         "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n",
@@ -814,7 +815,7 @@ fn an_effect_past_the_devices_texture_budget_is_refused_at_compilation() {
 fn the_built_ins_leave_the_host_its_whole_share_of_the_registry() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    let builtins = pollster::block_on(renderer.register_builtins()).expect("built-ins register");
+    let builtins = renderer.register_builtins().expect("built-ins register");
     assert!(builtins.len() > 40, "{}", builtins.len());
     let host = |index: usize| EffectDef {
         id: format!("test.host-{index}"),

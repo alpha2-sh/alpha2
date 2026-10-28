@@ -86,8 +86,11 @@ fn builtin_hash3(a: u32, b: u32, c: u32) -> u32 {
 // The top 24 bits of a hash as a float in [0, 1), converted exactly.
 fn builtin_unit(hash: u32) -> f32 { return f32(hash >> 8u) / 16777216.0; }
 
-// A lattice cell index of either sign as a hash input.
-fn builtin_cell(value: f32) -> u32 { return bitcast<u32>(i32(floor(value))); }
+// A lattice cell index of either sign as a hash input, clamped to the range `i32()` saturates
+// to: the GL backend's `int()` is undefined past it.
+fn builtin_cell(value: f32) -> u32 {
+    return bitcast<u32>(i32(clamp(floor(value), -2147483648.0, 2147483520.0)));
+}
 
 // GLSL's floor-mod; WGSL `%` truncates toward zero.
 fn builtin_floor_mod(x: f32, y: f32) -> f32 { return x - y * floor(x / y); }
@@ -97,8 +100,8 @@ fn builtin_value_noise(p: vec2f, seed: u32) -> f32 {
     let cell = floor(p);
     let f = p - cell;
     let w = f * f * (3.0 - 2.0 * f);
-    let x = bitcast<u32>(i32(cell.x));
-    let y = bitcast<u32>(i32(cell.y));
+    let x = builtin_cell(cell.x);
+    let y = builtin_cell(cell.y);
     let a = builtin_unit(builtin_hash3(x, y, seed));
     let b = builtin_unit(builtin_hash3(x + 1u, y, seed));
     let c = builtin_unit(builtin_hash3(x, y + 1u, seed));

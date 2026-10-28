@@ -78,7 +78,7 @@ fn assert_falls_off(row: &[u8], from: usize, reach: usize, what: &str) {
 fn the_project_blur_is_one_gaussian_without_gaps_between_taps() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    pollster::block_on(renderer.register_builtins()).expect("built-ins compile");
+    renderer.register_builtins().expect("built-ins compile");
     // sigma = radius / 2 * 64 = 8 px: the 2D body's taps fall 8 px apart.
     let size = RenderSize::new(256, 64).expect("non-zero size");
     let pixels = line_image(size, 4);
@@ -109,7 +109,7 @@ fn the_project_blur_is_one_gaussian_without_gaps_between_taps() {
 fn a_wide_project_blur_stays_smooth_at_any_size() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    pollster::block_on(renderer.register_builtins()).expect("built-ins compile");
+    renderer.register_builtins().expect("built-ins compile");
     // sigma = 0.05 / 2 * 1080 = 27 px, as a 1080p project with radius 0.05.
     let size = RenderSize::new(512, 1080).expect("non-zero size");
     let pixels = line_image(size, 32);
@@ -128,7 +128,7 @@ fn a_wide_project_blur_stays_smooth_at_any_size() {
 fn glow_falls_off_smoothly_from_a_bright_line() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    pollster::block_on(renderer.register_builtins()).expect("built-ins compile");
+    renderer.register_builtins().expect("built-ins compile");
     // radius 0.06 * 256 = 15 px: the ring of 12 taps sits 15 px out.
     let size = RenderSize::new(256, 256).expect("non-zero size");
     let pixels = line_image(size, 4);
@@ -176,7 +176,7 @@ fn red_at(pixels: &[u8], size: RenderSize, x: u32, y: u32) -> u8 {
 fn a_directional_blur_at_zero_degrees_spreads_along_x_only() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    pollster::block_on(renderer.register_builtins()).expect("built-ins compile");
+    renderer.register_builtins().expect("built-ins compile");
     // sigma = length / 2 * 64 = 8 px.
     let size = RenderSize::new(256, 64).expect("non-zero size");
     let params = EffectParams::new()
@@ -210,7 +210,7 @@ fn a_directional_blur_at_zero_degrees_spreads_along_x_only() {
 fn a_directional_blur_at_45_degrees_is_symmetric_about_its_line() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    pollster::block_on(renderer.register_builtins()).expect("built-ins compile");
+    renderer.register_builtins().expect("built-ins compile");
     // A square about the centre; sigma = 0.25 / 2 * 96 = 12 px along up-right.
     let size = RenderSize::new(96, 96).expect("non-zero size");
     let square = rectangle_image(size, 46..50, 46..50);
@@ -244,7 +244,7 @@ fn a_directional_blur_at_45_degrees_is_symmetric_about_its_line() {
 fn expanded_effects_check_their_parameters() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    pollster::block_on(renderer.register_builtins()).expect("built-ins compile");
+    renderer.register_builtins().expect("built-ins compile");
     let size = RenderSize::new(8, 8).expect("non-zero size");
     let texture = rgba_image_texture(&renderer, size, &line_image(size, 2));
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -326,7 +326,9 @@ fn render_transition(renderer: &Renderer, id: &str, size: RenderSize, progress: 
 fn ported_transitions_keep_their_upward_direction() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    pollster::block_on(renderer.register_builtin_transitions()).expect("transitions compile");
+    renderer
+        .register_builtin_transitions()
+        .expect("transitions compile");
     let size = RenderSize::new(64, 64).expect("non-zero size");
 
     // A quarter of the way, wipe-up shows the next clip in the bottom quarter only.
@@ -367,7 +369,7 @@ fn a_tier_b_renderer_filters_with_the_tier_b_sample_budget_and_says_so() {
     let _lock = gpu_test_lock();
     let renderers = |tier: CapabilityTier, budget: Option<u32>| {
         let mut renderer = Renderer::new(gpu().with_tier(tier));
-        pollster::block_on(renderer.register_builtins()).expect("built-ins compile");
+        renderer.register_builtins().expect("built-ins compile");
         if let Some(budget) = budget {
             renderer.set_quality_controls(budget, 1);
         }

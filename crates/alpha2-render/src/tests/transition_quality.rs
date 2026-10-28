@@ -4,7 +4,7 @@ use super::*;
 fn transparent_builtin_transitions_preserve_associated_alpha() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    let ids = pollster::block_on(renderer.register_builtin_transitions()).unwrap();
+    let ids = renderer.register_builtin_transitions().unwrap();
     let size = RenderSize::new(16, 16).unwrap();
     let from: Vec<u8> = (0..256)
         .flat_map(|i| {
@@ -58,7 +58,7 @@ fn transparent_builtin_transitions_preserve_associated_alpha() {
 fn color_phase_preserves_color_when_coverage_changes() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    let ids = pollster::block_on(renderer.register_builtin_transitions()).unwrap();
+    let ids = renderer.register_builtin_transitions().unwrap();
     let id = ids
         .iter()
         .find(|id| id.as_str().ends_with(".color-phase"))
@@ -86,7 +86,7 @@ fn color_phase_preserves_color_when_coverage_changes() {
 fn color_parameters_and_degenerate_ramps_have_defined_results() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    let ids = pollster::block_on(renderer.register_builtin_transitions()).unwrap();
+    let ids = renderer.register_builtin_transitions().unwrap();
     let from = rgba_texture(&renderer, [255, 0, 0, 255]);
     let to = rgba_texture(&renderer, [0, 0, 255, 255]);
     let from_view = from.create_view(&wgpu::TextureViewDescriptor::default());
@@ -158,7 +158,7 @@ fn color_parameters_and_degenerate_ramps_have_defined_results() {
 fn morph_displacement_is_independent_of_uniform_source_opacity() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    let ids = pollster::block_on(renderer.register_builtin_transitions()).unwrap();
+    let ids = renderer.register_builtin_transitions().unwrap();
     let id = ids
         .iter()
         .find(|id| id.as_str() == "alpha2.transition.morph")
@@ -204,7 +204,7 @@ fn morph_displacement_is_independent_of_uniform_source_opacity() {
 fn colour_distance_compares_color_instead_of_coverage() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    let ids = pollster::block_on(renderer.register_builtin_transitions()).unwrap();
+    let ids = renderer.register_builtin_transitions().unwrap();
     let id = ids
         .iter()
         .find(|id| id.as_str().ends_with(".colour-distance"))

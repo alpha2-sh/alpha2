@@ -733,16 +733,15 @@ fn readback_failure(
 }
 
 /// A renderer on `gpu` that reports GPU errors through `health`, with the
-/// built-in effects compiled. A built-in that fails to compile is an internal
-/// error.
-pub(crate) async fn renderer_with_builtins(
+/// built-in effects registered, each compiled the first time it is drawn. A
+/// built-in that fails to register is an internal error.
+pub(crate) fn renderer_with_builtins(
     gpu: GpuContext,
     health: &DeviceHealth,
 ) -> Result<Renderer, JsValue> {
     let mut renderer = Renderer::new(gpu).with_gpu_error_reports(health.reports.clone());
     renderer
         .register_builtins()
-        .await
         .map_err(|diagnostics| diagnostics_to_js(Code::INTERNAL, diagnostics))?;
     Ok(renderer)
 }

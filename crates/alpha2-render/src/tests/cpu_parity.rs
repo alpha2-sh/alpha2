@@ -105,7 +105,7 @@ impl Parity {
     pub(crate) fn new() -> Self {
         let lock = gpu_test_lock();
         let mut gpu = Renderer::new(adapter_gpu());
-        pollster::block_on(gpu.register_builtins()).expect("built-ins register");
+        gpu.register_builtins().expect("built-ins register");
         let cpu = CpuRenderer::new(3);
         let quality = gpu.quality_controls();
         cpu.set_quality_controls(quality.max_filter_samples, quality.motion_blur_subframes);

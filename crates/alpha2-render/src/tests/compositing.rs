@@ -253,7 +253,8 @@ fn graph_uniform_arena_reuses_only_submitted_buffers() {
 fn uniform_arena_is_shared_across_source_effect_and_pack_submissions() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    let chroma_key = pollster::block_on(renderer.register_builtin_chroma_key())
+    let chroma_key = renderer
+        .register_builtin_chroma_key()
         .expect("built-in chroma key compiles");
     let size = RenderSize::new(2, 2).expect("non-zero size");
     let source = renderer

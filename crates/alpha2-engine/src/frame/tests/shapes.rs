@@ -9,7 +9,7 @@ const H: u32 = 32;
 
 fn renderer() -> Renderer {
     let mut renderer = Renderer::new(gpu());
-    pollster::block_on(renderer.register_builtins()).expect("the built-ins compile");
+    renderer.register_builtins().expect("the built-ins compile");
     renderer
 }
 

@@ -714,7 +714,7 @@ fn create_gpu_host(policy: VideoDecodePolicy) -> Result<Host, HostError> {
     renderer.set_gpu_wait_timeout(wait_timeout);
     #[cfg(feature = "hwdevice")]
     alpha2_native_gpu::set_gpu_wait_timeout(wait_timeout);
-    let builtin_ids = pollster::block_on(renderer.register_builtins()).map_err(|diagnostics| {
+    let builtin_ids = renderer.register_builtins().map_err(|diagnostics| {
         HostError::new(
             "EFFECT_ERROR",
             format!("built-in effect registration failed: {diagnostics:?}"),

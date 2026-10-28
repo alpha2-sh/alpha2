@@ -4,9 +4,10 @@
 // fragment-uniformity rules can reject shaders accepted by native naga. Missing Chrome skips the
 // run; `--require-browser` or ALPHA2_REQUIRE_BROWSER=1 fails it.
 //
-// It also times what registering the built-ins costs the browser: one shader module and one render
-// pipeline per built-in effect and transition, created one after another as
-// `Renderer::register_builtins` does. Run it on the machine whose browser is in question.
+// It also times what compiling every built-in costs the browser: one shader module and one render
+// pipeline per built-in effect and transition, created one after another. The renderer makes each
+// the first time it is drawn, so this is the most a project that draws all of them waits in total.
+// Run it on the machine whose browser is in question.
 
 import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
@@ -90,7 +91,7 @@ process.stdout.write(
 );
 if (result.registration)
   process.stdout.write(
-    `registering ${result.registration.count} built-in effects and transitions took ${result.registration.ms.toFixed(0)} ms (shader modules and pipelines)\n`,
+    `compiling ${result.registration.count} built-in effects and transitions took ${result.registration.ms.toFixed(0)} ms (shader modules and pipelines, made at first use)\n`,
   );
 process.exit(result.failures.length === 0 ? 0 : 1);
 
@@ -119,7 +120,7 @@ try {
     if (scoped && messages.length === 0) messages.push(scoped.message);
     if (messages.length > 0) failures.push({ label, messages });
   }
-  // The built-ins as the renderer registers them, timed once every module above compiled.
+  // Every built-in as the renderer compiles it, timed once every module above compiled.
   let registration = null;
   if (failures.length === 0) {
     const effects = modules.filter(({ label }) => label.startsWith("alpha2."));

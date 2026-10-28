@@ -351,78 +351,74 @@ pub(crate) fn internal_effect_definitions() -> Vec<EffectDef> {
 }
 
 impl Renderer {
-    async fn register_builtin_definition(
+    fn register_builtin_definition(
         &mut self,
         definition: EffectDef,
     ) -> Result<EffectId, ShaderDiagnostics> {
-        let id = self.register_effect(definition).await?;
+        let id = self.register_lazily(definition)?;
         self.effects.mark_builtin(id.clone());
         Ok(id)
     }
 
-    /// Compiles and registers the complete built-in effect and transition catalog.
+    /// Registers the complete built-in effect and transition catalog. Each
+    /// one's shader module and pipeline are made the first time it is drawn
+    /// or warmed ([`Self::warmup`]).
     ///
     /// Built-ins are engine-owned and cannot be removed through the host-effect
     /// lifecycle methods.
     ///
     /// # Errors
     /// Returns diagnostics from the first definition that fails.
-    pub async fn register_builtins(&mut self) -> Result<Vec<EffectId>, ShaderDiagnostics> {
+    pub fn register_builtins(&mut self) -> Result<Vec<EffectId>, ShaderDiagnostics> {
         for definition in internal_effect_definitions() {
-            let internal = self.register_builtin_definition(definition).await?;
+            let internal = self.register_builtin_definition(definition)?;
             self.effects.mark_internal(internal);
         }
         let mut definitions = builtin_effect_definitions();
         definitions.extend(builtin_transition_definitions());
         let mut ids = Vec::with_capacity(definitions.len());
         for definition in definitions {
-            ids.push(self.register_builtin_definition(definition).await?);
+            ids.push(self.register_builtin_definition(definition)?);
         }
         Ok(ids)
     }
 
-    /// Compiles and registers the built-in chroma-key effect.
+    /// Registers the built-in chroma-key effect.
     ///
     /// # Errors
-    /// Returns schema or compiler diagnostics when registration fails.
-    pub async fn register_builtin_chroma_key(&mut self) -> Result<EffectId, ShaderDiagnostics> {
+    /// Returns schema diagnostics when registration fails.
+    pub fn register_builtin_chroma_key(&mut self) -> Result<EffectId, ShaderDiagnostics> {
         self.register_builtin_definition(chroma_key_definition())
-            .await
     }
 
-    /// Compiles and registers the public Gaussian blur and its internal pass.
+    /// Registers the public Gaussian blur and its internal pass.
     ///
     /// # Errors
-    /// Returns schema or compiler diagnostics when registration fails.
-    pub async fn register_builtin_gaussian_blur(&mut self) -> Result<EffectId, ShaderDiagnostics> {
-        let internal = self
-            .register_builtin_definition(gaussian_blur_pass_definition())
-            .await?;
+    /// Returns schema diagnostics when registration fails.
+    pub fn register_builtin_gaussian_blur(&mut self) -> Result<EffectId, ShaderDiagnostics> {
+        let internal = self.register_builtin_definition(gaussian_blur_pass_definition())?;
         self.effects.mark_internal(internal);
         self.register_builtin_definition(gaussian_blur_definition())
-            .await
     }
 
-    /// Compiles and registers the built-in 3D LUT effect.
+    /// Registers the built-in 3D LUT effect.
     ///
     /// # Errors
-    /// Returns schema or compiler diagnostics when registration fails.
-    pub async fn register_builtin_lut_3d(&mut self) -> Result<EffectId, ShaderDiagnostics> {
-        self.register_builtin_definition(lut_3d_definition()).await
+    /// Returns schema diagnostics when registration fails.
+    pub fn register_builtin_lut_3d(&mut self) -> Result<EffectId, ShaderDiagnostics> {
+        self.register_builtin_definition(lut_3d_definition())
     }
 
-    /// Compiles and registers all built-in transition definitions.
+    /// Registers all built-in transition definitions.
     ///
     /// # Errors
     /// Returns diagnostics from the first definition that fails. Definitions
-    /// compiled before that point remain registered.
-    pub async fn register_builtin_transitions(
-        &mut self,
-    ) -> Result<Vec<EffectId>, ShaderDiagnostics> {
+    /// registered before that point remain registered.
+    pub fn register_builtin_transitions(&mut self) -> Result<Vec<EffectId>, ShaderDiagnostics> {
         let definitions = builtin_transition_definitions();
         let mut ids = Vec::with_capacity(definitions.len());
         for definition in definitions {
-            ids.push(self.register_builtin_definition(definition).await?);
+            ids.push(self.register_builtin_definition(definition)?);
         }
         Ok(ids)
     }

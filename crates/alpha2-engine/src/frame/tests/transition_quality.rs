@@ -43,7 +43,7 @@ fn pixels(renderer: &Renderer, size: RenderSize, frame: &FrameDesc, frames: &Fra
 fn transition_endpoints_preserve_each_clips_visual_and_blend_mode() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    pollster::block_on(renderer.register_builtin_transitions()).unwrap();
+    renderer.register_builtin_transitions().unwrap();
     let textures = [[80, 120, 160, 200], [255, 80, 20, 255], [20, 100, 255, 255]]
         .map(|pixel| rgba_texture(&renderer, pixel));
     let frames = Frames(
@@ -115,7 +115,7 @@ fn transition_endpoints_preserve_each_clips_visual_and_blend_mode() {
 fn transition_opacity_is_applied_once_at_the_midpoint() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    pollster::block_on(renderer.register_builtin_transitions()).unwrap();
+    renderer.register_builtin_transitions().unwrap();
     let texture = rgba_texture(&renderer, [255, 255, 255, 255]);
     let frames = Frames(vec![
         texture.create_view(&wgpu::TextureViewDescriptor::default()),
@@ -169,7 +169,7 @@ fn chained_transitions_on_two_tracks_with_a_matted_endpoint_show_their_endpoints
     use alpha2_model::{Matte, MatteMode};
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    pollster::block_on(renderer.register_builtin_transitions()).unwrap();
+    renderer.register_builtin_transitions().unwrap();
     pollster::block_on(renderer.register_effect(alpha2_render::track_matte_definition())).unwrap();
     // A red, B green, C blue, the matte half covering, E grey, F orange.
     let textures = [

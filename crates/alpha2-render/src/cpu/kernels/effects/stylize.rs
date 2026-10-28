@@ -32,8 +32,8 @@ pub(super) fn kernel(id: &str) -> Option<&'static dyn CpuKernel> {
     })
 }
 
-/// WGSL `u32(max(floor(value), 0.0))`: the conversion clamps to the
-/// largest f32 below 2^32, not to `u32::MAX`.
+/// WGSL `u32(clamp(floor(value), 0.0, 4294967040.0))`: the largest f32
+/// below 2^32, not `u32::MAX`.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn whole(value: f32) -> u32 {
     value.floor().clamp(0.0, 4_294_967_040.0) as u32
@@ -594,8 +594,8 @@ impl CpuKernel for Letterbox {
     }
 }
 
-/// oil-paint.wgsl: Kuwahara's filter, the mean of the quadrant that varies
-/// least.
+/// oil-paint.wgsl: Kuwahara's filter, the quadrants' means weighted by the
+/// inverse fourth power of their variance.
 struct OilPaint;
 
 impl CpuKernel for OilPaint {
@@ -638,9 +638,9 @@ impl CpuKernel for OilPaint {
             })
             .collect();
         let n = side * side;
-        effect_row(context, y, x0, out, |_, uv, src| {
-            let mut best = src;
-            let mut best_variance = 1.0e9_f32;
+        effect_row(context, y, x0, out, |_, uv, _| {
+            let mut weighted = [0.0_f32; 4];
+            let mut total = 0.0_f32;
             for taps in &quadrants {
                 let mut sum = [0.0_f32; 4];
                 let mut squares = [0.0_f32; 3];
@@ -655,13 +655,15 @@ impl CpuKernel for OilPaint {
                 }
                 let mean = sum.map(|value| value / n);
                 let spread: [f32; 3] = std::array::from_fn(|c| squares[c] / n - mean[c] * mean[c]);
-                let variance = spread[0] + spread[1] + spread[2];
-                if variance < best_variance {
-                    best_variance = variance;
-                    best = mean;
+                let variance = (spread[0] + spread[1] + spread[2]).max(0.0) + 1.0e-3;
+                let quartic = (variance * variance) * (variance * variance);
+                let weight = 1.0 / quartic;
+                for c in 0..4 {
+                    weighted[c] += mean[c] * weight;
                 }
+                total += weight;
             }
-            best
+            weighted.map(|value| value / total)
         });
     }
 }

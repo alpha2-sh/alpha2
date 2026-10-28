@@ -400,9 +400,9 @@ fn oil_paint_matches() {
         &card,
         &effect("oil-paint"),
         &[
-            (Vec::new(), Tolerance::Unstable),
-            (vec![("radius", float(0.015))], Tolerance::Unstable),
-            (vec![("radius", float(0.0))], Tolerance::Unstable),
+            (Vec::new(), Tolerance::Edges),
+            (vec![("radius", float(0.015))], Tolerance::Edges),
+            (vec![("radius", float(0.0))], Tolerance::Edges),
         ],
         EffectRuntime::default(),
     );

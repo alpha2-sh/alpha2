@@ -6,7 +6,7 @@ use super::*;
 /// A renderer with the whole built-in catalog registered.
 fn builtin_renderer() -> Renderer {
     let mut renderer = Renderer::new(gpu());
-    pollster::block_on(renderer.register_builtins()).expect("built-ins compile");
+    renderer.register_builtins().expect("built-ins compile");
     renderer
 }
 
@@ -1047,13 +1047,15 @@ fn every_builtin_effect_draws_its_reviewed_picture() {
     }
     let labels: Vec<&str> = effects.iter().map(|(id, _)| *id).collect();
     assert_rgba8_golden_tiles(
-        // Thresholds and argmins (solarize, halftone, VHS, oil paint) land on either side of a
-        // step on other GPUs; Metal compiles with fast math as well.
+        // Thresholds (solarize, halftone, VHS) land on either side of a step on other GPUs; Metal
+        // compiles with fast math as well, and GL is a few levels off every other backend.
         &[
             "builtin_effects",
             "builtin_effects_lavapipe",
             "builtin_effects_radv",
             "builtin_effects_metal",
+            "builtin_effects_gl",
+            "builtin_effects_dx12",
         ],
         RenderSize::new(
             size.width * u32::try_from(effects.len()).expect("a few tiles"),

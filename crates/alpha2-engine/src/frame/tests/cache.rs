@@ -224,7 +224,7 @@ fn a_still_under_an_effect_that_cannot_read_the_time_is_found_in_later_frames() 
 fn film_grain_is_new_in_every_frame_of_a_long_timeline() {
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    pollster::block_on(renderer.register_builtins()).expect("built-ins compile");
+    renderer.register_builtins().expect("built-ins compile");
     renderer.set_result_cache_budget(1 << 20);
     let texture = rgba_texture(&renderer, [128, 128, 128, 255]);
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
