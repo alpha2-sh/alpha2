@@ -1778,6 +1778,7 @@ pub fn open_codec_context(
     context: &mut rsmpeg::avcodec::AVCodecContext,
     options: rsmpeg::avutil::AVDictionary,
 ) -> Result<Option<rsmpeg::avutil::AVDictionary>, RsmpegError> {
+    let _media_foundation = media_foundation_lock(context);
     // Ownership moves to FFmpeg here, before the call that frees it.
     let mut dictionary = options.into_raw().as_ptr();
     // SAFETY: `context` is a live codec context, and `dictionary` is a valid dictionary FFmpeg now
@@ -1798,6 +1799,70 @@ pub fn open_codec_context(
         return Err(RsmpegError::from(status));
     }
     Ok(unused)
+}
+
+/// Serializes opening and closing `FFmpeg`'s `MediaFoundation` (`_mf`)
+/// encoders: the guard for `context` when it is one, `None` otherwise.
+///
+/// An `_mf` encoder calls `MFTEnumEx` when it opens and `MFShutdown` when it
+/// closes, and those two deadlock against each other on different threads:
+/// `MFShutdown` (in `RtwqShutdown`) holds the work-queue lock and waits on
+/// mfplat's critical section, while `MFTEnumEx` holds that section and waits on
+/// the work-queue lock. Observed as a hang between an export closing `h264_mf`
+/// and the encoder probe opening `av1_mf`. Holding one extra `MFStartup` does
+/// not avoid it: `MFShutdown` takes the lock whatever the count. So every open
+/// ([`open_codec_context`]) and every close ([`EncoderContext`]) of one takes
+/// this lock.
+fn media_foundation_lock(
+    context: &rsmpeg::avcodec::AVCodecContext,
+) -> Option<std::sync::MutexGuard<'static, ()>> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    if !cfg!(target_os = "windows") || context.codec.is_null() {
+        return None;
+    }
+    // SAFETY: a non-null `codec` is one of FFmpeg's static codec descriptors, whose `name` is a
+    // static, NUL-terminated string.
+    let name = unsafe { CStr::from_ptr((*context.codec).name) };
+    name.to_bytes().ends_with(b"_mf").then(|| {
+        LOCK.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    })
+}
+
+/// An encoder context that is closed under the `MediaFoundation` lock when it
+/// is one of the `_mf` encoders (see [`open_codec_context`]), and dropped as
+/// usual otherwise. It reads and writes as the [`AVCodecContext`] it holds.
+///
+/// [`AVCodecContext`]: rsmpeg::avcodec::AVCodecContext
+pub struct EncoderContext(Option<rsmpeg::avcodec::AVCodecContext>);
+
+impl From<rsmpeg::avcodec::AVCodecContext> for EncoderContext {
+    fn from(context: rsmpeg::avcodec::AVCodecContext) -> Self {
+        Self(Some(context))
+    }
+}
+
+impl std::ops::Deref for EncoderContext {
+    type Target = rsmpeg::avcodec::AVCodecContext;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref().expect("taken only when dropped")
+    }
+}
+
+impl std::ops::DerefMut for EncoderContext {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.0.as_mut().expect("taken only when dropped")
+    }
+}
+
+impl Drop for EncoderContext {
+    fn drop(&mut self) {
+        if let Some(context) = self.0.take() {
+            let _media_foundation = media_foundation_lock(&context);
+            drop(context);
+        }
+    }
 }
 
 /// `VkImageUsageFlags` an encoder-input pool needs beyond `FFmpeg`'s own.

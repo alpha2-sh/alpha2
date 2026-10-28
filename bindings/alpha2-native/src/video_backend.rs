@@ -7,7 +7,8 @@
 
 use std::fmt;
 
-use rsmpeg::avcodec::{AVCodecContext, AVCodecParameters, AVPacket};
+use alpha2_ffmpeg_bridge::EncoderContext;
+use rsmpeg::avcodec::{AVCodecParameters, AVPacket};
 use rsmpeg::avutil::{AVFrame, AVRational};
 use rsmpeg::error::RsmpegError;
 use rsmpeg::ffi;
@@ -16,8 +17,9 @@ use crate::openh264::OpenH264Encoder;
 
 /// One open video encoder.
 pub(crate) enum VideoEncoderBackend {
-    /// An `FFmpeg` encoder.
-    Ffmpeg(AVCodecContext),
+    /// An `FFmpeg` encoder, closed under the `MediaFoundation` lock when it is
+    /// an `_mf` one.
+    Ffmpeg(EncoderContext),
     /// Cisco's `OpenH264`, loaded at run time.
     OpenH264(Box<OpenH264Encoder>),
 }

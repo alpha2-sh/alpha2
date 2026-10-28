@@ -9,6 +9,7 @@ use std::{fs, path::Path};
 
 use crate::convert::{encode_adapter_error, reject_unused_encode_options, video_encoder_options};
 use crate::video_encode::VideoEncodeConfig;
+use alpha2_ffmpeg_bridge::EncoderContext;
 use alpha2_media::{ColorMetadata, EncodeError};
 use rsmpeg::avcodec::{AVCodec, AVCodecContext, AVCodecRef};
 use rsmpeg::avutil::AVRational;
@@ -1274,7 +1275,7 @@ fn open_one_video_encoder(
     candidate: &VideoEncoderCandidate,
     name: &str,
 ) -> Result<
-    (AVCodecContext, crate::AppliedRateControl, Option<String>),
+    (EncoderContext, crate::AppliedRateControl, Option<String>),
     (NativeEncoderRejection, EncodeError),
 > {
     validate_encoder_dimensions(name, request.config.width, request.config.height)
@@ -1301,8 +1302,8 @@ fn open_video_encoder_context(
     candidate: &VideoEncoderCandidate,
     name: &str,
     quantized: Option<&crate::rate_control::MechanismRequest>,
-) -> Result<AVCodecContext, (NativeEncoderRejection, EncodeError)> {
-    let mut encoder = AVCodecContext::new(&candidate.encoder);
+) -> Result<EncoderContext, (NativeEncoderRejection, EncodeError)> {
+    let mut encoder = EncoderContext::from(AVCodecContext::new(&candidate.encoder));
     encoder.set_width(request.width);
     encoder.set_height(request.height);
     encoder.set_pix_fmt(ffi::AV_PIX_FMT_YUV420P);
@@ -1329,9 +1330,8 @@ fn open_video_encoder_context(
     encoder.set_gop_size(keyframe_interval(request.config.frame_rate));
     encoder.set_max_b_frames(encoder_max_b_frames(name));
     if request.global_header {
-        encoder.set_flags(
-            encoder.flags | i32::try_from(ffi::AV_CODEC_FLAG_GLOBAL_HEADER).unwrap_or(0),
-        );
+        let flags = encoder.flags | i32::try_from(ffi::AV_CODEC_FLAG_GLOBAL_HEADER).unwrap_or(0);
+        encoder.set_flags(flags);
     }
     // A hardware candidate never asks, so an export whose GPU encoder opens never decides a
     // software split it would not use.
@@ -1773,7 +1773,7 @@ fn probe_software_encode(
         return (Some(error.to_string()), 0);
     }
     let encoder = &candidate.encoder;
-    let mut context = AVCodecContext::new(encoder);
+    let mut context = EncoderContext::from(AVCodecContext::new(encoder));
     context.set_width(coded_width);
     context.set_height(coded_height);
     context.set_pix_fmt(ffi::AV_PIX_FMT_YUV420P);
