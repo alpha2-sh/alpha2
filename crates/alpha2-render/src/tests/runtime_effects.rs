@@ -809,3 +809,29 @@ fn an_effect_past_the_devices_texture_budget_is_refused_at_compilation() {
     assert!(pollster::block_on(scope.pop()).is_none());
     assert_rgb_close(&pixels, &[[153, 51, 204]; 4], "a full binding budget");
 }
+
+#[test]
+fn the_built_ins_leave_the_host_its_whole_share_of_the_registry() {
+    let _lock = gpu_test_lock();
+    let mut renderer = Renderer::new(gpu());
+    let builtins = pollster::block_on(renderer.register_builtins()).expect("built-ins register");
+    assert!(builtins.len() > 40, "{}", builtins.len());
+    let host = |index: usize| EffectDef {
+        id: format!("test.host-{index}"),
+        version: 1,
+        kind: EffectKind::Effect,
+        inputs: Vec::new(),
+        params: Vec::new(),
+        resources: Vec::new(),
+        wgsl_body: "fn effect(_uv: vec2f, src: vec4f) -> vec4f { return src; }".into(),
+        tier_min: CapabilityTier::TierB,
+        license: None,
+    };
+    for index in 0..256 {
+        pollster::block_on(renderer.register_effect(host(index)))
+            .unwrap_or_else(|error| panic!("host effect {index}: {error:?}"));
+    }
+    let error = pollster::block_on(renderer.register_effect(host(256)))
+        .expect_err("the host's share is full");
+    assert!(format!("{error:?}").contains("full"), "{error:?}");
+}

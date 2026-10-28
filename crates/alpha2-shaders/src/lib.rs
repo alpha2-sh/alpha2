@@ -11,15 +11,11 @@
 //!   the effect's parameter schema and concatenates the body onto it, which is
 //!   why these cannot be resolved ahead of time.
 
+mod effects;
 mod transitions;
 
-pub use transitions::{
-    ANGULAR, CIRCLE, CIRCLE_CROP, CIRCLE_OPEN, COLOR_PHASE, COLOUR_DISTANCE, CROSS_WARP,
-    DIRECTIONAL, DIRECTIONAL_WARP, DIRECTIONAL_WIPE, DREAMY, FADE, FADE_COLOR, FADE_GRAYSCALE,
-    HEART, MORPH, PINWHEEL, PIXELIZE, POLKA_DOTS_CURTAIN, RADIAL, RIPPLE, SIMPLE_ZOOM, SQUEEZE,
-    TRANSITION_HELPERS, WIND, WINDOW_BLINDS, WINDOW_SLICE, WIPE_DOWN, WIPE_LEFT, WIPE_RIGHT,
-    WIPE_UP,
-};
+pub use effects::*;
+pub use transitions::*;
 
 /// Embeds a WESL module compiled by `build.rs` into `OUT_DIR`.
 macro_rules! built_module {
@@ -47,33 +43,6 @@ pub const YUV_TO_LINEAR_WGSL: &str = built_module!("yuv-to-linear");
 /// [`YUV_TO_LINEAR_WGSL`] for 16-bit containers uploaded as unsigned
 /// integers, which it filters and normalizes itself.
 pub const YUV16_TO_LINEAR_WGSL: &str = built_module!("yuv16-to-linear");
-
-/// Author body for the built-in chroma-key effect.
-pub const CHROMA_KEY_BODY: &str = include_str!("../shaders/runtime/effects/chroma-key.wgsl");
-/// Author body for one axis pass of the built-in Gaussian blur cascade.
-pub const GAUSSIAN_BLUR: &str = include_str!("../shaders/runtime/effects/gaussian-blur.wgsl");
-/// Author body for the built-in resource-backed 3D LUT effect.
-pub const LUT_3D_BODY: &str = include_str!("../shaders/runtime/effects/lut-3d.wgsl");
-/// Body of a public effect the render graph expands into internal passes.
-pub const EXPANDED_EFFECT: &str = include_str!("../shaders/runtime/effects/expanded.wgsl");
-/// Built-in exposure, contrast, saturation, temperature, and tint body.
-pub const COLOR_CONTROLS: &str = include_str!("../shaders/runtime/effects/color-controls.wgsl");
-/// Built-in vignette body.
-pub const VIGNETTE: &str = include_str!("../shaders/runtime/effects/vignette.wgsl");
-/// Built-in sharpening body.
-pub const SHARPEN: &str = include_str!("../shaders/runtime/effects/sharpen.wgsl");
-/// Built-in pixelation body.
-pub const PIXELATE_EFFECT: &str = include_str!("../shaders/runtime/effects/pixelate.wgsl");
-/// Glow's first pass: the straight color above its threshold.
-pub const GLOW_THRESHOLD: &str = include_str!("../shaders/runtime/effects/glow-threshold.wgsl");
-/// Glow's last pass: the source with its blurred bloom added.
-pub const GLOW_COMBINE: &str = include_str!("../shaders/runtime/effects/glow-combine.wgsl");
-/// Built-in procedural film-grain body.
-pub const FILM_GRAIN: &str = include_str!("../shaders/runtime/effects/film-grain.wgsl");
-/// Built-in crop body.
-pub const CROP: &str = include_str!("../shaders/runtime/effects/crop.wgsl");
-/// Built-in mirror body.
-pub const MIRROR: &str = include_str!("../shaders/runtime/effects/mirror.wgsl");
 
 #[cfg(test)]
 mod tests {

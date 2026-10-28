@@ -173,6 +173,576 @@
       "output": "effect"
     },
     {
+      "id": "invert-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.invert",
+              "version": 1,
+              "params": {
+                "amount": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.8
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "black-and-white-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.black-and-white",
+              "version": 1,
+              "params": {
+                "red": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 1
+                  }
+                },
+                "green": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0
+                  }
+                },
+                "blue": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "sepia-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.sepia",
+              "version": 1
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "duotone-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.duotone",
+              "version": 1
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "gradient-map-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.gradient-map",
+              "version": 1,
+              "params": {
+                "shadows": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "color",
+                    "value": [
+                      0,
+                      0,
+                      0.5,
+                      1
+                    ]
+                  }
+                },
+                "midtones": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "color",
+                    "value": [
+                      0.9,
+                      0.1,
+                      0.2,
+                      1
+                    ]
+                  }
+                },
+                "highlights": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "color",
+                    "value": [
+                      1,
+                      1,
+                      0.2,
+                      1
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "posterize-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.posterize",
+              "version": 1,
+              "params": {
+                "levels": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 4
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "threshold-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.threshold",
+              "version": 1,
+              "params": {
+                "softness": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.1
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "levels-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.levels",
+              "version": 1,
+              "params": {
+                "input_black": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.1
+                  }
+                },
+                "input_white": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.85
+                  }
+                },
+                "gamma": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 1.4
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "hue-saturation-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.hue-saturation",
+              "version": 1,
+              "params": {
+                "hue": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 60
+                  }
+                },
+                "saturation": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.3
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "vibrance-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.vibrance",
+              "version": 1,
+              "params": {
+                "amount": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.7
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "channel-mixer-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.channel-mixer",
+              "version": 1,
+              "params": {
+                "red": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "vec4",
+                    "value": [
+                      0,
+                      0,
+                      1,
+                      0
+                    ]
+                  }
+                },
+                "blue": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "vec4",
+                    "value": [
+                      1,
+                      0,
+                      0,
+                      0
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "lift-gamma-gain-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.lift-gamma-gain",
+              "version": 1,
+              "params": {
+                "lift": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "vec4",
+                    "value": [
+                      0.05,
+                      0,
+                      -0.05,
+                      0
+                    ]
+                  }
+                },
+                "gamma": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "vec4",
+                    "value": [
+                      0,
+                      0,
+                      0,
+                      0.2
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "color-isolate-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.color-isolate",
+              "version": 1,
+              "params": {
+                "hue": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0
+                  }
+                },
+                "range": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 40
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "solarize-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.solarize",
+              "version": 1
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "fill-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.fill",
+              "version": 1,
+              "params": {
+                "color": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "color",
+                    "value": [
+                      1,
+                      0.4,
+                      0,
+                      1
+                    ]
+                  }
+                },
+                "amount": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.6
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
       "id": "vignette-look",
       "nodes": [
         {
@@ -413,6 +983,1437 @@
         }
       ],
       "output": "effect"
+    },
+    {
+      "id": "luma-key-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.luma-key",
+              "version": 1,
+              "params": {
+                "threshold": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.3
+                  }
+                },
+                "softness": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.2
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "spill-suppress-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.spill-suppress",
+              "version": 1,
+              "params": {
+                "amount": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.8
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "alpha-adjust-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.alpha-adjust",
+              "version": 1,
+              "params": {
+                "black": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.1
+                  }
+                },
+                "white": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.8
+                  }
+                },
+                "gamma": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 2
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "matte-choker-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.matte-choker",
+              "version": 1,
+              "params": {
+                "choke": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": -0.6
+                  }
+                },
+                "radius": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.02
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "set-matte-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "matte",
+          "op": {
+            "type": "media",
+            "source_id": "still"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "inputs": {
+              "matte": "matte"
+            },
+            "effect": {
+              "id": "alpha2.effect.set-matte",
+              "version": 1,
+              "params": {
+                "mode": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "enum",
+                    "value": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "directional-blur-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.directional-blur",
+              "version": 1,
+              "params": {
+                "length": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.1
+                  }
+                },
+                "angle": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 30
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "radial-blur-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.radial-blur",
+              "version": 1,
+              "params": {
+                "amount": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.3
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "unsharp-mask-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.unsharp-mask",
+              "version": 1,
+              "params": {
+                "amount": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 2
+                  }
+                },
+                "radius": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.02
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "tilt-shift-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.tilt-shift",
+              "version": 1,
+              "params": {
+                "blur": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.1
+                  }
+                },
+                "focus": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.1
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "lens-blur-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.lens-blur",
+              "version": 1,
+              "params": {
+                "radius": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.015
+                  }
+                },
+                "highlights": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 4
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "surface-blur-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.surface-blur",
+              "version": 1,
+              "params": {
+                "radius": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.015
+                  }
+                },
+                "threshold": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.2
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "rgb-split-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.rgb-split",
+              "version": 1,
+              "params": {
+                "amount": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.02
+                  }
+                },
+                "angle": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 30
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "glitch-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.glitch",
+              "version": 1,
+              "params": {
+                "amount": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.8
+                  }
+                },
+                "color_split": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.02
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "crt-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.crt",
+              "version": 1,
+              "params": {
+                "curvature": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.3
+                  }
+                },
+                "scanlines": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.6
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "vhs-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.vhs",
+              "version": 1,
+              "params": {
+                "amount": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.8
+                  }
+                },
+                "noise": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.3
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "halftone-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.halftone",
+              "version": 1,
+              "params": {
+                "mode": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "enum",
+                    "value": 1
+                  }
+                },
+                "cells": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 24
+                  }
+                },
+                "angle": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "emboss-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.emboss",
+              "version": 1,
+              "params": {
+                "distance": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.004
+                  }
+                },
+                "keep_color": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "bool",
+                    "value": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "edge-detect-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.edge-detect",
+              "version": 1,
+              "params": {
+                "width": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.003
+                  }
+                },
+                "colored": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "bool",
+                    "value": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "drop-shadow-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.drop-shadow",
+              "version": 1,
+              "params": {
+                "color": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "color",
+                    "value": [
+                      0.1,
+                      0,
+                      0.3,
+                      1
+                    ]
+                  }
+                },
+                "distance": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.03
+                  }
+                },
+                "softness": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.02
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "outline-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.outline",
+              "version": 1,
+              "params": {
+                "color": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "color",
+                    "value": [
+                      1,
+                      0.9,
+                      0,
+                      1
+                    ]
+                  }
+                },
+                "width": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.01
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "light-leak-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.light-leak",
+              "version": 1,
+              "params": {
+                "intensity": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 1.2
+                  }
+                },
+                "speed": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "letterbox-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.letterbox",
+              "version": 1,
+              "params": {
+                "aspect": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 2.39
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "oil-paint-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.oil-paint",
+              "version": 1,
+              "params": {
+                "radius": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.008
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "swirl-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.swirl",
+              "version": 1,
+              "params": {
+                "angle": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 270
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "bulge-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.bulge",
+              "version": 1,
+              "params": {
+                "strength": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.8
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "wave-warp-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.wave-warp",
+              "version": 1,
+              "params": {
+                "amplitude": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.02
+                  }
+                },
+                "wavelength": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.15
+                  }
+                },
+                "speed": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "ripple-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.ripple",
+              "version": 1,
+              "params": {
+                "amplitude": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.02
+                  }
+                },
+                "wavelength": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.08
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "lens-distortion-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.lens-distortion",
+              "version": 1,
+              "params": {
+                "k1": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.4
+                  }
+                },
+                "k2": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.1
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "polar-coordinates-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.polar-coordinates",
+              "version": 1,
+              "params": {
+                "edge": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "enum",
+                    "value": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "offset-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.offset",
+              "version": 1,
+              "params": {
+                "shift": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "vec2",
+                    "value": [
+                      0.3,
+                      0.2
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "corner-pin-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.corner-pin",
+              "version": 1,
+              "params": {
+                "top_left": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "vec2",
+                    "value": [
+                      0.1,
+                      0.05
+                    ]
+                  }
+                },
+                "top_right": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "vec2",
+                    "value": [
+                      0.85,
+                      0.15
+                    ]
+                  }
+                },
+                "bottom_right": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "vec2",
+                    "value": [
+                      0.95,
+                      0.9
+                    ]
+                  }
+                },
+                "bottom_left": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "vec2",
+                    "value": [
+                      0.05,
+                      0.95
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "shake-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.shake",
+              "version": 1,
+              "params": {
+                "amplitude": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.05
+                  }
+                },
+                "rotation": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 5
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "turbulent-displace-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.turbulent-displace",
+              "version": 1,
+              "params": {
+                "amount": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.04
+                  }
+                },
+                "evolution": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "displacement-map-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "map",
+          "op": {
+            "type": "media",
+            "source_id": "still"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "inputs": {
+              "map": "map"
+            },
+            "effect": {
+              "id": "alpha2.effect.displacement-map",
+              "version": 1,
+              "params": {
+                "amount_x": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.05
+                  }
+                },
+                "amount_y": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": -0.05
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "kaleidoscope-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.kaleidoscope",
+              "version": 1,
+              "params": {
+                "segments": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 8
+                  }
+                },
+                "angle": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 15
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "tile-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.tile",
+              "version": 1,
+              "params": {
+                "tiles": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "vec2",
+                    "value": [
+                      3,
+                      3
+                    ]
+                  }
+                },
+                "mirror": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "bool",
+                    "value": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
     }
   ],
   "timeline": {
@@ -483,11 +2484,236 @@
             }
           },
           {
-            "id": "effect-vignette",
+            "id": "effect-invert",
             "source_id": "video",
             "timeline_range": {
               "start": 40000,
               "end": 50000
+            },
+            "source_range": {
+              "start": 80000,
+              "end": 90000
+            },
+            "composition": {
+              "id": "invert-look"
+            }
+          },
+          {
+            "id": "effect-black-and-white",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 50000,
+              "end": 60000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 10000
+            },
+            "composition": {
+              "id": "black-and-white-look"
+            }
+          },
+          {
+            "id": "effect-sepia",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 60000,
+              "end": 70000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 30000
+            },
+            "composition": {
+              "id": "sepia-look"
+            }
+          },
+          {
+            "id": "effect-duotone",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 70000,
+              "end": 80000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 50000
+            },
+            "composition": {
+              "id": "duotone-look"
+            }
+          },
+          {
+            "id": "effect-gradient-map",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 80000,
+              "end": 90000
+            },
+            "source_range": {
+              "start": 60000,
+              "end": 70000
+            },
+            "composition": {
+              "id": "gradient-map-look"
+            }
+          },
+          {
+            "id": "effect-posterize",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 90000,
+              "end": 100000
+            },
+            "source_range": {
+              "start": 80000,
+              "end": 90000
+            },
+            "composition": {
+              "id": "posterize-look"
+            }
+          },
+          {
+            "id": "effect-threshold",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 100000,
+              "end": 110000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 10000
+            },
+            "composition": {
+              "id": "threshold-look"
+            }
+          },
+          {
+            "id": "effect-levels",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 110000,
+              "end": 120000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 30000
+            },
+            "composition": {
+              "id": "levels-look"
+            }
+          },
+          {
+            "id": "effect-hue-saturation",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 120000,
+              "end": 130000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 50000
+            },
+            "composition": {
+              "id": "hue-saturation-look"
+            }
+          },
+          {
+            "id": "effect-vibrance",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 130000,
+              "end": 140000
+            },
+            "source_range": {
+              "start": 60000,
+              "end": 70000
+            },
+            "composition": {
+              "id": "vibrance-look"
+            }
+          },
+          {
+            "id": "effect-channel-mixer",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 140000,
+              "end": 150000
+            },
+            "source_range": {
+              "start": 80000,
+              "end": 90000
+            },
+            "composition": {
+              "id": "channel-mixer-look"
+            }
+          },
+          {
+            "id": "effect-lift-gamma-gain",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 150000,
+              "end": 160000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 10000
+            },
+            "composition": {
+              "id": "lift-gamma-gain-look"
+            }
+          },
+          {
+            "id": "effect-color-isolate",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 160000,
+              "end": 170000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 30000
+            },
+            "composition": {
+              "id": "color-isolate-look"
+            }
+          },
+          {
+            "id": "effect-solarize",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 170000,
+              "end": 180000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 50000
+            },
+            "composition": {
+              "id": "solarize-look"
+            }
+          },
+          {
+            "id": "effect-fill",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 180000,
+              "end": 190000
+            },
+            "source_range": {
+              "start": 60000,
+              "end": 70000
+            },
+            "composition": {
+              "id": "fill-look"
+            }
+          },
+          {
+            "id": "effect-vignette",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 190000,
+              "end": 200000
             },
             "source_range": {
               "start": 80000,
@@ -501,8 +2727,8 @@
             "id": "effect-sharpen",
             "source_id": "video",
             "timeline_range": {
-              "start": 50000,
-              "end": 60000
+              "start": 200000,
+              "end": 210000
             },
             "source_range": {
               "start": 0,
@@ -516,8 +2742,8 @@
             "id": "effect-pixelate",
             "source_id": "video",
             "timeline_range": {
-              "start": 60000,
-              "end": 70000
+              "start": 210000,
+              "end": 220000
             },
             "source_range": {
               "start": 20000,
@@ -531,8 +2757,8 @@
             "id": "effect-glow",
             "source_id": "video",
             "timeline_range": {
-              "start": 70000,
-              "end": 80000
+              "start": 220000,
+              "end": 230000
             },
             "source_range": {
               "start": 40000,
@@ -546,8 +2772,8 @@
             "id": "effect-film-grain",
             "source_id": "video",
             "timeline_range": {
-              "start": 80000,
-              "end": 90000
+              "start": 230000,
+              "end": 240000
             },
             "source_range": {
               "start": 60000,
@@ -561,8 +2787,8 @@
             "id": "effect-crop",
             "source_id": "video",
             "timeline_range": {
-              "start": 90000,
-              "end": 100000
+              "start": 240000,
+              "end": 250000
             },
             "source_range": {
               "start": 80000,
@@ -576,8 +2802,8 @@
             "id": "effect-mirror",
             "source_id": "video",
             "timeline_range": {
-              "start": 100000,
-              "end": 110000
+              "start": 250000,
+              "end": 260000
             },
             "source_range": {
               "start": 0,
@@ -588,11 +2814,551 @@
             }
           },
           {
+            "id": "effect-luma-key",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 260000,
+              "end": 270000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 30000
+            },
+            "composition": {
+              "id": "luma-key-look"
+            }
+          },
+          {
+            "id": "effect-spill-suppress",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 270000,
+              "end": 280000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 50000
+            },
+            "composition": {
+              "id": "spill-suppress-look"
+            }
+          },
+          {
+            "id": "effect-alpha-adjust",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 280000,
+              "end": 290000
+            },
+            "source_range": {
+              "start": 60000,
+              "end": 70000
+            },
+            "composition": {
+              "id": "alpha-adjust-look"
+            }
+          },
+          {
+            "id": "effect-matte-choker",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 290000,
+              "end": 300000
+            },
+            "source_range": {
+              "start": 80000,
+              "end": 90000
+            },
+            "composition": {
+              "id": "matte-choker-look"
+            }
+          },
+          {
+            "id": "effect-set-matte",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 300000,
+              "end": 310000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 10000
+            },
+            "composition": {
+              "id": "set-matte-look"
+            }
+          },
+          {
+            "id": "effect-directional-blur",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 310000,
+              "end": 320000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 30000
+            },
+            "composition": {
+              "id": "directional-blur-look"
+            }
+          },
+          {
+            "id": "effect-radial-blur",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 320000,
+              "end": 330000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 50000
+            },
+            "composition": {
+              "id": "radial-blur-look"
+            }
+          },
+          {
+            "id": "effect-unsharp-mask",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 330000,
+              "end": 340000
+            },
+            "source_range": {
+              "start": 60000,
+              "end": 70000
+            },
+            "composition": {
+              "id": "unsharp-mask-look"
+            }
+          },
+          {
+            "id": "effect-tilt-shift",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 340000,
+              "end": 350000
+            },
+            "source_range": {
+              "start": 80000,
+              "end": 90000
+            },
+            "composition": {
+              "id": "tilt-shift-look"
+            }
+          },
+          {
+            "id": "effect-lens-blur",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 350000,
+              "end": 360000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 10000
+            },
+            "composition": {
+              "id": "lens-blur-look"
+            }
+          },
+          {
+            "id": "effect-surface-blur",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 360000,
+              "end": 370000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 30000
+            },
+            "composition": {
+              "id": "surface-blur-look"
+            }
+          },
+          {
+            "id": "effect-rgb-split",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 370000,
+              "end": 380000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 50000
+            },
+            "composition": {
+              "id": "rgb-split-look"
+            }
+          },
+          {
+            "id": "effect-glitch",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 380000,
+              "end": 390000
+            },
+            "source_range": {
+              "start": 60000,
+              "end": 70000
+            },
+            "composition": {
+              "id": "glitch-look"
+            }
+          },
+          {
+            "id": "effect-crt",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 390000,
+              "end": 400000
+            },
+            "source_range": {
+              "start": 80000,
+              "end": 90000
+            },
+            "composition": {
+              "id": "crt-look"
+            }
+          },
+          {
+            "id": "effect-vhs",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 400000,
+              "end": 410000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 10000
+            },
+            "composition": {
+              "id": "vhs-look"
+            }
+          },
+          {
+            "id": "effect-halftone",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 410000,
+              "end": 420000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 30000
+            },
+            "composition": {
+              "id": "halftone-look"
+            }
+          },
+          {
+            "id": "effect-emboss",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 420000,
+              "end": 430000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 50000
+            },
+            "composition": {
+              "id": "emboss-look"
+            }
+          },
+          {
+            "id": "effect-edge-detect",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 430000,
+              "end": 440000
+            },
+            "source_range": {
+              "start": 60000,
+              "end": 70000
+            },
+            "composition": {
+              "id": "edge-detect-look"
+            }
+          },
+          {
+            "id": "effect-drop-shadow",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 440000,
+              "end": 450000
+            },
+            "source_range": {
+              "start": 80000,
+              "end": 90000
+            },
+            "composition": {
+              "id": "drop-shadow-look"
+            }
+          },
+          {
+            "id": "effect-outline",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 450000,
+              "end": 460000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 10000
+            },
+            "composition": {
+              "id": "outline-look"
+            }
+          },
+          {
+            "id": "effect-light-leak",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 460000,
+              "end": 470000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 30000
+            },
+            "composition": {
+              "id": "light-leak-look"
+            }
+          },
+          {
+            "id": "effect-letterbox",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 470000,
+              "end": 480000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 50000
+            },
+            "composition": {
+              "id": "letterbox-look"
+            }
+          },
+          {
+            "id": "effect-oil-paint",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 480000,
+              "end": 490000
+            },
+            "source_range": {
+              "start": 60000,
+              "end": 70000
+            },
+            "composition": {
+              "id": "oil-paint-look"
+            }
+          },
+          {
+            "id": "effect-swirl",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 490000,
+              "end": 500000
+            },
+            "source_range": {
+              "start": 80000,
+              "end": 90000
+            },
+            "composition": {
+              "id": "swirl-look"
+            }
+          },
+          {
+            "id": "effect-bulge",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 500000,
+              "end": 510000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 10000
+            },
+            "composition": {
+              "id": "bulge-look"
+            }
+          },
+          {
+            "id": "effect-wave-warp",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 510000,
+              "end": 520000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 30000
+            },
+            "composition": {
+              "id": "wave-warp-look"
+            }
+          },
+          {
+            "id": "effect-ripple",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 520000,
+              "end": 530000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 50000
+            },
+            "composition": {
+              "id": "ripple-look"
+            }
+          },
+          {
+            "id": "effect-lens-distortion",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 530000,
+              "end": 540000
+            },
+            "source_range": {
+              "start": 60000,
+              "end": 70000
+            },
+            "composition": {
+              "id": "lens-distortion-look"
+            }
+          },
+          {
+            "id": "effect-polar-coordinates",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 540000,
+              "end": 550000
+            },
+            "source_range": {
+              "start": 80000,
+              "end": 90000
+            },
+            "composition": {
+              "id": "polar-coordinates-look"
+            }
+          },
+          {
+            "id": "effect-offset",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 550000,
+              "end": 560000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 10000
+            },
+            "composition": {
+              "id": "offset-look"
+            }
+          },
+          {
+            "id": "effect-corner-pin",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 560000,
+              "end": 570000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 30000
+            },
+            "composition": {
+              "id": "corner-pin-look"
+            }
+          },
+          {
+            "id": "effect-shake",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 570000,
+              "end": 580000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 50000
+            },
+            "composition": {
+              "id": "shake-look"
+            }
+          },
+          {
+            "id": "effect-turbulent-displace",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 580000,
+              "end": 590000
+            },
+            "source_range": {
+              "start": 60000,
+              "end": 70000
+            },
+            "composition": {
+              "id": "turbulent-displace-look"
+            }
+          },
+          {
+            "id": "effect-displacement-map",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 590000,
+              "end": 600000
+            },
+            "source_range": {
+              "start": 80000,
+              "end": 90000
+            },
+            "composition": {
+              "id": "displacement-map-look"
+            }
+          },
+          {
+            "id": "effect-kaleidoscope",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 600000,
+              "end": 610000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 10000
+            },
+            "composition": {
+              "id": "kaleidoscope-look"
+            }
+          },
+          {
+            "id": "effect-tile",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 610000,
+              "end": 620000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 30000
+            },
+            "composition": {
+              "id": "tile-look"
+            }
+          },
+          {
             "id": "chain-0",
             "source_id": "video",
             "timeline_range": {
-              "start": 110000,
-              "end": 145000
+              "start": 620000,
+              "end": 655000
             },
             "source_range": {
               "start": 0,
@@ -603,8 +3369,8 @@
             "id": "chain-1",
             "source_id": "still",
             "timeline_range": {
-              "start": 130000,
-              "end": 165000
+              "start": 640000,
+              "end": 675000
             },
             "source_range": {
               "start": 0,
@@ -615,8 +3381,8 @@
             "id": "chain-2",
             "source_id": "video",
             "timeline_range": {
-              "start": 150000,
-              "end": 185000
+              "start": 660000,
+              "end": 695000
             },
             "source_range": {
               "start": 20000,
@@ -627,8 +3393,8 @@
             "id": "chain-3",
             "source_id": "still",
             "timeline_range": {
-              "start": 170000,
-              "end": 205000
+              "start": 680000,
+              "end": 715000
             },
             "source_range": {
               "start": 0,
@@ -639,8 +3405,8 @@
             "id": "chain-4",
             "source_id": "video",
             "timeline_range": {
-              "start": 190000,
-              "end": 225000
+              "start": 700000,
+              "end": 735000
             },
             "source_range": {
               "start": 40000,
@@ -651,8 +3417,8 @@
             "id": "chain-5",
             "source_id": "still",
             "timeline_range": {
-              "start": 210000,
-              "end": 245000
+              "start": 720000,
+              "end": 755000
             },
             "source_range": {
               "start": 0,
@@ -663,8 +3429,8 @@
             "id": "chain-6",
             "source_id": "video",
             "timeline_range": {
-              "start": 230000,
-              "end": 265000
+              "start": 740000,
+              "end": 775000
             },
             "source_range": {
               "start": 60000,
@@ -675,8 +3441,8 @@
             "id": "chain-7",
             "source_id": "still",
             "timeline_range": {
-              "start": 250000,
-              "end": 285000
+              "start": 760000,
+              "end": 795000
             },
             "source_range": {
               "start": 0,
@@ -687,8 +3453,8 @@
             "id": "chain-8",
             "source_id": "video",
             "timeline_range": {
-              "start": 270000,
-              "end": 305000
+              "start": 780000,
+              "end": 815000
             },
             "source_range": {
               "start": 0,
@@ -699,8 +3465,8 @@
             "id": "chain-9",
             "source_id": "still",
             "timeline_range": {
-              "start": 290000,
-              "end": 325000
+              "start": 800000,
+              "end": 835000
             },
             "source_range": {
               "start": 0,
@@ -711,8 +3477,8 @@
             "id": "chain-10",
             "source_id": "video",
             "timeline_range": {
-              "start": 310000,
-              "end": 345000
+              "start": 820000,
+              "end": 855000
             },
             "source_range": {
               "start": 20000,
@@ -723,8 +3489,8 @@
             "id": "chain-11",
             "source_id": "still",
             "timeline_range": {
-              "start": 330000,
-              "end": 365000
+              "start": 840000,
+              "end": 875000
             },
             "source_range": {
               "start": 0,
@@ -735,8 +3501,8 @@
             "id": "chain-12",
             "source_id": "video",
             "timeline_range": {
-              "start": 350000,
-              "end": 385000
+              "start": 860000,
+              "end": 895000
             },
             "source_range": {
               "start": 40000,
@@ -747,8 +3513,8 @@
             "id": "chain-13",
             "source_id": "still",
             "timeline_range": {
-              "start": 370000,
-              "end": 405000
+              "start": 880000,
+              "end": 915000
             },
             "source_range": {
               "start": 0,
@@ -759,8 +3525,8 @@
             "id": "chain-14",
             "source_id": "video",
             "timeline_range": {
-              "start": 390000,
-              "end": 425000
+              "start": 900000,
+              "end": 935000
             },
             "source_range": {
               "start": 60000,
@@ -771,8 +3537,8 @@
             "id": "chain-15",
             "source_id": "still",
             "timeline_range": {
-              "start": 410000,
-              "end": 445000
+              "start": 920000,
+              "end": 955000
             },
             "source_range": {
               "start": 0,
@@ -783,8 +3549,8 @@
             "id": "chain-16",
             "source_id": "video",
             "timeline_range": {
-              "start": 430000,
-              "end": 465000
+              "start": 940000,
+              "end": 975000
             },
             "source_range": {
               "start": 0,
@@ -795,8 +3561,8 @@
             "id": "chain-17",
             "source_id": "still",
             "timeline_range": {
-              "start": 450000,
-              "end": 485000
+              "start": 960000,
+              "end": 995000
             },
             "source_range": {
               "start": 0,
@@ -807,8 +3573,8 @@
             "id": "chain-18",
             "source_id": "video",
             "timeline_range": {
-              "start": 470000,
-              "end": 505000
+              "start": 980000,
+              "end": 1015000
             },
             "source_range": {
               "start": 20000,
@@ -819,8 +3585,8 @@
             "id": "chain-19",
             "source_id": "still",
             "timeline_range": {
-              "start": 490000,
-              "end": 525000
+              "start": 1000000,
+              "end": 1035000
             },
             "source_range": {
               "start": 0,
@@ -831,8 +3597,8 @@
             "id": "chain-20",
             "source_id": "video",
             "timeline_range": {
-              "start": 510000,
-              "end": 545000
+              "start": 1020000,
+              "end": 1055000
             },
             "source_range": {
               "start": 40000,
@@ -843,8 +3609,8 @@
             "id": "chain-21",
             "source_id": "still",
             "timeline_range": {
-              "start": 530000,
-              "end": 565000
+              "start": 1040000,
+              "end": 1075000
             },
             "source_range": {
               "start": 0,
@@ -855,8 +3621,8 @@
             "id": "chain-22",
             "source_id": "video",
             "timeline_range": {
-              "start": 550000,
-              "end": 585000
+              "start": 1060000,
+              "end": 1095000
             },
             "source_range": {
               "start": 60000,
@@ -867,8 +3633,8 @@
             "id": "chain-23",
             "source_id": "still",
             "timeline_range": {
-              "start": 570000,
-              "end": 605000
+              "start": 1080000,
+              "end": 1115000
             },
             "source_range": {
               "start": 0,
@@ -879,8 +3645,8 @@
             "id": "chain-24",
             "source_id": "video",
             "timeline_range": {
-              "start": 590000,
-              "end": 625000
+              "start": 1100000,
+              "end": 1135000
             },
             "source_range": {
               "start": 0,
@@ -891,8 +3657,8 @@
             "id": "chain-25",
             "source_id": "still",
             "timeline_range": {
-              "start": 610000,
-              "end": 645000
+              "start": 1120000,
+              "end": 1155000
             },
             "source_range": {
               "start": 0,
@@ -903,8 +3669,8 @@
             "id": "chain-26",
             "source_id": "video",
             "timeline_range": {
-              "start": 630000,
-              "end": 665000
+              "start": 1140000,
+              "end": 1175000
             },
             "source_range": {
               "start": 20000,
@@ -915,8 +3681,8 @@
             "id": "chain-27",
             "source_id": "still",
             "timeline_range": {
-              "start": 650000,
-              "end": 685000
+              "start": 1160000,
+              "end": 1195000
             },
             "source_range": {
               "start": 0,
@@ -927,8 +3693,8 @@
             "id": "chain-28",
             "source_id": "video",
             "timeline_range": {
-              "start": 670000,
-              "end": 705000
+              "start": 1180000,
+              "end": 1215000
             },
             "source_range": {
               "start": 40000,
@@ -939,8 +3705,8 @@
             "id": "chain-29",
             "source_id": "still",
             "timeline_range": {
-              "start": 690000,
-              "end": 725000
+              "start": 1200000,
+              "end": 1235000
             },
             "source_range": {
               "start": 0,
@@ -951,12 +3717,1116 @@
             "id": "chain-30",
             "source_id": "video",
             "timeline_range": {
-              "start": 710000,
-              "end": 745000
+              "start": 1220000,
+              "end": 1255000
             },
             "source_range": {
               "start": 60000,
               "end": 95000
+            }
+          },
+          {
+            "id": "chain-31",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 1240000,
+              "end": 1275000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-32",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 1260000,
+              "end": 1295000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-33",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 1280000,
+              "end": 1315000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-34",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 1300000,
+              "end": 1335000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 55000
+            }
+          },
+          {
+            "id": "chain-35",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 1320000,
+              "end": 1355000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-36",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 1340000,
+              "end": 1375000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 75000
+            }
+          },
+          {
+            "id": "chain-37",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 1360000,
+              "end": 1395000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-38",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 1380000,
+              "end": 1415000
+            },
+            "source_range": {
+              "start": 60000,
+              "end": 95000
+            }
+          },
+          {
+            "id": "chain-39",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 1400000,
+              "end": 1435000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-40",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 1420000,
+              "end": 1455000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-41",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 1440000,
+              "end": 1475000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-42",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 1460000,
+              "end": 1495000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 55000
+            }
+          },
+          {
+            "id": "chain-43",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 1480000,
+              "end": 1515000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-44",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 1500000,
+              "end": 1535000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 75000
+            }
+          },
+          {
+            "id": "chain-45",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 1520000,
+              "end": 1555000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-46",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 1540000,
+              "end": 1575000
+            },
+            "source_range": {
+              "start": 60000,
+              "end": 95000
+            }
+          },
+          {
+            "id": "chain-47",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 1560000,
+              "end": 1595000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-48",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 1580000,
+              "end": 1615000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-49",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 1600000,
+              "end": 1635000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-50",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 1620000,
+              "end": 1655000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 55000
+            }
+          },
+          {
+            "id": "chain-51",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 1640000,
+              "end": 1675000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-52",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 1660000,
+              "end": 1695000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 75000
+            }
+          },
+          {
+            "id": "chain-53",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 1680000,
+              "end": 1715000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-54",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 1700000,
+              "end": 1735000
+            },
+            "source_range": {
+              "start": 60000,
+              "end": 95000
+            }
+          },
+          {
+            "id": "chain-55",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 1720000,
+              "end": 1755000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-56",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 1740000,
+              "end": 1775000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-57",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 1760000,
+              "end": 1795000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-58",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 1780000,
+              "end": 1815000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 55000
+            }
+          },
+          {
+            "id": "chain-59",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 1800000,
+              "end": 1835000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-60",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 1820000,
+              "end": 1855000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 75000
+            }
+          },
+          {
+            "id": "chain-61",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 1840000,
+              "end": 1875000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-62",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 1860000,
+              "end": 1895000
+            },
+            "source_range": {
+              "start": 60000,
+              "end": 95000
+            }
+          },
+          {
+            "id": "chain-63",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 1880000,
+              "end": 1915000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-64",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 1900000,
+              "end": 1935000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-65",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 1920000,
+              "end": 1955000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-66",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 1940000,
+              "end": 1975000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 55000
+            }
+          },
+          {
+            "id": "chain-67",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 1960000,
+              "end": 1995000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-68",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 1980000,
+              "end": 2015000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 75000
+            }
+          },
+          {
+            "id": "chain-69",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 2000000,
+              "end": 2035000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-70",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 2020000,
+              "end": 2055000
+            },
+            "source_range": {
+              "start": 60000,
+              "end": 95000
+            }
+          },
+          {
+            "id": "chain-71",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 2040000,
+              "end": 2075000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-72",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 2060000,
+              "end": 2095000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-73",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 2080000,
+              "end": 2115000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-74",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 2100000,
+              "end": 2135000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 55000
+            }
+          },
+          {
+            "id": "chain-75",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 2120000,
+              "end": 2155000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-76",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 2140000,
+              "end": 2175000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 75000
+            }
+          },
+          {
+            "id": "chain-77",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 2160000,
+              "end": 2195000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-78",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 2180000,
+              "end": 2215000
+            },
+            "source_range": {
+              "start": 60000,
+              "end": 95000
+            }
+          },
+          {
+            "id": "chain-79",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 2200000,
+              "end": 2235000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-80",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 2220000,
+              "end": 2255000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-81",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 2240000,
+              "end": 2275000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-82",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 2260000,
+              "end": 2295000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 55000
+            }
+          },
+          {
+            "id": "chain-83",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 2280000,
+              "end": 2315000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-84",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 2300000,
+              "end": 2335000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 75000
+            }
+          },
+          {
+            "id": "chain-85",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 2320000,
+              "end": 2355000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-86",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 2340000,
+              "end": 2375000
+            },
+            "source_range": {
+              "start": 60000,
+              "end": 95000
+            }
+          },
+          {
+            "id": "chain-87",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 2360000,
+              "end": 2395000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-88",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 2380000,
+              "end": 2415000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-89",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 2400000,
+              "end": 2435000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-90",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 2420000,
+              "end": 2455000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 55000
+            }
+          },
+          {
+            "id": "chain-91",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 2440000,
+              "end": 2475000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-92",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 2460000,
+              "end": 2495000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 75000
+            }
+          },
+          {
+            "id": "chain-93",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 2480000,
+              "end": 2515000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-94",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 2500000,
+              "end": 2535000
+            },
+            "source_range": {
+              "start": 60000,
+              "end": 95000
+            }
+          },
+          {
+            "id": "chain-95",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 2520000,
+              "end": 2555000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-96",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 2540000,
+              "end": 2575000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-97",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 2560000,
+              "end": 2595000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-98",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 2580000,
+              "end": 2615000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 55000
+            }
+          },
+          {
+            "id": "chain-99",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 2600000,
+              "end": 2635000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-100",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 2620000,
+              "end": 2655000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 75000
+            }
+          },
+          {
+            "id": "chain-101",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 2640000,
+              "end": 2675000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-102",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 2660000,
+              "end": 2695000
+            },
+            "source_range": {
+              "start": 60000,
+              "end": 95000
+            }
+          },
+          {
+            "id": "chain-103",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 2680000,
+              "end": 2715000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-104",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 2700000,
+              "end": 2735000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-105",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 2720000,
+              "end": 2755000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-106",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 2740000,
+              "end": 2775000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 55000
+            }
+          },
+          {
+            "id": "chain-107",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 2760000,
+              "end": 2795000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-108",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 2780000,
+              "end": 2815000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 75000
+            }
+          },
+          {
+            "id": "chain-109",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 2800000,
+              "end": 2835000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-110",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 2820000,
+              "end": 2855000
+            },
+            "source_range": {
+              "start": 60000,
+              "end": 95000
+            }
+          },
+          {
+            "id": "chain-111",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 2840000,
+              "end": 2875000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-112",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 2860000,
+              "end": 2895000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-113",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 2880000,
+              "end": 2915000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-114",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 2900000,
+              "end": 2935000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 55000
+            }
+          },
+          {
+            "id": "chain-115",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 2920000,
+              "end": 2955000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-116",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 2940000,
+              "end": 2975000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 75000
+            }
+          },
+          {
+            "id": "chain-117",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 2960000,
+              "end": 2995000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-118",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 2980000,
+              "end": 3015000
+            },
+            "source_range": {
+              "start": 60000,
+              "end": 95000
+            }
+          },
+          {
+            "id": "chain-119",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 3000000,
+              "end": 3035000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-120",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 3020000,
+              "end": 3055000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-121",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 3040000,
+              "end": 3075000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-122",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 3060000,
+              "end": 3095000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 55000
             }
           }
         ],
@@ -965,8 +4835,8 @@
             "from_clip": "chain-0",
             "to_clip": "chain-1",
             "timeline_range": {
-              "start": 130000,
-              "end": 145000
+              "start": 640000,
+              "end": 655000
             },
             "easing": {
               "type": "linear"
@@ -980,8 +4850,8 @@
             "from_clip": "chain-1",
             "to_clip": "chain-2",
             "timeline_range": {
-              "start": 150000,
-              "end": 165000
+              "start": 660000,
+              "end": 675000
             },
             "easing": {
               "type": "linear"
@@ -995,8 +4865,8 @@
             "from_clip": "chain-2",
             "to_clip": "chain-3",
             "timeline_range": {
-              "start": 170000,
-              "end": 185000
+              "start": 680000,
+              "end": 695000
             },
             "easing": {
               "type": "linear"
@@ -1010,8 +4880,8 @@
             "from_clip": "chain-3",
             "to_clip": "chain-4",
             "timeline_range": {
-              "start": 190000,
-              "end": 205000
+              "start": 700000,
+              "end": 715000
             },
             "easing": {
               "type": "linear"
@@ -1025,8 +4895,8 @@
             "from_clip": "chain-4",
             "to_clip": "chain-5",
             "timeline_range": {
-              "start": 210000,
-              "end": 225000
+              "start": 720000,
+              "end": 735000
             },
             "easing": {
               "type": "linear"
@@ -1040,8 +4910,8 @@
             "from_clip": "chain-5",
             "to_clip": "chain-6",
             "timeline_range": {
-              "start": 230000,
-              "end": 245000
+              "start": 740000,
+              "end": 755000
             },
             "easing": {
               "type": "linear"
@@ -1055,8 +4925,8 @@
             "from_clip": "chain-6",
             "to_clip": "chain-7",
             "timeline_range": {
-              "start": 250000,
-              "end": 265000
+              "start": 760000,
+              "end": 775000
             },
             "easing": {
               "type": "linear"
@@ -1070,8 +4940,8 @@
             "from_clip": "chain-7",
             "to_clip": "chain-8",
             "timeline_range": {
-              "start": 270000,
-              "end": 285000
+              "start": 780000,
+              "end": 795000
             },
             "easing": {
               "type": "linear"
@@ -1085,8 +4955,8 @@
             "from_clip": "chain-8",
             "to_clip": "chain-9",
             "timeline_range": {
-              "start": 290000,
-              "end": 305000
+              "start": 800000,
+              "end": 815000
             },
             "easing": {
               "type": "linear"
@@ -1100,8 +4970,8 @@
             "from_clip": "chain-9",
             "to_clip": "chain-10",
             "timeline_range": {
-              "start": 310000,
-              "end": 325000
+              "start": 820000,
+              "end": 835000
             },
             "easing": {
               "type": "linear"
@@ -1115,8 +4985,308 @@
             "from_clip": "chain-10",
             "to_clip": "chain-11",
             "timeline_range": {
-              "start": 330000,
-              "end": 345000
+              "start": 840000,
+              "end": 855000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.bounce",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-11",
+            "to_clip": "chain-12",
+            "timeline_range": {
+              "start": 860000,
+              "end": 875000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.directional-scaled",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-12",
+            "to_clip": "chain-13",
+            "timeline_range": {
+              "start": 880000,
+              "end": 895000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.slides",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-13",
+            "to_clip": "chain-14",
+            "timeline_range": {
+              "start": 900000,
+              "end": 915000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.fold",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-14",
+            "to_clip": "chain-15",
+            "timeline_range": {
+              "start": 920000,
+              "end": 935000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.directional-easing",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-15",
+            "to_clip": "chain-16",
+            "timeline_range": {
+              "start": 940000,
+              "end": 955000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.hsv-fade",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-16",
+            "to_clip": "chain-17",
+            "timeline_range": {
+              "start": 960000,
+              "end": 975000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.left-right",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-17",
+            "to_clip": "chain-18",
+            "timeline_range": {
+              "start": 980000,
+              "end": 995000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.top-bottom",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-18",
+            "to_clip": "chain-19",
+            "timeline_range": {
+              "start": 1000000,
+              "end": 1015000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.multiply-blend",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-19",
+            "to_clip": "chain-20",
+            "timeline_range": {
+              "start": 1020000,
+              "end": 1035000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.rolls",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-20",
+            "to_clip": "chain-21",
+            "timeline_range": {
+              "start": 1040000,
+              "end": 1055000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.split-slide-in-horizontal",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-21",
+            "to_clip": "chain-22",
+            "timeline_range": {
+              "start": 1060000,
+              "end": 1075000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.split-slide-in-vertical",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-22",
+            "to_clip": "chain-23",
+            "timeline_range": {
+              "start": 1080000,
+              "end": 1095000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.split-slide-out-horizontal",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-23",
+            "to_clip": "chain-24",
+            "timeline_range": {
+              "start": 1100000,
+              "end": 1115000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.split-slide-out-vertical",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-24",
+            "to_clip": "chain-25",
+            "timeline_range": {
+              "start": 1120000,
+              "end": 1135000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.split-slide-in-out-horizontal",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-25",
+            "to_clip": "chain-26",
+            "timeline_range": {
+              "start": 1140000,
+              "end": 1155000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.split-slide-in-out-vertical",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-26",
+            "to_clip": "chain-27",
+            "timeline_range": {
+              "start": 1160000,
+              "end": 1175000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.rotate",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-27",
+            "to_clip": "chain-28",
+            "timeline_range": {
+              "start": 1180000,
+              "end": 1195000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.x-axis-translation",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-28",
+            "to_clip": "chain-29",
+            "timeline_range": {
+              "start": 1200000,
+              "end": 1215000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.cover",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-29",
+            "to_clip": "chain-30",
+            "timeline_range": {
+              "start": 1220000,
+              "end": 1235000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.uncover",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-30",
+            "to_clip": "chain-31",
+            "timeline_range": {
+              "start": 1240000,
+              "end": 1255000
             },
             "easing": {
               "type": "linear"
@@ -1127,11 +5297,11 @@
             }
           },
           {
-            "from_clip": "chain-11",
-            "to_clip": "chain-12",
+            "from_clip": "chain-31",
+            "to_clip": "chain-32",
             "timeline_range": {
-              "start": 350000,
-              "end": 365000
+              "start": 1260000,
+              "end": 1275000
             },
             "easing": {
               "type": "linear"
@@ -1142,11 +5312,11 @@
             }
           },
           {
-            "from_clip": "chain-12",
-            "to_clip": "chain-13",
+            "from_clip": "chain-32",
+            "to_clip": "chain-33",
             "timeline_range": {
-              "start": 370000,
-              "end": 385000
+              "start": 1280000,
+              "end": 1295000
             },
             "easing": {
               "type": "linear"
@@ -1157,11 +5327,11 @@
             }
           },
           {
-            "from_clip": "chain-13",
-            "to_clip": "chain-14",
+            "from_clip": "chain-33",
+            "to_clip": "chain-34",
             "timeline_range": {
-              "start": 390000,
-              "end": 405000
+              "start": 1300000,
+              "end": 1315000
             },
             "easing": {
               "type": "linear"
@@ -1172,11 +5342,11 @@
             }
           },
           {
-            "from_clip": "chain-14",
-            "to_clip": "chain-15",
+            "from_clip": "chain-34",
+            "to_clip": "chain-35",
             "timeline_range": {
-              "start": 410000,
-              "end": 425000
+              "start": 1320000,
+              "end": 1335000
             },
             "easing": {
               "type": "linear"
@@ -1187,11 +5357,11 @@
             }
           },
           {
-            "from_clip": "chain-15",
-            "to_clip": "chain-16",
+            "from_clip": "chain-35",
+            "to_clip": "chain-36",
             "timeline_range": {
-              "start": 430000,
-              "end": 445000
+              "start": 1340000,
+              "end": 1355000
             },
             "easing": {
               "type": "linear"
@@ -1202,11 +5372,11 @@
             }
           },
           {
-            "from_clip": "chain-16",
-            "to_clip": "chain-17",
+            "from_clip": "chain-36",
+            "to_clip": "chain-37",
             "timeline_range": {
-              "start": 450000,
-              "end": 465000
+              "start": 1360000,
+              "end": 1375000
             },
             "easing": {
               "type": "linear"
@@ -1217,11 +5387,11 @@
             }
           },
           {
-            "from_clip": "chain-17",
-            "to_clip": "chain-18",
+            "from_clip": "chain-37",
+            "to_clip": "chain-38",
             "timeline_range": {
-              "start": 470000,
-              "end": 485000
+              "start": 1380000,
+              "end": 1395000
             },
             "easing": {
               "type": "linear"
@@ -1232,11 +5402,11 @@
             }
           },
           {
-            "from_clip": "chain-18",
-            "to_clip": "chain-19",
+            "from_clip": "chain-38",
+            "to_clip": "chain-39",
             "timeline_range": {
-              "start": 490000,
-              "end": 505000
+              "start": 1400000,
+              "end": 1415000
             },
             "easing": {
               "type": "linear"
@@ -1247,11 +5417,11 @@
             }
           },
           {
-            "from_clip": "chain-19",
-            "to_clip": "chain-20",
+            "from_clip": "chain-39",
+            "to_clip": "chain-40",
             "timeline_range": {
-              "start": 510000,
-              "end": 525000
+              "start": 1420000,
+              "end": 1435000
             },
             "easing": {
               "type": "linear"
@@ -1262,11 +5432,11 @@
             }
           },
           {
-            "from_clip": "chain-20",
-            "to_clip": "chain-21",
+            "from_clip": "chain-40",
+            "to_clip": "chain-41",
             "timeline_range": {
-              "start": 530000,
-              "end": 545000
+              "start": 1440000,
+              "end": 1455000
             },
             "easing": {
               "type": "linear"
@@ -1277,11 +5447,11 @@
             }
           },
           {
-            "from_clip": "chain-21",
-            "to_clip": "chain-22",
+            "from_clip": "chain-41",
+            "to_clip": "chain-42",
             "timeline_range": {
-              "start": 550000,
-              "end": 565000
+              "start": 1460000,
+              "end": 1475000
             },
             "easing": {
               "type": "linear"
@@ -1292,11 +5462,11 @@
             }
           },
           {
-            "from_clip": "chain-22",
-            "to_clip": "chain-23",
+            "from_clip": "chain-42",
+            "to_clip": "chain-43",
             "timeline_range": {
-              "start": 570000,
-              "end": 585000
+              "start": 1480000,
+              "end": 1495000
             },
             "easing": {
               "type": "linear"
@@ -1307,11 +5477,11 @@
             }
           },
           {
-            "from_clip": "chain-23",
-            "to_clip": "chain-24",
+            "from_clip": "chain-43",
+            "to_clip": "chain-44",
             "timeline_range": {
-              "start": 590000,
-              "end": 605000
+              "start": 1500000,
+              "end": 1515000
             },
             "easing": {
               "type": "linear"
@@ -1322,11 +5492,11 @@
             }
           },
           {
-            "from_clip": "chain-24",
-            "to_clip": "chain-25",
+            "from_clip": "chain-44",
+            "to_clip": "chain-45",
             "timeline_range": {
-              "start": 610000,
-              "end": 625000
+              "start": 1520000,
+              "end": 1535000
             },
             "easing": {
               "type": "linear"
@@ -1337,11 +5507,11 @@
             }
           },
           {
-            "from_clip": "chain-25",
-            "to_clip": "chain-26",
+            "from_clip": "chain-45",
+            "to_clip": "chain-46",
             "timeline_range": {
-              "start": 630000,
-              "end": 645000
+              "start": 1540000,
+              "end": 1555000
             },
             "easing": {
               "type": "linear"
@@ -1352,11 +5522,11 @@
             }
           },
           {
-            "from_clip": "chain-26",
-            "to_clip": "chain-27",
+            "from_clip": "chain-46",
+            "to_clip": "chain-47",
             "timeline_range": {
-              "start": 650000,
-              "end": 665000
+              "start": 1560000,
+              "end": 1575000
             },
             "easing": {
               "type": "linear"
@@ -1367,11 +5537,11 @@
             }
           },
           {
-            "from_clip": "chain-27",
-            "to_clip": "chain-28",
+            "from_clip": "chain-47",
+            "to_clip": "chain-48",
             "timeline_range": {
-              "start": 670000,
-              "end": 685000
+              "start": 1580000,
+              "end": 1595000
             },
             "easing": {
               "type": "linear"
@@ -1382,11 +5552,11 @@
             }
           },
           {
-            "from_clip": "chain-28",
-            "to_clip": "chain-29",
+            "from_clip": "chain-48",
+            "to_clip": "chain-49",
             "timeline_range": {
-              "start": 690000,
-              "end": 705000
+              "start": 1600000,
+              "end": 1615000
             },
             "easing": {
               "type": "linear"
@@ -1397,17 +5567,1124 @@
             }
           },
           {
-            "from_clip": "chain-29",
-            "to_clip": "chain-30",
+            "from_clip": "chain-49",
+            "to_clip": "chain-50",
             "timeline_range": {
-              "start": 710000,
-              "end": 725000
+              "start": 1620000,
+              "end": 1635000
             },
             "easing": {
               "type": "linear"
             },
             "effect": {
               "id": "alpha2.transition.directional-warp",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-50",
+            "to_clip": "chain-51",
+            "timeline_range": {
+              "start": 1640000,
+              "end": 1655000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.horizontal-open",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-51",
+            "to_clip": "chain-52",
+            "timeline_range": {
+              "start": 1660000,
+              "end": 1675000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.horizontal-close",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-52",
+            "to_clip": "chain-53",
+            "timeline_range": {
+              "start": 1680000,
+              "end": 1695000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.vertical-open",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-53",
+            "to_clip": "chain-54",
+            "timeline_range": {
+              "start": 1700000,
+              "end": 1715000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.vertical-close",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-54",
+            "to_clip": "chain-55",
+            "timeline_range": {
+              "start": 1720000,
+              "end": 1735000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.screen-melt",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-55",
+            "to_clip": "chain-56",
+            "timeline_range": {
+              "start": 1740000,
+              "end": 1755000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.squares-wire",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-56",
+            "to_clip": "chain-57",
+            "timeline_range": {
+              "start": 1760000,
+              "end": 1775000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.static-wipe",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-57",
+            "to_clip": "chain-58",
+            "timeline_range": {
+              "start": 1780000,
+              "end": 1795000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.zoom-left-wipe",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-58",
+            "to_clip": "chain-59",
+            "timeline_range": {
+              "start": 1800000,
+              "end": 1815000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.zoom-right-wipe",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-59",
+            "to_clip": "chain-60",
+            "timeline_range": {
+              "start": 1820000,
+              "end": 1835000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.gradient-wipe",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-60",
+            "to_clip": "chain-61",
+            "timeline_range": {
+              "start": 1840000,
+              "end": 1855000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.box",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-61",
+            "to_clip": "chain-62",
+            "timeline_range": {
+              "start": 1860000,
+              "end": 1875000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.chessboard",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-62",
+            "to_clip": "chain-63",
+            "timeline_range": {
+              "start": 1880000,
+              "end": 1895000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.bow-tie",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-63",
+            "to_clip": "chain-64",
+            "timeline_range": {
+              "start": 1900000,
+              "end": 1915000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.bow-tie-horizontal",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-64",
+            "to_clip": "chain-65",
+            "timeline_range": {
+              "start": 1920000,
+              "end": 1935000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.bow-tie-vertical",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-65",
+            "to_clip": "chain-66",
+            "timeline_range": {
+              "start": 1940000,
+              "end": 1955000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.fragment",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-66",
+            "to_clip": "chain-67",
+            "timeline_range": {
+              "start": 1960000,
+              "end": 1975000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.polar-function",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-67",
+            "to_clip": "chain-68",
+            "timeline_range": {
+              "start": 1980000,
+              "end": 1995000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.rectangle",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-68",
+            "to_clip": "chain-69",
+            "timeline_range": {
+              "start": 2000000,
+              "end": 2015000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.rectangle-crop",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-69",
+            "to_clip": "chain-70",
+            "timeline_range": {
+              "start": 2020000,
+              "end": 2035000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.star-wipe",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-70",
+            "to_clip": "chain-71",
+            "timeline_range": {
+              "start": 2040000,
+              "end": 2055000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.shape-wipe",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-71",
+            "to_clip": "chain-72",
+            "timeline_range": {
+              "start": 2060000,
+              "end": 2075000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.cube",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-72",
+            "to_clip": "chain-73",
+            "timeline_range": {
+              "start": 2080000,
+              "end": 2095000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.doorway",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-73",
+            "to_clip": "chain-74",
+            "timeline_range": {
+              "start": 2100000,
+              "end": 2115000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.swap",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-74",
+            "to_clip": "chain-75",
+            "timeline_range": {
+              "start": 2120000,
+              "end": 2135000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.grid-flip",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-75",
+            "to_clip": "chain-76",
+            "timeline_range": {
+              "start": 2140000,
+              "end": 2155000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.tiles-wave",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-76",
+            "to_clip": "chain-77",
+            "timeline_range": {
+              "start": 2160000,
+              "end": 2175000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.book-flip",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-77",
+            "to_clip": "chain-78",
+            "timeline_range": {
+              "start": 2180000,
+              "end": 2195000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.simple-flip",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-78",
+            "to_clip": "chain-79",
+            "timeline_range": {
+              "start": 2200000,
+              "end": 2215000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.page-peel",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-79",
+            "to_clip": "chain-80",
+            "timeline_range": {
+              "start": 2220000,
+              "end": 2235000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.strip-datamosh-glitch",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-80",
+            "to_clip": "chain-81",
+            "timeline_range": {
+              "start": 2240000,
+              "end": 2255000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.drop-zone-flicker",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-81",
+            "to_clip": "chain-82",
+            "timeline_range": {
+              "start": 2260000,
+              "end": 2275000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.glitch-displace",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-82",
+            "to_clip": "chain-83",
+            "timeline_range": {
+              "start": 2280000,
+              "end": 2295000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.old-tv-lost-signal",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-83",
+            "to_clip": "chain-84",
+            "timeline_range": {
+              "start": 2300000,
+              "end": 2315000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.static-fade",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-84",
+            "to_clip": "chain-85",
+            "timeline_range": {
+              "start": 2320000,
+              "end": 2335000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.tv-static",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-85",
+            "to_clip": "chain-86",
+            "timeline_range": {
+              "start": 2340000,
+              "end": 2355000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.parametric-glitch",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-86",
+            "to_clip": "chain-87",
+            "timeline_range": {
+              "start": 2360000,
+              "end": 2375000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.glitch",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-87",
+            "to_clip": "chain-88",
+            "timeline_range": {
+              "start": 2380000,
+              "end": 2395000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.defocus-blur",
+              "version": 1,
+              "params": {
+                "blur_size": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.05
+                  }
+                }
+              }
+            }
+          },
+          {
+            "from_clip": "chain-88",
+            "to_clip": "chain-89",
+            "timeline_range": {
+              "start": 2400000,
+              "end": 2415000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.dreamy-zoom",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-89",
+            "to_clip": "chain-90",
+            "timeline_range": {
+              "start": 2420000,
+              "end": 2435000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.revolve",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-90",
+            "to_clip": "chain-91",
+            "timeline_range": {
+              "start": 2440000,
+              "end": 2455000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.linear-blur",
+              "version": 1,
+              "params": {
+                "intensity": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.3
+                  }
+                }
+              }
+            }
+          },
+          {
+            "from_clip": "chain-91",
+            "to_clip": "chain-92",
+            "timeline_range": {
+              "start": 2460000,
+              "end": 2475000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.mosaic-tiles",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-92",
+            "to_clip": "chain-93",
+            "timeline_range": {
+              "start": 2480000,
+              "end": 2495000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.rotate-scale-fade",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-93",
+            "to_clip": "chain-94",
+            "timeline_range": {
+              "start": 2500000,
+              "end": 2515000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.rotate-scale-vanish",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-94",
+            "to_clip": "chain-95",
+            "timeline_range": {
+              "start": 2520000,
+              "end": 2535000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.scale-in",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-95",
+            "to_clip": "chain-96",
+            "timeline_range": {
+              "start": 2540000,
+              "end": 2555000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.simple-zoom-out",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-96",
+            "to_clip": "chain-97",
+            "timeline_range": {
+              "start": 2560000,
+              "end": 2575000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.zoom-in-circles",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-97",
+            "to_clip": "chain-98",
+            "timeline_range": {
+              "start": 2580000,
+              "end": 2595000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.zoom-in-out",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-98",
+            "to_clip": "chain-99",
+            "timeline_range": {
+              "start": 2600000,
+              "end": 2615000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.zoom-blur",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-99",
+            "to_clip": "chain-100",
+            "timeline_range": {
+              "start": 2620000,
+              "end": 2635000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.whip-pan",
+              "version": 1,
+              "params": {
+                "direction": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "enum",
+                    "value": 2
+                  }
+                }
+              }
+            }
+          },
+          {
+            "from_clip": "chain-100",
+            "to_clip": "chain-101",
+            "timeline_range": {
+              "start": 2640000,
+              "end": 2655000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.block-dissolve",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-101",
+            "to_clip": "chain-102",
+            "timeline_range": {
+              "start": 2660000,
+              "end": 2675000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.random-squares",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-102",
+            "to_clip": "chain-103",
+            "timeline_range": {
+              "start": 2680000,
+              "end": 2695000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.burn-noise",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-103",
+            "to_clip": "chain-104",
+            "timeline_range": {
+              "start": 2700000,
+              "end": 2715000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.perlin",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-104",
+            "to_clip": "chain-105",
+            "timeline_range": {
+              "start": 2720000,
+              "end": 2735000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.film-burn",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-105",
+            "to_clip": "chain-106",
+            "timeline_range": {
+              "start": 2740000,
+              "end": 2755000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.overexposure",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-106",
+            "to_clip": "chain-107",
+            "timeline_range": {
+              "start": 2760000,
+              "end": 2775000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.advanced-mosaic",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-107",
+            "to_clip": "chain-108",
+            "timeline_range": {
+              "start": 2780000,
+              "end": 2795000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.burn",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-108",
+            "to_clip": "chain-109",
+            "timeline_range": {
+              "start": 2800000,
+              "end": 2815000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.crosshatch",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-109",
+            "to_clip": "chain-110",
+            "timeline_range": {
+              "start": 2820000,
+              "end": 2835000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.butterfly-wave-scrawler",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-110",
+            "to_clip": "chain-111",
+            "timeline_range": {
+              "start": 2840000,
+              "end": 2855000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.crazy-parametric-fun",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-111",
+            "to_clip": "chain-112",
+            "timeline_range": {
+              "start": 2860000,
+              "end": 2875000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.edge",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-112",
+            "to_clip": "chain-113",
+            "timeline_range": {
+              "start": 2880000,
+              "end": 2895000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.fly-eye",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-113",
+            "to_clip": "chain-114",
+            "timeline_range": {
+              "start": 2900000,
+              "end": 2915000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.hexagonalize",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-114",
+            "to_clip": "chain-115",
+            "timeline_range": {
+              "start": 2920000,
+              "end": 2935000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.kaleidoscope",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-115",
+            "to_clip": "chain-116",
+            "timeline_range": {
+              "start": 2940000,
+              "end": 2955000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.luma-burn",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-116",
+            "to_clip": "chain-117",
+            "timeline_range": {
+              "start": 2960000,
+              "end": 2975000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.luminance-melt",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-117",
+            "to_clip": "chain-118",
+            "timeline_range": {
+              "start": 2980000,
+              "end": 2995000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.power-kaleido",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-118",
+            "to_clip": "chain-119",
+            "timeline_range": {
+              "start": 3000000,
+              "end": 3015000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.random-noise",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-119",
+            "to_clip": "chain-120",
+            "timeline_range": {
+              "start": 3020000,
+              "end": 3035000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.swirl",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-120",
+            "to_clip": "chain-121",
+            "timeline_range": {
+              "start": 3040000,
+              "end": 3055000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.undulating-burn-out",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-121",
+            "to_clip": "chain-122",
+            "timeline_range": {
+              "start": 3060000,
+              "end": 3075000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.water-drop",
               "version": 1
             }
           }

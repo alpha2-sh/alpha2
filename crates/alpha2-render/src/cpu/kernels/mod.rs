@@ -107,6 +107,13 @@ impl KernelContext<'_> {
         [ticks as u32, (ticks >> 32) as u32]
     }
 
+    /// `time()`: the time in seconds, rounded once from the exact quotient
+    /// as the runtime uniform holds it.
+    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+    pub(crate) fn time(&self) -> f32 {
+        (self.runtime.time.ticks() as f64 / alpha2_time::TICKS_PER_SECOND as f64) as f32
+    }
+
     pub(crate) const fn progress(&self) -> f32 {
         self.runtime.progress
     }

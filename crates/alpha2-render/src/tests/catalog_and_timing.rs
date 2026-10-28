@@ -8,7 +8,7 @@ fn builtin_transition_catalog_compiles_and_preserves_endpoints() {
     let mut renderer = Renderer::new(gpu());
     let ids = pollster::block_on(renderer.register_builtin_transitions())
         .expect("built-in transitions compile");
-    assert_eq!(ids.len(), 30);
+    assert_eq!(ids.len(), crate::builtin_transition_definitions().len());
     renderer.warmup(&ids).expect("catalog is warm");
 
     let from_pixel = [240, 32, 16, 255];
@@ -21,9 +21,17 @@ fn builtin_transition_catalog_compiles_and_preserves_endpoints() {
 
     for id in &ids {
         let definition = renderer.effect_definition(id).expect("definition exists");
-        assert!(definition.license.as_deref().is_some_and(|license| {
-            license.contains("MIT") && license.contains("gl-transitions")
-        }));
+        // Alpha2's own, or a gl-transitions port: no other source's terms.
+        assert!(
+            definition.license.as_deref().is_some_and(|license| {
+                license == crate::builtins::ALPHA2_EFFECT_LICENSE
+                    || (license.starts_with("MIT; Author: ")
+                        && license.contains(crate::builtins::GL_TRANSITIONS_BASE))
+            }),
+            "{}: {:?}",
+            id.as_str(),
+            definition.license
+        );
         for (progress, expected) in [(0.0, from_pixel), (1.0, to_pixel)] {
             let target = renderer
                 .render_effect(
@@ -86,7 +94,8 @@ fn builtin_transition_catalog_compiles_and_preserves_endpoints() {
     assert_rgba8_golden_tiles(
         // One golden for every GPU: anti-aliasing uses `fwidthFine`; plain `fwidth` differs between
         // coarse-derivative GPUs (RADV, lavapipe) and fine ones (NVIDIA, Metal).
-        &["builtin_transitions"],
+        // Thresholds (edge detection) land on either side of a step on other GPUs.
+        &["builtin_transitions", "builtin_transitions_lavapipe"],
         RenderSize::new(
             preview_size.width * u32::try_from(ids.len()).expect("catalog size fits u32"),
             preview_size.height,

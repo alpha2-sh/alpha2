@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::builtins::{GAUSSIAN_BLUR_ID, GLOW_ID};
+use crate::builtins::{DIRECTIONAL_BLUR_ID, GAUSSIAN_BLUR_ID, GLOW_ID};
 
 /// Opaque black with a white vertical line `width` pixels wide, centred.
 fn line_image(size: RenderSize, width: u32) -> Vec<u8> {
@@ -148,6 +148,96 @@ fn glow_falls_off_smoothly_from_a_bright_line() {
     // GL on the 8-bit intermediate is up to 3 levels off every other backend: it gets its own
     // reviewed variant rather than a looser tolerance for all.
     assert_rgba8_golden_tiles(&["glow", "glow_gl_rgba8"], size, &["glow"], &glowing, 2);
+}
+
+/// Opaque black with a white rectangle over columns `x` and rows `y`.
+fn rectangle_image(size: RenderSize, x: std::ops::Range<u32>, y: std::ops::Range<u32>) -> Vec<u8> {
+    (0..size.height)
+        .flat_map(|row| {
+            let inside_row = y.contains(&row);
+            let x = x.clone();
+            (0..size.width).flat_map(move |column| {
+                if inside_row && x.contains(&column) {
+                    [255, 255, 255, 255]
+                } else {
+                    [0, 0, 0, 255]
+                }
+            })
+        })
+        .collect()
+}
+
+/// The red channel at `(x, y)`.
+fn red_at(pixels: &[u8], size: RenderSize, x: u32, y: u32) -> u8 {
+    pixels[((y * size.width + x) * 4) as usize]
+}
+
+#[test]
+fn a_directional_blur_at_zero_degrees_spreads_along_x_only() {
+    let _lock = gpu_test_lock();
+    let mut renderer = Renderer::new(gpu());
+    pollster::block_on(renderer.register_builtins()).expect("built-ins compile");
+    // sigma = length / 2 * 64 = 8 px.
+    let size = RenderSize::new(256, 64).expect("non-zero size");
+    let params = EffectParams::new()
+        .with("length", ParamValue::Float(0.25))
+        .with("angle", ParamValue::Float(0.0));
+    let vertical = render_project_effect(
+        &renderer,
+        DIRECTIONAL_BLUR_ID,
+        size,
+        &line_image(size, 4),
+        &params,
+    );
+    let row = middle_row(&vertical, size);
+    assert_falls_off(&row, 129, 16, "directional blur");
+    let symmetric = (0..16).all(|d| row[129 + d].abs_diff(row[126 - d]) <= 1);
+    assert!(symmetric, "the blur is lopsided: {row:?}");
+    // A horizontal line stays as sharp as it was across its rows.
+    let horizontal = rectangle_image(size, 0..size.width, 30..34);
+    let blurred = render_project_effect(&renderer, DIRECTIONAL_BLUR_ID, size, &horizontal, &params);
+    for x in [0, 77, 128, 255] {
+        for y in 0..size.height {
+            assert!(
+                red_at(&blurred, size, x, y).abs_diff(red_at(&horizontal, size, x, y)) <= 1,
+                "({x}, {y}) moved across the line"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_directional_blur_at_45_degrees_is_symmetric_about_its_line() {
+    let _lock = gpu_test_lock();
+    let mut renderer = Renderer::new(gpu());
+    pollster::block_on(renderer.register_builtins()).expect("built-ins compile");
+    // A square about the centre; sigma = 0.25 / 2 * 96 = 12 px along up-right.
+    let size = RenderSize::new(96, 96).expect("non-zero size");
+    let square = rectangle_image(size, 46..50, 46..50);
+    let blurred = render_project_effect(
+        &renderer,
+        DIRECTIONAL_BLUR_ID,
+        size,
+        &square,
+        &EffectParams::new()
+            .with("length", ParamValue::Float(0.25))
+            .with("angle", ParamValue::Float(45.0)),
+    );
+    let at = |x, y| red_at(&blurred, size, x, y);
+    // Counter-clockwise: up and to the right is lit, down and to the right is not.
+    assert!(at(55, 40) > 20, "along the line: {}", at(55, 40));
+    assert!(at(55, 55) <= 1, "across the line: {}", at(55, 55));
+    for y in 0..size.height {
+        for x in 0..size.width {
+            // Through the centre, and mirrored across the blur's line.
+            let (turned, mirrored) = (at(95 - x, 95 - y), at(95 - y, 95 - x));
+            assert!(
+                at(x, y).abs_diff(turned) <= 2 && at(x, y).abs_diff(mirrored) <= 2,
+                "({x}, {y}) is {} but {turned} turned and {mirrored} mirrored",
+                at(x, y)
+            );
+        }
+    }
 }
 
 #[test]

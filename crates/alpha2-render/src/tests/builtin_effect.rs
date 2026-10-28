@@ -637,8 +637,9 @@ fn effect_test_image(size: RenderSize) -> Vec<u8> {
 
 /// Every public effect but the LUT (its own golden, `lut_3d`), away from its
 /// defaults, as the contact sheet draws them.
-fn contact_sheet_effects() -> [(&'static str, EffectParams<'static>); 11] {
-    [
+#[allow(clippy::too_many_lines)]
+fn contact_sheet_effects() -> Vec<(&'static str, EffectParams<'static>)> {
+    vec![
         (
             "alpha2.effect.gaussian-blur",
             EffectParams::new().with("radius", ParamValue::Float(0.1)),
@@ -659,6 +660,89 @@ fn contact_sheet_effects() -> [(&'static str, EffectParams<'static>); 11] {
                 .with("saturation", ParamValue::Float(1.5))
                 .with("temperature", ParamValue::Float(0.3))
                 .with("tint", ParamValue::Float(-0.2)),
+        ),
+        (
+            "alpha2.effect.invert",
+            EffectParams::new().with("amount", ParamValue::Float(0.8)),
+        ),
+        (
+            "alpha2.effect.black-and-white",
+            EffectParams::new()
+                .with("red", ParamValue::Float(1.0))
+                .with("green", ParamValue::Float(0.0))
+                .with("blue", ParamValue::Float(0.0)),
+        ),
+        (
+            "alpha2.effect.sepia",
+            EffectParams::new().with("amount", ParamValue::Float(0.9)),
+        ),
+        (
+            "alpha2.effect.duotone",
+            EffectParams::new()
+                .with("shadows", ParamValue::Color([0.3, 0.0, 0.4, 1.0]))
+                .with("highlights", ParamValue::Color([0.4, 1.0, 0.8, 1.0])),
+        ),
+        (
+            "alpha2.effect.gradient-map",
+            EffectParams::new()
+                .with("shadows", ParamValue::Color([0.0, 0.0, 0.5, 1.0]))
+                .with("midtones", ParamValue::Color([0.9, 0.1, 0.2, 1.0]))
+                .with("highlights", ParamValue::Color([1.0, 1.0, 0.2, 1.0])),
+        ),
+        (
+            "alpha2.effect.posterize",
+            EffectParams::new().with("levels", ParamValue::Float(3.0)),
+        ),
+        (
+            "alpha2.effect.threshold",
+            EffectParams::new()
+                .with("level", ParamValue::Float(0.4))
+                .with("softness", ParamValue::Float(0.1)),
+        ),
+        (
+            "alpha2.effect.levels",
+            EffectParams::new()
+                .with("input_black", ParamValue::Float(0.2))
+                .with("input_white", ParamValue::Float(0.8))
+                .with("gamma", ParamValue::Float(1.6)),
+        ),
+        (
+            "alpha2.effect.hue-saturation",
+            EffectParams::new()
+                .with("hue", ParamValue::Float(120.0))
+                .with("saturation", ParamValue::Float(0.4)),
+        ),
+        (
+            "alpha2.effect.vibrance",
+            EffectParams::new().with("amount", ParamValue::Float(1.0)),
+        ),
+        (
+            "alpha2.effect.channel-mixer",
+            EffectParams::new()
+                .with("red", ParamValue::Vec4([0.0, 0.0, 1.0, 0.0]))
+                .with("blue", ParamValue::Vec4([1.0, 0.0, 0.0, 0.0])),
+        ),
+        (
+            "alpha2.effect.lift-gamma-gain",
+            EffectParams::new()
+                .with("lift", ParamValue::Vec4([0.1, 0.0, -0.05, 0.0]))
+                .with("gain", ParamValue::Vec4([-0.1, 0.0, 0.2, 0.0])),
+        ),
+        (
+            "alpha2.effect.color-isolate",
+            EffectParams::new()
+                .with("hue", ParamValue::Float(0.0))
+                .with("range", ParamValue::Float(40.0)),
+        ),
+        (
+            "alpha2.effect.solarize",
+            EffectParams::new().with("threshold", ParamValue::Float(0.4)),
+        ),
+        (
+            "alpha2.effect.fill",
+            EffectParams::new()
+                .with("color", ParamValue::Color([1.0, 0.4, 0.0, 1.0]))
+                .with("amount", ParamValue::Float(0.7)),
         ),
         (
             "alpha2.effect.vignette",
@@ -705,6 +789,230 @@ fn contact_sheet_effects() -> [(&'static str, EffectParams<'static>); 11] {
             "alpha2.effect.mirror",
             EffectParams::new().with("axis", ParamValue::Enum(0)),
         ),
+        (
+            "alpha2.effect.luma-key",
+            EffectParams::new()
+                .with("threshold", ParamValue::Float(0.3))
+                .with("softness", ParamValue::Float(0.2)),
+        ),
+        (
+            "alpha2.effect.spill-suppress",
+            EffectParams::new()
+                .with("screen", ParamValue::Enum(1))
+                .with("amount", ParamValue::Float(0.8)),
+        ),
+        (
+            "alpha2.effect.alpha-adjust",
+            EffectParams::new()
+                .with("black", ParamValue::Float(0.2))
+                .with("white", ParamValue::Float(0.7))
+                .with("gamma", ParamValue::Float(2.0)),
+        ),
+        (
+            "alpha2.effect.matte-choker",
+            EffectParams::new()
+                .with("choke", ParamValue::Float(-0.8))
+                .with("radius", ParamValue::Float(0.03)),
+        ),
+        (
+            "alpha2.effect.set-matte",
+            EffectParams::new().with("mode", ParamValue::Enum(1)),
+        ),
+        (
+            "alpha2.effect.directional-blur",
+            EffectParams::new()
+                .with("length", ParamValue::Float(0.2))
+                .with("angle", ParamValue::Float(30.0)),
+        ),
+        (
+            "alpha2.effect.radial-blur",
+            EffectParams::new().with("amount", ParamValue::Float(0.5)),
+        ),
+        (
+            "alpha2.effect.unsharp-mask",
+            EffectParams::new()
+                .with("amount", ParamValue::Float(3.0))
+                .with("radius", ParamValue::Float(0.05)),
+        ),
+        (
+            "alpha2.effect.tilt-shift",
+            EffectParams::new()
+                .with("blur", ParamValue::Float(0.2))
+                .with("focus", ParamValue::Float(0.1))
+                .with("falloff", ParamValue::Float(0.2)),
+        ),
+        (
+            "alpha2.effect.lens-blur",
+            EffectParams::new()
+                .with("radius", ParamValue::Float(0.02))
+                .with("highlights", ParamValue::Float(5.0)),
+        ),
+        (
+            "alpha2.effect.surface-blur",
+            EffectParams::new()
+                .with("radius", ParamValue::Float(0.02))
+                .with("threshold", ParamValue::Float(0.3)),
+        ),
+        (
+            "alpha2.effect.rgb-split",
+            EffectParams::new()
+                .with("amount", ParamValue::Float(0.05))
+                .with("angle", ParamValue::Float(30.0)),
+        ),
+        (
+            "alpha2.effect.glitch",
+            EffectParams::new()
+                .with("amount", ParamValue::Float(1.0))
+                .with("block_size", ParamValue::Float(0.1))
+                .with("color_split", ParamValue::Float(0.05)),
+        ),
+        (
+            "alpha2.effect.crt",
+            EffectParams::new()
+                .with("curvature", ParamValue::Float(0.5))
+                .with("scanlines", ParamValue::Float(0.8))
+                .with("mask", ParamValue::Float(0.6)),
+        ),
+        (
+            "alpha2.effect.vhs",
+            EffectParams::new()
+                .with("amount", ParamValue::Float(1.0))
+                .with("noise", ParamValue::Float(0.4))
+                .with("speed", ParamValue::Float(5.0)),
+        ),
+        (
+            "alpha2.effect.halftone",
+            EffectParams::new().with("cells", ParamValue::Float(10.0)),
+        ),
+        (
+            "alpha2.effect.emboss",
+            EffectParams::new()
+                .with("distance", ParamValue::Float(0.01))
+                .with("strength", ParamValue::Float(3.0)),
+        ),
+        (
+            "alpha2.effect.edge-detect",
+            EffectParams::new()
+                .with("width", ParamValue::Float(0.01))
+                .with("colored", ParamValue::Bool(true)),
+        ),
+        (
+            "alpha2.effect.drop-shadow",
+            EffectParams::new()
+                .with("color", ParamValue::Color([0.1, 0.0, 0.4, 1.0]))
+                .with("opacity", ParamValue::Float(1.0))
+                .with("distance", ParamValue::Float(0.15))
+                .with("softness", ParamValue::Float(0.05)),
+        ),
+        (
+            "alpha2.effect.outline",
+            EffectParams::new()
+                .with("color", ParamValue::Color([1.0, 0.9, 0.0, 1.0]))
+                .with("width", ParamValue::Float(0.03)),
+        ),
+        (
+            "alpha2.effect.light-leak",
+            EffectParams::new()
+                .with("intensity", ParamValue::Float(1.5))
+                .with("position", ParamValue::Vec2([0.3, 0.3]))
+                .with("size", ParamValue::Float(0.4))
+                .with("speed", ParamValue::Float(2.0)),
+        ),
+        (
+            "alpha2.effect.letterbox",
+            EffectParams::new()
+                .with("aspect", ParamValue::Float(2.0))
+                .with("color", ParamValue::Color([0.1, 0.1, 0.1, 1.0])),
+        ),
+        (
+            "alpha2.effect.oil-paint",
+            EffectParams::new().with("radius", ParamValue::Float(0.015)),
+        ),
+        (
+            "alpha2.effect.pixelate",
+            EffectParams::new()
+                .with("blocks", ParamValue::Float(4.0))
+                .with("shape", ParamValue::Enum(1)),
+        ),
+        (
+            "alpha2.effect.swirl",
+            EffectParams::new()
+                .with("radius", ParamValue::Float(0.6))
+                .with("angle", ParamValue::Float(360.0)),
+        ),
+        (
+            "alpha2.effect.bulge",
+            EffectParams::new()
+                .with("radius", ParamValue::Float(0.6))
+                .with("strength", ParamValue::Float(1.0)),
+        ),
+        (
+            "alpha2.effect.wave-warp",
+            EffectParams::new()
+                .with("amplitude", ParamValue::Float(0.05))
+                .with("wavelength", ParamValue::Float(0.3))
+                .with("angle", ParamValue::Float(30.0))
+                .with("speed", ParamValue::Float(1.0)),
+        ),
+        (
+            "alpha2.effect.ripple",
+            EffectParams::new()
+                .with("amplitude", ParamValue::Float(0.03))
+                .with("wavelength", ParamValue::Float(0.2))
+                .with("decay", ParamValue::Float(1.0)),
+        ),
+        (
+            "alpha2.effect.lens-distortion",
+            EffectParams::new()
+                .with("k1", ParamValue::Float(0.5))
+                .with("k2", ParamValue::Float(0.2)),
+        ),
+        (
+            "alpha2.effect.polar-coordinates",
+            EffectParams::new().with("edge", ParamValue::Enum(1)),
+        ),
+        (
+            "alpha2.effect.offset",
+            EffectParams::new().with("shift", ParamValue::Vec2([0.25, 0.1])),
+        ),
+        (
+            "alpha2.effect.corner-pin",
+            EffectParams::new()
+                .with("top_left", ParamValue::Vec2([0.2, 0.1]))
+                .with("top_right", ParamValue::Vec2([0.8, 0.0]))
+                .with("bottom_left", ParamValue::Vec2([0.0, 0.9])),
+        ),
+        (
+            "alpha2.effect.shake",
+            EffectParams::new()
+                .with("amplitude", ParamValue::Float(0.1))
+                .with("rotation", ParamValue::Float(10.0)),
+        ),
+        (
+            "alpha2.effect.turbulent-displace",
+            EffectParams::new()
+                .with("amount", ParamValue::Float(0.08))
+                .with("size", ParamValue::Float(0.3))
+                .with("evolution", ParamValue::Float(1.0)),
+        ),
+        (
+            "alpha2.effect.displacement-map",
+            EffectParams::new()
+                .with("amount_x", ParamValue::Float(0.1))
+                .with("amount_y", ParamValue::Float(-0.1)),
+        ),
+        (
+            "alpha2.effect.kaleidoscope",
+            EffectParams::new()
+                .with("segments", ParamValue::Float(5.0))
+                .with("angle", ParamValue::Float(20.0)),
+        ),
+        (
+            "alpha2.effect.tile",
+            EffectParams::new()
+                .with("tiles", ParamValue::Vec2([3.0, 2.0]))
+                .with("mirror", ParamValue::Bool(true)),
+        ),
     ]
 }
 
@@ -739,7 +1047,13 @@ fn every_builtin_effect_draws_its_reviewed_picture() {
     }
     let labels: Vec<&str> = effects.iter().map(|(id, _)| *id).collect();
     assert_rgba8_golden_tiles(
-        &["builtin_effects"],
+        // Thresholds and argmins (solarize, halftone, VHS, oil paint) land on either side of a
+        // step on other GPUs.
+        &[
+            "builtin_effects",
+            "builtin_effects_lavapipe",
+            "builtin_effects_radv",
+        ],
         RenderSize::new(
             size.width * u32::try_from(effects.len()).expect("a few tiles"),
             size.height,
@@ -778,8 +1092,21 @@ fn an_effect_body_reads_the_time_only_through_the_names_that_reach_it() {
     }
 }
 
+/// The built-ins whose bodies read the frame time: they draw anew at every
+/// time, so the result cache keys them by it.
+const TIME_READING_BUILTINS: &[&str] = &[
+    "alpha2.effect.film-grain",
+    "alpha2.effect.glitch",
+    "alpha2.effect.vhs",
+    "alpha2.effect.light-leak",
+    "alpha2.effect.wave-warp",
+    "alpha2.effect.ripple",
+    "alpha2.effect.shake",
+    "alpha2.effect.turbulent-displace",
+];
+
 #[test]
-fn only_film_grain_of_the_builtins_reads_the_time() {
+fn only_the_listed_builtins_read_the_time() {
     // A body that changes whether it reads the time changes this list: the result cache keys an
     // effect by the frame time only when it does.
     let reading: Vec<String> = crate::builtin_effect_definitions()
@@ -790,7 +1117,7 @@ fn only_film_grain_of_the_builtins_reads_the_time() {
         .filter(|definition| crate::registry::body_reads_time(&definition.wgsl_body))
         .map(|definition| definition.id)
         .collect();
-    assert_eq!(reading, ["alpha2.effect.film-grain"]);
+    assert_eq!(reading, TIME_READING_BUILTINS);
 }
 
 #[test]
@@ -820,10 +1147,10 @@ fn builtins_that_do_not_read_the_time_draw_alike_at_any_time() {
     };
     for (id, params) in contact_sheet_effects() {
         let reads = renderer.effect_reads_time(&crate::EffectId::new(id.into(), 1));
-        assert_eq!(reads, id == "alpha2.effect.film-grain", "{id}");
+        assert_eq!(reads, TIME_READING_BUILTINS.contains(&id), "{id}");
         let (first, later) = (at(id, &params, 0), at(id, &params, 870_000));
         if reads {
-            assert_ne!(first, later, "{id} draws new grain at a new time");
+            assert_ne!(first, later, "{id} draws anew at a new time");
         } else {
             assert_same_pixels(&later, &first, id);
         }

@@ -1,8 +1,8 @@
 use serde_json::{Value, json};
 
+use crate::builtins::{builtin_effect_groups, builtin_transition_groups};
 use crate::{
     EffectDef, EffectKind, EffectResourceKind, ParamSpec, ParamType, ParamUnit, ParamValue,
-    builtin_effect_definitions, builtin_transition_definitions,
 };
 
 /// Returns the complete engine-owned effect catalog as a host-friendly JSON value.
@@ -11,15 +11,20 @@ use crate::{
 /// contract while registration and ownership remain inside the engine.
 #[must_use]
 pub fn builtin_catalog() -> Value {
-    let effects = builtin_effect_definitions()
-        .iter()
-        .map(catalog_entry)
-        .collect::<Vec<_>>();
-    let transitions = builtin_transition_definitions()
-        .iter()
-        .map(catalog_entry)
-        .collect::<Vec<_>>();
-    json!({ "effects": effects, "transitions": transitions })
+    let entries = |groups: Vec<(&'static str, Vec<EffectDef>)>| {
+        groups
+            .into_iter()
+            .flat_map(|(group, definitions)| {
+                definitions
+                    .into_iter()
+                    .map(move |definition| catalog_entry(&definition, group))
+            })
+            .collect::<Vec<_>>()
+    };
+    json!({
+        "effects": entries(builtin_effect_groups()),
+        "transitions": entries(builtin_transition_groups()),
+    })
 }
 
 /// Serializes [`builtin_catalog`] for process and WebAssembly boundaries.
@@ -28,8 +33,8 @@ pub fn builtin_catalog_json() -> String {
     builtin_catalog().to_string()
 }
 
-fn catalog_entry(definition: &EffectDef) -> Value {
-    let (label, group) = presentation(&definition.id, definition.kind);
+fn catalog_entry(definition: &EffectDef, group: &str) -> Value {
+    let label = label(&definition.id);
     json!({
         "id": definition.id,
         "version": definition.version,
@@ -93,56 +98,26 @@ fn param(spec: &ParamSpec) -> Value {
     })
 }
 
-fn presentation(id: &str, kind: EffectKind) -> (String, &'static str) {
+/// The labels `humanize` would get wrong: initialisms and the like, by the
+/// short id of the built-in.
+const LABELS: &[(&str, &str)] = &[
+    ("lut-3d", "3D LUT"),
+    ("black-and-white", "Black & White"),
+    ("hue-saturation", "Hue/Saturation"),
+    ("rgb-split", "RGB Split"),
+    ("crt", "CRT"),
+    ("vhs", "VHS"),
+    ("hsv-fade", "HSV Fade"),
+    ("tv-static", "TV Static"),
+    ("old-tv-lost-signal", "Old TV Lost Signal"),
+];
+
+fn label(id: &str) -> String {
     let short = id.rsplit('.').next().unwrap_or(id);
-    let label = if short == "lut-3d" {
-        "3D LUT".into()
-    } else {
-        humanize(short)
-    };
-    let group = match kind {
-        EffectKind::Effect if matches!(short, "gaussian-blur" | "sharpen") => "Blur & Sharpen",
-        EffectKind::Effect if short == "chroma-key" => "Keying",
-        EffectKind::Effect if matches!(short, "color-controls" | "lut-3d") => "Color",
-        EffectKind::Effect if matches!(short, "crop" | "mirror" | "pixelate") => "Distort",
-        EffectKind::Effect => "Stylize",
-        EffectKind::Transition
-            if matches!(
-                short,
-                "wipe-up"
-                    | "wipe-down"
-                    | "wipe-left"
-                    | "wipe-right"
-                    | "window-blinds"
-                    | "window-slice"
-                    | "wind"
-                    | "pinwheel"
-                    | "heart"
-            ) =>
-        {
-            "Wipes"
-        }
-        EffectKind::Transition
-            if matches!(
-                short,
-                "fade"
-                    | "directional"
-                    | "circle-open"
-                    | "angular"
-                    | "pixelize"
-                    | "directional-wipe"
-                    | "circle"
-                    | "cross-warp"
-                    | "dreamy"
-                    | "radial"
-            ) =>
-        {
-            "Classic"
-        }
-        EffectKind::Transition => "Stylized",
-        EffectKind::Generator => "Generate",
-    };
-    (label, group)
+    LABELS
+        .iter()
+        .find(|(name, _)| *name == short)
+        .map_or_else(|| humanize(short), |(_, label)| (*label).to_owned())
 }
 
 fn humanize(value: &str) -> String {
@@ -188,15 +163,67 @@ mod tests {
     }
 
     #[test]
-    fn every_built_in_lists_its_named_inputs_and_none_has_any() {
+    fn every_built_in_lists_the_named_inputs_it_declares() {
         let catalog = builtin_catalog();
-        for entry in catalog["effects"]
+        let definitions = crate::builtin_effect_definitions()
+            .into_iter()
+            .chain(crate::builtin_transition_definitions())
+            .collect::<Vec<_>>();
+        let entries = catalog["effects"]
             .as_array()
             .unwrap()
             .iter()
             .chain(catalog["transitions"].as_array().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(entries.len(), definitions.len());
+        for (entry, definition) in entries.into_iter().zip(&definitions) {
+            assert_eq!(entry["id"], definition.id);
+            let names = definition
+                .inputs
+                .iter()
+                .map(|input| json!({ "name": input.name }))
+                .collect::<Vec<_>>();
+            assert_eq!(entry["inputs"], json!(names), "{}", entry["id"]);
+        }
+    }
+
+    #[test]
+    fn every_built_in_is_alpha2_s_own_or_a_gl_transitions_port() {
+        // A source with other terms needs a notice and an exception here.
+        let own = crate::builtins::ALPHA2_EFFECT_LICENSE;
+        for definition in crate::builtin_effect_definitions()
+            .into_iter()
+            .chain(crate::builtins::internal_effect_definitions())
         {
-            assert_eq!(entry["inputs"], json!([]), "{}", entry["id"]);
+            assert_eq!(
+                definition.license.as_deref(),
+                Some(own),
+                "{}",
+                definition.id
+            );
+        }
+        for definition in crate::builtin_transition_definitions() {
+            let license = definition.license.as_deref().unwrap_or_default();
+            assert!(
+                license == own
+                    || (license.starts_with("MIT; Author: ")
+                        && license.contains(crate::builtins::GL_TRANSITIONS_BASE)),
+                "{}: {license}",
+                definition.id
+            );
+        }
+    }
+
+    #[test]
+    fn every_label_exception_names_a_built_in_and_changes_its_label() {
+        let shorts = crate::builtin_effect_definitions()
+            .into_iter()
+            .chain(crate::builtin_transition_definitions())
+            .map(|definition| definition.id.rsplit('.').next().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        for (short, label) in LABELS {
+            assert!(shorts.iter().any(|name| name == short), "{short}");
+            assert_ne!(humanize(short), *label, "{short} needs no exception");
         }
     }
 

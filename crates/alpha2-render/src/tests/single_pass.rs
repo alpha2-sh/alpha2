@@ -7,7 +7,7 @@
 
 use super::*;
 use crate::builtins::GAUSSIAN_BLUR_ID;
-use crate::{EffectId, EffectResources};
+use crate::{EffectId, EffectInputs, EffectResources};
 
 impl Renderer {
     /// Draws a registered effect or transition over `source_a` (and
@@ -45,22 +45,33 @@ impl Renderer {
         resources: &EffectResources,
         runtime: EffectRuntime,
     ) -> Result<RenderedTexture, RenderError> {
-        let kind = self
+        let definition = self
             .effect_definition(id)
-            .map(|definition| definition.kind)
             .ok_or(RenderError::UnknownEffect)?;
+        let (kind, inputs) = (definition.kind, definition.inputs.clone());
         let mut graph = RenderGraph::new(size);
         let source_a = graph.add_source(SourceView::from_wgpu(source_a));
         let output = match kind {
-            EffectKind::Effect => graph
-                .add_effect_with_resources(
-                    id.clone(),
-                    source_a,
-                    params.clone(),
-                    resources.clone(),
-                    runtime,
-                )
-                .map_err(GraphError::into_render_error)?,
+            // An effect's named inputs all show `source_b`, or else the source itself.
+            EffectKind::Effect => {
+                let shown = match source_b {
+                    Some(view) => graph.add_source(SourceView::from_wgpu(view)),
+                    None => source_a,
+                };
+                let named = inputs.iter().fold(EffectInputs::new(), |named, input| {
+                    named.with(input.name.clone(), shown)
+                });
+                graph
+                    .add_effect_with_inputs(
+                        id.clone(),
+                        source_a,
+                        named,
+                        params.clone(),
+                        resources.clone(),
+                        runtime,
+                    )
+                    .map_err(GraphError::into_render_error)?
+            }
             EffectKind::Transition => {
                 let source_b = source_b.ok_or(RenderError::MissingEffectInput)?;
                 let source_b = graph.add_source(SourceView::from_wgpu(source_b));

@@ -134,12 +134,16 @@ export async function browserChecks(
   assert.deepEqual(
     effects.unused,
     [],
-    "every built-in effect and transition is in the effects project",
+    "every built-in effect and transition is in the effects project (scripts/generate-effects-project.mjs)",
   );
-  assert.equal(effects.frames, 149, "every frame of the effects project");
   // Each body is held to the complex project's bounds on every frame it draws. Anti-aliasing uses
   // `fwidthFine`: plain `fwidth` differed by up to 41 codes across GPUs on edges.
   const effectsProject = JSON.parse(await readFile(effectsProjectPath, "utf8"));
+  assert.equal(
+    effects.frames,
+    projectFrames(effectsProject),
+    "every frame of the effects project",
+  );
   const bodies = bodiesByFrame(effectsProject, effects.frames);
   const byBody = new Map();
   bodies.forEach((body, frame) => {
@@ -314,6 +318,19 @@ export async function browserChecks(
   console.log(
     `verified the browser sink encodes at the engine's rate: ${JSON.stringify(sink)}`,
   );
+}
+
+/** The frames of `project`'s timeline, to the end of its last clip. */
+function projectFrames(project) {
+  const ticksPerFrame =
+    (120_000 * project.settings.frame_rate.den) /
+    project.settings.frame_rate.num;
+  const end = Math.max(
+    ...project.timeline.tracks.flatMap((track) =>
+      track.clips.map((clip) => clip.timeline_range.end),
+    ),
+  );
+  return Math.ceil(end / ticksPerFrame);
 }
 
 /**

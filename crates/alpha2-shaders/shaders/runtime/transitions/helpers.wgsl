@@ -1,17 +1,3 @@
-// The bodies are ports of gl-transitions and keep its coordinates: uv (0, 0) is the
-// bottom-left corner and y grows upward, so the entry point and the samplers flip y.
-fn transition(uv: vec2f) -> vec4f {
-    return gl_transition(vec2f(uv.x, 1.0 - uv.y));
-}
-
-fn gl_from_color(uv: vec2f) -> vec4f {
-    return from_color(vec2f(uv.x, 1.0 - uv.y));
-}
-
-fn gl_to_color(uv: vec2f) -> vec4f {
-    return to_color(vec2f(uv.x, 1.0 - uv.y));
-}
-
 // Built-in transitions store premultiplied, sRGB-encoded RGBA.
 fn builtin_straight(color: vec4f) -> vec3f {
     if color.a <= 0.000001 { return vec3f(0.0); }
@@ -83,4 +69,74 @@ fn builtin_angle_width(centered: vec2f) -> f32 {
 fn builtin_interval_coverage(value: f32, width: f32) -> f32 {
     let span = max(width, 0.0000001);
     return clamp((min(value + span * 0.5, 1.0) - max(value - span * 0.5, 0.0)) / span, 0.0, 1.0);
+}
+
+// PCG (Jarzynski and Olano, "Hash Functions for GPU Rendering", 2020): integer hashes that
+// are the same on every GPU, unlike `fract(sin(x) * ...)`.
+fn builtin_hash(value: u32) -> u32 {
+    let state = value * 747796405u + 2891336453u;
+    let word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+fn builtin_hash3(a: u32, b: u32, c: u32) -> u32 {
+    return builtin_hash(a ^ builtin_hash(b ^ builtin_hash(c)));
+}
+
+// The top 24 bits of a hash as a float in [0, 1), converted exactly.
+fn builtin_unit(hash: u32) -> f32 { return f32(hash >> 8u) / 16777216.0; }
+
+// A lattice cell index of either sign as a hash input.
+fn builtin_cell(value: f32) -> u32 { return bitcast<u32>(i32(floor(value))); }
+
+// GLSL's floor-mod; WGSL `%` truncates toward zero.
+fn builtin_floor_mod(x: f32, y: f32) -> f32 { return x - y * floor(x / y); }
+
+// Value noise in [0, 1] on the integer lattice, smooth (C1) between lattice points.
+fn builtin_value_noise(p: vec2f, seed: u32) -> f32 {
+    let cell = floor(p);
+    let f = p - cell;
+    let w = f * f * (3.0 - 2.0 * f);
+    let x = bitcast<u32>(i32(cell.x));
+    let y = bitcast<u32>(i32(cell.y));
+    let a = builtin_unit(builtin_hash3(x, y, seed));
+    let b = builtin_unit(builtin_hash3(x + 1u, y, seed));
+    let c = builtin_unit(builtin_hash3(x, y + 1u, seed));
+    let d = builtin_unit(builtin_hash3(x + 1u, y + 1u, seed));
+    return mix(mix(a, b, w.x), mix(c, d, w.x), w.y);
+}
+
+// `top` over `bottom`, both premultiplied.
+fn builtin_over(top: vec4f, bottom: vec4f) -> vec4f { return top + bottom * (1.0 - top.a); }
+
+// Clamped into premultiplied range: alpha 0..1, color 0..alpha.
+fn builtin_valid(c: vec4f) -> vec4f {
+    let a = clamp(c.a, 0.0, 1.0);
+    return vec4f(clamp(c.rgb, vec3f(0.0), vec3f(a)), a);
+}
+
+// Hue, saturation, value (Smith 1978), hue in [0, 1).
+fn builtin_rgb_to_hsv(c: vec3f) -> vec3f {
+    let high = max(c.r, max(c.g, c.b));
+    let low = min(c.r, min(c.g, c.b));
+    let range = high - low;
+    var hue = 0.0;
+    if range > 0.0 {
+        if high == c.r {
+            hue = (c.g - c.b) / range;
+            if hue < 0.0 { hue += 6.0; }
+        } else if high == c.g {
+            hue = (c.b - c.r) / range + 2.0;
+        } else {
+            hue = (c.r - c.g) / range + 4.0;
+        }
+    }
+    return vec3f(hue / 6.0, select(0.0, range / high, high > 0.0), high);
+}
+
+fn builtin_hsv_to_rgb(hsv: vec3f) -> vec3f {
+    let h = fract(hsv.x) * 6.0;
+    let k = (vec3f(5.0, 3.0, 1.0) + vec3f(h)) % vec3f(6.0);
+    let ramp = clamp(min(k, vec3f(4.0) - k), vec3f(0.0), vec3f(1.0));
+    return vec3f(hsv.z) - hsv.z * hsv.y * ramp;
 }

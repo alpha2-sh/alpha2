@@ -121,6 +121,50 @@ fn minification_averages_texture_detail_and_associated_alpha() {
     }
 }
 
+/// Parameters that make `name`'s edge one between the plain black and white
+/// pictures: backgrounds and shadows drawn white or transparent, hard edges.
+fn edge_test_params(name: &str) -> EffectParams<'static> {
+    let mut params = EffectParams::new();
+    if [
+        "circle",
+        "circle-crop",
+        "left-right",
+        "top-bottom",
+        "simple-flip",
+        "rotate-scale-fade",
+        "rotate-scale-vanish",
+    ]
+    .contains(&name)
+    {
+        params = params.with("back_color", ParamValue::Color([1.0; 4]));
+    }
+    if name == "bounce" {
+        params = params.with("shadow_color", ParamValue::Color([1.0; 4]));
+    }
+    if name == "directional-scaled" {
+        params = params.with("scale", ParamValue::Float(1.5));
+    }
+    if ["cube", "doorway", "swap"].contains(&name) {
+        params = params.with("back_color", ParamValue::Color([0.0; 4]));
+    }
+    if name == "grid-flip" {
+        params = params.with("bg_color", ParamValue::Color([0.0; 4]));
+    }
+    if ["circle-open", "directional-wipe", "window-slice"].contains(&name) {
+        params = params.with("smoothness", ParamValue::Float(0.0));
+    }
+    if ["rectangle", "rectangle-crop"].contains(&name) {
+        params = params.with("bg_color", ParamValue::Color([1.0; 4]));
+    }
+    if name == "static-wipe" {
+        params = params.with("max_static_span", ParamValue::Float(0.0));
+    }
+    if name == "gradient-wipe" {
+        params = params.with("softness", ParamValue::Float(0.0));
+    }
+    params
+}
+
 #[test]
 fn geometric_transition_edges_have_partial_coverage() {
     let _lock = gpu_test_lock();
@@ -147,18 +191,51 @@ fn geometric_transition_edges_have_partial_coverage() {
         "circle-open",
         "directional-wipe",
         "radial",
+        "rotate-scale-fade",
+        "rotate-scale-vanish",
+        "whip-pan",
+        "bounce",
+        "directional-scaled",
+        "slides",
+        "fold",
+        "left-right",
+        "top-bottom",
+        "rolls",
+        "split-slide-in-horizontal",
+        "split-slide-in-vertical",
+        "split-slide-out-horizontal",
+        "split-slide-out-vertical",
+        "split-slide-in-out-horizontal",
+        "split-slide-in-out-vertical",
+        "x-axis-translation",
+        "cover",
+        "cube",
+        "doorway",
+        "swap",
+        "grid-flip",
+        "book-flip",
+        "simple-flip",
+        "page-peel",
+        "box",
+        "chessboard",
+        "bow-tie",
+        "bow-tie-horizontal",
+        "bow-tie-vertical",
+        "polar-function",
+        "rectangle",
+        "rectangle-crop",
+        "star-wipe",
+        "shape-wipe",
+        "screen-melt",
+        "squares-wire",
+        "static-wipe",
+        "gradient-wipe",
     ] {
         let id = ids
             .iter()
             .find(|id| id.as_str() == format!("alpha2.transition.{name}"))
             .unwrap();
-        let mut params = EffectParams::new();
-        if ["circle", "circle-crop"].contains(&name) {
-            params = params.with("back_color", ParamValue::Color([1.0; 4]));
-        }
-        if ["circle-open", "directional-wipe", "window-slice"].contains(&name) {
-            params = params.with("smoothness", ParamValue::Float(0.0));
-        }
+        let params = edge_test_params(name);
         let size = RenderSize::new(64, 64).unwrap();
         let out = renderer
             .render_effect(

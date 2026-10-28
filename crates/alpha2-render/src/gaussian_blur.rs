@@ -11,11 +11,14 @@
 use std::sync::LazyLock;
 
 use crate::{
-    EffectDef, EffectId, EffectParams, EffectResources, EffectRuntime, GraphError, ParamValue,
-    RenderError, RenderGraph, RenderNodeId,
+    EffectDef, EffectId, EffectInputs, EffectParams, EffectResources, EffectRuntime, GraphError,
+    ParamValue, RenderError, RenderGraph, RenderNodeId,
     builtins::{
-        GAUSSIAN_BLUR_ID, GAUSSIAN_BLUR_PASS_ID, GLOW_COMBINE_ID, GLOW_ID, GLOW_THRESHOLD_ID,
-        gaussian_blur_definition, glow_definition,
+        DIRECTIONAL_BLUR_ID, DROP_SHADOW_ID, FOCUS_COMBINE_ID, GAUSSIAN_BLUR_ID,
+        GAUSSIAN_BLUR_PASS_ID, GLOW_COMBINE_ID, GLOW_ID, GLOW_THRESHOLD_ID, SHADOW_COMBINE_ID,
+        SHADOW_OFFSET_ID, TILT_SHIFT_ID, UNSHARP_COMBINE_ID, UNSHARP_MASK_ID,
+        directional_blur_definition, drop_shadow_definition, gaussian_blur_definition,
+        glow_definition, tilt_shift_definition, unsharp_mask_definition,
     },
 };
 
@@ -32,13 +35,20 @@ const MAX_PASSES_PER_AXIS: usize = 16;
 /// against, made once rather than for every graph that draws one.
 static GAUSSIAN_BLUR: LazyLock<EffectDef> = LazyLock::new(gaussian_blur_definition);
 static GLOW: LazyLock<EffectDef> = LazyLock::new(glow_definition);
+static DIRECTIONAL_BLUR: LazyLock<EffectDef> = LazyLock::new(directional_blur_definition);
+static UNSHARP_MASK: LazyLock<EffectDef> = LazyLock::new(unsharp_mask_definition);
+static TILT_SHIFT: LazyLock<EffectDef> = LazyLock::new(tilt_shift_definition);
+static DROP_SHADOW: LazyLock<EffectDef> = LazyLock::new(drop_shadow_definition);
 
 /// The internal effects a built-in drawn as several passes draws with, for
 /// [`RenderGraph::add_expanded_effect`]'s effects; `None` for every other.
 pub(crate) fn expanded_passes(effect: &str) -> Option<&'static [&'static str]> {
     match effect {
-        GAUSSIAN_BLUR_ID => Some(&[GAUSSIAN_BLUR_PASS_ID]),
+        GAUSSIAN_BLUR_ID | DIRECTIONAL_BLUR_ID => Some(&[GAUSSIAN_BLUR_PASS_ID]),
         GLOW_ID => Some(&[GLOW_THRESHOLD_ID, GAUSSIAN_BLUR_PASS_ID, GLOW_COMBINE_ID]),
+        UNSHARP_MASK_ID => Some(&[GAUSSIAN_BLUR_PASS_ID, UNSHARP_COMBINE_ID]),
+        TILT_SHIFT_ID => Some(&[GAUSSIAN_BLUR_PASS_ID, FOCUS_COMBINE_ID]),
+        DROP_SHADOW_ID => Some(&[SHADOW_OFFSET_ID, GAUSSIAN_BLUR_PASS_ID, SHADOW_COMBINE_ID]),
         _ => None,
     }
 }
@@ -56,6 +66,10 @@ impl<'a> RenderGraph<'a> {
         match effect.as_str() {
             GAUSSIAN_BLUR_ID => Some(self.add_gaussian_blur(source, params, runtime)),
             GLOW_ID => Some(self.add_glow(source, params, runtime)),
+            DIRECTIONAL_BLUR_ID => Some(self.add_directional_blur(source, params, runtime)),
+            UNSHARP_MASK_ID => Some(self.add_unsharp_mask(source, params, runtime)),
+            TILT_SHIFT_ID => Some(self.add_tilt_shift(source, params, runtime)),
+            DROP_SHADOW_ID => Some(self.add_drop_shadow(source, params, runtime)),
             _ => None,
         }
     }
@@ -68,6 +82,63 @@ impl<'a> RenderGraph<'a> {
     ) -> Result<RenderNodeId, GraphError> {
         let [radius] = checked_params(&GAUSSIAN_BLUR, params, ["radius"])?;
         self.add_gaussian(source, radius * 0.5, runtime)
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    fn add_drop_shadow(
+        &mut self,
+        source: RenderNodeId,
+        params: &EffectParams,
+        runtime: EffectRuntime,
+    ) -> Result<RenderNodeId, GraphError> {
+        let [color, opacity, angle, distance, softness, shadow_only] = checked_values(
+            &DROP_SHADOW,
+            params,
+            [
+                "color",
+                "opacity",
+                "angle",
+                "distance",
+                "softness",
+                "shadow_only",
+            ],
+        )?;
+        let (
+            ParamValue::Float(opacity),
+            ParamValue::Float(angle),
+            ParamValue::Float(distance),
+            ParamValue::Float(softness),
+        ) = (opacity, angle, distance, softness)
+        else {
+            return Err(RenderError::InvalidEffectParams.into());
+        };
+        // Counter-clockwise on screen, y down; the distance in heights, the offset in uv.
+        let radians = angle.to_radians();
+        let height_over_width = self.size.height as f32 / self.size.width as f32;
+        let offset = [
+            libm::cosf(radians) * distance * height_over_width,
+            -libm::sinf(radians) * distance,
+        ];
+        let shadow = self.add_internal_effect(
+            SHADOW_OFFSET_ID,
+            source,
+            EffectParams::new()
+                .with("offset", ParamValue::Vec2(offset))
+                .with("color", color)
+                .with("opacity", ParamValue::Float(opacity)),
+            runtime,
+        )?;
+        let soft = self.add_gaussian(shadow, softness * 0.5, runtime)?;
+        self.add_transition(
+            EffectId::from_static(SHADOW_COMBINE_ID, 1),
+            source,
+            soft,
+            EffectParams::new().with("shadow_only", shadow_only),
+            EffectRuntime {
+                progress: 0.5,
+                ..runtime
+            },
+        )
     }
 
     fn add_glow(
@@ -94,6 +165,79 @@ impl<'a> RenderGraph<'a> {
                 progress: 0.5,
                 ..runtime
             },
+        )
+    }
+
+    /// One axis of a Gaussian, `angle` degrees counter-clockwise on screen.
+    #[allow(clippy::cast_precision_loss)]
+    fn add_directional_blur(
+        &mut self,
+        source: RenderNodeId,
+        params: &EffectParams,
+        runtime: EffectRuntime,
+    ) -> Result<RenderNodeId, GraphError> {
+        let [length, angle] = checked_params(&DIRECTIONAL_BLUR, params, ["length", "angle"])?;
+        // libm, so the CPU renderer's graph is the same on every target.
+        let radians = angle.to_radians();
+        let direction = [libm::cosf(radians), -libm::sinf(radians)];
+        let sigma_pixels = length * 0.5 * self.size.height as f32;
+        self.add_gaussian_axis(source, sigma_pixels, direction, runtime)
+    }
+
+    fn add_unsharp_mask(
+        &mut self,
+        source: RenderNodeId,
+        params: &EffectParams,
+        runtime: EffectRuntime,
+    ) -> Result<RenderNodeId, GraphError> {
+        let [amount, radius, threshold] =
+            checked_params(&UNSHARP_MASK, params, ["amount", "radius", "threshold"])?;
+        let blurred = self.add_gaussian(source, radius * 0.5, runtime)?;
+        self.add_transition(
+            EffectId::from_static(UNSHARP_COMBINE_ID, 1),
+            source,
+            blurred,
+            EffectParams::new()
+                .with("amount", ParamValue::Float(amount))
+                .with("threshold", ParamValue::Float(threshold)),
+            EffectRuntime {
+                progress: 0.5,
+                ..runtime
+            },
+        )
+    }
+
+    /// A blur of a quarter `blur`, and one of half `blur` drawn on from
+    /// it (Gaussians add in quadrature), mixed into the source by the
+    /// distance from the band.
+    fn add_tilt_shift(
+        &mut self,
+        source: RenderNodeId,
+        params: &EffectParams,
+        runtime: EffectRuntime,
+    ) -> Result<RenderNodeId, GraphError> {
+        let [blur, position, angle, focus, falloff] = checked_params(
+            &TILT_SHIFT,
+            params,
+            ["blur", "position", "angle", "focus", "falloff"],
+        )?;
+        let (narrow, wide) = (blur * 0.25, blur * 0.5);
+        let soft = self.add_gaussian(source, narrow, runtime)?;
+        let rest = (wide * wide - narrow * narrow).max(0.0).sqrt();
+        let blurred = self.add_gaussian(soft, rest, runtime)?;
+        self.add_effect_with_inputs(
+            EffectId::from_static(FOCUS_COMBINE_ID, 1),
+            source,
+            EffectInputs::new()
+                .with("soft", soft)
+                .with("blurred", blurred),
+            EffectParams::new()
+                .with("position", ParamValue::Float(position))
+                .with("angle", ParamValue::Float(angle))
+                .with("focus", ParamValue::Float(focus))
+                .with("falloff", ParamValue::Float(falloff)),
+            EffectResources::new(),
+            runtime,
         )
     }
 
@@ -135,43 +279,59 @@ impl<'a> RenderGraph<'a> {
 
     /// The pass cascades of a Gaussian of `sigma_pixels`; one identity pass
     /// per axis at zero.
-    #[allow(clippy::cast_precision_loss)]
     fn add_gaussian_cascade(
         &mut self,
         source: RenderNodeId,
         sigma_pixels: f32,
         runtime: EffectRuntime,
     ) -> Result<RenderNodeId, GraphError> {
+        let node = self.add_gaussian_axis(source, sigma_pixels, [1.0, 0.0], runtime)?;
+        self.add_gaussian_axis(node, sigma_pixels, [0.0, 1.0], runtime)
+    }
+
+    /// A one-axis Gaussian of `sigma_pixels` along the unit vector
+    /// `direction` (y down), as a cascade of passes; one identity pass at
+    /// zero. A pass's taps lie `spacing` pixels apart along `direction`
+    /// whatever its angle, so a diagonal blur is as wide as an upright one.
+    #[allow(clippy::cast_precision_loss)]
+    pub(crate) fn add_gaussian_axis(
+        &mut self,
+        source: RenderNodeId,
+        sigma_pixels: f32,
+        direction: [f32; 2],
+        runtime: EffectRuntime,
+    ) -> Result<RenderNodeId, GraphError> {
+        let extent = [self.size.width as f32, self.size.height as f32];
         let mut node = source;
-        for (axis, extent) in [(0, self.size.width), (1, self.size.height)] {
-            let mut blurred = 0.0_f32;
-            let mut spacing = 1.0_f32;
-            for _ in 0..MAX_PASSES_PER_AXIS {
-                let remaining = (sigma_pixels * sigma_pixels - blurred * blurred)
-                    .max(0.0)
-                    .sqrt();
-                let pass = remaining.min(MAX_PASS_SIGMA_TAPS * spacing);
-                let mut step = [0.0; 2];
-                step[axis] = spacing / extent as f32;
-                node = self.add_internal_effect(
-                    GAUSSIAN_BLUR_PASS_ID,
-                    node,
-                    EffectParams::new()
-                        .with("step", ParamValue::Vec2(step))
-                        .with("sigma", ParamValue::Float(pass / spacing)),
-                    runtime,
-                )?;
-                blurred = blurred.hypot(pass);
-                if pass < MAX_PASS_SIGMA_TAPS * spacing {
-                    break;
-                }
-                spacing = blurred;
+        let mut blurred = 0.0_f32;
+        let mut spacing = 1.0_f32;
+        for _ in 0..MAX_PASSES_PER_AXIS {
+            let remaining = (sigma_pixels * sigma_pixels - blurred * blurred)
+                .max(0.0)
+                .sqrt();
+            let pass = remaining.min(MAX_PASS_SIGMA_TAPS * spacing);
+            let step = [
+                direction[0] * spacing / extent[0],
+                direction[1] * spacing / extent[1],
+            ];
+            node = self.add_internal_effect(
+                GAUSSIAN_BLUR_PASS_ID,
+                node,
+                EffectParams::new()
+                    .with("step", ParamValue::Vec2(step))
+                    .with("sigma", ParamValue::Float(pass / spacing)),
+                runtime,
+            )?;
+            blurred = blurred.hypot(pass);
+            if pass < MAX_PASS_SIGMA_TAPS * spacing {
+                break;
             }
+            spacing = blurred;
         }
         Ok(node)
     }
 
-    fn add_internal_effect(
+    pub(crate) fn add_internal_effect(
         &mut self,
         id: &'static str,
         source: RenderNodeId,
@@ -188,9 +348,30 @@ impl<'a> RenderGraph<'a> {
     }
 }
 
+/// The named parameters of `definition` as `params` gives them, its
+/// defaults filling the rest, checked as a pass would check them: of any
+/// type, for an expanded effect that passes colors, switches or choices on.
+pub(crate) fn checked_values<const N: usize>(
+    definition: &EffectDef,
+    params: &EffectParams,
+    names: [&str; N],
+) -> Result<[ParamValue; N], GraphError> {
+    crate::runtime_effect::encode_params(&definition.params, params)?;
+    let mut values = std::array::from_fn(|_| ParamValue::Float(0.0));
+    for (value, name) in values.iter_mut().zip(names) {
+        let spec = definition
+            .params
+            .iter()
+            .find(|spec| spec.name == name)
+            .ok_or(RenderError::InvalidEffectParams)?;
+        *value = params.get(name).unwrap_or(&spec.default).clone();
+    }
+    Ok(values)
+}
+
 /// The named float parameters of `definition` as `params` gives them, its
 /// defaults filling the rest, checked as a pass would check them.
-fn checked_params<const N: usize>(
+pub(crate) fn checked_params<const N: usize>(
     definition: &EffectDef,
     params: &EffectParams,
     names: [&str; N],
@@ -209,4 +390,30 @@ fn checked_params<const N: usize>(
         *value = *supplied;
     }
     Ok(values)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::checked_values;
+    use crate::{EffectParams, ParamValue, chroma_key_definition};
+
+    #[test]
+    fn checked_values_fill_defaults_and_refuse_a_wrong_type() {
+        let definition = chroma_key_definition();
+        let supplied = EffectParams::new()
+            .with("key_color", ParamValue::Color([0.2, 0.4, 0.6, 1.0]))
+            .with("distance_mode", ParamValue::Enum(1));
+        let [key, mode, softness] = checked_values(
+            &definition,
+            &supplied,
+            ["key_color", "distance_mode", "softness"],
+        )
+        .expect("valid parameters");
+        assert_eq!(key, ParamValue::Color([0.2, 0.4, 0.6, 1.0]));
+        assert_eq!(mode, ParamValue::Enum(1));
+        assert_eq!(softness, ParamValue::Float(0.1));
+        let wrong = EffectParams::new().with("key_color", ParamValue::Float(1.0));
+        assert!(checked_values(&definition, &wrong, ["key_color"]).is_err());
+        assert!(checked_values(&definition, &EffectParams::new(), ["missing"]).is_err());
+    }
 }

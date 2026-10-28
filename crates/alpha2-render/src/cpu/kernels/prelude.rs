@@ -1,6 +1,6 @@
 //! WGSL built-ins and the shared WGSL helpers kernels port: the
-//! transitions' `helpers.wgsl`, and fine derivatives emulated on 2 x 2
-//! quads exactly as WGSL defines them.
+//! transitions' `helpers.wgsl` and `gl-entry.wgsl`, and fine derivatives
+//! emulated on 2 x 2 quads exactly as WGSL defines them.
 
 use super::KernelContext;
 use crate::RenderSize;
@@ -241,4 +241,119 @@ pub(crate) const fn pcg(value: u32) -> u32 {
     let state = value.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
     let word = ((state >> ((state >> 28) + 4)) ^ state).wrapping_mul(277_803_737);
     (word >> 22) ^ word
+}
+
+/// `builtin_hash`: [`pcg`].
+#[inline]
+pub(crate) const fn builtin_hash(value: u32) -> u32 {
+    pcg(value)
+}
+
+/// `builtin_hash3`.
+#[inline]
+pub(crate) const fn builtin_hash3(a: u32, b: u32, c: u32) -> u32 {
+    pcg(a ^ pcg(b ^ pcg(c)))
+}
+
+/// `builtin_unit`: the top 24 bits of a hash as a float in `[0, 1)`,
+/// converted exactly.
+#[inline]
+#[allow(clippy::cast_precision_loss)]
+pub(crate) fn builtin_unit(hash: u32) -> f32 {
+    (hash >> 8) as f32 / 16_777_216.0
+}
+
+/// `builtin_cell`: a lattice cell index of either sign as a hash input.
+/// WGSL's `i32(..)` clamps to the f32 values an `i32` holds, so past 2^31
+/// it is 2147483520, not `i32::MAX`.
+#[inline]
+#[allow(clippy::cast_possible_truncation)]
+pub(crate) fn builtin_cell(value: f32) -> u32 {
+    (value.floor().clamp(-2_147_483_648.0, 2_147_483_520.0) as i32).cast_unsigned()
+}
+
+/// `builtin_floor_mod`: GLSL's `mod`.
+#[inline]
+pub(crate) fn builtin_floor_mod(x: f32, y: f32) -> f32 {
+    x - y * (x / y).floor()
+}
+
+/// `builtin_value_noise`: value noise in `[0, 1]` on the integer lattice,
+/// smooth between lattice points.
+#[inline]
+#[allow(clippy::many_single_char_names)]
+pub(crate) fn builtin_value_noise(p: [f32; 2], seed: u32) -> f32 {
+    let cell = [p[0].floor(), p[1].floor()];
+    let f = [p[0] - cell[0], p[1] - cell[1]];
+    let w = f.map(|f| f * f * (3.0 - 2.0 * f));
+    let x = builtin_cell(cell[0]);
+    let y = builtin_cell(cell[1]);
+    let a = builtin_unit(builtin_hash3(x, y, seed));
+    let b = builtin_unit(builtin_hash3(x.wrapping_add(1), y, seed));
+    let c = builtin_unit(builtin_hash3(x, y.wrapping_add(1), seed));
+    let d = builtin_unit(builtin_hash3(x.wrapping_add(1), y.wrapping_add(1), seed));
+    mix(mix(a, b, w[0]), mix(c, d, w[0]), w[1])
+}
+
+/// `builtin_over(top, bottom)`, both premultiplied.
+#[inline]
+pub(crate) fn builtin_over(top: [f32; 4], bottom: [f32; 4]) -> [f32; 4] {
+    let rest = 1.0 - top[3];
+    [
+        top[0] + bottom[0] * rest,
+        top[1] + bottom[1] * rest,
+        top[2] + bottom[2] * rest,
+        top[3] + bottom[3] * rest,
+    ]
+}
+
+/// `builtin_valid`: clamped into premultiplied range, NaN to 0 as GPUs
+/// clamp.
+#[inline]
+#[allow(clippy::manual_clamp)]
+pub(crate) fn builtin_valid(color: [f32; 4]) -> [f32; 4] {
+    let alpha = color[3].max(0.0).min(1.0);
+    [
+        color[0].max(0.0).min(alpha),
+        color[1].max(0.0).min(alpha),
+        color[2].max(0.0).min(alpha),
+        alpha,
+    ]
+}
+
+/// `builtin_rgb_to_hsv`: hue, saturation and value (Smith 1978), hue in
+/// `[0, 1)`.
+#[inline]
+#[allow(clippy::float_cmp)]
+pub(crate) fn builtin_rgb_to_hsv(c: [f32; 3]) -> [f32; 3] {
+    let high = c[0].max(c[1].max(c[2]));
+    let low = c[0].min(c[1].min(c[2]));
+    let range = high - low;
+    let mut hue = 0.0;
+    if range > 0.0 {
+        if high == c[0] {
+            hue = (c[1] - c[2]) / range;
+            if hue < 0.0 {
+                hue += 6.0;
+            }
+        } else if high == c[1] {
+            hue = (c[2] - c[0]) / range + 2.0;
+        } else {
+            hue = (c[0] - c[1]) / range + 4.0;
+        }
+    }
+    let saturation = if high > 0.0 { range / high } else { 0.0 };
+    [hue / 6.0, saturation, high]
+}
+
+/// `builtin_hsv_to_rgb`. WGSL `%` truncates; its operands here are
+/// positive, where Rust's `%` is the same.
+#[inline]
+pub(crate) fn builtin_hsv_to_rgb(hsv: [f32; 3]) -> [f32; 3] {
+    let h = fract(hsv[0]) * 6.0;
+    [5.0_f32, 3.0, 1.0].map(|n| {
+        let k = (n + h) % 6.0;
+        let ramp = k.min(4.0 - k).clamp(0.0, 1.0);
+        hsv[2] - hsv[2] * hsv[1] * ramp
+    })
 }

@@ -13,6 +13,8 @@ use crate::{
     UniformField, UniformLayout,
 };
 
+/// Effects a host may register. The built-ins, a fixed set the build
+/// decides, do not count against it.
 const MAX_REGISTERED_EFFECTS: usize = 256;
 const MAX_WGSL_BODY_BYTES: usize = 32 * 1024;
 const MAX_WGSL_NESTING: usize = 64;
@@ -183,7 +185,9 @@ pub(crate) struct EffectRegistry {
 }
 
 impl EffectRegistry {
-    /// Refuses `id` when it is registered already or the registry is full.
+    /// Refuses `id` when it is registered already or the host's share of the
+    /// registry is full. A built-in is counted only once it is marked one, so
+    /// the built-ins registering never fill it.
     fn check_room(&self, id: &EffectId) -> Result<(), ShaderDiagnostics> {
         if self.entries.contains_key(id) {
             return Err(ShaderDiagnostics::error(format!(
@@ -192,7 +196,7 @@ impl EffectRegistry {
                 id.version()
             )));
         }
-        if self.entries.len() >= MAX_REGISTERED_EFFECTS {
+        if self.entries.len() - self.builtins.len() >= MAX_REGISTERED_EFFECTS {
             return Err(ShaderDiagnostics::error(format!(
                 "effect registry is full (maximum {MAX_REGISTERED_EFFECTS})"
             )));

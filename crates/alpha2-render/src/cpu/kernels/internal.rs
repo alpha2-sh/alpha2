@@ -1,10 +1,13 @@
 //! The internal passes: the blur and glow passes, shape-mask combines and the track matte.
 
 use super::effects::{
-    centre, effect_row, grow, luminance, margin, premultiplied, saturate, straight,
+    centre, effect_row, grow, luminance, margin, output, premultiplied, saturate, straight,
 };
-use super::{CpuKernel, KernelContext, transition_row};
-use crate::builtins::{GAUSSIAN_BLUR_PASS_ID, GLOW_COMBINE_ID, GLOW_THRESHOLD_ID};
+use super::{CpuKernel, KernelContext, builtin_smoothstep, mix4, transition_row};
+use crate::builtins::{
+    FOCUS_COMBINE_ID, GAUSSIAN_BLUR_PASS_ID, GLOW_COMBINE_ID, GLOW_THRESHOLD_ID, SHADOW_COMBINE_ID,
+    SHADOW_OFFSET_ID, UNSHARP_COMBINE_ID,
+};
 use crate::cpu::curves;
 use crate::cpu::half;
 use crate::cpu::image::{CpuImage, PixelBox, Pixels};
@@ -18,6 +21,10 @@ pub(super) fn kernel(id: &str) -> Option<&'static dyn CpuKernel> {
         GAUSSIAN_BLUR_PASS_ID => &BlurPass,
         GLOW_THRESHOLD_ID => &GlowThreshold,
         GLOW_COMBINE_ID => &GlowCombine,
+        UNSHARP_COMBINE_ID => &UnsharpCombine,
+        FOCUS_COMBINE_ID => &FocusCombine,
+        SHADOW_OFFSET_ID => &ShadowOffset,
+        SHADOW_COMBINE_ID => &ShadowCombine,
         TRACK_MATTE_EFFECT_ID => &TrackMatte,
         _ if MASK_COMBINE_EFFECT_IDS.contains(&id) => &MaskCombine,
         _ => return None,
@@ -350,6 +357,93 @@ impl CpuKernel for GlowCombine {
     }
 }
 
+/// unsharp-combine.wgsl: the source pushed away from its blur.
+struct UnsharpCombine;
+
+impl CpuKernel for UnsharpCombine {
+    fn bounds(&self, context: &KernelContext<'_>) -> PixelBox {
+        wrapped_bounds(context, context.source_a.bounds())
+    }
+
+    fn row(&self, context: &KernelContext<'_>, y: u32, x0: u32, out: &mut [[f32; 4]]) {
+        let amount = context.float("amount");
+        let threshold = context.float("threshold");
+        let size = context.size;
+        transition_row(context, y, x0, out, |x, _| {
+            let src = centre(context.source_a, size, x, y);
+            if src[3] <= 0.0001 {
+                return src;
+            }
+            let blurred = centre(context.source_b, size, x, y);
+            let center = [src[0] / src[3], src[1] / src[3], src[2] / src[3]];
+            let around = if blurred[3] > 0.0001 {
+                [0, 1, 2].map(|c| blurred[c] / blurred[3])
+            } else {
+                center
+            };
+            let detail = [0, 1, 2].map(|c| center[c] - around[c]);
+            let weight = builtin_smoothstep(0.0, threshold, luminance(detail).abs());
+            output(
+                [0, 1, 2].map(|c| center[c] + detail[c] * amount * weight),
+                src[3],
+            )
+        });
+    }
+}
+
+/// focus-combine.wgsl: the source and its two blurs by the distance from
+/// the band.
+struct FocusCombine;
+
+impl FocusCombine {
+    fn input<'a>(context: &KernelContext<'a>, name: &str) -> Option<&'a CpuImage> {
+        context
+            .inputs
+            .iter()
+            .find(|(input, _)| *input == name)
+            .map(|(_, image)| *image)
+    }
+}
+
+impl CpuKernel for FocusCombine {
+    // The blurs reach past the source.
+    fn bounds(&self, context: &KernelContext<'_>) -> PixelBox {
+        ["soft", "blurred"]
+            .into_iter()
+            .filter_map(|name| Self::input(context, name))
+            .fold(context.source_a.bounds(), |covered, image| {
+                covered.union(image.bounds())
+            })
+    }
+
+    fn row(&self, context: &KernelContext<'_>, y: u32, x0: u32, out: &mut [[f32; 4]]) {
+        let resolution = context.resolution();
+        let aspect = resolution[0] / resolution[1];
+        let position = context.float("position");
+        let angle = context.float("angle").to_radians();
+        let normal = [libm::sinf(angle), libm::cosf(angle)];
+        let focus = context.float("focus");
+        let falloff = context.float("falloff");
+        let (soft, blurred) = (
+            Self::input(context, "soft"),
+            Self::input(context, "blurred"),
+        );
+        let size = context.size;
+        effect_row(context, y, x0, out, |x, uv, src| {
+            let offset = [(uv[0] - 0.5) * aspect, uv[1] - position];
+            let off_focus = (offset[0] * normal[0] + offset[1] * normal[1]).abs();
+            let w = builtin_smoothstep(focus * 0.5, focus * 0.5 + falloff, off_focus);
+            let soft = soft.map_or([0.0; 4], |image| centre(image, size, x, y));
+            let blurred = blurred.map_or([0.0; 4], |image| centre(image, size, x, y));
+            if w < 0.5 {
+                mix4(src, soft, w * 2.0)
+            } else {
+                mix4(soft, blurred, w * 2.0 - 1.0)
+            }
+        });
+    }
+}
+
 /// The track matte (masking.rs `track_matte_definition`).
 struct TrackMatte;
 
@@ -476,6 +570,113 @@ impl CpuKernel for MaskCombine {
             }
             let coverage = saturate(coverage);
             src.map(|value| value * coverage)
+        });
+    }
+}
+
+/// shadow-offset.wgsl: the source's alpha moved by `offset`, in the shadow
+/// color.
+struct ShadowOffset;
+
+impl CpuKernel for ShadowOffset {
+    // The source's pixels moved by the offset, with room for the bilinear
+    // neighbour and rounding; a side on the canvas's edge reaches that edge
+    // still, as the sampler repeats it.
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
+    fn bounds(&self, context: &KernelContext<'_>) -> PixelBox {
+        let source = context.source_a.bounds();
+        let offset = context.vec2("offset");
+        let size = context.size;
+        if source.is_empty() {
+            return source;
+        }
+        if context.source_a.size() != size || !offset.iter().all(|value| value.is_finite()) {
+            return PixelBox::whole(size);
+        }
+        let extent = [size.width as f32, size.height as f32];
+        let shift = [offset[0] * extent[0], offset[1] * extent[1]];
+        let low = [
+            source.x as f32 + shift[0] - 2.0,
+            source.y as f32 + shift[1] - 2.0,
+        ];
+        let high = [
+            source.right() as f32 + shift[0] + 2.0,
+            source.bottom() as f32 + shift[1] + 2.0,
+        ];
+        let clamp = |value: f32, axis: usize| value.max(0.0).min(extent[axis]) as u32;
+        let x = if source.x == 0 {
+            0
+        } else {
+            clamp(low[0].floor(), 0)
+        };
+        let y = if source.y == 0 {
+            0
+        } else {
+            clamp(low[1].floor(), 1)
+        };
+        let right = if source.right() == size.width {
+            size.width
+        } else {
+            clamp(high[0].ceil(), 0)
+        };
+        let bottom = if source.bottom() == size.height {
+            size.height
+        } else {
+            clamp(high[1].ceil(), 1)
+        };
+        if right <= x || bottom <= y {
+            return PixelBox::EMPTY;
+        }
+        PixelBox {
+            x,
+            y,
+            width: right - x,
+            height: bottom - y,
+        }
+    }
+
+    fn row(&self, context: &KernelContext<'_>, y: u32, x0: u32, out: &mut [[f32; 4]]) {
+        let offset = context.vec2("offset");
+        let color = context.vec4("color");
+        let opacity = context.float("opacity");
+        effect_row(context, y, x0, out, |_, uv, _| {
+            let moved = context.sample_src([uv[0] - offset[0], uv[1] - offset[1]]);
+            let coverage = moved[3] * opacity * color[3];
+            [color[0], color[1], color[2], 1.0].map(|value| value * coverage)
+        });
+    }
+}
+
+/// shadow-combine.wgsl: the source over its softened shadow, or the shadow
+/// alone.
+struct ShadowCombine;
+
+impl CpuKernel for ShadowCombine {
+    fn bounds(&self, context: &KernelContext<'_>) -> PixelBox {
+        let shadow = context.source_b.bounds();
+        let body = if context.boolean("shadow_only") {
+            shadow
+        } else {
+            shadow.union(context.source_a.bounds())
+        };
+        wrapped_bounds(context, body)
+    }
+
+    fn row(&self, context: &KernelContext<'_>, y: u32, x0: u32, out: &mut [[f32; 4]]) {
+        let shadow_only = context.boolean("shadow_only");
+        let size = context.size;
+        transition_row(context, y, x0, out, |x, _| {
+            let shadow = centre(context.source_b, size, x, y);
+            if shadow_only {
+                return shadow;
+            }
+            let src = centre(context.source_a, size, x, y);
+            let rest = 1.0 - src[3];
+            [0, 1, 2, 3].map(|c| src[c] + shadow[c] * rest)
         });
     }
 }
