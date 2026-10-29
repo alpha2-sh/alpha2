@@ -630,12 +630,15 @@ export class SourcePixels {
     };
   }
 
-  /** Decoder cursors the budget counts: the software cursors of recovered frames are not. */
+  /**
+   * Decoder cursors the budget counts, one per consumer: a software cursor beside its consumer's
+   * own cursor is not counted again.
+   */
   #cursorCount() {
-    let count = 0;
+    const consumers = new Set();
     for (const decoder of this.#decoders.values())
-      if (!decoder.software) count += 1;
-    return count;
+      consumers.add(decoderCursorKey(decoder.sourceId, decoder.consumerId));
+    return consumers.size;
   }
 
   /**
@@ -673,12 +676,14 @@ export class SourcePixels {
    *
    * The cursor shares the consumer's source and consumer IDs, so `retainConsumers` and `release`
    * close it with the consumer's; it stays open between frames, as readback failures come in runs
-   * and the next one then decodes on from it.
+   * and the next one then decodes on from it. A consumer whose frames all decode here (a source
+   * the browser decodes to opaque frames) has no other cursor, so this one opens within the budget.
    */
   async #softwareFrame(asset, seconds, consumerId, sourceId) {
     if (!asset.file)
       throw new Error(`${asset.id} has no file to decode in software`);
-    const cursor = `${decoderCursorKey(sourceId, consumerId)}\u0000software`;
+    const primary = decoderCursorKey(sourceId, consumerId);
+    const cursor = `${primary}\u0000software`;
     let decoder = this.#decoders.get(cursor);
     if (decoder && decoder.asset !== asset) {
       await closeDecoder(decoder);
@@ -686,6 +691,13 @@ export class SourcePixels {
       decoder = undefined;
     }
     if (!decoder) {
+      if (
+        !this.#decoders.has(primary) &&
+        this.#cursorCount() >= this.decoderLimit
+      )
+        throw Object.assign(new Error("Video decoder budget reached"), {
+          code: "resource_budget",
+        });
       decoder = {
         sourceId,
         asset,

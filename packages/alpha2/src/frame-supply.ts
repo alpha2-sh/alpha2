@@ -155,8 +155,9 @@ export interface FrameSupplyDecodeOptions {
    * `"software"`: decode this frame on the CPU, on a cursor of its own beside `consumerId`'s, and
    * resolve with a `VideoFrame`. The supply asks for it when the browser could not read a
    * hardware-decoded frame back, and when a frame the engine must convert (HDR, or color the
-   * project declares) has no planar format it reads (an opaque hardware frame); a host that cannot
-   * decode the source in software rejects. Absent for every other request.
+   * project declares) has no planar format it reads (an opaque hardware frame), and then for every
+   * later frame of that source until its content changes; a host that cannot decode the source in
+   * software rejects. Absent for every other request.
    */
   readonly decode?: "software";
 }
@@ -471,6 +472,12 @@ export interface FrameSupplyEngine {
 interface SourceContent {
   readonly content: unknown;
   readonly epoch: number;
+  /**
+   * Set once a frame of this content the engine must convert came back with no planar format: the
+   * browser's decoder does that for every frame of a source, so later frames decode in software
+   * at once rather than twice.
+   */
+  softwareDecode?: true;
 }
 
 /**
@@ -919,13 +926,19 @@ export class FrameSupply {
               (planar &&
                 layer.kind === "video" &&
                 this.#engine.hdrSource?.(need.sourceId) === true);
+            const software =
+              layer.kind === "video" &&
+              this.#contents.get(need.sourceId)?.softwareDecode === true;
             const decoded = await this.#decodeCursor(
-              keyForNeed(need, layer),
+              software
+                ? `${keyForNeed(need, layer)}\u0000software`
+                : keyForNeed(need, layer),
               () =>
                 pixelsFor(layer, Number(sourceTicks) / TICKS_PER_SECOND, {
                   preferVideoFrame: directVideo || enginesColor,
                   consumerId: consumerOf(need),
                   sourceId: need.sourceId,
+                  ...(software ? { decode: "software" as const } : {}),
                 }),
             );
             results[index] = this.#planarRoute(
@@ -1016,8 +1029,8 @@ export class FrameSupply {
    * `unreadableFrames: "present"`, a frame the engine need not convert resolves `undefined`
    * instead, left open for the browser's conversion. A frame with no planar format the engine
    * reads (an opaque hardware frame, routed here only when the engine must convert it) is decoded
-   * again in software at once. Rejects, the frame closed, when the copy fails otherwise or the
-   * software decode cannot serve it.
+   * again in software at once, as every later frame of its source is. Rejects, the frame closed,
+   * when the copy fails otherwise or the software decode cannot serve it.
    */
   async #copyPlanar(
     need: FrameNeed,
@@ -1048,6 +1061,10 @@ export class FrameSupply {
       const timestamp =
         source.physicalTimeMicroseconds ?? source.frame.timestamp;
       source.frame.close();
+      if (nonPlanar) {
+        const content = this.#contents.get(need.sourceId);
+        if (content !== undefined) content.softwareDecode = true;
+      }
       copied = await this.#redecodePlanar(
         need,
         layer,

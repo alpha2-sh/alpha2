@@ -2,15 +2,10 @@
 // learns that a source exists (`browser://<id>`); this module answers its per-frame requests.
 
 import { colorMetadataFromVideoColorSpace } from "alpha2/hdr-frames";
+import { MediabunnyVideoDecoder } from "alpha2/mediabunny";
+import { TICKS_PER_SECOND } from "alpha2/project";
 import { OffscreenTextRasterizer } from "alpha2/text";
-import {
-  ALL_FORMATS,
-  AudioSampleSink,
-  BlobSource,
-  CanvasSink,
-  EncodedPacketSink,
-  Input,
-} from "mediabunny";
+import { ALL_FORMATS, AudioSampleSink, BlobSource, Input } from "mediabunny";
 const uid = (prefix) => `${prefix}-${crypto.randomUUID()}`;
 import { drawGenerator, generatorLabel } from "./generators.js";
 import { seekVideoFrame } from "./preview-utils.js";
@@ -178,13 +173,14 @@ export class AssetLibrary {
    * Imports one browser file as an image, video or audio asset. Rejects with an `EditorError`:
    * `unsupported_media` for a file that is none of those, `unreadable_media` for one that is but
    * that this browser could not read (a codec it does not decode, a damaged file), with the
-   * decoder's or demuxer's reason in the message and as the `cause`.
+   * decoder's or demuxer's reason in the message and as the `cause`. Rejects with `signal`'s
+   * reason once it aborts a decode.
    */
-  async importFile(file) {
-    return (await this.#import(file)).asset;
+  async importFile(file, { signal } = {}) {
+    return (await this.#import(file, signal)).asset;
   }
 
-  async #import(file) {
+  async #import(file, signal) {
     const kind = mediaKindForFile(file);
     if (!kind)
       throw new EditorError(
@@ -202,10 +198,11 @@ export class AssetLibrary {
         as === "image"
           ? await this.#importImage(file, reference)
           : as === "video"
-            ? await this.#importVideo(file, reference, probe)
+            ? await this.#importVideo(file, reference, probe, signal)
             : await this.#importAudio(file, reference);
       return { asset, relinked: !!reference };
     } catch (error) {
+      if (signal?.aborted) throw signal.reason;
       // A media element's MediaError is no Error, but says why in `message` too.
       const reason =
         typeof error?.message === "string"
@@ -250,10 +247,10 @@ export class AssetLibrary {
 
   /**
    * `probe` is null when the container was unreadable; an element with no picture is refused. A
-   * file the media element cannot open still imports when WebCodecs decodes its picture, with no
-   * element (`video: null`).
+   * file the media element cannot open still imports, with no element (`video: null`), when the
+   * decoder preview and export read it with decodes its picture.
    */
-  async #importVideo(file, reference = null, probe = null) {
+  async #importVideo(file, reference = null, probe = null, signal) {
     if (probe && !probe.video)
       throw new Error("the file has neither a picture nor sound");
     const url = URL.createObjectURL(file);
@@ -311,9 +308,18 @@ export class AssetLibrary {
       thumbnail: null,
       peaks: null,
     };
-    asset.thumbnail = element
-      ? await videoThumbnail(element, read.width, read.height)
-      : await decodedThumbnail(file, read.width, read.height);
+    if (element)
+      asset.thumbnail = await videoThumbnail(element, read.width, read.height);
+    else {
+      try {
+        asset.thumbnail = await decodedThumbnail(asset, signal);
+      } catch (error) {
+        throw new Error(
+          `${failed.message || "the media element could not open it"}; decoding it with WebCodecs failed too: ${error?.message ?? error}`,
+          { cause: error },
+        );
+      }
+    }
     this.#assets.set(asset.id, asset);
     return asset;
   }
@@ -641,13 +647,34 @@ export function computePeaks(buffer, buckets = 1_200) {
   return peaks;
 }
 
-function thumbnailFrom(image, width, height) {
+/**
+ * A thumbnail of `image` shown at `width` x `height`. With `orientation`, `image` is a decoded
+ * frame that shows upright mirrored left to right when `mirror` is set, then turned `rotation`
+ * degrees clockwise.
+ */
+function thumbnailFrom(image, width, height, orientation = null) {
   // Rendered once at import; the timeline re-reads `dataUrl` on every redraw.
   const scale = THUMBNAIL_WIDTH / Math.max(1, width);
   const canvas = document.createElement("canvas");
   canvas.width = THUMBNAIL_WIDTH;
   canvas.height = Math.max(1, Math.round(height * scale));
-  canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+  const context = canvas.getContext("2d");
+  if (orientation) {
+    const turned = orientation.rotation % 180 !== 0;
+    const drawn = turned
+      ? { width: canvas.height, height: canvas.width }
+      : { width: canvas.width, height: canvas.height };
+    context.translate(canvas.width / 2, canvas.height / 2);
+    context.rotate((orientation.rotation * Math.PI) / 180);
+    if (orientation.mirror) context.scale(-1, 1);
+    context.drawImage(
+      image,
+      -drawn.width / 2,
+      -drawn.height / 2,
+      drawn.width,
+      drawn.height,
+    );
+  } else context.drawImage(image, 0, 0, canvas.width, canvas.height);
   canvas.dataUrl = canvas.toDataURL("image/jpeg", 0.72);
   return canvas;
 }
@@ -670,32 +697,35 @@ async function videoThumbnail(video, width, height) {
   }
 }
 
-/** A thumbnail decoded with WebCodecs, for a file the media element cannot open; null on failure. */
-async function decodedThumbnail(file, width, height) {
-  const input = new Input({
-    source: new BlobSource(file),
-    formats: ALL_FORMATS,
-  });
+/**
+ * A thumbnail of `asset`, a file the media element cannot open, decoded by the decoder preview and
+ * export read it with: its stall limit bounds a decoder that never answers. Rejects when it decodes
+ * no picture, or with `signal`'s reason once it aborts.
+ */
+async function decodedThumbnail(asset, signal) {
+  const decoder = await MediabunnyVideoDecoder.open(asset.id, asset.file);
   try {
-    const track = await input.getPrimaryVideoTrack();
-    if (!track) return null;
-    const duration = (await input.computeDuration().catch(() => 0)) || 1;
-    // Rotated as drawing the element is.
-    const sink = new CanvasSink(track, { width: THUMBNAIL_WIDTH, poolSize: 1 });
-    // A stream that starts on frames referencing a cut-away keyframe shows from its first real one.
-    const first = async () => {
-      const key = await new EncodedPacketSink(track).getFirstKeyPacket({
-        verifyKeyPackets: true,
+    // Requests before the stream's first frame present that frame, as preview shows it.
+    const seconds = Math.min(0.25 * (asset.duration || 1), 1);
+    const { frame, rotationDegrees, mirror } = await decoder.refill(
+      {
+        sourceId: asset.id,
+        mediaTimeTicks: BigInt(Math.round(seconds * TICKS_PER_SECOND)),
+        reason: "seek",
+        generation: 0,
+      },
+      signal,
+    );
+    try {
+      return thumbnailFrom(frame, asset.width, asset.height, {
+        rotation: rotationDegrees ?? 0,
+        mirror: mirror ?? false,
       });
-      return key && sink.getCanvas(key.timestamp);
-    };
-    const wrapped =
-      (await sink.getCanvas(Math.min(0.25 * duration, 1))) ?? (await first());
-    return wrapped ? thumbnailFrom(wrapped.canvas, width, height) : null;
-  } catch {
-    return null;
+    } finally {
+      frame.close();
+    }
   } finally {
-    input.dispose();
+    decoder.close();
   }
 }
 

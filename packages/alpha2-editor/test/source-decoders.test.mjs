@@ -207,18 +207,27 @@ test("a frame asked for in software decodes on a cursor of its own, opened for s
   assert.equal(pixels.diagnostics.liveDecoders, 0);
 });
 
-test("a software cursor does not count against the decoder budget", async (t) => {
+test("the decoder budget counts consumers: a software cursor beside its consumer's is not counted again, one alone is", async (t) => {
   const opened = fakeDecoders(t);
   const pixels = new SourcePixels(null, { decoderLimit: 1 });
   const asset = { id: "s", kind: "video", file: { name: "s.mp4" } };
+  const software = (consumerId) =>
+    pixels.pixelsFor(asset, 0, {
+      preferVideoFrame: true,
+      consumerId,
+      sourceId: "s",
+      decode: "software",
+    });
   await frame(pixels, asset, 0, { sourceId: "s" });
-  await pixels.pixelsFor(asset, 0, {
-    preferVideoFrame: true,
-    consumerId: "clip",
-    sourceId: "s",
-    decode: "software",
-  });
+  await software("clip");
   await frame(pixels, asset, 1 / 30, { sourceId: "s" });
+  assert.equal(opened.length, 2);
+  // A second consumer whose frames all decode in software (its source decodes to opaque frames)
+  // opens a cursor of its own, which the budget holds.
+  await assert.rejects(
+    software("other"),
+    (error) => error.code === "resource_budget",
+  );
   assert.equal(opened.length, 2);
 });
 

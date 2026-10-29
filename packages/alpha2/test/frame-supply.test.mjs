@@ -1898,6 +1898,49 @@ test("an HDR frame with no planar format is decoded again in software and conver
   });
 });
 
+test("a source whose frames come back opaque decodes in software from then on, until its content changes", async () => {
+  const engine = recoveryEngine();
+  let at = 0n;
+  engine.releaseSourceFrames = () => {};
+  engine.frameNeeds = () =>
+    JSON.stringify([
+      { clipId: "a", sourceId: "v", mediaTimeTicks: String(at) },
+    ]);
+  const supply = new FrameSupply(engine);
+  let content = "original";
+  const requests = [];
+  const supplyAt = (ticks) => {
+    at = ticks;
+    const timestamp = Number(ticks / 120n);
+    return supply.supply(ticks, {
+      width: 4,
+      height: 2,
+      contentOf: () => content,
+      liveSourceIds: new Set(["v"]),
+      getLayer: () => ({ id: "v", kind: "video" }),
+      pixelsFor: async (_layer, _seconds, options) => {
+        requests.push(options.decode ?? "auto");
+        const frame =
+          options.decode === "software"
+            ? fakeHdrFrame({ transfer: "hlg", timestamp })
+            : opaque(fakeHdrFrame({ transfer: "hlg", timestamp }));
+        return { kind: "video-frame", frame, chromaSiting: "left" };
+      },
+      isCurrent: () => true,
+    });
+  };
+  await supplyAt(0n);
+  await supplyAt(4_000n);
+  assert.deepEqual(requests, ["auto", "software", "software"]);
+  assert.equal(engine.yuv.length, 2);
+  assert.equal(supply.readbackRecovery.unreadableFrames, 1);
+  // Other media (a proxy, or the original again) may decode otherwise: it is tried as it comes.
+  content = "proxy";
+  requests.length = 0;
+  await supplyAt(8_000n);
+  assert.deepEqual(requests, ["auto", "software"]);
+});
+
 test("a preview decodes an opaque HDR frame again too and never presents it", async () => {
   const engine = recoveryEngine();
   engine.uploadPresentedVideoFrame = () => {

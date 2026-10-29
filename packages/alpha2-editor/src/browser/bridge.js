@@ -233,7 +233,7 @@ export function createMediaAdapter({
     try {
       const runtime = file.name.toLowerCase().endsWith(".cube")
         ? await library.importEffectResource(file, "lut3d")
-        : await library.importFile(file);
+        : await library.importFile(file, { signal });
       signal.throwIfAborted();
       if (runtime.kind === "lut3d") {
         // The engine's parser validates the LUT once here rather than at every load.
