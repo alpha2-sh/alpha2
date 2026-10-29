@@ -246,6 +246,7 @@ impl Host {
             byte_budget: self.memory.decode_queue.byte_budget(),
             concurrency: plan.codec_threads.decode_concurrency,
             decoder_threads: plan.codec_threads.decoder_threads,
+            hardware_decoder_threads: plan.codec_threads.hardware_decoder_threads,
             max_sessions: plan.decoder_sessions,
             reverse_cache_bytes: self.memory.reverse_cache.bytes,
             reverse_hardware_surfaces: configured_reverse_hardware_surfaces(self.decode_policy),

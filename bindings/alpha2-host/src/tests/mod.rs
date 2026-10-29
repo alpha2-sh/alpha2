@@ -465,6 +465,7 @@ fn decode_worker_over(
         byte_budget: crate::memory::ByteBudget::exact(256 << 20),
         concurrency,
         decoder_threads: 1,
+        hardware_decoder_threads: 1,
         max_sessions: concurrency,
         reverse_cache_bytes: 0,
         reverse_hardware_surfaces: 0,

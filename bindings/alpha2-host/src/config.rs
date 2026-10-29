@@ -783,9 +783,11 @@ pub fn codec_thread_policy_for(
 /// How each decode session's worker count was arrived at.
 pub fn decoder_thread_policy(hardware_decode: bool, software_video_encoder: bool) -> &'static str {
     if hardware_decode {
-        // A device-resident session decodes nothing on the CPU and still cannot be given less; its
-        // pool size is a decoder liveness bound.
-        "hardware-even-share"
+        // A device-resident session decodes nothing on the CPU, so it opens with a fixed count
+        // (`HARDWARE_DECODER_THREADS`); a fallback from it takes the even share. On the pinned
+        // FFmpeg the count sizes no surface pool: Vulkan, D3D12 and VideoToolbox set no fixed
+        // initial pool size for frame threads to grow.
+        "hardware-fixed"
     } else if software_video_encoder {
         "source-area"
     } else {

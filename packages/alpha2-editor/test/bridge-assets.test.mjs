@@ -279,7 +279,8 @@ test(
 );
 
 test("the default adapter computes no fingerprint when none is wanted", async () => {
-  const adapter = createMediaAdapter();
+  const workers = countedHashWorkers();
+  const adapter = createMediaAdapter({ hashWorkerFactory: workers.factory });
   const signal = new AbortController().signal;
   const plain = await adapter.stage(toneWav(0.5), signal);
   assert.match(plain.fingerprint?.content_sha256 ?? "", /^[0-9a-f]{64}$/);
@@ -290,6 +291,67 @@ test("the default adapter computes no fingerprint when none is wanted", async ()
   assert.equal(bare.fingerprint, undefined);
   assert.equal(bare.runtime.kind, "audio");
   bare.dispose();
+  assert.equal(workers.posts, 1);
+});
+
+/** Hash workers that answer with a fixed hash and count the files posted to them. */
+function countedHashWorkers() {
+  const workers = { posts: 0, terminated: 0 };
+  workers.factory = () => {
+    const worker = {
+      onmessage: null,
+      onerror: null,
+      postMessage() {
+        workers.posts++;
+        setTimeout(() =>
+          worker.onmessage?.({ data: { type: "hashed", sha256: hash("c") } }),
+        );
+      },
+      terminate() {
+        workers.terminated++;
+      },
+    };
+    return worker;
+  };
+  return workers;
+}
+
+test("the default adapter hashes each file once, from the start of its import", async () => {
+  const workers = countedHashWorkers();
+  const adapter = createMediaAdapter({ hashWorkerFactory: workers.factory });
+  const staging = adapter.stage(toneWav(0.5), new AbortController().signal);
+  // Posted before the file is read for anything else.
+  assert.equal(workers.posts, 1);
+  const staged = await staging;
+  assert.equal(staged.fingerprint?.content_sha256, hash("c"));
+  assert.equal(workers.posts, 1);
+  assert.equal(workers.terminated, 1);
+  staged.dispose();
+});
+
+test("a file the default adapter refuses stops its hash", async () => {
+  const workers = { posts: 0, terminated: 0 };
+  const adapter = createMediaAdapter({
+    hashWorkerFactory: () => ({
+      onmessage: null,
+      onerror: null,
+      postMessage() {
+        workers.posts++;
+      },
+      terminate() {
+        workers.terminated++;
+      },
+    }),
+  });
+  await assert.rejects(
+    adapter.stage(
+      new File(["notes"], "notes.txt"),
+      new AbortController().signal,
+    ),
+    { code: "unsupported_media" },
+  );
+  assert.equal(workers.posts, 1);
+  assert.equal(workers.terminated, 1);
 });
 
 test(

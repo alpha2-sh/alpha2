@@ -831,6 +831,38 @@ fn a_surface_that_cannot_be_imported_is_downloaded_on_both_gpu_paths() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// A hardware decode session opens with the fixed worker count rather than a
+/// share of the codec budget, and the report says which rule sized it.
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos", target_os = "windows"),
+    feature = "hwencode",
+    feature = "hwdecode"
+))]
+#[test]
+fn a_hardware_decode_session_opens_with_the_fixed_worker_count() {
+    let _gpu = gpu_test_lock();
+    let Some(mut host) = surface_importing_gpu_output_host() else {
+        return;
+    };
+    let directory = scratch_directory("hardware-decoder-threads");
+    let result =
+        export_with_a_surface_fault(&mut host, None, (512, 288), &directory.join("render.mp4"))
+            .expect("a hardware decoded export");
+    let performance = &result["performance"];
+    assert_eq!(performance["hardwareDecodedFrames"], json!(15), "{result}");
+    assert_eq!(result["decoderThreadPolicy"], json!("hardware-fixed"));
+    let budget = performance["codecThreadBudget"]
+        .as_u64()
+        .expect("a codec budget");
+    let budget = usize::try_from(budget).expect("budget fits");
+    assert_eq!(
+        performance["hardwareDecoderThreads"],
+        json!(alpha2_native::HARDWARE_DECODER_THREADS.min(budget).max(1)),
+        "{performance}"
+    );
+    let _ = std::fs::remove_dir_all(directory);
+}
+
 /// Run by [`the_synchronous_comparison_path_reports_and_refuses_as_a_software_decode`]
 /// in a child process whose `ALPHA2_EXPORT_PIPELINE` is off.
 #[test]

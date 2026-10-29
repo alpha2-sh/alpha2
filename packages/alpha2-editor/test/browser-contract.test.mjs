@@ -132,6 +132,115 @@ test("staged batch failure rolls back all media; undo keeps previous resource re
   assert.equal(closed, 3);
 });
 
+/** Runs `body` with `navigator.hardwareConcurrency` reading `cores`. */
+async function withCores(cores, body) {
+  const saved = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", {
+    value: { ...globalThis.navigator, hardwareConcurrency: cores },
+    configurable: true,
+    writable: true,
+  });
+  try {
+    return await body();
+  } finally {
+    if (saved) Object.defineProperty(globalThis, "navigator", saved);
+    else delete globalThis.navigator;
+  }
+}
+test("the files of one import are staged together, at most four at once, and committed in the order given", () =>
+  withCores(8, async () => {
+    const editor = createEditor();
+    const gates = new Map();
+    let running = 0,
+      peak = 0;
+    const bridge = createBrowserBridge({
+      editor,
+      mediaAdapter: {
+        async stage(file) {
+          running++;
+          peak = Math.max(peak, running);
+          const gate = deferred();
+          gates.set(file.name, gate);
+          await gate.promise;
+          running--;
+          return {
+            runtime: { id: file.name, kind: "image" },
+            description: {},
+            dispose() {},
+          };
+        },
+      },
+    });
+    const names = ["a", "b", "c", "d", "e", "f"];
+    const importing = bridge.importFiles(
+      names.map((name) => ({ name, size: 1, lastModified: 1 })),
+    );
+    // Resolved last first: each settled stage lets the next file start.
+    for (let left = names.length; left > 0;) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const waiting = names.filter(
+        (name) => gates.has(name) && !gates.get(name).done,
+      );
+      const last = waiting.at(-1);
+      gates.get(last).done = true;
+      gates.get(last).resolve();
+      left--;
+    }
+    const { assetIds } = await importing;
+    assert.equal(peak, 4);
+    assert.deepEqual(assetIds, names);
+    assert.deepEqual(Object.keys(editor.document.assets), names);
+    await bridge.dispose();
+    editor.dispose();
+  }));
+test("a file that fails stops the files not yet staged and disposes every staged one", () =>
+  withCores(8, async () => {
+    const editor = createEditor();
+    const started = [];
+    const gates = new Map();
+    let disposed = 0;
+    const bridge = createBrowserBridge({
+      editor,
+      mediaAdapter: {
+        async stage(file) {
+          started.push(file.name);
+          const gate = deferred();
+          gates.set(file.name, gate);
+          await gate.promise;
+          if (file.name === "b") throw new Error("b cannot be decoded");
+          return {
+            runtime: { id: file.name, kind: "image" },
+            description: {},
+            dispose() {
+              disposed++;
+            },
+          };
+        },
+      },
+    });
+    const importing = bridge.importFiles(
+      ["a", "b", "c", "d", "e", "f"].map((name) => ({
+        name,
+        size: 1,
+        lastModified: 1,
+      })),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    gates.get("b").resolve();
+    gates.get("a").resolve();
+    gates.get("c").resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    gates.get("d").resolve();
+    await assert.rejects(importing, /b cannot be decoded/);
+    assert.deepEqual(started, ["a", "b", "c", "d"]);
+    assert.equal(disposed, 3);
+    assert.equal(bridge.resourceCount, 0);
+    assert.equal(Object.keys(editor.document.assets).length, 0);
+    assert.equal(editor.getSnapshot().canUndo, false);
+    await bridge.dispose();
+    editor.dispose();
+  }));
+
 test("session disposal drains its bridge and waits for registered cleanup", async () => {
   const editor = createEditor(),
     gate = deferred();

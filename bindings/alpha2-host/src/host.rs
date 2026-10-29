@@ -1885,6 +1885,7 @@ impl Host {
             decode_lookahead,
             decode_concurrency: codec_threads.decode_concurrency,
             decoder_threads: codec_threads.decoder_threads,
+            hardware_decoder_threads: codec_threads.hardware_decoder_threads,
             codec_thread_budget: codec_threads.total_threads,
             codec_threads_allocated: codec_threads.allocated_threads,
             encoder_threads: codec_threads.encoder_threads,

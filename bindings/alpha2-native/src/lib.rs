@@ -82,8 +82,8 @@ pub use capabilities::{
     video_encoder_capabilities, video_encoders_without_probing,
 };
 pub use convert::{
-    CodecThreadAllocation, CodecThreadRequest, codec_thread_allocation, codec_thread_budget,
-    codec_thread_override, configured_codec_thread_override,
+    CodecThreadAllocation, CodecThreadRequest, HARDWARE_DECODER_THREADS, codec_thread_allocation,
+    codec_thread_budget, codec_thread_override, configured_codec_thread_override,
 };
 pub use decode::{
     DecodeStageTimings, NativeAudioDecoder, NativeDecoder, ProbeResult, SOURCE_SAMPLE_RATES, probe,

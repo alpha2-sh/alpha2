@@ -34,6 +34,7 @@ import {
   blockingIssues,
   compareFingerprints,
   conformProject,
+  sha256Blob,
 } from "alpha2/assets";
 
 /**
@@ -73,6 +74,12 @@ const PLAYBACK_POLICIES = Object.freeze([
 ]);
 
 /**
+ * Files of one import staged at once. Each hashes its whole file in its own worker, at about
+ * 200 MB/s: four read about 800 MB/s, below a local SSD, and one core stays with the page.
+ */
+const IMPORT_STAGE_CONCURRENCY = 4;
+
+/**
  * How long Play waits for sound to start before playing the picture without it. A first start loads
  * and compiles the audio worklet and decodes the first block, about 1.5 s on Firefox.
  */
@@ -99,7 +106,7 @@ export function createMediaAdapter({
 } = {}) {
   const hash = hashWorkerFactory
     ? (file, options) => hashInWorker(hashWorkerFactory, file, options)
-    : undefined;
+    : sha256Blob;
   const module = {
     factory: extensionsWorkerFactory,
     wasmUrl: extensionsWasmUrl,
@@ -136,113 +143,134 @@ export function createMediaAdapter({
     },
     async stage(file, signal, { fingerprint: wanted = true } = {}) {
       signal.throwIfAborted();
+      // The hash reads the whole file, so it starts now and runs while the file is probed.
+      const hashing = new AbortController();
+      const stop = () => hashing.abort(signal.reason);
+      signal.addEventListener("abort", stop, { once: true });
+      const started = wanted ? hash(file, { signal: hashing.signal }) : null;
+      started?.catch(() => {}); // awaited below when used; a failed stage aborts it
       /** The file's fingerprint, unless the caller has no use for it (a proxy being adopted). */
       const fingerprintOf = (kind, options) =>
         wanted
-          ? fingerprintFile(file, kind, { signal, hash, ...options })
+          ? fingerprintFile(file, kind, {
+              signal,
+              hash: () => started,
+              ...options,
+            })
           : undefined;
-      // Recognized by its bytes; the provider module loads only for bytes that could be one.
-      const head = new Uint8Array(await file.slice(0, 4096).arrayBuffer());
-      if (mayBeExtension(head)) {
-        // Parsed whole in provider memory that never shrinks, so an oversize file is refused unread.
-        const document = providerDocumentLimit(head);
-        if (document !== null && file.size > document.limit)
-          throw new EditorError(
-            "too_large",
-            `${file.name} is ${file.size} bytes; a ${document.what} is read up to ${document.limit}`,
-            "import",
-          );
-        const found = await read("read", file, signal);
-        signal.throwIfAborted();
-        if (found)
-          return stageProviderFile(file, found, await fingerprintOf("image"));
+      try {
+        return await stageFile(file, signal, fingerprintOf);
+      } catch (error) {
+        hashing.abort(error);
+        throw error;
+      } finally {
+        signal.removeEventListener("abort", stop);
       }
-      if (/\.(ttf|otf|ttc|otc)$/i.test(file.name)) {
-        const bytes = new Uint8Array(await file.arrayBuffer());
+    },
+  };
+  /** Stages `file` as the media its bytes or name say it is; `fingerprintOf` gives its evidence. */
+  async function stageFile(file, signal, fingerprintOf) {
+    // Recognized by its bytes; the provider module loads only for bytes that could be one.
+    const head = new Uint8Array(await file.slice(0, 4096).arrayBuffer());
+    if (mayBeExtension(head)) {
+      // Parsed whole in provider memory that never shrinks, so an oversize file is refused unread.
+      const document = providerDocumentLimit(head);
+      if (document !== null && file.size > document.limit)
+        throw new EditorError(
+          "too_large",
+          `${file.name} is ${file.size} bytes; a ${document.what} is read up to ${document.limit}`,
+          "import",
+        );
+      const found = await read("read", file, signal);
+      signal.throwIfAborted();
+      if (found)
+        return stageProviderFile(file, found, await fingerprintOf("image"));
+    }
+    if (/\.(ttf|otf|ttc|otc)$/i.test(file.name)) {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      signal.throwIfAborted();
+      // The engine's parser decides: FontFace also loads WOFF and WOFF2, which the engine refuses.
+      const { loadEngineWasm } = await import("./runtime/wasm.js");
+      const { checkFont } = await loadEngineWasm(wasmUrl);
+      signal.throwIfAborted();
+      try {
+        checkFont(bytes, 0);
+      } catch (error) {
+        throw new EditorError(
+          "unreadable_media",
+          `Cannot read ${file.name} as a font: ${error instanceof Error ? error.message : String(error)}`,
+          "import",
+          undefined,
+          true,
+          { cause: error },
+        );
+      }
+      const id = crypto.randomUUID();
+      let face;
+      if (typeof FontFace !== "undefined") {
+        face = new FontFace(`alpha2-font-${id}`, bytes);
+        await face.load();
         signal.throwIfAborted();
-        // The engine's parser decides: FontFace also loads WOFF and WOFF2, which the engine refuses.
+        globalThis.document?.fonts.add(face);
+      }
+      return {
+        runtime: {
+          id,
+          kind: "font",
+          name: file.name,
+          bytes,
+          faceIndex: 0,
+          family: `alpha2-font-${id}`,
+        },
+        description: { id, kind: "font", name: file.name },
+        fingerprint: await fingerprintOf("font"),
+        dispose() {
+          if (face) globalThis.document?.fonts.delete(face);
+        },
+      };
+    }
+    const library = new AssetLibrary();
+    try {
+      const runtime = file.name.toLowerCase().endsWith(".cube")
+        ? await library.importEffectResource(file, "lut3d")
+        : await library.importFile(file);
+      signal.throwIfAborted();
+      if (runtime.kind === "lut3d") {
+        // The engine's parser validates the LUT once here rather than at every load.
         const { loadEngineWasm } = await import("./runtime/wasm.js");
-        const { checkFont } = await loadEngineWasm(wasmUrl);
+        const { checkLut3d } = await loadEngineWasm(wasmUrl);
         signal.throwIfAborted();
         try {
-          checkFont(bytes, 0);
+          checkLut3d(runtime.text);
         } catch (error) {
           throw new EditorError(
             "unreadable_media",
-            `Cannot read ${file.name} as a font: ${error instanceof Error ? error.message : String(error)}`,
+            `Cannot read ${file.name} as a 3D LUT: ${error instanceof Error ? error.message : String(error)}`,
             "import",
             undefined,
             true,
             { cause: error },
           );
         }
-        const id = crypto.randomUUID();
-        let face;
-        if (typeof FontFace !== "undefined") {
-          face = new FontFace(`alpha2-font-${id}`, bytes);
-          await face.load();
-          signal.throwIfAborted();
-          globalThis.document?.fonts.add(face);
-        }
-        return {
-          runtime: {
-            id,
-            kind: "font",
-            name: file.name,
-            bytes,
-            faceIndex: 0,
-            family: `alpha2-font-${id}`,
-          },
-          description: { id, kind: "font", name: file.name },
-          fingerprint: await fingerprintOf("font"),
-          dispose() {
-            if (face) globalThis.document?.fonts.delete(face);
-          },
-        };
       }
-      const library = new AssetLibrary();
-      try {
-        const runtime = file.name.toLowerCase().endsWith(".cube")
-          ? await library.importEffectResource(file, "lut3d")
-          : await library.importFile(file);
-        signal.throwIfAborted();
-        if (runtime.kind === "lut3d") {
-          // The engine's parser validates the LUT once here rather than at every load.
-          const { loadEngineWasm } = await import("./runtime/wasm.js");
-          const { checkLut3d } = await loadEngineWasm(wasmUrl);
-          signal.throwIfAborted();
-          try {
-            checkLut3d(runtime.text);
-          } catch (error) {
-            throw new EditorError(
-              "unreadable_media",
-              `Cannot read ${file.name} as a 3D LUT: ${error instanceof Error ? error.message : String(error)}`,
-              "import",
-              undefined,
-              true,
-              { cause: error },
-            );
-          }
-        }
-        const description = library.projectManifest()[0];
-        const fingerprint = await fingerprintOf(runtime.kind, {
-          size: runtime.width
-            ? { width: runtime.width, height: runtime.height }
-            : undefined,
-        });
-        signal.throwIfAborted();
-        return {
-          runtime,
-          description,
-          fingerprint,
-          dispose: () => library.dispose(),
-        };
-      } catch (error) {
-        library.dispose();
-        throw error;
-      }
-    },
-  };
+      const description = library.projectManifest()[0];
+      const fingerprint = await fingerprintOf(runtime.kind, {
+        size: runtime.width
+          ? { width: runtime.width, height: runtime.height }
+          : undefined,
+      });
+      signal.throwIfAborted();
+      return {
+        runtime,
+        description,
+        fingerprint,
+        dispose: () => library.dispose(),
+      };
+    } catch (error) {
+      library.dispose();
+      throw error;
+    }
+  }
 }
 
 /**
@@ -1827,6 +1855,10 @@ export function createBrowserBridge(options) {
       stage: (signal) => mediaAdapter.stageSequence(files, options, signal),
     };
   }
+  /**
+   * Stages `units` (at most {@link IMPORT_STAGE_CONCURRENCY} at once) and adds them to the document
+   * in their order, as one undo step; a relink has exactly one.
+   */
   async function importUnits(units, { signal, relinkId } = {}) {
     if (disposed)
       throw new EditorError("disposed", "Bridge is disposed", "import");
@@ -1836,7 +1868,8 @@ export function createBrowserBridge(options) {
     const abort = () => controller.abort(signal?.reason);
     signal?.addEventListener("abort", abort, { once: true });
     if (signal?.aborted) abort();
-    const staged = [],
+    // Index `i` is unit `i`'s staged asset; a unit never started leaves its slot empty.
+    const staged = new Array(units.length),
       leases = [],
       commands = [];
     try {
@@ -1847,10 +1880,35 @@ export function createBrowserBridge(options) {
           "relink",
           relinkId,
         );
-      for (const unit of units) {
-        const item = await unit.stage(controller.signal);
+      // Staged together, committed in order. The first file that fails stops the rest, and its
+      // error is the import's, not the cancellation the others then see.
+      let failure = null;
+      let next = 0;
+      const stageNext = async () => {
+        while (next < units.length && failure === null) {
+          const index = next++;
+          try {
+            staged[index] = await units[index].stage(controller.signal);
+          } catch (error) {
+            failure ??= { error };
+            controller.abort(error);
+          }
+        }
+      };
+      const limit = Math.max(
+        1,
+        Math.min(
+          IMPORT_STAGE_CONCURRENCY,
+          (globalThis.navigator?.hardwareConcurrency ?? 2) - 1,
+        ),
+      );
+      await Promise.all(
+        Array.from({ length: Math.min(limit, units.length) }, stageNext),
+      );
+      if (failure) throw failure.error;
+      for (const [index, unit] of units.entries()) {
+        const item = staged[index];
         const fileName = unit.name ?? item.name ?? item.runtime.name;
-        staged.push(item);
         controller.signal.throwIfAborted();
         if (disposed || editor.disposed || editor.generation !== generation)
           throw new EditorError(
@@ -1961,7 +2019,7 @@ export function createBrowserBridge(options) {
         owners.delete(key(entry.id, entry.contentRevision));
         entry.lease.release();
       }
-      for (const item of staged.slice(leases.length)) item.dispose();
+      for (const item of staged.slice(leases.length)) item?.dispose();
       throw error;
     } finally {
       pendingImports.delete(controller);

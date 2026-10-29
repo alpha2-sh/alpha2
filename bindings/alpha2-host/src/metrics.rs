@@ -102,6 +102,7 @@ pub struct ExportMetrics {
     pub ready_readback_dispatches: u64,
     pub decode_concurrency: usize,
     pub decoder_threads: i64,
+    pub hardware_decoder_threads: i64,
     pub codec_thread_budget: usize,
     pub codec_threads_allocated: usize,
     pub encoder_threads: i64,
@@ -678,6 +679,7 @@ pub fn export_metrics_json(
     add_stage_split_metrics(&mut value, metrics);
     value["decodeConcurrency"] = json!(metrics.decode_concurrency);
     value["decoderThreads"] = json!(metrics.decoder_threads);
+    value["hardwareDecoderThreads"] = json!(metrics.hardware_decoder_threads);
     value["codecThreadBudget"] = json!(metrics.codec_thread_budget);
     value["codecThreadsAllocated"] = json!(metrics.codec_threads_allocated);
     value["encoderThreads"] = json!(metrics.encoder_threads);

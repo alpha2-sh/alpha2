@@ -368,7 +368,8 @@ fn codec_threading_policy_and_unused_option_guard_are_explicit() {
                     usize::try_from(allocation.encoder_threads).expect("encoder threads fit"),
                 );
             assert_eq!(assigned, allocation.allocated_threads);
-            // A hardware session keeps the even share it was measured with.
+            // A session that falls back from hardware keeps the even share it was measured with;
+            // the hardware session itself opens with the fixed count.
             let contexts = allocation.decode_concurrency + 1;
             let even_share = i64::try_from(allocation.total_threads / contexts).expect("fits");
             if hardware_decode {
@@ -376,6 +377,12 @@ fn codec_threading_policy_and_unused_option_guard_are_explicit() {
             } else {
                 assert!(allocation.decoder_threads <= even_share.max(1));
             }
+            assert_eq!(
+                allocation.hardware_decoder_threads,
+                i64::try_from(HARDWARE_DECODER_THREADS.min(allocation.total_threads))
+                    .expect("fits")
+                    .max(1)
+            );
             assert!(allocation.allocated_threads <= allocation.total_threads);
         }
     }

@@ -1014,17 +1014,40 @@ const MIN_SOFTWARE_DECODER_THREADS: usize = 2;
 const MAX_SOFTWARE_DECODER_THREADS: usize = 6;
 /// Workers the software video encoder keeps whatever decode asks for.
 const ENCODER_THREAD_FLOOR: usize = 4;
+/// `FFmpeg` workers a hardware decode session opens with, whatever the budget.
+///
+/// Such a session decodes on the device; its workers only parse and submit.
+/// Each one is a frame thread with its own codec context, and frame threading
+/// holds back one packet per extra worker, which a session opened for a short
+/// cut fills and then drops. Measured on a 4090 (`h264_vulkan` decode and
+/// encode, 24-core budget), wall time and `decodeMs`:
+///
+/// | workers | 120 sources, 295 cuts, 1080p30 | one 4K59.94 source, 60 s |
+/// | --- | --- | --- |
+/// | 22 (the even share before) | 64.8-71.6 s | 26.3 s, decode 353-419 ms |
+/// | 4 | 37.6 s | 26.2 s, decode 254-268 ms |
+/// | 2 | 35.5 s | 26.2 s, decode 255 ms |
+/// | 1 | 35.4-35.6 s | 26.2 s, decode 454-461 ms |
+///
+/// Two, not one: the many-cut run is the same, and one worker doubles a long
+/// source's decode time, which an encode-bound export hides but a decode-bound
+/// one would not. The worker count changes no output byte.
+pub const HARDWARE_DECODER_THREADS: usize = 2;
 
-/// One export-wide software-codec allocation. Every decoder receives
-/// `decoder_threads`; the software video encoder receives `encoder_threads`.
+/// One export-wide software-codec allocation. Every software decoder receives
+/// `decoder_threads`, every hardware one `hardware_decoder_threads`; the
+/// software video encoder receives `encoder_threads`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CodecThreadAllocation {
     /// Total software codec workers available to this export.
     pub total_threads: usize,
     /// Number of decoder contexts allowed to execute concurrently.
     pub decode_concurrency: usize,
-    /// `FFmpeg` worker count assigned to each decoder context.
+    /// `FFmpeg` worker count assigned to each software decoder context,
+    /// including one a hardware session falls back to.
     pub decoder_threads: i64,
+    /// `FFmpeg` workers a hardware decode session opens with.
+    pub hardware_decoder_threads: i64,
     /// `FFmpeg` worker count assigned to the software video encoder, or zero for hardware.
     pub encoder_threads: i64,
     /// Workers this allocation actually hands out, decoders plus encoder.
@@ -1049,9 +1072,10 @@ pub struct CodecThreadAllocation {
 /// so decode stops being ahead of the renderer. That configuration keeps the
 /// even split.
 ///
-/// A hardware session decodes nothing on the CPU, so one worker should be
-/// enough, but it keeps the even share: that is the split it has been
-/// measured with, and no smaller share has been measured for speed.
+/// A hardware session opens with [`HARDWARE_DECODER_THREADS`] instead. The
+/// share is still reserved for it, because any session can fall back to
+/// software; and with a software encoder that keeps the encoder's worker
+/// count, and so its output, the same whichever way the sources decode.
 #[must_use]
 pub fn codec_thread_allocation(request: CodecThreadRequest) -> CodecThreadAllocation {
     let configured = configured_codec_thread_budget();
@@ -1076,8 +1100,8 @@ pub fn codec_thread_allocation(request: CodecThreadRequest) -> CodecThreadAlloca
         (total_threads / contexts).max(1)
     };
     let decoder_threads = if request.hardware_decode || !request.software_video_encoder {
-        // Hardware decode keeps the even share it was measured with (see above), and with a
-        // hardware encoder nothing can use what decode would give up.
+        // A fallback from hardware decode keeps the even share it was measured with (see above),
+        // and with a hardware encoder nothing can use what decode would give up.
         even_share
     } else {
         software_decoder_threads(request.source_frame_pixels)
@@ -1095,6 +1119,9 @@ pub fn codec_thread_allocation(request: CodecThreadRequest) -> CodecThreadAlloca
         total_threads,
         decode_concurrency,
         decoder_threads: i64::try_from(decoder_threads).unwrap_or(1).clamp(1, 64),
+        hardware_decoder_threads: i64::try_from(HARDWARE_DECODER_THREADS.min(total_threads))
+            .unwrap_or(1)
+            .max(1),
         encoder_threads: i64::try_from(encoder_threads).unwrap_or(0).clamp(0, 64),
         allocated_threads: decode_assigned.saturating_add(encoder_threads),
     }

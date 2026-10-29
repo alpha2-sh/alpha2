@@ -371,6 +371,8 @@ pub struct DecodeWorkerConfig {
     pub byte_budget: crate::memory::ByteBudget,
     pub concurrency: usize,
     pub decoder_threads: i64,
+    /// Workers a hardware session opens with; `decoder_threads` is a software one's.
+    pub hardware_decoder_threads: i64,
     pub max_sessions: usize,
     pub reverse_cache_bytes: u64,
     pub reverse_hardware_surfaces: usize,
@@ -435,6 +437,7 @@ impl DecodeWorker {
             )?);
             if let Some(state) = states.last_mut() {
                 state.reverse_hardware_surfaces = config.reverse_hardware_surfaces;
+                state.hardware_decoder_threads = config.hardware_decoder_threads;
                 state.providers = Arc::clone(&config.providers);
                 state.decoding = Arc::clone(&config.decoding);
                 #[cfg(test)]
@@ -1008,7 +1011,10 @@ pub struct ExportDecodeState {
     pub decoded: HashMap<DecodeCursorKey, ExportDecodedPosition>,
     /// Sources whose hardware session already failed once this run.
     pub software_only: HashSet<SourceId>,
+    /// Workers a software session opens with, including a fallback from hardware.
     pub decoder_threads: i64,
+    /// Workers a hardware session opens with; `decoder_threads` until a pool sets it.
+    pub hardware_decoder_threads: i64,
     pub max_sessions: usize,
     pub session_clock: u64,
     pub session_use: HashMap<DecodeCursorKey, u64>,
@@ -1165,6 +1171,7 @@ impl ExportDecodeState {
             decoded: HashMap::new(),
             software_only: HashSet::new(),
             decoder_threads,
+            hardware_decoder_threads: decoder_threads,
             max_sessions: max_sessions.max(1),
             session_clock: 0,
             session_use: HashMap::new(),
@@ -1342,7 +1349,7 @@ impl ExportDecodeState {
                 let opening = self.heartbeat.begin_hardware_open();
                 let opened = NativeExportDecoder::open_vulkan(
                     &path,
-                    self.decoder_threads,
+                    self.hardware_decoder_threads,
                     context,
                     self.generation,
                 )
@@ -1357,7 +1364,7 @@ impl ExportDecodeState {
                 let opening = self.heartbeat.begin_hardware_open();
                 let opened = NativeExportDecoder::open_videotoolbox(
                     &path,
-                    self.decoder_threads,
+                    self.hardware_decoder_threads,
                     context,
                     self.generation,
                 )
@@ -1372,7 +1379,7 @@ impl ExportDecodeState {
                 let opening = self.heartbeat.begin_hardware_open();
                 let opened = NativeExportDecoder::open_d3d12(
                     &path,
-                    self.decoder_threads,
+                    self.hardware_decoder_threads,
                     context,
                     self.generation,
                 )

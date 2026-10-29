@@ -112,14 +112,15 @@ export interface StagedAsset {
 /** Decodes and probes files for import. `createMediaAdapter` makes the default one. */
 export interface BrowserMediaAdapter {
   /**
-   * Stages one file. Rejects with an `EditorError`: `unsupported_media` for a file that is no media
-   * the adapter imports, `unreadable_media` for media this browser could not read (a codec it does
-   * not decode, a damaged file, or one an extension provider refuses, such as one whose drawing is
-   * past its budgets; the decoder's or provider's reason is in the message and is the `cause`),
-   * `too_large` for a Lottie, dotLottie or SVG file larger than the engine parses
-   * (`MAX_LOTTIE_DOCUMENT_BYTES`, `MAX_PROVIDER_DOCUMENT_BYTES` for a dotLottie package,
-   * `MAX_SVG_DOCUMENT_BYTES`), `provider_stalled` for one the extensions worker read past
-   * `EXTENSIONS_CALL_TIMEOUT_MS`, and when `signal` aborts.
+   * Stages one file. The bridge may stage several files of one import at once, at most four.
+   * Rejects with an `EditorError`: `unsupported_media` for a file that is no media the adapter
+   * imports, `unreadable_media` for media this browser could not read (a codec it does not decode,
+   * a damaged file, or one an extension provider refuses, such as one whose drawing is past its
+   * budgets; the decoder's or provider's reason is in the message and is the `cause`), `too_large`
+   * for a Lottie, dotLottie or SVG file larger than the engine parses (`MAX_LOTTIE_DOCUMENT_BYTES`,
+   * `MAX_PROVIDER_DOCUMENT_BYTES` for a dotLottie package, `MAX_SVG_DOCUMENT_BYTES`),
+   * `provider_stalled` for one the extensions worker read past `EXTENSIONS_CALL_TIMEOUT_MS`, and
+   * when `signal` aborts.
    */
   stage(
     file: File,
