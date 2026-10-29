@@ -230,8 +230,17 @@ impl Host {
             requested_sessions,
         );
         // No more shards than sessions: a shard with none to hold could decode nothing.
+        // The encoder keeps the workers it had: a software encoder's thread count shapes its
+        // bitstream, and the file must not depend on how much memory the decoders were given.
         if decoder_sessions.sessions < codec_threads.decode_concurrency {
+            let encoder_threads = codec_threads.encoder_threads;
             codec_threads = threads_for(decoder_sessions.sessions);
+            let decode_assigned = codec_threads
+                .allocated_threads
+                .saturating_sub(usize::try_from(codec_threads.encoder_threads).unwrap_or(0));
+            codec_threads.encoder_threads = encoder_threads;
+            codec_threads.allocated_threads = decode_assigned
+                .saturating_add(usize::try_from(encoder_threads).unwrap_or(0));
         }
         ExportCodecSplit {
             hardware_decode,
