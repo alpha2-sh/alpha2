@@ -314,12 +314,16 @@ fn sample_source(input: VertexOutput, index: u32, looped: bool) -> SampledSource
     let scale = layer.scale_rotation_opacity.xy;
     let angle = layer.scale_rotation_opacity.z;
     let opacity = layer.scale_rotation_opacity.w;
-    let offset = input.uv - position;
+    let output_dimensions = batch.output_dimensions.xy;
+    // The pixel's UV from its exact center, not the interpolated `input.uv`:
+    // across the full-screen triangle some GPUs (Apple's) interpolate it a
+    // quarter texel off at some pixels, which bilinear filtering blends with a
+    // neighbour even when the layer maps texels 1:1.
+    let offset = input.position.xy / output_dimensions - position;
     // Normalized UV axes have different physical lengths on a non-square
     // target. Rotate in output-pixel space so rotation does not introduce an
     // aspect-dependent non-uniform scale, then return to normalized space
     // before applying the caller's intentional per-axis scale.
-    let output_dimensions = batch.output_dimensions.xy;
     let pixel_offset = offset * output_dimensions;
     let cosine = cos(angle);
     let sine = sin(angle);
