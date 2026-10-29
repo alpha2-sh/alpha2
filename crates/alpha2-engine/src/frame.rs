@@ -742,14 +742,12 @@ fn attach_texts<'t>(
         LaidOut::attach(layout, frames)
     };
     let lookup = |generator: &Generator| match generator {
-        Generator::Text { text, style } => {
-            frames
-                .text(crate::text_key(text, style, size))
-                .map(|texture| PlacedText {
-                    texture,
-                    visual: text_placement(texture, style, size),
-                })
-        }
+        Generator::Text { text, style } => frames
+            .text(crate::text_key(text, style, crate::text::picture(size)))
+            .map(|texture| PlacedText {
+                texture,
+                visual: text_placement(texture, style, size),
+            }),
         _ => None,
     };
     for (clip, textures) in available {
@@ -841,7 +839,11 @@ fn caption_layers<'a>(
         .iter()
         .map(|caption| {
             let texture = frames
-                .text(crate::text_key(caption.text, caption.style, size))
+                .text(crate::text_key(
+                    caption.text,
+                    caption.style,
+                    crate::text::picture(size),
+                ))
                 .ok_or(RenderError::MissingText)?;
             Ok(CaptionLayer {
                 layers_below: caption.layers_below,

@@ -95,8 +95,8 @@ impl Renderer {
             .map_err(GraphError::into_render_error)
     }
 
-    /// Draws the built-in Gaussian blur, `radius` a fraction of the output
-    /// height, as a project's effect at the source's aspect ratio does. Call
+    /// Draws the built-in Gaussian blur, `radius` a fraction of the output's
+    /// shorter side, as a project's effect at the source's aspect ratio does. Call
     /// [`Renderer::register_builtin_gaussian_blur`] first.
     #[allow(clippy::cast_precision_loss)]
     pub(crate) fn render_gaussian_blur(

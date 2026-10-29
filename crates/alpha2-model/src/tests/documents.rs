@@ -112,6 +112,34 @@ fn documents_omitting_optional_visual_fields_receive_defaults() {
 }
 
 #[test]
+fn a_partial_visual_takes_the_default_of_each_field_it_leaves_out() {
+    let visual: crate::VisualProperties =
+        serde_json::from_str(r#"{"opacity": {"mode": "constant", "value": 0.25}}"#)
+            .expect("a partial visual");
+    assert_eq!(
+        visual,
+        crate::VisualProperties {
+            opacity: crate::Animated::Constant { value: 0.25 },
+            ..crate::VisualProperties::default()
+        }
+    );
+    let written = serde_json::to_value(&visual).expect("serialize");
+    let mut fields = written
+        .as_object()
+        .expect("an object")
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    fields.sort();
+    assert_eq!(
+        fields,
+        ["anchor", "opacity", "position", "rotation_degrees", "scale"]
+    );
+    let empty: crate::VisualProperties = serde_json::from_str("{}").expect("an empty visual");
+    assert_eq!(empty, crate::VisualProperties::default());
+}
+
+#[test]
 fn validation_rejects_invalid_effect_values() {
     let project = with_effect(
         project(),

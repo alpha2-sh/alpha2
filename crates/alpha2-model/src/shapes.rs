@@ -7,7 +7,7 @@
 //! of the picture's shorter side. Rotation and scale act in pixel space, so a
 //! rotated square stays square on a wide canvas.
 
-use crate::animation::valid_keyframes;
+use crate::animation::{opaque, unit_scale, valid_keyframes, visit_keyed, visit_keyed_point};
 use crate::checks::{
     ValueIssue, ValueProblem, any, non_negative, point, scalar, unit, validate_paint, vec2,
 };
@@ -78,10 +78,6 @@ pub enum ShapeItem {
     Stroke(StrokeItem),
     /// Keeps part of the geometry listed before it in its group, by length.
     Trim(TrimItem),
-}
-
-pub(crate) fn opaque() -> Animated<f32> {
-    Animated::Constant { value: 1.0 }
 }
 
 fn zero() -> Animated<f32> {
@@ -249,7 +245,7 @@ pub struct ShapeTransform {
     pub position: AnimatedPoint,
     /// Per-axis scale; 1 leaves the items unscaled. Stroke widths scale with
     /// it.
-    #[serde(default = "unscaled")]
+    #[serde(default = "unit_scale")]
     pub scale: Animated<Vec2>,
     /// Clockwise rotation, in degrees.
     #[serde(default = "zero")]
@@ -266,18 +262,12 @@ fn origin() -> Animated<Vec2> {
     }
 }
 
-fn unscaled() -> Animated<Vec2> {
-    Animated::Constant {
-        value: Vec2::new(1.0, 1.0),
-    }
-}
-
 impl Default for ShapeTransform {
     fn default() -> Self {
         Self {
             anchor: origin(),
             position: AnimatedPoint::default(),
-            scale: unscaled(),
+            scale: unit_scale(),
             rotation_degrees: zero(),
             opacity: opaque(),
         }
@@ -739,7 +729,93 @@ impl ShapeItem {
     }
 }
 
+/// Calls `visit` with each animated value of `items` that has keyframes: its
+/// path below `at` (`items[0].transform.opacity` for `at` "items") and its
+/// keyframes' times, in document order.
+pub(crate) fn for_each_keyed_item(
+    items: &[ShapeItem],
+    at: &str,
+    visit: &mut impl FnMut(&str, &[alpha2_time::MediaTime]),
+) {
+    for (index, item) in items.iter().enumerate() {
+        item.for_each_keyed(&format!("{at}[{index}]"), visit);
+    }
+}
+
+impl ShapeItem {
+    /// Calls `visit` with each of its animated values that has keyframes,
+    /// by its path below `at`, and their times.
+    pub(crate) fn for_each_keyed(
+        &self,
+        at: &str,
+        visit: &mut impl FnMut(&str, &[alpha2_time::MediaTime]),
+    ) {
+        match self {
+            Self::Group { items, transform } => {
+                let transform_at = format!("{at}.transform");
+                visit_keyed(&format!("{transform_at}.anchor"), &transform.anchor, visit);
+                visit_keyed_point(
+                    &format!("{transform_at}.position"),
+                    &transform.position,
+                    visit,
+                );
+                visit_keyed(&format!("{transform_at}.scale"), &transform.scale, visit);
+                visit_keyed(
+                    &format!("{transform_at}.rotation_degrees"),
+                    &transform.rotation_degrees,
+                    visit,
+                );
+                visit_keyed(
+                    &format!("{transform_at}.opacity"),
+                    &transform.opacity,
+                    visit,
+                );
+                for_each_keyed_item(items, &format!("{at}.items"), visit);
+            }
+            Self::Rectangle(geometry) => geometry.for_each_keyed(at, visit),
+            Self::Ellipse(geometry) => geometry.for_each_keyed(at, visit),
+            Self::Polystar(geometry) => geometry.for_each_keyed(at, visit),
+            Self::Path(geometry) => visit_keyed(&format!("{at}.path"), &geometry.path, visit),
+            Self::Fill { paint, opacity, .. } => {
+                visit_keyed(&format!("{at}.paint"), paint, visit);
+                visit_keyed(&format!("{at}.opacity"), opacity, visit);
+            }
+            Self::Stroke(stroke) => {
+                visit_keyed(&format!("{at}.paint"), &stroke.paint, visit);
+                visit_keyed(&format!("{at}.width"), &stroke.width, visit);
+                visit_keyed(&format!("{at}.opacity"), &stroke.opacity, visit);
+                if let Some(dash) = &stroke.dash {
+                    for (index, entry) in dash.pattern.iter().enumerate() {
+                        visit_keyed(&format!("{at}.dash.pattern[{index}]"), entry, visit);
+                    }
+                    visit_keyed(&format!("{at}.dash.offset"), &dash.offset, visit);
+                }
+            }
+            Self::Trim(trim) => {
+                visit_keyed(&format!("{at}.start"), &trim.start, visit);
+                visit_keyed(&format!("{at}.end"), &trim.end, visit);
+                visit_keyed(&format!("{at}.offset"), &trim.offset, visit);
+            }
+        }
+    }
+}
+
 impl ShapeGeometry {
+    /// Calls `visit` with each of its animated values that has keyframes,
+    /// by its path below `at`, and their times.
+    pub(crate) fn for_each_keyed(
+        &self,
+        at: &str,
+        visit: &mut impl FnMut(&str, &[alpha2_time::MediaTime]),
+    ) {
+        match self {
+            Self::Rectangle(geometry) => geometry.for_each_keyed(at, visit),
+            Self::Ellipse(geometry) => geometry.for_each_keyed(at, visit),
+            Self::Polystar(geometry) => geometry.for_each_keyed(at, visit),
+            Self::Path(geometry) => visit_keyed(&format!("{at}.path"), &geometry.path, visit),
+        }
+    }
+
     /// Whether the outline changes over time.
     #[must_use]
     pub fn is_animated(&self) -> bool {
@@ -767,7 +843,54 @@ impl EllipseGeometry {
     }
 }
 
+impl RectangleGeometry {
+    fn for_each_keyed(&self, at: &str, visit: &mut impl FnMut(&str, &[alpha2_time::MediaTime])) {
+        visit_keyed_point(&format!("{at}.center"), &self.center, visit);
+        visit_keyed(&format!("{at}.size"), &self.size, visit);
+        visit_keyed(&format!("{at}.corner_radius"), &self.corner_radius, visit);
+        visit_keyed(
+            &format!("{at}.rotation_degrees"),
+            &self.rotation_degrees,
+            visit,
+        );
+    }
+}
+
+impl EllipseGeometry {
+    fn for_each_keyed(&self, at: &str, visit: &mut impl FnMut(&str, &[alpha2_time::MediaTime])) {
+        visit_keyed_point(&format!("{at}.center"), &self.center, visit);
+        visit_keyed(&format!("{at}.size"), &self.size, visit);
+        visit_keyed(
+            &format!("{at}.rotation_degrees"),
+            &self.rotation_degrees,
+            visit,
+        );
+    }
+}
+
 impl PolystarGeometry {
+    fn for_each_keyed(&self, at: &str, visit: &mut impl FnMut(&str, &[alpha2_time::MediaTime])) {
+        visit_keyed_point(&format!("{at}.center"), &self.center, visit);
+        visit_keyed(&format!("{at}.points"), &self.points, visit);
+        visit_keyed(&format!("{at}.outer_radius"), &self.outer_radius, visit);
+        visit_keyed(&format!("{at}.inner_radius"), &self.inner_radius, visit);
+        visit_keyed(
+            &format!("{at}.outer_roundness"),
+            &self.outer_roundness,
+            visit,
+        );
+        visit_keyed(
+            &format!("{at}.inner_roundness"),
+            &self.inner_roundness,
+            visit,
+        );
+        visit_keyed(
+            &format!("{at}.rotation_degrees"),
+            &self.rotation_degrees,
+            visit,
+        );
+    }
+
     fn is_animated(&self) -> bool {
         self.center.is_animated()
             || keyed(&self.points)

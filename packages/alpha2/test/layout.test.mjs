@@ -184,6 +184,7 @@ test("measureLayout sends a layout generator and its canvas and reads the engine
         content: { left: 0, top: 0, right: 1, bottom: 1 },
         overflow: false,
         lineCount: null,
+        baselines: null,
       },
     ],
   };

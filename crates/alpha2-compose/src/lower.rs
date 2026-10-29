@@ -777,7 +777,7 @@ impl Context<'_> {
                 position.unwrap_or(if vertical { 0.62 } else { 0.7 })
             }
         };
-        style.font_size = (font_px / height).min(alpha2_model::MAX_CAPTION_FONT_SIZE);
+        style.font_size = (font_px / self.short_side()).min(alpha2_model::MAX_CAPTION_FONT_SIZE);
         style.position = alpha2_model::Vec2::new(0.5, y);
         let _ = width;
         Ok(Prim::Captions(Box::new(CaptionsPrim {

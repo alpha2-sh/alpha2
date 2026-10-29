@@ -996,6 +996,53 @@ test("canonicalProject writes a layout's sides and offsets as objects", () => {
   assert.deepEqual(root.children[0].translate.value, { x: "10px", y: 0 });
 });
 
+test("canonicalProject writes a clip's visual whole, from the engine's defaults", () => {
+  const project = {
+    schema_version: CURRENT_SCHEMA_VERSION,
+    id: "p",
+    name: "P",
+    settings: {
+      width: 1920,
+      height: 1080,
+      frame_rate: { num: 30, den: 1 },
+      sample_rate: 48000,
+    },
+    sources: [{ id: "v", kind: "video", locator: "a.mp4" }],
+    timeline: {
+      tracks: [
+        {
+          id: "t",
+          name: "T",
+          kind: "video",
+          clips: [
+            {
+              id: "c",
+              source_id: "v",
+              timeline_range: { start: 0, end: 120000 },
+              source_range: { start: 0, end: 120000 },
+              visual: { opacity: constant(0.5) },
+            },
+          ],
+          transitions: [],
+        },
+      ],
+    },
+  };
+  assert.deepEqual(validateProject(project), []);
+  const canonical = canonicalProject(project);
+  assert.deepEqual(canonical.timeline.tracks[0].clips[0].visual, {
+    opacity: constant(0.5),
+    position: constant({ x: 0.5, y: 0.5 }),
+    anchor: { x: 0.5, y: 0.5 },
+    scale: constant({ x: 1, y: 1 }),
+    rotation_degrees: constant(0),
+  });
+  assert.deepEqual(project.timeline.tracks[0].clips[0].visual, {
+    opacity: constant(0.5),
+  });
+  assert.equal(canonicalProject(canonical), canonical);
+});
+
 test("canonicalProject shares what it does not change and leaves what it cannot read", () => {
   const frozen = (value) => {
     if (typeof value === "object" && value !== null) {

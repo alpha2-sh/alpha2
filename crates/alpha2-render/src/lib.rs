@@ -91,6 +91,7 @@ pub use error::{
     DEFAULT_GPU_WAIT_TIMEOUT, GPU_DEVICE_LOST_MESSAGE, GPU_TIMEOUT_MESSAGE,
     GPU_WORK_DROPPED_MESSAGE, ReadbackFailure, RenderError,
 };
+pub use gaussian_blur::blur_sigma_pixels;
 pub use generator::{
     FILL_PAINT_PARAMS, GENERATOR_EFFECT_ID, MAX_GENERATOR_STOPS, PAINT_KINDS, PAINT_SPREADS,
     PaintParams, generator_definition,

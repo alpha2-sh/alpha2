@@ -832,6 +832,8 @@
               "red": 1.0
             },
             "font_size": 0.05,
+            "font_weight": 400,
+            "letter_spacing": 0.0,
             "line_height": 1.2,
             "max_width": 0.9,
             "outline": null,
@@ -1915,6 +1917,8 @@
                   "red": 1.0
                 },
                 "font_size": 0.05,
+                "font_weight": 400,
+                "letter_spacing": 0.0,
                 "line_height": 1.2,
                 "max_width": 0.9,
                 "outline": null,
@@ -2686,6 +2690,16 @@
           ],
           "description": "Font size: positive, at most [`MAX_LAYOUT_FONT_SIZE`] of the\npicture's shorter side. Inherited; the root's is 0.05."
         },
+        "font_weight": {
+          "description": "The weight, in `[1, 1000]`, the family's faces are matched by, as\nCSS Fonts 4 matches `font-weight`; a variable face draws at it. Not\nanimated. Inherited; the root's is 400.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "gap": {
           "anyOf": [
             {
@@ -2829,8 +2843,16 @@
           ],
           "description": "Where the box lies in its grid area's column. `None` follows the\nparent's `justify_items`. Not in a flex container, as every grid\nitem field."
         },
+        "letter_spacing": {
+          "description": "Space after each character, as a fraction of the font size, in\n`[-0.5, 1]`, as CSS `letter-spacing` adds it: none after a line's\nlast character, and none after a character of a cursive script.\nNot animated. Inherited; the root's is 0.",
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
         "line_height": {
-          "description": "Baseline-to-baseline distance in font sizes, in `[0.5, 3]`.\nInherited; the root's is 1.2.",
+          "description": "Baseline-to-baseline distance in font sizes, in `[0.5, 3]`. Each\nline's em box, 0.8 of a font size above its baseline and 0.2 below,\nis centred in its line when the line is taller than an em.\nInherited; the root's is 1.2.",
           "format": "float",
           "type": [
             "number",
@@ -5183,7 +5205,7 @@
     },
     "TextStyle": {
       "additionalProperties": false,
-      "description": "How text looks and where it lies: a caption track's cues, or a text\n[`crate::Generator`].\n\nSizes are resolution-independent: the font size is a fraction of the\ncanvas height, the wrapping width a fraction of the canvas width, and the\noutline and background padding fractions of the font size. The engine\ndraws with the fonts its host registered: those of `font_family` first,\nthen the rest in their fallback order.",
+      "description": "How text looks and where it lies: a caption track's cues, or a text\n[`crate::Generator`].\n\nSizes are resolution-independent: the font size is a fraction of the\ncanvas's shorter side, as every other length is, the wrapping width a\nfraction of the canvas width, and the outline and background padding\nfractions of the font size. The engine draws with the fonts its host\nregistered: those of `font_family` first, then the rest in their\nfallback order.",
       "properties": {
         "align": {
           "$ref": "#/$defs/TextAlign",
@@ -5229,13 +5251,27 @@
         },
         "font_size": {
           "default": 0.05,
-          "description": "Font size as a fraction of the canvas height: positive, at most\n[`crate::MAX_CAPTION_FONT_SIZE`] on a caption track and\n[`MAX_TEXT_GENERATOR_FONT_SIZE`] in a text generator.",
+          "description": "Font size as a fraction of the canvas's shorter side: positive, at\nmost [`crate::MAX_CAPTION_FONT_SIZE`] on a caption track and\n[`MAX_TEXT_GENERATOR_FONT_SIZE`] in a text generator.",
+          "format": "float",
+          "type": "number"
+        },
+        "font_weight": {
+          "default": 400,
+          "description": "The weight, in `[1, 1000]`, a family's faces are matched by, as CSS\nFonts 4 matches `font-weight`; a variable face draws at it, clamped\nto its `wght` axis. No face is emboldened: a weight the family lacks\ndraws its nearest face.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "letter_spacing": {
+          "default": 0.0,
+          "description": "Space after each character, as a fraction of the font size, in\n`[-0.5, 1]`, as CSS `letter-spacing` adds it: none after a line's\nlast character, and none after a character of a cursive script\n(Arabic, say), whose joins it would break. Not zero, it turns optional\nligatures off.",
           "format": "float",
           "type": "number"
         },
         "line_height": {
           "default": 1.2,
-          "description": "Baseline-to-baseline distance in font sizes, in `[0.5, 3]`.",
+          "description": "Baseline-to-baseline distance in font sizes, in `[0.5, 3]`. Each\nline's em box, 0.8 of a font size above its baseline and 0.2 below,\nis centred in its line when the line is taller than an em.",
           "format": "float",
           "type": "number"
         },
@@ -5651,36 +5687,55 @@
     },
     "VisualProperties": {
       "additionalProperties": false,
-      "description": "Resolution-independent visual presentation controls for a clip.",
+      "description": "Resolution-independent visual presentation controls for a clip.\n\nEach field a document leaves out takes its default: the\nsource centred on the canvas, unscaled, unrotated and opaque.",
       "properties": {
         "anchor": {
           "$ref": "#/$defs/Vec2",
+          "default": {
+            "x": 0.5,
+            "y": 0.5
+          },
           "description": "Unanimated normalized point within the source rectangle."
         },
         "opacity": {
           "$ref": "#/$defs/Animated_float",
+          "default": {
+            "mode": "constant",
+            "value": 1.0
+          },
           "description": "Animated opacity constrained to `0..=1`."
         },
         "position": {
           "$ref": "#/$defs/AnimatedPoint",
+          "default": {
+            "mode": "constant",
+            "value": {
+              "x": 0.5,
+              "y": 0.5
+            }
+          },
           "description": "Animated normalized canvas translation, along spatial curves where its\nkeyframes have tangents."
         },
         "rotation_degrees": {
           "$ref": "#/$defs/Animated_float",
+          "default": {
+            "mode": "constant",
+            "value": 0.0
+          },
           "description": "Animated clockwise rotation in degrees."
         },
         "scale": {
           "$ref": "#/$defs/Animated_Vec2",
+          "default": {
+            "mode": "constant",
+            "value": {
+              "x": 1.0,
+              "y": 1.0
+            }
+          },
           "description": "Animated per-axis scale."
         }
       },
-      "required": [
-        "position",
-        "anchor",
-        "scale",
-        "rotation_degrees",
-        "opacity"
-      ],
       "type": "object"
     }
   },

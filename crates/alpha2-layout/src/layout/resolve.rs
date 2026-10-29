@@ -2,13 +2,13 @@
 //! an upgrade touches this file and the goldens.
 
 use super::{LAYOUT_WRAP_SLACK, NodeRects, ResolvedLayout, wrap};
+use crate::PictureSize;
 use alpha2_eval::{EvaluatedLayout, EvaluatedNode, NodeContent, NodeLayout, Sides};
 use alpha2_model::{
     AlignContent, AlignItems, Display, FlexDirection, FlexWrap, GridAutoFlow, GridEdge,
     GridPlacement, JustifyContent, LayoutLength, Overflow, Position, RepeatCount, TrackBreadth,
     TrackComponent, TrackList, TrackSize,
 };
-use alpha2_render::RenderSize;
 use alpha2_text::ShapedText;
 use std::sync::Arc;
 use taffy::{
@@ -29,12 +29,13 @@ enum NodeContext {
 /// Lays `layout` out on a picture of `size` pixels. `shaped` holds each
 /// text node's shaped text, in preorder, `None` for an empty text.
 #[allow(clippy::cast_precision_loss)]
-pub(crate) fn resolve(
+#[must_use]
+pub fn resolve(
     layout: &EvaluatedLayout,
-    size: RenderSize,
+    size: PictureSize,
     shaped: &[Option<Arc<ShapedText>>],
 ) -> ResolvedLayout {
-    let (width, height) = (size.width as f32, size.height as f32);
+    let (width, height) = (size.width() as f32, size.height() as f32);
     let unit = width.min(height);
     let mut tree = TaffyTree::<NodeContext>::new();
     let mut ids = Vec::new();
@@ -480,6 +481,7 @@ fn collect(
         text_width,
         overflow: false,
         line_count: None,
+        baselines: None,
     });
     let mut overflow = false;
     match &node.content {
@@ -490,9 +492,15 @@ fn collect(
                 let lines = text.lines_at(wrap(text_width));
                 overflow = lines.height > text_height + LAYOUT_WRAP_SLACK
                     || text.min_content_width() > wrap(text_width);
-                lines.line_count
+                lines
             });
-            out[slot].line_count = Some(lines.unwrap_or(0));
+            out[slot].line_count = Some(lines.map_or(0, |lines| lines.line_count));
+            out[slot].baselines = lines.map(|lines| {
+                [
+                    content[1] + lines.first_baseline,
+                    content[1] + lines.last_baseline,
+                ]
+            });
         }
         NodeContent::Children(children) => {
             for child in children {

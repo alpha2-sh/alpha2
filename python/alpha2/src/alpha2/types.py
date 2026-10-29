@@ -88,6 +88,9 @@ MAX_EQ_Q = 50
 MAX_FONT_FAMILY_BYTES = 256
 """Mirrors `alpha2_model::MAX_FONT_FAMILY_BYTES`."""
 
+MAX_FONT_WEIGHT = 1000
+"""Mirrors `alpha2_model::MAX_FONT_WEIGHT`."""
+
 MAX_FRAME_INLINED_NODES = 65536
 """Mirrors `alpha2_model::MAX_FRAME_INLINED_NODES`."""
 
@@ -123,6 +126,9 @@ MAX_LAYOUT_NODES = 256
 
 MAX_LAYOUT_TEXTS = 64
 """Mirrors `alpha2_model::MAX_LAYOUT_TEXTS`."""
+
+MAX_LETTER_SPACING = 1
+"""Mirrors `alpha2_model::MAX_LETTER_SPACING`."""
 
 MAX_LINE_HEIGHT = 3
 """Mirrors `alpha2_model::MAX_LINE_HEIGHT`."""
@@ -190,8 +196,14 @@ MIN_EQ_FREQUENCY_HZ = 10
 MIN_EQ_Q = 0.05
 """Mirrors `alpha2_model::MIN_EQ_Q`."""
 
+MIN_FONT_WEIGHT = 1
+"""Mirrors `alpha2_model::MIN_FONT_WEIGHT`."""
+
 MIN_HDR_PEAK_NITS = 100
 """Mirrors `alpha2_model::MIN_HDR_PEAK_NITS`."""
+
+MIN_LETTER_SPACING = -0.5
+"""Mirrors `alpha2_model::MIN_LETTER_SPACING`."""
 
 MIN_LEVEL_DB = -96
 """Mirrors `alpha2_model::MIN_LEVEL_DB`."""
@@ -1232,6 +1244,11 @@ class LayoutNode(TypedDict):
     """Font size: positive, at most `MAX_LAYOUT_FONT_SIZE` of the
     picture's shorter side. Inherited; the root's is 0.05.
     """
+    font_weight: NotRequired[int | None]
+    """The weight, in `[1, 1000]`, the family's faces are matched by, as
+    CSS Fonts 4 matches `font-weight`; a variable face draws at it. Not
+    animated. Inherited; the root's is 400.
+    """
     gap: NotRequired[Animated[LayoutSize] | None]
     """Space between children, on both axes. At least 0; default 0."""
     grid_auto_columns: NotRequired[TrackList | None]
@@ -1269,8 +1286,16 @@ class LayoutNode(TypedDict):
     parent's `justify_items`. Not in a flex container, as every grid
     item field.
     """
+    letter_spacing: NotRequired[float | None]
+    """Space after each character, as a fraction of the font size, in
+    `[-0.5, 1]`, as CSS `letter-spacing` adds it: none after a line's
+    last character, and none after a character of a cursive script.
+    Not animated. Inherited; the root's is 0.
+    """
     line_height: NotRequired[float | None]
-    """Baseline-to-baseline distance in font sizes, in `[0.5, 3]`.
+    """Baseline-to-baseline distance in font sizes, in `[0.5, 3]`. Each
+    line's em box, 0.8 of a font size above its baseline and 0.2 below,
+    is centred in its line when the line is taller than an em.
     Inherited; the root's is 1.2.
     """
     margin: NotRequired[Animated[Insets] | None]
@@ -2415,10 +2440,11 @@ class TextStyle(TypedDict):
     `Generator`.
 
     Sizes are resolution-independent: the font size is a fraction of the
-    canvas height, the wrapping width a fraction of the canvas width, and the
-    outline and background padding fractions of the font size. The engine
-    draws with the fonts its host registered: those of `font_family` first,
-    then the rest in their fallback order.
+    canvas's shorter side, as every other length is, the wrapping width a
+    fraction of the canvas width, and the outline and background padding
+    fractions of the font size. The engine draws with the fonts its host
+    registered: those of `font_family` first, then the rest in their
+    fallback order.
     """
 
     align: NotRequired[TextAlign]
@@ -2451,14 +2477,33 @@ class TextStyle(TypedDict):
     bytes.
     """
     font_size: NotRequired[float]
-    """Font size as a fraction of the canvas height: positive, at most
-    `MAX_CAPTION_FONT_SIZE` on a caption track and
+    """Font size as a fraction of the canvas's shorter side: positive, at
+    most `MAX_CAPTION_FONT_SIZE` on a caption track and
     `MAX_TEXT_GENERATOR_FONT_SIZE` in a text generator.
 
     Default: `0.05`.
     """
+    font_weight: NotRequired[int]
+    """The weight, in `[1, 1000]`, a family's faces are matched by, as CSS
+    Fonts 4 matches `font-weight`; a variable face draws at it, clamped
+    to its `wght` axis. No face is emboldened: a weight the family lacks
+    draws its nearest face.
+
+    Default: `400`.
+    """
+    letter_spacing: NotRequired[float]
+    """Space after each character, as a fraction of the font size, in
+    `[-0.5, 1]`, as CSS `letter-spacing` adds it: none after a line's
+    last character, and none after a character of a cursive script
+    (Arabic, say), whose joins it would break. Not zero, it turns optional
+    ligatures off.
+
+    Default: `0`.
+    """
     line_height: NotRequired[float]
-    """Baseline-to-baseline distance in font sizes, in `[0.5, 3]`.
+    """Baseline-to-baseline distance in font sizes, in `[0.5, 3]`. Each
+    line's em box, 0.8 of a font size above its baseline and 0.2 below,
+    is centred in its line when the line is taller than an em.
 
     Default: `1.2`.
     """
@@ -2660,17 +2705,35 @@ class VideoStreamShape(TypedDict):
 
 
 class VisualProperties(TypedDict):
-    """Resolution-independent visual presentation controls for a clip."""
+    """Resolution-independent visual presentation controls for a clip.
 
-    anchor: Vec2
-    """Unanimated normalized point within the source rectangle."""
-    opacity: Animated[float]
-    """Animated opacity constrained to `0..=1`."""
-    position: AnimatedPoint
+    Each field a document leaves out takes its default: the
+    source centred on the canvas, unscaled, unrotated and opaque.
+    """
+
+    anchor: NotRequired[Vec2]
+    """Unanimated normalized point within the source rectangle.
+
+    Default: `{"x":0.5,"y":0.5}`.
+    """
+    opacity: NotRequired[Animated[float]]
+    """Animated opacity constrained to `0..=1`.
+
+    Default: `{"mode":"constant","value":1}`.
+    """
+    position: NotRequired[AnimatedPoint]
     """Animated normalized canvas translation, along spatial curves where its
     keyframes have tangents.
+
+    Default: `{"mode":"constant","value":{"x":0.5,"y":0.5}}`.
     """
-    rotation_degrees: Animated[float]
-    """Animated clockwise rotation in degrees."""
-    scale: Animated[Vec2]
-    """Animated per-axis scale."""
+    rotation_degrees: NotRequired[Animated[float]]
+    """Animated clockwise rotation in degrees.
+
+    Default: `{"mode":"constant","value":0}`.
+    """
+    scale: NotRequired[Animated[Vec2]]
+    """Animated per-axis scale.
+
+    Default: `{"mode":"constant","value":{"x":1,"y":1}}`.
+    """

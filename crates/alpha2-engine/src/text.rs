@@ -17,8 +17,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use alpha2_eval::{FrameDesc, GeneratorPlan, LayoutPlan, StepOp};
-use alpha2_media::EmojiPolicy;
-use alpha2_model::{Generator, Rgba, TextAlign, TextStyle};
+use alpha2_layout::{PictureSize, TextBounds, shaped_key, text_key, text_request};
+use alpha2_model::{Generator, TextStyle};
 use alpha2_render::{
     CpuImage, CpuRenderer, CpuSource, RenderCacheKey, RenderError, RenderSize, Renderer,
     SourceView, UploadTexture,
@@ -26,6 +26,11 @@ use alpha2_render::{
 use alpha2_text::{ShapedText, TextFont, TextRasterError, TextRasterRequest, TextRasterizer};
 
 use crate::layout::PreparedLayout;
+
+/// `size` as the picture text and layouts are placed on.
+pub(crate) fn picture(size: RenderSize) -> PictureSize {
+    PictureSize::new(size.width, size.height).expect("a render size is a picture size")
+}
 
 /// The high 64 bits of a text's result cache key, before its font set is
 /// mixed in: font sets are counted from 1 and stay far below this, so those
@@ -49,11 +54,6 @@ const RETAINED_LAYOUTS: usize = 8;
 /// How many shaped texts a host keeps for layout, least recently used
 /// first out.
 const RETAINED_SHAPED: usize = 256;
-
-/// The largest font, outline, and padding the text host draws, in pixels.
-pub(crate) const MAX_FONT_PIXELS: f32 = 2_048.0;
-pub(crate) const MAX_OUTLINE_PIXELS: f32 = 64.0;
-const MAX_PADDING_PIXELS: f32 = 256.0;
 
 /// Where [`TextTextures`] keeps the pixels of a rasterized text: the GPU
 /// renderer uploads them to a texture, the CPU renderer keeps them.
@@ -126,44 +126,6 @@ pub struct TextTexture<'a> {
     /// for a source: [`TextTextures`] keys each text by its [`text_key`] and
     /// the fonts it was drawn with.
     pub cache_key: Option<RenderCacheKey>,
-}
-
-/// Where a text lies, as fractions of the canvas, `(0, 0)` top-left to
-/// `(1, 1)` bottom-right, as its style's position is: on the picture a text
-/// generator draws, before its clip's transform and effects, and on the
-/// canvas for a caption. [`measure_text`] measures it.
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub struct TextBounds {
-    /// The box the style's anchor and position place: the wrapping width
-    /// wide, every line's em box tall, and the whole pixels of outline and
-    /// background padding around that.
-    pub layout: CanvasRect,
-    /// The lines' advances: from the start of the line that starts farthest
-    /// left to the end of the one that ends farthest right, as tall as the
-    /// layout, with the same decorations around it. It moves only as the
-    /// advances do, not as glyphs with more or less ink are typed.
-    pub content: CanvasRect,
-    /// What the text draws: its glyphs, their outline, and the background's
-    /// boxes, as [`alpha2_text::TextMeasure::ink`] bounds them at the measured
-    /// size. Every pixel the text gives any alpha there meets it, give or
-    /// take the pixel sampling the texture spreads it by. `None` when the text
-    /// draws nothing.
-    pub ink: Option<CanvasRect>,
-    /// Number of laid-out lines.
-    pub line_count: u32,
-}
-
-/// A rectangle as fractions of the canvas, y down.
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub struct CanvasRect {
-    /// Left edge, a fraction of the canvas width.
-    pub left: f32,
-    /// Top edge, a fraction of the canvas height.
-    pub top: f32,
-    /// Right edge, a fraction of the canvas width.
-    pub right: f32,
-    /// Bottom edge, a fraction of the canvas height.
-    pub bottom: f32,
 }
 
 /// Why text could not be prepared.
@@ -312,13 +274,14 @@ impl TextTextures {
         size: RenderSize,
     ) -> Result<(), TextError> {
         self.frame += 1;
+        let picture = picture(size);
         for (text, style) in frame_texts(frame) {
-            let key = text_key(text, style, size);
+            let key = text_key(text, style, picture);
             if let Some(entry) = self.entries.get_mut(&key) {
                 entry.last_used = self.frame;
                 continue;
             }
-            let request = text_request(text, style, size, key);
+            let request = text_request(text, style, picture, key);
             self.rasterize(renderer, key, &request)?;
         }
         for (plan, time) in frame_layouts(frame) {
@@ -417,10 +380,12 @@ impl TextTextures {
         }
         self.resolves += 1;
         let frame = self.frame;
+        let picture = picture(size);
         let shaped =
-            crate::layout::shape_texts(&evaluated, size, |request| self.shape(request, frame))?;
-        let resolved = crate::layout::resolve(&evaluated, size, &shaped);
-        let (texts, requests) = crate::layout::layout_texts(&evaluated, &resolved, size);
+            alpha2_layout::shape_texts(&evaluated, picture, |request| self.shape(request, frame))
+                .map_err(TextError::Raster)?;
+        let resolved = alpha2_layout::resolve(&evaluated, picture, &shaped);
+        let (texts, requests) = alpha2_layout::layout_texts(&evaluated, &resolved, picture);
         let mut boxes = Vec::with_capacity(texts.len());
         for text in &texts {
             boxes.push(match text {
@@ -515,7 +480,8 @@ impl TextTextures {
         size: RenderSize,
         canvas: (u32, u32),
     ) -> Result<crate::LayoutBounds, TextError> {
-        crate::measure_layout(&self.rasterizer, root, time, size, canvas)
+        crate::measure_layout(&self.rasterizer, root, time, picture(size), canvas)
+            .map_err(TextError::Raster)
     }
 
     /// [`Self::prepare`] for the frame of `project` at `time`, rendered at
@@ -541,7 +507,7 @@ impl TextTextures {
     }
 
     /// Where `text` in `style` lies on a canvas of `size`, drawn with these
-    /// fonts: [`measure_text`].
+    /// fonts: [`crate::measure_text`].
     ///
     /// # Errors
     /// Returns [`TextError::Raster`] as [`Self::prepare`] would for the text.
@@ -551,10 +517,10 @@ impl TextTextures {
         style: &TextStyle,
         size: RenderSize,
     ) -> Result<TextBounds, TextError> {
-        measure_text(&self.rasterizer, text, style, size)
+        crate::measure_text(&self.rasterizer, text, style, picture(size)).map_err(TextError::Raster)
     }
 
-    /// The prepared text with `key`, as [`text_key`] names it.
+    /// The prepared text with `key`, as [`crate::text_key`] names it.
     #[must_use]
     pub fn get(&self, key: u64) -> Option<TextTexture<'_>> {
         self.entries.get(&key).map(|entry| TextTexture {
@@ -714,208 +680,3 @@ pub fn layout_key(evaluated: u128, size: RenderSize) -> u128 {
     hash.u32(size.height);
     hash.finish()
 }
-
-/// A layout text's raster request as a text store key: FNV-1a over a domain
-/// byte and every field of the request. Never zero.
-pub(crate) fn layout_text_key(request: &TextRasterRequest) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    let mut feed = |bytes: &[u8]| {
-        for byte in bytes {
-            hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
-        }
-    };
-    // Layout texts take keys apart from captions' and text generators'.
-    feed(&[0x4c]);
-    feed_request(&mut feed, request);
-    hash.max(1)
-}
-
-/// What a request is shaped from, as a shaped-text cache key.
-fn shaped_key(request: &TextRasterRequest) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    let mut feed = |bytes: &[u8]| {
-        for byte in bytes {
-            hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
-        }
-    };
-    feed(request.text.as_bytes());
-    feed(&[0xff]);
-    feed(
-        request
-            .font_family
-            .as_deref()
-            .unwrap_or_default()
-            .as_bytes(),
-    );
-    feed(&[0xff, u8::from(request.font_family.is_some())]);
-    feed(&request.font_size.to_bits().to_le_bytes());
-    feed(&request.line_height.to_bits().to_le_bytes());
-    hash
-}
-
-fn feed_request(feed: &mut impl FnMut(&[u8]), request: &TextRasterRequest) {
-    feed(request.text.as_bytes());
-    feed(&[0xff]);
-    feed(
-        request
-            .font_family
-            .as_deref()
-            .unwrap_or_default()
-            .as_bytes(),
-    );
-    feed(&[0xff, u8::from(request.font_family.is_some())]);
-    for value in [request.font_size, request.max_width, request.line_height] {
-        feed(&value.to_bits().to_le_bytes());
-    }
-    feed(&request.color);
-    feed(&[match request.align {
-        alpha2_media::TextAlign::Start => 0,
-        alpha2_media::TextAlign::Center => 1,
-        alpha2_media::TextAlign::End => 2,
-    }]);
-    match request.outline {
-        Some(outline) => {
-            feed(&[1]);
-            feed(&outline.color);
-            feed(&outline.width.to_bits().to_le_bytes());
-        }
-        None => feed(&[0]),
-    }
-}
-
-/// A text's identity at a render size: the text, its style, and the size,
-/// hashed (FNV-1a). Never zero.
-#[must_use]
-pub fn text_key(text: &str, style: &TextStyle, size: RenderSize) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    let mut feed = |bytes: &[u8]| {
-        for byte in bytes {
-            hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
-        }
-    };
-    feed(text.as_bytes());
-    feed(&[0xff]);
-    // Family names cannot hold 0xff (they are UTF-8), so the text and family stay apart.
-    feed(style.font_family.as_deref().unwrap_or_default().as_bytes());
-    feed(&[0xff, u8::from(style.font_family.is_some())]);
-    for value in [
-        style.font_size,
-        style.line_height,
-        style.max_width,
-        style.position.x,
-        style.position.y,
-        style.anchor.x,
-        style.anchor.y,
-    ] {
-        feed(&value.to_bits().to_le_bytes());
-    }
-    feed(&rgba8(style.color));
-    feed(&[match style.align {
-        TextAlign::Start => 0,
-        TextAlign::Center => 1,
-        TextAlign::End => 2,
-    }]);
-    match style.outline {
-        Some(outline) => {
-            feed(&[1]);
-            feed(&rgba8(outline.color));
-            feed(&outline.width.to_bits().to_le_bytes());
-        }
-        None => feed(&[0]),
-    }
-    match style.background {
-        Some(background) => {
-            feed(&[1]);
-            feed(&rgba8(background.color));
-            feed(&background.padding.to_bits().to_le_bytes());
-        }
-        None => feed(&[0]),
-    }
-    feed(&size.width.to_le_bytes());
-    feed(&size.height.to_le_bytes());
-    hash.max(1)
-}
-
-/// Where `text` in `style` lies on a canvas of `size` ([`TextBounds`]), laid
-/// out with `rasterizer`'s fonts as [`TextTextures::prepare`] lays it out and
-/// placed as a frame places it, without drawing it. Measured at the size a
-/// frame is drawn at, it agrees with that frame to the pixel; text laid out
-/// at another size can break its lines elsewhere.
-///
-/// # Errors
-/// Returns [`TextError::Raster`] when the text host refuses the text: no
-/// fonts, or a style out of range.
-#[allow(clippy::cast_precision_loss)]
-pub fn measure_text(
-    rasterizer: &TextRasterizer,
-    text: &str,
-    style: &TextStyle,
-    size: RenderSize,
-) -> Result<TextBounds, TextError> {
-    let request = text_request(text, style, size, text_key(text, style, size));
-    let measure = rasterizer.measure(&request).map_err(TextError::Raster)?;
-    let (width, height) = (size.width as f32, size.height as f32);
-    let margin = measure.decoration_margin as f32;
-    let (box_width, box_height) = (measure.box_width as f32, measure.box_height as f32);
-    // The layout box's top-left corner on the canvas: the anchor of the box with its decorations
-    // lies at the position, as `text_placement` places the texture.
-    let origin = [
-        style.position.x * width - style.anchor.x * (box_width + 2.0 * margin) + margin,
-        style.position.y * height - style.anchor.y * (box_height + 2.0 * margin) + margin,
-    ];
-    let rect = |[left, top, right, bottom]: [f32; 4]| CanvasRect {
-        left: (origin[0] + left) / width,
-        top: (origin[1] + top) / height,
-        right: (origin[0] + right) / width,
-        bottom: (origin[1] + bottom) / height,
-    };
-    Ok(TextBounds {
-        layout: rect([-margin, -margin, box_width + margin, box_height + margin]),
-        content: rect(measure.content),
-        ink: measure.ink.map(rect),
-        line_count: measure.line_count,
-    })
-}
-
-/// A straight, sRGB-encoded color as bytes.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-pub(crate) fn rgba8(color: Rgba) -> [u8; 4] {
-    [color.red, color.green, color.blue, color.alpha]
-        .map(|value| (value.clamp(0.0, 1.0) * 255.0).round() as u8)
-}
-
-/// The text host request for `text` at `size`: sizes scaled from canvas
-/// fractions to pixels, within what the text host draws.
-#[allow(clippy::cast_precision_loss)]
-fn text_request(text: &str, style: &TextStyle, size: RenderSize, key: u64) -> TextRasterRequest {
-    let font_size = (style.font_size * size.height as f32).clamp(1.0, MAX_FONT_PIXELS);
-    TextRasterRequest {
-        text: text.to_owned(),
-        font_size,
-        max_width: (style.max_width * size.width as f32).max(1.0),
-        line_height: style.line_height,
-        align: match style.align {
-            TextAlign::Start => alpha2_media::TextAlign::Start,
-            TextAlign::Center => alpha2_media::TextAlign::Center,
-            TextAlign::End => alpha2_media::TextAlign::End,
-        },
-        color: rgba8(style.color),
-        emoji_policy: EmojiPolicy::Color,
-        content_version: key,
-        outline: style.outline.map(|outline| alpha2_text::TextOutline {
-            color: rgba8(outline.color),
-            width: (outline.width * font_size).clamp(f32::MIN_POSITIVE, MAX_OUTLINE_PIXELS),
-        }),
-        background: style
-            .background
-            .map(|background| alpha2_text::TextBackground {
-                color: rgba8(background.color),
-                padding: (background.padding * font_size).clamp(0.0, MAX_PADDING_PIXELS),
-            }),
-        font_family: style.font_family.clone(),
-    }
-}
-
-#[cfg(test)]
-#[path = "text_tests.rs"]
-mod tests;

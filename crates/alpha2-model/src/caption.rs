@@ -29,7 +29,7 @@ pub struct CaptionCue {
     pub text: String,
 }
 
-/// Largest caption font size, as a fraction of the frame's height.
+/// Largest caption font size, as a fraction of the frame's shorter side.
 pub const MAX_CAPTION_FONT_SIZE: f32 = 0.25;
 
 impl Captions {

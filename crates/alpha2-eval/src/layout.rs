@@ -266,6 +266,10 @@ pub struct EvaluatedText {
     pub color: Rgba,
     /// Baseline-to-baseline distance in font sizes.
     pub line_height: f32,
+    /// Space after each character, a fraction of the font size.
+    pub letter_spacing: f32,
+    /// The weight its faces are matched by.
+    pub font_weight: u16,
     /// How lines align in the content width.
     pub text_align: TextAlign,
     /// A band around the glyphs.
@@ -365,6 +369,8 @@ fn text_style(node: &LayoutNode, time: MediaTime, inherited: &LayoutTextStyle) -
         }),
         color: node.color.unwrap_or(inherited.color),
         line_height: node.line_height.unwrap_or(inherited.line_height),
+        letter_spacing: node.letter_spacing.unwrap_or(inherited.letter_spacing),
+        font_weight: node.font_weight.unwrap_or(inherited.font_weight),
         text_align: node.text_align.unwrap_or(inherited.text_align),
         outline: node.outline.or(inherited.outline),
     }
@@ -417,6 +423,8 @@ fn evaluate_node<'a>(
             font_size: style.font_size,
             color: style.color,
             line_height: style.line_height,
+            letter_spacing: style.letter_spacing,
+            font_weight: style.font_weight,
             text_align: style.text_align,
             outline: style.outline,
         })
@@ -650,6 +658,8 @@ fn hash_node_in(
             hash.f32(text.font_size);
             hash_color(hash, text.color);
             hash.f32(text.line_height);
+            hash.f32(text.letter_spacing);
+            hash.u32(u32::from(text.font_weight));
             hash.u32(text.text_align as u32);
             match text.outline {
                 None => hash.u32(0),

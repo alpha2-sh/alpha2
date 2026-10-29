@@ -155,9 +155,9 @@ fn vhs_definition() -> EffectDef {
 
 /// Returns the data-only definition of the built-in drop shadow.
 ///
-/// The source's alpha, moved `distance` (a fraction of the height) along
-/// `angle` (counter-clockwise, -45 down and to the right), in `color` at
-/// `opacity`, blurred like the Gaussian blur with a `softness` radius and
+/// The source's alpha, moved `distance` (a fraction of the shorter side)
+/// along `angle` (counter-clockwise, -45 down and to the right), in `color`
+/// at `opacity`, blurred like the Gaussian blur with a `softness` radius and
 /// drawn under the source, or alone with `shadow_only`. It is drawn on the
 /// canvas before the clip's transform, so a rotated clip turns its shadow
 /// with it. A render graph draws it as internal passes; its own body is

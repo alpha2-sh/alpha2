@@ -217,6 +217,16 @@ pub fn project_limits_json() -> Value {
         ("MIN_LINE_HEIGHT", json!(crate::LINE_HEIGHT_RANGE.start())),
         ("MAX_LINE_HEIGHT", json!(crate::LINE_HEIGHT_RANGE.end())),
         (
+            "MIN_LETTER_SPACING",
+            json!(crate::LETTER_SPACING_RANGE.start()),
+        ),
+        (
+            "MAX_LETTER_SPACING",
+            json!(crate::LETTER_SPACING_RANGE.end()),
+        ),
+        ("MIN_FONT_WEIGHT", json!(crate::FONT_WEIGHT_RANGE.start())),
+        ("MAX_FONT_WEIGHT", json!(crate::FONT_WEIGHT_RANGE.end())),
+        (
             "MAX_TEXT_OUTLINE_WIDTH",
             json!(crate::MAX_TEXT_OUTLINE_WIDTH),
         ),

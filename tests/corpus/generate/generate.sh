@@ -16,6 +16,7 @@
 #   emoji-fonts font-emoji.sh, font-color.py: the source fonts NOTO_EMOJI_COLRV1 (Noto-COLRv1.ttf)
 #               and NOTO_EMOJI_CBDT (NotoColorEmoji.ttf) from noto-emoji v2.051 and fontTools'
 #               pyftsubset, into tests/fonts.
+#   weight-fonts font-weights.py: fontTools alone, into tests/fonts (no source fonts: it draws them).
 #
 # Usage: generate.sh [--out DIR] [STEP...]
 #
@@ -39,8 +40,8 @@ fonts="$tests/fonts"
 named=("$@")
 for step in "${named[@]}"; do
   case "$step" in
-    media | recovery | extensions | fonts | emoji-fonts) ;;
-    *) echo "error: unknown step '$step' (media, recovery, extensions, fonts, emoji-fonts)" >&2; exit 2 ;;
+    media | recovery | extensions | fonts | emoji-fonts | weight-fonts) ;;
+    *) echo "error: unknown step '$step' (media, recovery, extensions, fonts, emoji-fonts, weight-fonts)" >&2; exit 2 ;;
   esac
 done
 
@@ -90,4 +91,9 @@ fi
 if wanted emoji-fonts "$([[ -n "${NOTO_EMOJI_COLRV1:-}" && -n "${NOTO_EMOJI_CBDT:-}" ]] && command -v pyftsubset >/dev/null || echo 'NOTO_EMOJI_COLRV1, NOTO_EMOJI_CBDT and pyftsubset')"; then
   mkdir -p "$fonts"
   sh "$here/font-emoji.sh" "$NOTO_EMOJI_COLRV1" "$NOTO_EMOJI_CBDT" "$fonts"
+fi
+
+if wanted weight-fonts "$(python3 -c 'import fontTools' 2>/dev/null || echo 'fontTools')"; then
+  mkdir -p "$fonts"
+  python3 "$here/font-weights.py" "$fonts"
 fi

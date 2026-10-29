@@ -24,6 +24,7 @@
 //! every input a node reachable from the output uses must be connected.
 //! Nodes that do not reach the output are kept and ignored.
 
+use crate::animation::opaque;
 use crate::{
     Animated, ClipBlendMode, ClipEffect, CompositionId, EffectValue, Generator, MatteMode, NodeId,
     ShapeMask, VisualProperties,
@@ -303,10 +304,6 @@ impl MergeLayer {
             opacity: Animated::Constant { value: 1.0 },
         }
     }
-}
-
-const fn opaque() -> Animated<f32> {
-    Animated::Constant { value: 1.0 }
 }
 
 /// What each composition's output reads: the group inputs and clip nodes a

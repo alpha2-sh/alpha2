@@ -80,6 +80,9 @@ export const MAX_EQ_Q = 50;
 /** Mirrors `alpha2_model::MAX_FONT_FAMILY_BYTES`. */
 export const MAX_FONT_FAMILY_BYTES = 256;
 
+/** Mirrors `alpha2_model::MAX_FONT_WEIGHT`. */
+export const MAX_FONT_WEIGHT = 1000;
+
 /** Mirrors `alpha2_model::MAX_FRAME_INLINED_NODES`. */
 export const MAX_FRAME_INLINED_NODES = 65536;
 
@@ -115,6 +118,9 @@ export const MAX_LAYOUT_NODES = 256;
 
 /** Mirrors `alpha2_model::MAX_LAYOUT_TEXTS`. */
 export const MAX_LAYOUT_TEXTS = 64;
+
+/** Mirrors `alpha2_model::MAX_LETTER_SPACING`. */
+export const MAX_LETTER_SPACING = 1;
 
 /** Mirrors `alpha2_model::MAX_LINE_HEIGHT`. */
 export const MAX_LINE_HEIGHT = 3;
@@ -182,8 +188,14 @@ export const MIN_EQ_FREQUENCY_HZ = 10;
 /** Mirrors `alpha2_model::MIN_EQ_Q`. */
 export const MIN_EQ_Q = 0.05;
 
+/** Mirrors `alpha2_model::MIN_FONT_WEIGHT`. */
+export const MIN_FONT_WEIGHT = 1;
+
 /** Mirrors `alpha2_model::MIN_HDR_PEAK_NITS`. */
 export const MIN_HDR_PEAK_NITS = 100;
+
+/** Mirrors `alpha2_model::MIN_LETTER_SPACING`. */
+export const MIN_LETTER_SPACING = -0.5;
 
 /** Mirrors `alpha2_model::MIN_LEVEL_DB`. */
 export const MIN_LEVEL_DB = -96;
@@ -1625,6 +1637,12 @@ export interface LayoutNode {
    */
   readonly font_size?: Animated<LayoutSize> | null;
   /**
+   * The weight, in `[1, 1000]`, the family's faces are matched by, as
+   * CSS Fonts 4 matches `font-weight`; a variable face draws at it. Not
+   * animated. Inherited; the root's is 400.
+   */
+  readonly font_weight?: number | null;
+  /**
    * Space between children, on both axes. At least 0; default 0.
    */
   readonly gap?: Animated<LayoutSize> | null;
@@ -1683,7 +1701,16 @@ export interface LayoutNode {
    */
   readonly justify_self?: AlignItems | null;
   /**
-   * Baseline-to-baseline distance in font sizes, in `[0.5, 3]`.
+   * Space after each character, as a fraction of the font size, in
+   * `[-0.5, 1]`, as CSS `letter-spacing` adds it: none after a line's
+   * last character, and none after a character of a cursive script.
+   * Not animated. Inherited; the root's is 0.
+   */
+  readonly letter_spacing?: number | null;
+  /**
+   * Baseline-to-baseline distance in font sizes, in `[0.5, 3]`. Each
+   * line's em box, 0.8 of a font size above its baseline and 0.2 below,
+   * is centred in its line when the line is taller than an em.
    * Inherited; the root's is 1.2.
    */
   readonly line_height?: number | null;
@@ -3105,10 +3132,11 @@ export interface TextOutline {
  * `Generator`.
  *
  * Sizes are resolution-independent: the font size is a fraction of the
- * canvas height, the wrapping width a fraction of the canvas width, and the
- * outline and background padding fractions of the font size. The engine
- * draws with the fonts its host registered: those of `font_family` first,
- * then the rest in their fallback order.
+ * canvas's shorter side, as every other length is, the wrapping width a
+ * fraction of the canvas width, and the outline and background padding
+ * fractions of the font size. The engine draws with the fonts its host
+ * registered: those of `font_family` first, then the rest in their
+ * fallback order.
  */
 export interface TextStyle {
   /**
@@ -3146,15 +3174,36 @@ export interface TextStyle {
    */
   readonly font_family?: string | null;
   /**
-   * Font size as a fraction of the canvas height: positive, at most
-   * `MAX_CAPTION_FONT_SIZE` on a caption track and
+   * Font size as a fraction of the canvas's shorter side: positive, at
+   * most `MAX_CAPTION_FONT_SIZE` on a caption track and
    * `MAX_TEXT_GENERATOR_FONT_SIZE` in a text generator.
    *
    * @defaultValue `0.05`
    */
   readonly font_size?: number;
   /**
-   * Baseline-to-baseline distance in font sizes, in `[0.5, 3]`.
+   * The weight, in `[1, 1000]`, a family's faces are matched by, as CSS
+   * Fonts 4 matches `font-weight`; a variable face draws at it, clamped
+   * to its `wght` axis. No face is emboldened: a weight the family lacks
+   * draws its nearest face.
+   *
+   * @defaultValue `400`
+   */
+  readonly font_weight?: number;
+  /**
+   * Space after each character, as a fraction of the font size, in
+   * `[-0.5, 1]`, as CSS `letter-spacing` adds it: none after a line's
+   * last character, and none after a character of a cursive script
+   * (Arabic, say), whose joins it would break. Not zero, it turns optional
+   * ligatures off.
+   *
+   * @defaultValue `0`
+   */
+  readonly letter_spacing?: number;
+  /**
+   * Baseline-to-baseline distance in font sizes, in `[0.5, 3]`. Each
+   * line's em box, 0.8 of a font size above its baseline and 0.2 below,
+   * is centred in its line when the line is taller than an em.
    *
    * @defaultValue `1.2`
    */
@@ -3410,27 +3459,40 @@ export interface VideoStreamShape {
 
 /**
  * Resolution-independent visual presentation controls for a clip.
+ *
+ * Each field a document leaves out takes its default: the
+ * source centred on the canvas, unscaled, unrotated and opaque.
  */
 export interface VisualProperties {
   /**
    * Unanimated normalized point within the source rectangle.
+   *
+   * @defaultValue `{"x":0.5,"y":0.5}`
    */
-  readonly anchor: Vec2;
+  readonly anchor?: Vec2;
   /**
    * Animated opacity constrained to `0..=1`.
+   *
+   * @defaultValue `{"mode":"constant","value":1}`
    */
-  readonly opacity: Animated<number>;
+  readonly opacity?: Animated<number>;
   /**
    * Animated normalized canvas translation, along spatial curves where its
    * keyframes have tangents.
+   *
+   * @defaultValue `{"mode":"constant","value":{"x":0.5,"y":0.5}}`
    */
-  readonly position: AnimatedPoint;
+  readonly position?: AnimatedPoint;
   /**
    * Animated clockwise rotation in degrees.
+   *
+   * @defaultValue `{"mode":"constant","value":0}`
    */
-  readonly rotation_degrees: Animated<number>;
+  readonly rotation_degrees?: Animated<number>;
   /**
    * Animated per-axis scale.
+   *
+   * @defaultValue `{"mode":"constant","value":{"x":1,"y":1}}`
    */
-  readonly scale: Animated<Vec2>;
+  readonly scale?: Animated<Vec2>;
 }

@@ -355,6 +355,26 @@ fn text_exports_with_the_requested_fonts() {
 }
 
 #[test]
+fn a_font_collection_registers_every_face() {
+    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let files = host
+        .set_fonts(&[
+            corpus("../fonts/Alpha2Fixture.ttf"),
+            corpus("../fonts/Alpha2FixturePair.ttc"),
+        ])
+        .expect("the fixture fonts");
+    // One file read each, and its faces: the fixture's one and the pair's Regular and Bold.
+    assert_eq!(files.len(), 2);
+    assert_eq!(
+        host.texts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .font_count(),
+        3
+    );
+}
+
+#[test]
 fn audio_window_rejects_unreported_internal_gaps_and_overlaps() {
     use crate::audio::append_audio_block;
     use alpha2_media::AudioBlock;

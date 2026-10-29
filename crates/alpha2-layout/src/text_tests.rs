@@ -27,7 +27,7 @@ fn imported_cues_whose_last_line_is_blank_after_markup_are_drawn() {
         face_index: 0,
     }])
     .expect("font");
-    let size = RenderSize::new(1920, 1080).expect("size");
+    let size = PictureSize::new(1920, 1080).expect("size");
     for style in [
         TextStyle::default(),
         TextStyle {
@@ -46,4 +46,48 @@ fn imported_cues_whose_last_line_is_blank_after_markup_are_drawn() {
             assert_eq!(raster.descriptor.line_count, 2, "{:?}", cue.text);
         }
     }
+}
+
+#[test]
+fn portrait_text_sizes_by_the_shorter_side() {
+    let style = TextStyle {
+        font_size: 0.05,
+        ..TextStyle::default()
+    };
+    for (width, height) in [(540, 960), (960, 540)] {
+        let size = PictureSize::new(width, height).expect("size");
+        let request = text_request("Hi", &style, size, text_key("Hi", &style, size));
+        assert_eq!(
+            request.font_size.to_bits(),
+            27.0_f32.to_bits(),
+            "{width}x{height}"
+        );
+    }
+}
+
+#[test]
+fn baselines_lie_a_half_leading_and_an_ascent_below_each_line_top() {
+    let rasterizer = TextRasterizer::new(vec![TextFont {
+        family: "Alpha2 Fixture".into(),
+        bytes: std::fs::read("../../tests/fonts/Alpha2Fixture.ttf")
+            .expect("fixture font")
+            .into(),
+        face_index: 0,
+    }])
+    .expect("font");
+    // 40 px lines 56 px apart on a 1000 px tall canvas: 8 px of half-leading, 32 px of ascent.
+    let size = PictureSize::new(1000, 1000).expect("size");
+    let style = TextStyle {
+        font_size: 0.04,
+        line_height: 1.4,
+        ..TextStyle::default()
+    };
+    let one = measure_text(&rasterizer, "Hg", &style, size).expect("measures");
+    assert_eq!(one.baselines.first.to_bits(), one.baselines.last.to_bits());
+    assert!((one.baselines.first - one.layout.top - 0.04).abs() < 1e-6);
+    let three = measure_text(&rasterizer, "Hg\nHg\nHg", &style, size).expect("measures");
+    assert_eq!(three.line_count, 3);
+    assert!(
+        (three.baselines.last - three.baselines.first - 2.0 * 1.4 * 40.0 / 1000.0).abs() < 1e-6
+    );
 }

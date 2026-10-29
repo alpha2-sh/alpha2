@@ -40,6 +40,15 @@ static UNSHARP_MASK: LazyLock<EffectDef> = LazyLock::new(unsharp_mask_definition
 static TILT_SHIFT: LazyLock<EffectDef> = LazyLock::new(tilt_shift_definition);
 static DROP_SHADOW: LazyLock<EffectDef> = LazyLock::new(drop_shadow_definition);
 
+/// The standard deviation, in pixels, of the built-in Gaussian blur of
+/// `radius` on a picture of `size`: half the radius, a fraction of the
+/// picture's shorter side.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn blur_sigma_pixels(radius: f32, size: crate::RenderSize) -> f32 {
+    radius * 0.5 * size.width.min(size.height) as f32
+}
+
 /// The internal effects a built-in drawn as several passes draws with, for
 /// [`RenderGraph::add_expanded_effect`]'s effects; `None` for every other.
 pub(crate) fn expanded_passes(effect: &str) -> Option<&'static [&'static str]> {
@@ -81,7 +90,7 @@ impl<'a> RenderGraph<'a> {
         runtime: EffectRuntime,
     ) -> Result<RenderNodeId, GraphError> {
         let [radius] = checked_params(&GAUSSIAN_BLUR, params, ["radius"])?;
-        self.add_gaussian(source, radius * 0.5, runtime)
+        self.add_gaussian_cascade(source, blur_sigma_pixels(radius, self.size), runtime)
     }
 
     #[allow(clippy::cast_precision_loss)]
@@ -112,12 +121,16 @@ impl<'a> RenderGraph<'a> {
         else {
             return Err(RenderError::InvalidEffectParams.into());
         };
-        // Counter-clockwise on screen, y down; the distance in heights, the offset in uv.
+        // Counter-clockwise on screen, y down; the distance in shorter sides, the offset in uv.
         let radians = angle.to_radians();
-        let height_over_width = self.size.height as f32 / self.size.width as f32;
+        let unit = self.unit_pixels();
+        let (unit_over_width, unit_over_height) = (
+            unit / self.size.width as f32,
+            unit / self.size.height as f32,
+        );
         let offset = [
-            libm::cosf(radians) * distance * height_over_width,
-            -libm::sinf(radians) * distance,
+            libm::cosf(radians) * distance * unit_over_width,
+            -libm::sinf(radians) * distance * unit_over_height,
         ];
         let shadow = self.add_internal_effect(
             SHADOW_OFFSET_ID,
@@ -180,7 +193,7 @@ impl<'a> RenderGraph<'a> {
         // libm, so the CPU renderer's graph is the same on every target.
         let radians = angle.to_radians();
         let direction = [libm::cosf(radians), -libm::sinf(radians)];
-        let sigma_pixels = length * 0.5 * self.size.height as f32;
+        let sigma_pixels = length * 0.5 * self.unit_pixels();
         self.add_gaussian_axis(source, sigma_pixels, direction, runtime)
     }
 
@@ -241,16 +254,23 @@ impl<'a> RenderGraph<'a> {
         )
     }
 
-    /// A Gaussian with a standard deviation of `sigma` output heights, as
-    /// horizontal then vertical pass cascades.
+    /// The output's shorter side in pixels: the unit of the lengths these
+    /// effects take, so a blur is as wide on a portrait picture as on its
+    /// landscape transpose.
     #[allow(clippy::cast_precision_loss)]
+    fn unit_pixels(&self) -> f32 {
+        self.size.width.min(self.size.height) as f32
+    }
+
+    /// A Gaussian with a standard deviation of `sigma` of the output's
+    /// shorter side, as horizontal then vertical pass cascades.
     fn add_gaussian(
         &mut self,
         source: RenderNodeId,
         sigma: f32,
         runtime: EffectRuntime,
     ) -> Result<RenderNodeId, GraphError> {
-        self.add_gaussian_cascade(source, sigma * self.size.height as f32, runtime)
+        self.add_gaussian_cascade(source, sigma * self.unit_pixels(), runtime)
     }
 
     /// Adds a Gaussian blur of `source` whose standard deviation is

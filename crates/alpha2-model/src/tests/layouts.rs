@@ -150,7 +150,6 @@ fn css_the_layout_does_not_take_is_refused_by_name() {
     for json in [
         r#"{"type":"layout","root":{"display":"block"}}"#,
         r#"{"type":"layout","root":{"justify_content":"flex-start"}}"#,
-        r#"{"type":"layout","root":{"children":[{"text":{"mode":"constant","value":"a"},"font_weight":700}]}}"#,
         r#"{"type":"layout","root":{"margin":{"mode":"constant","value":{"left":"auto"}}}}"#,
         r#"{"type":"layout","root":{"display":"grid","grid_template_areas":"a b"}}"#,
     ] {

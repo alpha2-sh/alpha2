@@ -111,7 +111,7 @@ fn a_wide_project_blur_stays_smooth_at_any_size() {
     let mut renderer = Renderer::new(gpu());
     renderer.register_builtins().expect("built-ins compile");
     // sigma = 0.05 / 2 * 1080 = 27 px, as a 1080p project with radius 0.05.
-    let size = RenderSize::new(512, 1080).expect("non-zero size");
+    let size = RenderSize::new(1280, 1080).expect("non-zero size");
     let pixels = line_image(size, 32);
     let blurred = render_project_effect(
         &renderer,
@@ -121,7 +121,64 @@ fn a_wide_project_blur_stays_smooth_at_any_size() {
         &EffectParams::new().with("radius", ParamValue::Float(0.05)),
     );
     let row = middle_row(&blurred, size);
-    assert_falls_off(&row, 271, 54, "wide gaussian blur");
+    assert_falls_off(&row, 655, 54, "wide gaussian blur");
+}
+
+/// Opaque black with a white `rect` (width, height) centred.
+fn rect_image(size: RenderSize, rect: (u32, u32)) -> Vec<u8> {
+    let (left, top) = ((size.width - rect.0) / 2, (size.height - rect.1) / 2);
+    (0..size.height)
+        .flat_map(|y| {
+            (0..size.width).flat_map(move |x| {
+                if (left..left + rect.0).contains(&x) && (top..top + rect.1).contains(&y) {
+                    [255, 255, 255, 255]
+                } else {
+                    [0, 0, 0, 255]
+                }
+            })
+        })
+        .collect()
+}
+
+#[test]
+fn portrait_blur_matches_landscape_transposed() {
+    let _lock = gpu_test_lock();
+    let mut renderer = Renderer::new(gpu());
+    renderer.register_builtins().expect("built-ins compile");
+    // The radius is a fraction of the shorter side, 64 px both ways: sigma 3.2 px.
+    let (portrait, landscape) = (
+        RenderSize::new(64, 128).expect("non-zero size"),
+        RenderSize::new(128, 64).expect("non-zero size"),
+    );
+    let blur = |size, rect| {
+        render_project_effect(
+            &renderer,
+            GAUSSIAN_BLUR_ID,
+            size,
+            &rect_image(size, rect),
+            &EffectParams::new().with("radius", ParamValue::Float(0.1)),
+        )
+    };
+    let tall = blur(portrait, (16, 32));
+    let wide = blur(landscape, (32, 16));
+    let mut lit = 0;
+    for y in 0..128_usize {
+        for x in 0..64_usize {
+            let (a, b) = (
+                &tall[(y * 64 + x) * 4..][..4],
+                &wide[(x * 128 + y) * 4..][..4],
+            );
+            for channel in 0..4 {
+                assert!(
+                    a[channel].abs_diff(b[channel]) <= 1,
+                    "({x}, {y}): portrait {a:?}, landscape transposed {b:?}"
+                );
+            }
+            lit += usize::from(a[0] > 0);
+        }
+    }
+    // The blur reaches well past the rect's 512 pixels.
+    assert!(lit > 1_000, "{lit} lit pixels");
 }
 
 #[test]

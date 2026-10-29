@@ -122,8 +122,10 @@ dependencies = [
 name = "alpha2-compose"
 version = "0.4.6"
 dependencies = [
+ "alpha2-layout",
  "alpha2-media",
  "alpha2-model",
+ "alpha2-render",
  "alpha2-text",
  "alpha2-time",
  "schemars",
@@ -141,6 +143,7 @@ dependencies = [
  "alpha2-geometry",
  "alpha2-golden-support",
  "alpha2-gpu",
+ "alpha2-layout",
  "alpha2-media",
  "alpha2-model",
  "alpha2-render",
@@ -151,7 +154,6 @@ dependencies = [
  "pollster",
  "serde",
  "serde_json",
- "taffy",
  "web-time",
  "wgpu",
 ]
@@ -264,6 +266,7 @@ dependencies = [
  "alpha2-extensions",
  "alpha2-ffmpeg-bridge",
  "alpha2-gpu",
+ "alpha2-layout",
  "alpha2-media",
  "alpha2-model",
  "alpha2-native",
@@ -282,6 +285,20 @@ dependencies = [
  "serde_json",
  "sha2",
  "wgpu",
+]
+
+[[package]]
+name = "alpha2-layout"
+version = "0.4.6"
+dependencies = [
+ "alpha2-eval",
+ "alpha2-geometry",
+ "alpha2-media",
+ "alpha2-model",
+ "alpha2-text",
+ "alpha2-time",
+ "serde_json",
+ "taffy",
 ]
 
 [[package]]
@@ -468,6 +485,7 @@ dependencies = [
  "alpha2-eval",
  "alpha2-geometry",
  "alpha2-gpu",
+ "alpha2-layout",
  "alpha2-media",
  "alpha2-model",
  "alpha2-provider-contract",

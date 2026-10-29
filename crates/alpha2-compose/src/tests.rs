@@ -262,6 +262,33 @@ fn reframe_blurs_a_muted_cover_copy_under_the_video() {
 }
 
 #[test]
+fn a_portrait_blur_is_a_fraction_of_the_width() {
+    let compiled = compile(&json!({
+        "canvas": "shorts",
+        "body": {"type": "reframe", "video": "wide.mp4", "blur": 0.05},
+    }));
+    let effect = &compiled["project"]["compositions"][0]["nodes"][1]["op"]["effect"];
+    assert_eq!(effect["id"], "alpha2.effect.gaussian-blur");
+    #[allow(clippy::cast_possible_truncation)]
+    let radius = effect["params"]["radius"]["value"]["value"]
+        .as_f64()
+        .expect("a constant radius") as f32;
+    let canvas = &compiled["project"]["settings"];
+    let size = alpha2_render::RenderSize::new(
+        u32::try_from(canvas["width"].as_u64().expect("width")).expect("width"),
+        u32::try_from(canvas["height"].as_u64().expect("height")).expect("height"),
+    )
+    .expect("size");
+    assert!(size.height > size.width, "a portrait canvas");
+    #[allow(clippy::cast_precision_loss)]
+    let expected = 0.025 * size.width as f32;
+    assert_eq!(
+        alpha2_render::blur_sigma_pixels(radius, size).to_bits(),
+        expected.to_bits()
+    );
+}
+
+#[test]
 fn a_music_bed_ducks_under_the_body() {
     let compiled = compile(&json!({
         "body": {"type": "media", "path": "wide.mp4"},

@@ -5,7 +5,7 @@
 //! with the same fonts.
 
 use alpha2_media::{EmojiPolicy, TextAlign};
-use alpha2_text::{TextFont, TextRasterRequest, TextRasterResult, TextRasterizer};
+use alpha2_text::{TextFont, TextRasterRequest, TextRasterResult};
 use serde::Deserialize;
 
 /// The JSON request `WasmTextRasterizer.rasterize` takes (camelCase, as the
@@ -31,6 +31,10 @@ pub(crate) struct TextRequestWire {
     background: Option<BackgroundWire>,
     #[serde(default)]
     font_family: Option<String>,
+    #[serde(default)]
+    letter_spacing: f32,
+    #[serde(default = "default_font_weight")]
+    font_weight: u16,
 }
 
 #[derive(Deserialize)]
@@ -49,6 +53,10 @@ struct BackgroundWire {
 
 const fn default_line_height() -> f32 {
     1.2
+}
+
+const fn default_font_weight() -> u16 {
+    400
 }
 
 #[derive(Default, Deserialize)]
@@ -99,6 +107,8 @@ impl TextRequestWire {
                     padding: background.padding,
                 }),
             font_family: self.font_family,
+            letter_spacing: self.letter_spacing,
+            font_weight: self.font_weight,
         }
     }
 }
@@ -121,126 +131,6 @@ pub(crate) fn descriptor_json(result: &TextRasterResult) -> String {
     .to_string()
 }
 
-/// Why a text generator could not be measured.
-#[derive(Debug)]
-pub(crate) enum MeasureError {
-    /// Not a text generator a project could hold, or no canvas.
-    Input(String),
-    /// The text host refused: no fonts, say.
-    Text(alpha2_engine::TextError),
-}
-
-/// Where the text generator `generator_json`, as a project holds it, lies on
-/// a `width` by `height` canvas ([`alpha2_engine::measure_text`]), as the
-/// JSON `WasmTextMeasurer.measure` returns.
-pub(crate) fn measure_json(
-    rasterizer: &TextRasterizer,
-    generator_json: &str,
-    width: u32,
-    height: u32,
-) -> Result<String, MeasureError> {
-    let generator: alpha2_model::Generator = serde_json::from_str(generator_json)
-        .map_err(|error| MeasureError::Input(format!("invalid text generator: {error}")))?;
-    if !generator.is_valid() {
-        return Err(MeasureError::Input(
-            "the text generator has a field out of range".into(),
-        ));
-    }
-    let alpha2_model::Generator::Text { text, style } = &generator else {
-        return Err(MeasureError::Input(
-            "only a text generator draws text".into(),
-        ));
-    };
-    let size = alpha2_render::RenderSize::new(width, height)
-        .map_err(|error| MeasureError::Input(format!("invalid canvas size: {error}")))?;
-    let bounds =
-        alpha2_engine::measure_text(rasterizer, text, style, size).map_err(MeasureError::Text)?;
-    let rect = |rect: alpha2_engine::CanvasRect| {
-        serde_json::json!({
-            "left": rect.left,
-            "top": rect.top,
-            "right": rect.right,
-            "bottom": rect.bottom,
-        })
-    };
-    Ok(serde_json::json!({
-        "layout": rect(bounds.layout),
-        "content": rect(bounds.content),
-        "ink": bounds.ink.map(rect),
-        "lineCount": bounds.line_count,
-    })
-    .to_string())
-}
-
-/// Where each node of the layout generator `generator_json`, as a project
-/// holds it, lies on a `width` by `height` picture at picture time `ticks`
-/// ([`alpha2_engine::measure_layout`]), as the JSON
-/// `WasmTextMeasurer.measureLayout` returns. `canvas` is the project canvas
-/// its pixels are pixels of: the picture's size when `None`.
-pub(crate) fn measure_layout_json(
-    rasterizer: &TextRasterizer,
-    generator_json: &str,
-    width: u32,
-    height: u32,
-    ticks: f64,
-    canvas: Option<(u32, u32)>,
-) -> Result<String, MeasureError> {
-    let generator: alpha2_model::Generator = serde_json::from_str(generator_json)
-        .map_err(|error| MeasureError::Input(format!("invalid layout generator: {error}")))?;
-    let size = alpha2_render::RenderSize::new(width, height)
-        .map_err(|error| MeasureError::Input(format!("invalid canvas size: {error}")))?;
-    let (canvas_width, canvas_height) = canvas.unwrap_or((width, height));
-    alpha2_render::RenderSize::new(canvas_width, canvas_height)
-        .map_err(|error| MeasureError::Input(format!("invalid project canvas: {error}")))?;
-    if let Err(issue) = generator.validate_on(canvas_width, canvas_height) {
-        return Err(MeasureError::Input(match issue {
-            alpha2_model::GeneratorIssue::Layout(issue) => {
-                format!("the layout generator {} {}", issue.at, issue.problem)
-            }
-            alpha2_model::GeneratorIssue::Shape(issue) => {
-                format!(
-                    "the layout generator's shape {} {}",
-                    issue.at, issue.problem
-                )
-            }
-            alpha2_model::GeneratorIssue::Invalid => {
-                "the layout generator has a field out of range".into()
-            }
-        }));
-    }
-    let alpha2_model::Generator::Layout { root } = &generator else {
-        return Err(MeasureError::Input(
-            "only a layout generator lays out boxes".into(),
-        ));
-    };
-    let time = crate::geometry::time(ticks).map_err(MeasureError::Input)?;
-    let bounds =
-        alpha2_engine::measure_layout(rasterizer, root, time, size, (canvas_width, canvas_height))
-            .map_err(MeasureError::Text)?;
-    let rect = |rect: alpha2_engine::CanvasRect| {
-        serde_json::json!({
-            "left": rect.left,
-            "top": rect.top,
-            "right": rect.right,
-            "bottom": rect.bottom,
-        })
-    };
-    let nodes = bounds
-        .nodes
-        .into_iter()
-        .map(|node| {
-            serde_json::json!({
-                "at": node.at,
-                "border": rect(node.border),
-                "content": rect(node.content),
-                "overflow": node.overflow,
-                "lineCount": node.line_count,
-            })
-        })
-        .collect::<Vec<_>>();
-    Ok(serde_json::json!({ "nodes": nodes }).to_string())
-}
-
 pub(crate) fn font(family: String, bytes: Vec<u8>, face_index: u32) -> TextFont {
     TextFont {
         family,
@@ -249,18 +139,54 @@ pub(crate) fn font(family: String, bytes: Vec<u8>, face_index: u32) -> TextFont 
     }
 }
 
+/// Every face of the font file `bytes`, sharing its bytes, each checked
+/// before any is registered: what `addFontFile` adds, as a native host
+/// registers a file ([`alpha2_layout::fonts_from_files`]).
+pub(crate) fn file_faces(
+    family: &str,
+    bytes: Vec<u8>,
+) -> Result<Vec<TextFont>, alpha2_text::TextRasterError> {
+    let bytes: std::sync::Arc<[u8]> = bytes.into();
+    (0..alpha2_text::face_count(&bytes))
+        .map(|face_index| {
+            alpha2_text::check_font(&bytes, face_index)?;
+            Ok(TextFont {
+                family: family.to_owned(),
+                bytes: std::sync::Arc::clone(&bytes),
+                face_index,
+            })
+        })
+        .collect()
+}
+
 #[cfg(target_arch = "wasm32")]
 mod web {
     use std::sync::Arc;
 
-    use super::{
-        MeasureError, TextRasterResult, TextRasterizer, TextRequestWire, descriptor_json, font,
-        measure_json, measure_layout_json,
-    };
+    use super::{TextRasterResult, TextRequestWire, descriptor_json, file_faces, font};
+    use alpha2_layout::json::{MeasureError, measure_layout_json, measure_text_json};
+    use alpha2_text::TextRasterizer;
     use wasm_bindgen::prelude::*;
     use web_sys::js_sys::Uint8Array;
 
     use crate::web::{invalid_input, typed_error};
+
+    /// How many faces the font file `bytes` holds: a font collection's
+    /// count, else 1. `addFontFile` registers each.
+    #[wasm_bindgen(js_name = fontFaceCount)]
+    #[must_use]
+    pub fn font_face_count(bytes: &[u8]) -> u32 {
+        alpha2_text::face_count(bytes)
+    }
+
+    /// A measurement's refusal as the engine answers it: the text host's as
+    /// [`alpha2_engine::TextError`].
+    fn measure_error(error: MeasureError) -> JsValue {
+        match error {
+            MeasureError::Text(error) => typed_error(&alpha2_engine::TextError::Raster(error)),
+            error => invalid_input(error.to_string()),
+        }
+    }
 
     /// Shapes and rasterizes text from caller-supplied fonts, in wasm.
     #[wasm_bindgen]
@@ -329,6 +255,22 @@ mod web {
             self.inner
                 .add_font(font(family, bytes, face_index))
                 .map_err(|error| typed_error(&error))
+        }
+
+        /// Appends every face of an OpenType font file to the fallback stack,
+        /// in the file's order: each weight of a collection (`.ttc`), all
+        /// checked before any is added.
+        ///
+        /// # Errors
+        /// Rejects malformed font bytes, naming no face added.
+        #[wasm_bindgen(js_name = addFontFile)]
+        pub fn add_font_file(&mut self, family: &str, bytes: Vec<u8>) -> Result<(), JsValue> {
+            for face in file_faces(family, bytes).map_err(|error| typed_error(&error))? {
+                self.inner
+                    .add_font(face)
+                    .map_err(|error| typed_error(&error))?;
+            }
+            Ok(())
         }
 
         /// Shapes, lays out, and rasterizes one request, or returns the cached
@@ -406,6 +348,22 @@ mod web {
                 .map_err(|error| typed_error(&error))
         }
 
+        /// Appends every face of an OpenType font file to the fallback stack,
+        /// in the file's order: each weight of a collection (`.ttc`), all
+        /// checked before any is added.
+        ///
+        /// # Errors
+        /// Rejects malformed font bytes, naming no face added.
+        #[wasm_bindgen(js_name = addFontFile)]
+        pub fn add_font_file(&mut self, family: &str, bytes: Vec<u8>) -> Result<(), JsValue> {
+            for face in file_faces(family, bytes).map_err(|error| typed_error(&error))? {
+                self.inner
+                    .add_font(face)
+                    .map_err(|error| typed_error(&error))?;
+            }
+            Ok(())
+        }
+
         /// Drops every font.
         #[wasm_bindgen(js_name = clearFonts)]
         pub fn clear_fonts(&mut self) {
@@ -414,11 +372,13 @@ mod web {
 
         /// Where the text generator `generator_json` (`{ "type": "text",
         /// "text", "style" }`, as a project holds it) lies on a `width` by
-        /// `height` canvas, as JSON `{ layout, content, ink, lineCount }`:
-        /// each a `{ left, top, right, bottom }` rectangle in fractions of the
-        /// canvas, as the style's position is, on the picture the generator
-        /// draws before its clip's transform; `ink` is `null` when the text
-        /// draws nothing. Measure at the project's canvas size: text laid out
+        /// `height` canvas, as JSON `{ layout, content, ink, lineCount,
+        /// baselines }`: each a `{ left, top, right, bottom }` rectangle in
+        /// fractions of the canvas, as the style's position is, on the picture
+        /// the generator draws before its clip's transform; `ink` is `null`
+        /// when the text draws nothing. `baselines` is `{ first, last }`, the
+        /// first and last lines' alphabetic baselines in fractions of the
+        /// canvas height. Measure at the project's canvas size: text laid out
         /// at another size can break its lines elsewhere.
         ///
         /// # Errors
@@ -430,10 +390,7 @@ mod web {
             width: u32,
             height: u32,
         ) -> Result<String, JsValue> {
-            measure_json(&self.inner, generator_json, width, height).map_err(|error| match error {
-                MeasureError::Input(message) => invalid_input(message),
-                MeasureError::Text(error) => typed_error(&error),
-            })
+            measure_text_json(&self.inner, generator_json, width, height).map_err(measure_error)
         }
 
         /// Where each node of the layout generator `generator_json`
@@ -441,9 +398,11 @@ mod web {
         /// `width` by `height` picture at picture time `time` (ticks), laid
         /// out with these fonts as a frame lays it out, as JSON `{ nodes }`:
         /// each node in preorder as `{ at, border, content, overflow,
-        /// lineCount }`, its boxes `{ left, top, right, bottom }` in fractions
-        /// of the picture, before its clip's transform and node visuals.
-        /// `lineCount` is `null` for a node without text. Measure at the size
+        /// lineCount, baselines }`, its boxes `{ left, top, right, bottom }` in
+        /// fractions of the picture, before its clip's transform and node
+        /// visuals. `lineCount` is `null` for a node without text, and
+        /// `baselines` (`{ first, last }`, in fractions of the picture height)
+        /// for a node without text or with empty text. Measure at the size
         /// the picture is drawn at. The layout's `"<n>px"` lengths are pixels
         /// of the project canvas, `canvasWidth` by `canvasHeight`: the
         /// picture's size when they are omitted.
@@ -471,12 +430,9 @@ mod web {
                     ));
                 }
             };
-            measure_layout_json(&self.inner, generator_json, width, height, time, canvas).map_err(
-                |error| match error {
-                    MeasureError::Input(message) => invalid_input(message),
-                    MeasureError::Text(error) => typed_error(&error),
-                },
-            )
+            let time = crate::geometry::time(time).map_err(invalid_input)?;
+            measure_layout_json(&self.inner, generator_json, width, height, time, canvas)
+                .map_err(measure_error)
         }
     }
 

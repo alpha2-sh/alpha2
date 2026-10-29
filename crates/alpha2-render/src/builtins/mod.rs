@@ -146,9 +146,10 @@ pub fn chroma_key_definition() -> EffectDef {
 
 /// Returns the data-only definition of the built-in Gaussian blur.
 ///
-/// Its standard deviation is half its `radius`, a fraction of the output
-/// height. A render graph draws it as a cascade of separable passes
-/// ([`crate::RenderGraph::add_effect`]); its own body is never drawn.
+/// Its standard deviation is half its `radius`, a fraction of the output's
+/// shorter side, so a blur is as wide on a portrait picture as on its
+/// landscape transpose. A render graph draws it as a cascade of separable
+/// passes ([`crate::RenderGraph::add_effect`]); its own body is never drawn.
 #[must_use]
 pub fn gaussian_blur_definition() -> EffectDef {
     EffectDef {

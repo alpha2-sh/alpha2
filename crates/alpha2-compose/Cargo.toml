@@ -19,6 +19,7 @@ include = [
 ]
 
 [dependencies]
+alpha2-layout.workspace = true
 alpha2-media.workspace = true
 alpha2-model.workspace = true
 alpha2-text.workspace = true
@@ -28,6 +29,10 @@ serde.workspace = true
 serde_json.workspace = true
 # Names where in a spec a value that does not parse lies (`spec.body.children[2]`).
 serde_path_to_error = "0.1.20"
+
+[dev-dependencies]
+# The renderer's blur rule, to check a compiled blur's width in pixels.
+alpha2-render.workspace = true
 
 [lints]
 workspace = true

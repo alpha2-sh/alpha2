@@ -155,7 +155,10 @@ export interface RenderWorkerScope {
 export interface TextFont {
   readonly family: string;
   readonly bytes: Uint8Array;
-  /** Face in a font collection (default 0). */
+  /**
+   * One face of a font collection; without it every face of the file is registered, as the export
+   * host registers a font file.
+   */
   readonly faceIndex?: number;
 }
 
@@ -768,7 +771,8 @@ function registerFonts(
   fonts: readonly TextFont[],
 ): void {
   for (const font of fonts) {
-    wasm.addFont(font.family, font.bytes, font.faceIndex ?? 0);
+    if (font.faceIndex === undefined) wasm.addFontFile(font.family, font.bytes);
+    else wasm.addFont(font.family, font.bytes, font.faceIndex);
   }
 }
 

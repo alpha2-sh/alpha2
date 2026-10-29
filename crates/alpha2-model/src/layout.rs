@@ -7,9 +7,11 @@
 //! for sizes and insets, `"<n>%"` of the parent's content box, as in CSS
 //! (see [`crate::layout_values`]). Boxes are `border-box`: a width includes
 //! padding and border. Text style (`font_family`, `font_size`, `color`,
-//! `line_height`, `text_align`, `outline`) may be set on any box and is
-//! inherited by the boxes in it, as CSS inherits it.
+//! `font_weight`, `line_height`, `letter_spacing`, `text_align`, `outline`)
+//! may be set on any box and is inherited by the boxes in it, as CSS
+//! inherits it.
 
+use crate::animation::visit_keyed;
 use crate::checks::{
     Checked, ValueIssue, ValueProblem, animated, any, non_negative, scalar, unit, validate_paint,
     vec2,
@@ -19,8 +21,9 @@ use crate::layout_values::{
     TrackComponent, TrackList,
 };
 use crate::{
-    Animated, Interpolation, LINE_HEIGHT_RANGE, MAX_FONT_FAMILY_BYTES, MAX_TEXT_CONTENT_BYTES,
-    MAX_TEXT_OUTLINE_WIDTH, Paint, Rgba, ShapeIssue, ShapeItem, TextAlign, TextOutline, Vec2,
+    Animated, FONT_WEIGHT_RANGE, Interpolation, LETTER_SPACING_RANGE, LINE_HEIGHT_RANGE,
+    MAX_FONT_FAMILY_BYTES, MAX_TEXT_CONTENT_BYTES, MAX_TEXT_OUTLINE_WIDTH, Paint, Rgba, ShapeIssue,
+    ShapeItem, TextAlign, TextOutline, Vec2,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -48,6 +51,8 @@ pub const LAYOUT_TEXT_DEFAULTS: LayoutTextStyle = LayoutTextStyle {
     font_size: 0.05,
     color: Rgba::new(1.0, 1.0, 1.0, 1.0),
     line_height: 1.2,
+    letter_spacing: 0.0,
+    font_weight: 400,
     text_align: TextAlign::Start,
     outline: None,
 };
@@ -64,6 +69,10 @@ pub struct LayoutTextStyle {
     pub color: Rgba,
     /// Baseline-to-baseline distance in font sizes.
     pub line_height: f32,
+    /// Space after each character, a fraction of the font size.
+    pub letter_spacing: f32,
+    /// The weight its faces are matched by.
+    pub font_weight: u16,
     /// How lines align within the content width.
     pub text_align: TextAlign,
     /// A band around the glyphs; its width a fraction of the font size.
@@ -241,10 +250,23 @@ pub struct LayoutNode {
     /// Text color. Inherited; the root's is white.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<Rgba>,
-    /// Baseline-to-baseline distance in font sizes, in `[0.5, 3]`.
+    /// Baseline-to-baseline distance in font sizes, in `[0.5, 3]`. Each
+    /// line's em box, 0.8 of a font size above its baseline and 0.2 below,
+    /// is centred in its line when the line is taller than an em.
     /// Inherited; the root's is 1.2.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_height: Option<f32>,
+    /// Space after each character, as a fraction of the font size, in
+    /// `[-0.5, 1]`, as CSS `letter-spacing` adds it: none after a line's
+    /// last character, and none after a character of a cursive script.
+    /// Not animated. Inherited; the root's is 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub letter_spacing: Option<f32>,
+    /// The weight, in `[1, 1000]`, the family's faces are matched by, as
+    /// CSS Fonts 4 matches `font-weight`; a variable face draws at it. Not
+    /// animated. Inherited; the root's is 400.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_weight: Option<u16>,
     /// How lines align within the content width. Inherited; the root's is
     /// `start`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -960,6 +982,18 @@ fn validate_style(node: &LayoutNode, at: &str, shorter_side: Option<f32>) -> Lay
     {
         return out_of_range("line_height");
     }
+    if node
+        .letter_spacing
+        .is_some_and(|spacing| !LETTER_SPACING_RANGE.contains(&spacing))
+    {
+        return out_of_range("letter_spacing");
+    }
+    if node
+        .font_weight
+        .is_some_and(|weight| !FONT_WEIGHT_RANGE.contains(&weight))
+    {
+        return out_of_range("font_weight");
+    }
     let valid_outline = |outline: TextOutline| {
         outline.color.is_valid() && outline.width > 0.0 && outline.width <= MAX_TEXT_OUTLINE_WIDTH
     };
@@ -1178,6 +1212,69 @@ impl LayoutNode {
         go(self, "root", &mut visit);
     }
 
+    /// Calls `visit` with each animated value of the tree that has keyframes,
+    /// by its path (`root.children[0].opacity`,
+    /// `root.shape.items[0].transform.scale`), and their times, in document
+    /// order.
+    pub(crate) fn for_each_keyed(
+        &self,
+        at: &str,
+        visit: &mut impl FnMut(&str, &[alpha2_time::MediaTime]),
+    ) {
+        let field = |name: &str| format!("{at}.{name}");
+        if let Some(text) = &self.text {
+            visit_keyed(&field("text"), text, visit);
+        }
+        if let Some(shape) = &self.shape {
+            crate::shapes::for_each_keyed_item(&shape.items, &field("shape.items"), visit);
+        }
+        for (name, value) in [
+            ("gap", &self.gap),
+            ("row_gap", &self.row_gap),
+            ("column_gap", &self.column_gap),
+            ("border_radius", &self.border_radius),
+            ("font_size", &self.font_size),
+        ] {
+            visit_option(&field(name), value.as_ref(), visit);
+        }
+        visit_option(&field("padding"), self.padding.as_ref(), visit);
+        visit_option(&field("background"), self.background.as_ref(), visit);
+        if let Some(border) = &self.border {
+            visit_keyed(&field("border.width"), &border.width, visit);
+            visit_keyed(&field("border.paint"), &border.paint, visit);
+        }
+        for (name, value) in [
+            ("width", &self.width),
+            ("height", &self.height),
+            ("min_width", &self.min_width),
+            ("min_height", &self.min_height),
+            ("max_width", &self.max_width),
+            ("max_height", &self.max_height),
+            ("flex_basis", &self.flex_basis),
+        ] {
+            visit_option(&field(name), value.as_ref(), visit);
+        }
+        visit_option(&field("margin"), self.margin.as_ref(), visit);
+        visit_option(&field("flex_grow"), self.flex_grow.as_ref(), visit);
+        visit_option(&field("flex_shrink"), self.flex_shrink.as_ref(), visit);
+        if let Some(inset) = &self.inset {
+            for (side, value) in inset.sides() {
+                visit_option(&field(&format!("inset.{side}")), value, visit);
+            }
+        }
+        visit_option(&field("opacity"), self.opacity.as_ref(), visit);
+        visit_option(&field("translate"), self.translate.as_ref(), visit);
+        visit_option(&field("scale"), self.scale.as_ref(), visit);
+        visit_option(
+            &field("rotation_degrees"),
+            self.rotation_degrees.as_ref(),
+            visit,
+        );
+        for (index, child) in self.children.iter().enumerate() {
+            child.for_each_keyed(&format!("{at}.children[{index}]"), visit);
+        }
+    }
+
     /// The tree with every pixel length turned into a fraction of a picture
     /// `shorter_side` pixels on its shorter side: what a plan evaluates, so
     /// that pixels and fractions interpolate as one kind.
@@ -1254,6 +1351,16 @@ impl LayoutNode {
         for child in &mut self.children {
             child.convert_px(shorter_side);
         }
+    }
+}
+
+fn visit_option<T>(
+    at: &str,
+    animation: Option<&Animated<T>>,
+    visit: &mut impl FnMut(&str, &[alpha2_time::MediaTime]),
+) {
+    if let Some(animation) = animation {
+        visit_keyed(at, animation, visit);
     }
 }
 

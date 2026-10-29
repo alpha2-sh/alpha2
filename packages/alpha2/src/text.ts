@@ -104,6 +104,7 @@ const TEXT_ALIGNS = new Set(["start", "end", "left", "right", "center"]);
 /** The `WasmTextRasterizer` class that `alpha2/wasm` exports. */
 export interface WasmTextRasterizerHandle {
   addFont(family: string, bytes: Uint8Array, faceIndex: number): void;
+  addFontFile(family: string, bytes: Uint8Array): void;
   rasterize(
     requestJson: string,
     contentVersion: bigint,
@@ -133,6 +134,16 @@ export interface WasmTextRequest {
   readonly maxWidth?: number;
   /** Baseline-to-baseline distance in font-size multiples (default 1.2). */
   readonly lineHeight?: number;
+  /**
+   * Space after each character in pixels (default 0), as CSS `letter-spacing` adds it: none after
+   * a line's last character or a character of a cursive script. Within -0.5 to 1 font sizes.
+   */
+  readonly letterSpacing?: number;
+  /**
+   * The weight a family's faces are matched by, 1 to 1000 (default 400), as CSS matches
+   * `font-weight`; a variable face draws at it, held to its `wght` axis. No face is emboldened.
+   */
+  readonly fontWeight?: number;
   readonly align?: "start" | "center" | "end";
   /** Straight (not premultiplied), sRGB-encoded RGBA, each in `0..=255`. */
   readonly color: readonly [number, number, number, number];
@@ -175,6 +186,16 @@ export class WasmTextRasterizer {
   ): void {
     const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
     this.#handle.addFont(family, view, faceIndex);
+  }
+
+  /**
+   * Appends every face of an OpenType font file to the fallback stack, in the file's order: each
+   * weight of a collection (`.ttc`), so a style's `font_weight` can pick it. The export host
+   * registers a font file the same way. Every cached result is dropped.
+   */
+  addFontFile(family: string, bytes: ArrayBuffer | Uint8Array): void {
+    const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    this.#handle.addFontFile(family, view);
   }
 
   /**
@@ -332,9 +353,12 @@ export class OffscreenTextRasterizer {
       1,
       request.maxWidth && request.maxWidth > 0 ? request.maxWidth : textWidth,
     );
-    // The box holds every line's nominal em at fixed baselines; ink past it goes in an equal margin
-    // on both sides so the box stays centered.
+    // The box holds every line's nominal em at fixed baselines, each em centred in its line when
+    // lines are more than an em apart; ink past it goes in an equal margin on both sides so the box
+    // stays centered.
+    const halfLeading = Math.max(0, lineAdvance - fontSize) / 2;
     const nominalAscent = fontSize * 0.8;
+    const firstBaseline = halfLeading + nominalAscent;
     const layoutHeight = Math.max(
       1,
       (lines.length - 1) * lineAdvance + Math.max(lineAdvance, fontSize),
@@ -352,7 +376,7 @@ export class OffscreenTextRasterizer {
     let ascent = nominalAscent;
     let descent = fontSize * 0.2;
     measured.forEach((metrics, index) => {
-      const baseline = nominalAscent + index * lineAdvance;
+      const baseline = firstBaseline + index * lineAdvance;
       overflowX = Math.max(
         overflowX,
         metrics.actualBoundingBoxLeft - x,
@@ -382,7 +406,7 @@ export class OffscreenTextRasterizer {
       context.fillText(
         line,
         marginX + x,
-        marginY + nominalAscent + index * lineAdvance,
+        marginY + firstBaseline + index * lineAdvance,
       ),
     );
     const image = context.getImageData(0, 0, width, height);
@@ -399,7 +423,7 @@ export class OffscreenTextRasterizer {
       layoutY: marginY,
       layoutWidth,
       layoutHeight,
-      firstBaseline: nominalAscent,
+      firstBaseline,
       ascent,
       descent,
       lineCount: lines.length,

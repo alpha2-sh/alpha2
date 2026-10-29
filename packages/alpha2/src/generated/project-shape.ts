@@ -313,7 +313,7 @@ export const PROJECT_SHAPE: unknown = {
           additionalProperties: false,
           properties: {
             attack_ms: { format: "float", type: "number" },
-            lookahead_ms: { format: "float", type: "number" },
+            lookahead_ms: { default: 0, format: "float", type: "number" },
             ratio: { format: "float", type: "number" },
             release_ms: { format: "float", type: "number" },
             threshold_db: { format: "float", type: "number" },
@@ -344,13 +344,23 @@ export const PROJECT_SHAPE: unknown = {
     AudioProperties: {
       additionalProperties: false,
       properties: {
-        effects: { items: { $ref: "#/$defs/AudioEffect" }, type: "array" },
-        fade_in: { $ref: "#/$defs/MediaTime" },
-        fade_out: { $ref: "#/$defs/MediaTime" },
-        fade_shape: { $ref: "#/$defs/FadeShape" },
-        gain: { $ref: "#/$defs/Animated_float" },
-        muted: { type: "boolean" },
-        pan: { $ref: "#/$defs/Animated_float" },
+        effects: {
+          default: [],
+          items: { $ref: "#/$defs/AudioEffect" },
+          type: "array",
+        },
+        fade_in: { $ref: "#/$defs/MediaTime", default: 0 },
+        fade_out: { $ref: "#/$defs/MediaTime", default: 0 },
+        fade_shape: { $ref: "#/$defs/FadeShape", default: "linear" },
+        gain: {
+          $ref: "#/$defs/Animated_float",
+          default: { mode: "constant", value: 1 },
+        },
+        muted: { default: false, type: "boolean" },
+        pan: {
+          $ref: "#/$defs/Animated_float",
+          default: { mode: "constant", value: 0 },
+        },
       },
       type: "object",
     },
@@ -399,7 +409,22 @@ export const PROJECT_SHAPE: unknown = {
       additionalProperties: false,
       properties: {
         cues: { items: { $ref: "#/$defs/CaptionCue" }, type: "array" },
-        style: { $ref: "#/$defs/TextStyle" },
+        style: {
+          $ref: "#/$defs/TextStyle",
+          default: {
+            align: "center",
+            anchor: { x: 0.5, y: 1 },
+            background: null,
+            color: { alpha: 1, blue: 1, green: 1, red: 1 },
+            font_size: 0.05,
+            font_weight: 400,
+            letter_spacing: 0,
+            line_height: 1.2,
+            max_width: 0.9,
+            outline: null,
+            position: { x: 0.5, y: 0.92 },
+          },
+        },
       },
       required: ["cues"],
       type: "object",
@@ -407,20 +432,48 @@ export const PROJECT_SHAPE: unknown = {
     Clip: {
       additionalProperties: false,
       properties: {
-        audio: { $ref: "#/$defs/AudioProperties" },
-        blend_mode: { $ref: "#/$defs/ClipBlendMode" },
+        audio: {
+          $ref: "#/$defs/AudioProperties",
+          default: {
+            effects: [],
+            fade_in: 0,
+            fade_out: 0,
+            fade_shape: "linear",
+            gain: { mode: "constant", value: 1 },
+            muted: false,
+            pan: { mode: "constant", value: 0 },
+          },
+        },
+        blend_mode: { $ref: "#/$defs/ClipBlendMode", default: "normal" },
         cache: { $ref: "#/$defs/CacheIntent" },
         composition: {
           anyOf: [{ $ref: "#/$defs/ClipComposition" }, { type: "null" }],
+          default: null,
         },
         id: { $ref: "#/$defs/ClipId" },
-        masks: { items: { $ref: "#/$defs/ShapeMask" }, type: "array" },
-        matte: { anyOf: [{ $ref: "#/$defs/Matte" }, { type: "null" }] },
+        masks: {
+          default: [],
+          items: { $ref: "#/$defs/ShapeMask" },
+          type: "array",
+        },
+        matte: {
+          anyOf: [{ $ref: "#/$defs/Matte" }, { type: "null" }],
+          default: null,
+        },
         source_id: { $ref: "#/$defs/SourceId" },
         source_range: { $ref: "#/$defs/TimeRange" },
-        time_map: { $ref: "#/$defs/TimeMap" },
+        time_map: { $ref: "#/$defs/TimeMap", default: { type: "forward" } },
         timeline_range: { $ref: "#/$defs/TimeRange" },
-        visual: { $ref: "#/$defs/VisualProperties" },
+        visual: {
+          $ref: "#/$defs/VisualProperties",
+          default: {
+            anchor: { x: 0.5, y: 0.5 },
+            opacity: { mode: "constant", value: 1 },
+            position: { mode: "constant", value: { x: 0.5, y: 0.5 } },
+            rotation_degrees: { mode: "constant", value: 0 },
+            scale: { mode: "constant", value: { x: 1, y: 1 } },
+          },
+        },
       },
       required: ["id", "source_id", "timeline_range", "source_range"],
       type: "object",
@@ -449,8 +502,8 @@ export const PROJECT_SHAPE: unknown = {
       additionalProperties: false,
       properties: {
         id: { $ref: "#/$defs/CompositionId" },
-        offset: { $ref: "#/$defs/MediaTime" },
-        scale: { $ref: "#/$defs/TimeScale" },
+        offset: { $ref: "#/$defs/MediaTime", default: 0 },
+        scale: { $ref: "#/$defs/TimeScale", default: { den: 1, num: 1 } },
       },
       required: ["id"],
       type: "object",
@@ -461,10 +514,12 @@ export const PROJECT_SHAPE: unknown = {
         id: { type: "string" },
         params: {
           additionalProperties: { $ref: "#/$defs/Animated_EffectValue" },
+          default: {},
           type: "object",
         },
         resources: {
           additionalProperties: { $ref: "#/$defs/EffectResourceId" },
+          default: {},
           type: "object",
         },
         version: {
@@ -513,8 +568,9 @@ export const PROJECT_SHAPE: unknown = {
     ColorPipeline: {
       additionalProperties: false,
       properties: {
-        hdr: { $ref: "#/$defs/HdrSources" },
+        hdr: { $ref: "#/$defs/HdrSources", default: "tone_map" },
         hdr_peak_nits: {
+          default: 1000,
           format: "uint32",
           maximum: 4294967295,
           minimum: 0,
@@ -545,8 +601,15 @@ export const PROJECT_SHAPE: unknown = {
         },
         id: { $ref: "#/$defs/CompositionId" },
         inputs: { items: { type: "string" }, type: "array" },
-        nodes: { items: { $ref: "#/$defs/CompositionNode" }, type: "array" },
-        output: { anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }] },
+        nodes: {
+          default: [],
+          items: { $ref: "#/$defs/CompositionNode" },
+          type: "array",
+        },
+        output: {
+          anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }],
+          default: null,
+        },
       },
       required: ["id"],
       type: "object",
@@ -565,7 +628,7 @@ export const PROJECT_SHAPE: unknown = {
     CompositionNode: {
       additionalProperties: false,
       properties: {
-        bypass: { type: "boolean" },
+        bypass: { default: false, type: "boolean" },
         id: { $ref: "#/$defs/NodeId" },
         op: { $ref: "#/$defs/NodeOp" },
       },
@@ -575,7 +638,10 @@ export const PROJECT_SHAPE: unknown = {
     Dash: {
       additionalProperties: false,
       properties: {
-        offset: { $ref: "#/$defs/Animated_float" },
+        offset: {
+          $ref: "#/$defs/Animated_float",
+          default: { mode: "constant", value: 0 },
+        },
         pattern: { items: { $ref: "#/$defs/Animated_float" }, type: "array" },
       },
       required: ["pattern"],
@@ -727,7 +793,7 @@ export const PROJECT_SHAPE: unknown = {
       additionalProperties: false,
       properties: {
         frequency_hz: { format: "float", type: "number" },
-        gain_db: { format: "float", type: "number" },
+        gain_db: { default: 0, format: "float", type: "number" },
         kind: { $ref: "#/$defs/EqBandKind" },
         q: { format: "float", type: "number" },
       },
@@ -809,7 +875,22 @@ export const PROJECT_SHAPE: unknown = {
         {
           additionalProperties: false,
           properties: {
-            style: { $ref: "#/$defs/TextStyle" },
+            style: {
+              $ref: "#/$defs/TextStyle",
+              default: {
+                align: "center",
+                anchor: { x: 0.5, y: 1 },
+                background: null,
+                color: { alpha: 1, blue: 1, green: 1, red: 1 },
+                font_size: 0.05,
+                font_weight: 400,
+                letter_spacing: 0,
+                line_height: 1.2,
+                max_width: 0.9,
+                outline: null,
+                position: { x: 0.5, y: 0.92 },
+              },
+            },
             text: { type: "string" },
             type: { const: "text", type: "string" },
           },
@@ -1090,6 +1171,12 @@ export const PROJECT_SHAPE: unknown = {
         font_size: {
           anyOf: [{ $ref: "#/$defs/Animated_LayoutSize" }, { type: "null" }],
         },
+        font_weight: {
+          format: "uint16",
+          maximum: 65535,
+          minimum: 0,
+          type: ["integer", "null"],
+        },
         gap: {
           anyOf: [{ $ref: "#/$defs/Animated_LayoutSize" }, { type: "null" }],
         },
@@ -1127,6 +1214,7 @@ export const PROJECT_SHAPE: unknown = {
         justify_self: {
           anyOf: [{ $ref: "#/$defs/AlignItems" }, { type: "null" }],
         },
+        letter_spacing: { format: "float", type: ["number", "null"] },
         line_height: { format: "float", type: ["number", "null"] },
         margin: {
           anyOf: [{ $ref: "#/$defs/Animated_Insets" }, { type: "null" }],
@@ -1255,9 +1343,19 @@ export const PROJECT_SHAPE: unknown = {
     MasterAudio: {
       additionalProperties: false,
       properties: {
-        effects: { items: { $ref: "#/$defs/AudioEffect" }, type: "array" },
-        gain: { $ref: "#/$defs/Animated_float" },
-        limiter: { anyOf: [{ $ref: "#/$defs/Limiter" }, { type: "null" }] },
+        effects: {
+          default: [],
+          items: { $ref: "#/$defs/AudioEffect" },
+          type: "array",
+        },
+        gain: {
+          $ref: "#/$defs/Animated_float",
+          default: { mode: "constant", value: 1 },
+        },
+        limiter: {
+          anyOf: [{ $ref: "#/$defs/Limiter" }, { type: "null" }],
+          default: { release_ms: 50, threshold: 1 },
+        },
       },
       type: "object",
     },
@@ -1310,6 +1408,7 @@ export const PROJECT_SHAPE: unknown = {
       properties: {
         color_metadata: {
           anyOf: [{ $ref: "#/$defs/ColorMetadata" }, { type: "null" }],
+          default: null,
         },
         composition: {
           anyOf: [{ $ref: "#/$defs/CompositionId" }, { type: "null" }],
@@ -1317,11 +1416,14 @@ export const PROJECT_SHAPE: unknown = {
         fingerprint: {
           anyOf: [{ $ref: "#/$defs/MediaFingerprint" }, { type: "null" }],
         },
-        generator: { anyOf: [{ $ref: "#/$defs/Generator" }, { type: "null" }] },
-        has_audio: { type: "boolean" },
+        generator: {
+          anyOf: [{ $ref: "#/$defs/Generator" }, { type: "null" }],
+          default: null,
+        },
+        has_audio: { default: false, type: "boolean" },
         id: { $ref: "#/$defs/SourceId" },
         kind: { $ref: "#/$defs/MediaKind" },
-        locator: { type: "string" },
+        locator: { default: "", type: "string" },
         provider: {
           anyOf: [{ $ref: "#/$defs/ProviderSource" }, { type: "null" }],
         },
@@ -1338,9 +1440,15 @@ export const PROJECT_SHAPE: unknown = {
     MergeLayer: {
       additionalProperties: false,
       properties: {
-        blend_mode: { $ref: "#/$defs/ClipBlendMode" },
-        input: { anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }] },
-        opacity: { $ref: "#/$defs/Animated_float" },
+        blend_mode: { $ref: "#/$defs/ClipBlendMode", default: "normal" },
+        input: {
+          anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }],
+          default: null,
+        },
+        opacity: {
+          $ref: "#/$defs/Animated_float",
+          default: { mode: "constant", value: 1 },
+        },
       },
       type: "object",
     },
@@ -1364,7 +1472,7 @@ export const PROJECT_SHAPE: unknown = {
           additionalProperties: false,
           properties: {
             source_id: { $ref: "#/$defs/SourceId" },
-            start: { $ref: "#/$defs/MediaTime" },
+            start: { $ref: "#/$defs/MediaTime", default: 0 },
             type: { const: "media", type: "string" },
           },
           required: ["type", "source_id"],
@@ -1383,7 +1491,10 @@ export const PROJECT_SHAPE: unknown = {
           additionalProperties: false,
           properties: {
             effect: { $ref: "#/$defs/ClipEffect" },
-            input: { anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }] },
+            input: {
+              anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }],
+              default: null,
+            },
             inputs: {
               additionalProperties: {
                 anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }],
@@ -1399,9 +1510,15 @@ export const PROJECT_SHAPE: unknown = {
           additionalProperties: false,
           properties: {
             effect: { $ref: "#/$defs/ClipEffect" },
-            from: { anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }] },
+            from: {
+              anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }],
+              default: null,
+            },
             progress: { $ref: "#/$defs/Animated_float" },
-            to: { anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }] },
+            to: {
+              anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }],
+              default: null,
+            },
             type: { const: "transition", type: "string" },
           },
           required: ["type", "effect", "progress"],
@@ -1410,8 +1527,20 @@ export const PROJECT_SHAPE: unknown = {
         {
           additionalProperties: false,
           properties: {
-            input: { anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }] },
-            transform: { $ref: "#/$defs/VisualProperties" },
+            input: {
+              anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }],
+              default: null,
+            },
+            transform: {
+              $ref: "#/$defs/VisualProperties",
+              default: {
+                anchor: { x: 0.5, y: 0.5 },
+                opacity: { mode: "constant", value: 1 },
+                position: { mode: "constant", value: { x: 0.5, y: 0.5 } },
+                rotation_degrees: { mode: "constant", value: 0 },
+                scale: { mode: "constant", value: { x: 1, y: 1 } },
+              },
+            },
             type: { const: "transform", type: "string" },
           },
           required: ["type"],
@@ -1420,7 +1549,11 @@ export const PROJECT_SHAPE: unknown = {
         {
           additionalProperties: false,
           properties: {
-            layers: { items: { $ref: "#/$defs/MergeLayer" }, type: "array" },
+            layers: {
+              default: [],
+              items: { $ref: "#/$defs/MergeLayer" },
+              type: "array",
+            },
             type: { const: "merge", type: "string" },
           },
           required: ["type"],
@@ -1429,8 +1562,14 @@ export const PROJECT_SHAPE: unknown = {
         {
           additionalProperties: false,
           properties: {
-            input: { anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }] },
-            matte: { anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }] },
+            input: {
+              anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }],
+              default: null,
+            },
+            matte: {
+              anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }],
+              default: null,
+            },
             mode: { $ref: "#/$defs/MatteMode" },
             type: { const: "matte", type: "string" },
           },
@@ -1440,7 +1579,10 @@ export const PROJECT_SHAPE: unknown = {
         {
           additionalProperties: false,
           properties: {
-            input: { anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }] },
+            input: {
+              anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }],
+              default: null,
+            },
             masks: { items: { $ref: "#/$defs/ShapeMask" }, type: "array" },
             type: { const: "shape_mask", type: "string" },
           },
@@ -1456,6 +1598,7 @@ export const PROJECT_SHAPE: unknown = {
               type: "object",
             },
             inputs: {
+              default: [],
               items: { anyOf: [{ $ref: "#/$defs/NodeId" }, { type: "null" }] },
               type: "array",
             },
@@ -1501,7 +1644,7 @@ export const PROJECT_SHAPE: unknown = {
           additionalProperties: false,
           properties: {
             end: { $ref: "#/$defs/Vec2" },
-            spread: { $ref: "#/$defs/Spread" },
+            spread: { $ref: "#/$defs/Spread", default: "pad" },
             start: { $ref: "#/$defs/Vec2" },
             stops: { items: { $ref: "#/$defs/GradientStop" }, type: "array" },
             type: { const: "linear_gradient", type: "string" },
@@ -1514,7 +1657,7 @@ export const PROJECT_SHAPE: unknown = {
           properties: {
             center: { $ref: "#/$defs/Vec2" },
             radius: { format: "float", type: "number" },
-            spread: { $ref: "#/$defs/Spread" },
+            spread: { $ref: "#/$defs/Spread", default: "pad" },
             stops: { items: { $ref: "#/$defs/GradientStop" }, type: "array" },
             type: { const: "radial_gradient", type: "string" },
           },
@@ -1524,7 +1667,7 @@ export const PROJECT_SHAPE: unknown = {
         {
           additionalProperties: false,
           properties: {
-            angle_degrees: { format: "float", type: "number" },
+            angle_degrees: { default: 0, format: "float", type: "number" },
             center: { $ref: "#/$defs/Vec2" },
             stops: { items: { $ref: "#/$defs/GradientStop" }, type: "array" },
             type: { const: "conic_gradient", type: "string" },
@@ -1546,8 +1689,8 @@ export const PROJECT_SHAPE: unknown = {
     PathVertex: {
       additionalProperties: false,
       properties: {
-        in_tangent: { $ref: "#/$defs/Vec2" },
-        out_tangent: { $ref: "#/$defs/Vec2" },
+        in_tangent: { $ref: "#/$defs/Vec2", default: { x: 0, y: 0 } },
+        out_tangent: { $ref: "#/$defs/Vec2", default: { x: 0, y: 0 } },
         point: { $ref: "#/$defs/Vec2" },
       },
       required: ["point"],
@@ -1581,9 +1724,15 @@ export const PROJECT_SHAPE: unknown = {
     ProjectSettings: {
       additionalProperties: false,
       properties: {
-        background: { $ref: "#/$defs/Rgb" },
-        blend_space: { $ref: "#/$defs/BlendSpace" },
-        color: { $ref: "#/$defs/ColorPipeline" },
+        background: {
+          $ref: "#/$defs/Rgb",
+          default: { blue: 0, green: 0, red: 0 },
+        },
+        blend_space: { $ref: "#/$defs/BlendSpace", default: "linear_light" },
+        color: {
+          $ref: "#/$defs/ColorPipeline",
+          default: { hdr: "tone_map", hdr_peak_nits: 1000 },
+        },
         frame_rate: { $ref: "#/$defs/FrameRate" },
         height: {
           format: "uint32",
@@ -1636,11 +1785,16 @@ export const PROJECT_SHAPE: unknown = {
             format: { const: "image_sequence", type: "string" },
             frame_rate: { $ref: "#/$defs/FrameRate" },
             frames: { items: { type: ["string", "null"] }, type: "array" },
-            missing: { $ref: "#/$defs/MissingFrames" },
+            missing: { $ref: "#/$defs/MissingFrames", default: "reject" },
             primaries: {
               anyOf: [{ $ref: "#/$defs/LinearPrimaries" }, { type: "null" }],
             },
-            start_number: { format: "uint64", minimum: 0, type: "integer" },
+            start_number: {
+              default: 0,
+              format: "uint64",
+              minimum: 0,
+              type: "integer",
+            },
           },
           required: ["format", "frames", "frame_rate"],
           type: "object",
@@ -1694,8 +1848,14 @@ export const PROJECT_SHAPE: unknown = {
           additionalProperties: false,
           properties: {
             center: { $ref: "#/$defs/AnimatedPoint" },
-            corner_radius: { $ref: "#/$defs/Animated_float" },
-            rotation_degrees: { $ref: "#/$defs/Animated_float" },
+            corner_radius: {
+              $ref: "#/$defs/Animated_float",
+              default: { mode: "constant", value: 0 },
+            },
+            rotation_degrees: {
+              $ref: "#/$defs/Animated_float",
+              default: { mode: "constant", value: 0 },
+            },
             size: { $ref: "#/$defs/Animated_Vec2" },
             type: { const: "rectangle", type: "string" },
           },
@@ -1706,7 +1866,10 @@ export const PROJECT_SHAPE: unknown = {
           additionalProperties: false,
           properties: {
             center: { $ref: "#/$defs/AnimatedPoint" },
-            rotation_degrees: { $ref: "#/$defs/Animated_float" },
+            rotation_degrees: {
+              $ref: "#/$defs/Animated_float",
+              default: { mode: "constant", value: 0 },
+            },
             size: { $ref: "#/$defs/Animated_Vec2" },
             type: { const: "ellipse", type: "string" },
           },
@@ -1717,13 +1880,25 @@ export const PROJECT_SHAPE: unknown = {
           additionalProperties: false,
           properties: {
             center: { $ref: "#/$defs/AnimatedPoint" },
-            inner_radius: { $ref: "#/$defs/Animated_float" },
-            inner_roundness: { $ref: "#/$defs/Animated_float" },
+            inner_radius: {
+              $ref: "#/$defs/Animated_float",
+              default: { mode: "constant", value: 0 },
+            },
+            inner_roundness: {
+              $ref: "#/$defs/Animated_float",
+              default: { mode: "constant", value: 0 },
+            },
             kind: { $ref: "#/$defs/PolystarKind" },
             outer_radius: { $ref: "#/$defs/Animated_float" },
-            outer_roundness: { $ref: "#/$defs/Animated_float" },
+            outer_roundness: {
+              $ref: "#/$defs/Animated_float",
+              default: { mode: "constant", value: 0 },
+            },
             points: { $ref: "#/$defs/Animated_float" },
-            rotation_degrees: { $ref: "#/$defs/Animated_float" },
+            rotation_degrees: {
+              $ref: "#/$defs/Animated_float",
+              default: { mode: "constant", value: 0 },
+            },
             type: { const: "polystar", type: "string" },
           },
           required: ["type", "kind", "center", "points", "outer_radius"],
@@ -1746,7 +1921,16 @@ export const PROJECT_SHAPE: unknown = {
           additionalProperties: false,
           properties: {
             items: { items: { $ref: "#/$defs/ShapeItem" }, type: "array" },
-            transform: { $ref: "#/$defs/ShapeTransform" },
+            transform: {
+              $ref: "#/$defs/ShapeTransform",
+              default: {
+                anchor: { mode: "constant", value: { x: 0, y: 0 } },
+                opacity: { mode: "constant", value: 1 },
+                position: { mode: "constant", value: { x: 0, y: 0 } },
+                rotation_degrees: { mode: "constant", value: 0 },
+                scale: { mode: "constant", value: { x: 1, y: 1 } },
+              },
+            },
             type: { const: "group", type: "string" },
           },
           required: ["type", "items"],
@@ -1756,8 +1940,14 @@ export const PROJECT_SHAPE: unknown = {
           additionalProperties: false,
           properties: {
             center: { $ref: "#/$defs/AnimatedPoint" },
-            corner_radius: { $ref: "#/$defs/Animated_float" },
-            rotation_degrees: { $ref: "#/$defs/Animated_float" },
+            corner_radius: {
+              $ref: "#/$defs/Animated_float",
+              default: { mode: "constant", value: 0 },
+            },
+            rotation_degrees: {
+              $ref: "#/$defs/Animated_float",
+              default: { mode: "constant", value: 0 },
+            },
             size: { $ref: "#/$defs/Animated_Vec2" },
             type: { const: "rectangle", type: "string" },
           },
@@ -1768,7 +1958,10 @@ export const PROJECT_SHAPE: unknown = {
           additionalProperties: false,
           properties: {
             center: { $ref: "#/$defs/AnimatedPoint" },
-            rotation_degrees: { $ref: "#/$defs/Animated_float" },
+            rotation_degrees: {
+              $ref: "#/$defs/Animated_float",
+              default: { mode: "constant", value: 0 },
+            },
             size: { $ref: "#/$defs/Animated_Vec2" },
             type: { const: "ellipse", type: "string" },
           },
@@ -1779,13 +1972,25 @@ export const PROJECT_SHAPE: unknown = {
           additionalProperties: false,
           properties: {
             center: { $ref: "#/$defs/AnimatedPoint" },
-            inner_radius: { $ref: "#/$defs/Animated_float" },
-            inner_roundness: { $ref: "#/$defs/Animated_float" },
+            inner_radius: {
+              $ref: "#/$defs/Animated_float",
+              default: { mode: "constant", value: 0 },
+            },
+            inner_roundness: {
+              $ref: "#/$defs/Animated_float",
+              default: { mode: "constant", value: 0 },
+            },
             kind: { $ref: "#/$defs/PolystarKind" },
             outer_radius: { $ref: "#/$defs/Animated_float" },
-            outer_roundness: { $ref: "#/$defs/Animated_float" },
+            outer_roundness: {
+              $ref: "#/$defs/Animated_float",
+              default: { mode: "constant", value: 0 },
+            },
             points: { $ref: "#/$defs/Animated_float" },
-            rotation_degrees: { $ref: "#/$defs/Animated_float" },
+            rotation_degrees: {
+              $ref: "#/$defs/Animated_float",
+              default: { mode: "constant", value: 0 },
+            },
             type: { const: "polystar", type: "string" },
           },
           required: ["type", "kind", "center", "points", "outer_radius"],
@@ -1803,9 +2008,12 @@ export const PROJECT_SHAPE: unknown = {
         {
           additionalProperties: false,
           properties: {
-            opacity: { $ref: "#/$defs/Animated_float" },
+            opacity: {
+              $ref: "#/$defs/Animated_float",
+              default: { mode: "constant", value: 1 },
+            },
             paint: { $ref: "#/$defs/Animated_Paint" },
-            rule: { $ref: "#/$defs/FillRule" },
+            rule: { $ref: "#/$defs/FillRule", default: "nonzero" },
             type: { const: "fill", type: "string" },
           },
           required: ["type", "paint"],
@@ -1814,11 +2022,17 @@ export const PROJECT_SHAPE: unknown = {
         {
           additionalProperties: false,
           properties: {
-            cap: { $ref: "#/$defs/LineCap" },
-            dash: { anyOf: [{ $ref: "#/$defs/Dash" }, { type: "null" }] },
-            join: { $ref: "#/$defs/LineJoin" },
-            miter_limit: { format: "float", type: "number" },
-            opacity: { $ref: "#/$defs/Animated_float" },
+            cap: { $ref: "#/$defs/LineCap", default: "butt" },
+            dash: {
+              anyOf: [{ $ref: "#/$defs/Dash" }, { type: "null" }],
+              default: null,
+            },
+            join: { $ref: "#/$defs/LineJoin", default: "miter" },
+            miter_limit: { default: 4, format: "float", type: "number" },
+            opacity: {
+              $ref: "#/$defs/Animated_float",
+              default: { mode: "constant", value: 1 },
+            },
             paint: { $ref: "#/$defs/Animated_Paint" },
             type: { const: "stroke", type: "string" },
             width: { $ref: "#/$defs/Animated_float" },
@@ -1830,8 +2044,11 @@ export const PROJECT_SHAPE: unknown = {
           additionalProperties: false,
           properties: {
             end: { $ref: "#/$defs/Animated_float" },
-            mode: { $ref: "#/$defs/TrimMode" },
-            offset: { $ref: "#/$defs/Animated_float" },
+            mode: { $ref: "#/$defs/TrimMode", default: "together" },
+            offset: {
+              $ref: "#/$defs/Animated_float",
+              default: { mode: "constant", value: 0 },
+            },
             start: { $ref: "#/$defs/Animated_float" },
             type: { const: "trim", type: "string" },
           },
@@ -1843,10 +2060,13 @@ export const PROJECT_SHAPE: unknown = {
     ShapeMask: {
       additionalProperties: false,
       properties: {
-        feather: { $ref: "#/$defs/Animated_float" },
-        fill_rule: { $ref: "#/$defs/FillRule" },
-        invert: { type: "boolean" },
-        mode: { $ref: "#/$defs/MaskMode" },
+        feather: {
+          $ref: "#/$defs/Animated_float",
+          default: { mode: "constant", value: 0 },
+        },
+        fill_rule: { $ref: "#/$defs/FillRule", default: "nonzero" },
+        invert: { default: false, type: "boolean" },
+        mode: { $ref: "#/$defs/MaskMode", default: "add" },
         shape: { $ref: "#/$defs/ShapeGeometry" },
       },
       required: ["shape"],
@@ -1855,11 +2075,26 @@ export const PROJECT_SHAPE: unknown = {
     ShapeTransform: {
       additionalProperties: false,
       properties: {
-        anchor: { $ref: "#/$defs/Animated_Vec2" },
-        opacity: { $ref: "#/$defs/Animated_float" },
-        position: { $ref: "#/$defs/AnimatedPoint" },
-        rotation_degrees: { $ref: "#/$defs/Animated_float" },
-        scale: { $ref: "#/$defs/Animated_Vec2" },
+        anchor: {
+          $ref: "#/$defs/Animated_Vec2",
+          default: { mode: "constant", value: { x: 0, y: 0 } },
+        },
+        opacity: {
+          $ref: "#/$defs/Animated_float",
+          default: { mode: "constant", value: 1 },
+        },
+        position: {
+          $ref: "#/$defs/AnimatedPoint",
+          default: { mode: "constant", value: { x: 0, y: 0 } },
+        },
+        rotation_degrees: {
+          $ref: "#/$defs/Animated_float",
+          default: { mode: "constant", value: 0 },
+        },
+        scale: {
+          $ref: "#/$defs/Animated_Vec2",
+          default: { mode: "constant", value: { x: 1, y: 1 } },
+        },
       },
       type: "object",
     },
@@ -1886,7 +2121,7 @@ export const PROJECT_SHAPE: unknown = {
     Subpath: {
       additionalProperties: false,
       properties: {
-        closed: { type: "boolean" },
+        closed: { default: false, type: "boolean" },
         vertices: { items: { $ref: "#/$defs/PathVertex" }, type: "array" },
       },
       required: ["vertices"],
@@ -1903,7 +2138,7 @@ export const PROJECT_SHAPE: unknown = {
       additionalProperties: false,
       properties: {
         color: { $ref: "#/$defs/Rgba" },
-        padding: { format: "float", type: "number" },
+        padding: { default: 0, format: "float", type: "number" },
       },
       required: ["color"],
       type: "object",
@@ -1920,18 +2155,33 @@ export const PROJECT_SHAPE: unknown = {
     TextStyle: {
       additionalProperties: false,
       properties: {
-        align: { $ref: "#/$defs/TextAlign" },
-        anchor: { $ref: "#/$defs/Vec2" },
+        align: { $ref: "#/$defs/TextAlign", default: "center" },
+        anchor: { $ref: "#/$defs/Vec2", default: { x: 0.5, y: 1 } },
         background: {
           anyOf: [{ $ref: "#/$defs/TextBackground" }, { type: "null" }],
+          default: null,
         },
-        color: { $ref: "#/$defs/Rgba" },
+        color: {
+          $ref: "#/$defs/Rgba",
+          default: { alpha: 1, blue: 1, green: 1, red: 1 },
+        },
         font_family: { type: ["string", "null"] },
-        font_size: { format: "float", type: "number" },
-        line_height: { format: "float", type: "number" },
-        max_width: { format: "float", type: "number" },
-        outline: { anyOf: [{ $ref: "#/$defs/TextOutline" }, { type: "null" }] },
-        position: { $ref: "#/$defs/Vec2" },
+        font_size: { default: 0.05, format: "float", type: "number" },
+        font_weight: {
+          default: 400,
+          format: "uint16",
+          maximum: 65535,
+          minimum: 0,
+          type: "integer",
+        },
+        letter_spacing: { default: 0, format: "float", type: "number" },
+        line_height: { default: 1.2, format: "float", type: "number" },
+        max_width: { default: 0.9, format: "float", type: "number" },
+        outline: {
+          anyOf: [{ $ref: "#/$defs/TextOutline" }, { type: "null" }],
+          default: null,
+        },
+        position: { $ref: "#/$defs/Vec2", default: { x: 0.5, y: 0.92 } },
       },
       type: "object",
     },
@@ -2008,13 +2258,27 @@ export const PROJECT_SHAPE: unknown = {
     Track: {
       additionalProperties: false,
       properties: {
-        audio: { $ref: "#/$defs/TrackAudio" },
-        captions: { anyOf: [{ $ref: "#/$defs/Captions" }, { type: "null" }] },
-        clips: { items: { $ref: "#/$defs/Clip" }, type: "array" },
+        audio: {
+          $ref: "#/$defs/TrackAudio",
+          default: {
+            ducking: null,
+            effects: [],
+            gain: { mode: "constant", value: 1 },
+            muted: false,
+            pan: { mode: "constant", value: 0 },
+            solo: false,
+          },
+        },
+        captions: {
+          anyOf: [{ $ref: "#/$defs/Captions" }, { type: "null" }],
+          default: null,
+        },
+        clips: { default: [], items: { $ref: "#/$defs/Clip" }, type: "array" },
         id: { $ref: "#/$defs/TrackId" },
         kind: { $ref: "#/$defs/TrackKind" },
         name: { type: "string" },
         transitions: {
+          default: [],
           items: { $ref: "#/$defs/ClipTransition" },
           type: "array",
         },
@@ -2025,12 +2289,25 @@ export const PROJECT_SHAPE: unknown = {
     TrackAudio: {
       additionalProperties: false,
       properties: {
-        ducking: { anyOf: [{ $ref: "#/$defs/Ducking" }, { type: "null" }] },
-        effects: { items: { $ref: "#/$defs/AudioEffect" }, type: "array" },
-        gain: { $ref: "#/$defs/Animated_float" },
-        muted: { type: "boolean" },
-        pan: { $ref: "#/$defs/Animated_float" },
-        solo: { type: "boolean" },
+        ducking: {
+          anyOf: [{ $ref: "#/$defs/Ducking" }, { type: "null" }],
+          default: null,
+        },
+        effects: {
+          default: [],
+          items: { $ref: "#/$defs/AudioEffect" },
+          type: "array",
+        },
+        gain: {
+          $ref: "#/$defs/Animated_float",
+          default: { mode: "constant", value: 1 },
+        },
+        muted: { default: false, type: "boolean" },
+        pan: {
+          $ref: "#/$defs/Animated_float",
+          default: { mode: "constant", value: 0 },
+        },
+        solo: { default: false, type: "boolean" },
       },
       type: "object",
     },
@@ -2091,21 +2368,44 @@ export const PROJECT_SHAPE: unknown = {
     VisualProperties: {
       additionalProperties: false,
       properties: {
-        anchor: { $ref: "#/$defs/Vec2" },
-        opacity: { $ref: "#/$defs/Animated_float" },
-        position: { $ref: "#/$defs/AnimatedPoint" },
-        rotation_degrees: { $ref: "#/$defs/Animated_float" },
-        scale: { $ref: "#/$defs/Animated_Vec2" },
+        anchor: { $ref: "#/$defs/Vec2", default: { x: 0.5, y: 0.5 } },
+        opacity: {
+          $ref: "#/$defs/Animated_float",
+          default: { mode: "constant", value: 1 },
+        },
+        position: {
+          $ref: "#/$defs/AnimatedPoint",
+          default: { mode: "constant", value: { x: 0.5, y: 0.5 } },
+        },
+        rotation_degrees: {
+          $ref: "#/$defs/Animated_float",
+          default: { mode: "constant", value: 0 },
+        },
+        scale: {
+          $ref: "#/$defs/Animated_Vec2",
+          default: { mode: "constant", value: { x: 1, y: 1 } },
+        },
       },
-      required: ["position", "anchor", "scale", "rotation_degrees", "opacity"],
       type: "object",
     },
   },
   additionalProperties: false,
   properties: {
-    audio: { $ref: "#/$defs/MasterAudio" },
-    compositions: { items: { $ref: "#/$defs/Composition" }, type: "array" },
+    audio: {
+      $ref: "#/$defs/MasterAudio",
+      default: {
+        effects: [],
+        gain: { mode: "constant", value: 1 },
+        limiter: { release_ms: 50, threshold: 1 },
+      },
+    },
+    compositions: {
+      default: [],
+      items: { $ref: "#/$defs/Composition" },
+      type: "array",
+    },
     effect_resources: {
+      default: [],
       items: { $ref: "#/$defs/EffectResource" },
       type: "array",
     },

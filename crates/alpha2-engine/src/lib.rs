@@ -27,6 +27,10 @@ mod schedule;
 mod snapshot;
 mod text;
 
+pub use alpha2_layout::{
+    Baselines, CanvasRect, LAYOUT_WRAP_SLACK, LayoutBounds, NodeBounds, PictureSize,
+    PictureSizeError, TextBounds, measure_layout, measure_text, text_key,
+};
 pub use audio::{
     AudioContinuity, AudioNeed, AudioRenderStatus, AudioRenderer, MAX_AUDIO_BLOCK,
     MAX_SETTLING_SECONDS,
@@ -45,7 +49,7 @@ pub use frame::{
     FrameGraph, FrameNv12Render, FrameProvider, FrameRender, FrameRenderer, FrameYuv420pRender,
     GpuFrameRenderer, RenderReport, check_frame_effects,
 };
-pub use layout::{LAYOUT_WRAP_SLACK, LayoutBounds, NodeBounds, PreparedLayout, measure_layout};
+pub use layout::PreparedLayout;
 pub use passthrough::{PassthroughAudio, PassthroughPlan, PassthroughSegment, passthrough_plan};
 pub use playback::{ClockStep, PlaybackClock, PlaybackPolicy};
 pub use player::{PlaybackFrame, Player};
@@ -53,6 +57,5 @@ pub use policy::{MissingFramePolicy, color_policy};
 pub use quality::QualityProfile;
 pub use snapshot::EngineProject;
 pub use text::{
-    CanvasRect, FramesWithText, TextBounds, TextError, TextPixels, TextTexture, TextTextures,
-    TextUpload, layout_key, measure_text, text_key,
+    FramesWithText, TextError, TextPixels, TextTexture, TextTextures, TextUpload, layout_key,
 };

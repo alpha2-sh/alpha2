@@ -343,6 +343,11 @@ export interface WasmCanvasRenderer extends WasmEffectRegistry {
    * The same font files as the export host give identical text.
    */
   addFont(family: string, bytes: Uint8Array, faceIndex: number): void;
+  /**
+   * Appends every face of an OpenType font file, in the file's order: each weight of a collection
+   * (`.ttc`), as the export host registers a font file.
+   */
+  addFontFile(family: string, bytes: Uint8Array): void;
   /** Drops every font. */
   clearFonts(): void;
   /** JSON source ids the most recent renderAudio call could not mix. */

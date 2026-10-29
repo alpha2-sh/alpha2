@@ -1266,5 +1266,523 @@
         "at": "items[2].items[0]"
       }
     ]
+  },
+  {
+    "name": "an-effect-keyframe-in-timeline-time-is-unreached-in-composition-time",
+    "project": {
+      "schema_version": 1,
+      "id": "lint",
+      "name": "Lint",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 600000,
+                  "end": 840000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 240000
+                },
+                "composition": {
+                  "id": "look"
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      },
+      "compositions": [
+        {
+          "id": "look",
+          "nodes": [
+            {
+              "id": "clip",
+              "op": {
+                "type": "clip"
+              }
+            },
+            {
+              "id": "blur",
+              "op": {
+                "type": "effect",
+                "input": "clip",
+                "effect": {
+                  "id": "alpha2.effect.gaussian-blur",
+                  "version": 1,
+                  "params": {
+                    "radius": {
+                      "mode": "keyframes",
+                      "keyframes": [
+                        {
+                          "time": 600000,
+                          "value": {
+                            "type": "float",
+                            "value": 0.0
+                          },
+                          "interpolation": {
+                            "type": "linear"
+                          }
+                        },
+                        {
+                          "time": 720000,
+                          "value": {
+                            "type": "float",
+                            "value": 0.05
+                          },
+                          "interpolation": {
+                            "type": "hold"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          ],
+          "output": "blur"
+        }
+      ]
+    },
+    "issues": [
+      {
+        "kind": "unreached_keyframe",
+        "owner": {
+          "type": "composition_node",
+          "composition": "look",
+          "node": "blur"
+        },
+        "property": "effect.params.radius",
+        "time": 720000
+      }
+    ]
+  },
+  {
+    "name": "a-shape-keyframe-past-the-source-range-is-unreached",
+    "project": {
+      "schema_version": 1,
+      "id": "lint",
+      "name": "Lint",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "shapes",
+            "items": [
+              {
+                "type": "group",
+                "transform": {
+                  "opacity": {
+                    "mode": "keyframes",
+                    "keyframes": [
+                      {
+                        "time": 0,
+                        "value": 0,
+                        "interpolation": {
+                          "type": "linear"
+                        }
+                      },
+                      {
+                        "time": 60000,
+                        "value": 1,
+                        "interpolation": {
+                          "type": "linear"
+                        }
+                      },
+                      {
+                        "time": 240000,
+                        "value": 0,
+                        "interpolation": {
+                          "type": "linear"
+                        }
+                      },
+                      {
+                        "time": 360000,
+                        "value": 1,
+                        "interpolation": {
+                          "type": "hold"
+                        }
+                      }
+                    ]
+                  }
+                },
+                "items": [
+                  {
+                    "type": "rectangle",
+                    "center": {
+                      "mode": "constant",
+                      "value": {
+                        "x": 0.5,
+                        "y": 0.5
+                      }
+                    },
+                    "size": {
+                      "mode": "constant",
+                      "value": {
+                        "x": 0.5,
+                        "y": 0.5
+                      }
+                    },
+                    "corner_radius": {
+                      "mode": "constant",
+                      "value": 0
+                    },
+                    "rotation_degrees": {
+                      "mode": "constant",
+                      "value": 0
+                    }
+                  },
+                  {
+                    "type": "fill",
+                    "paint": {
+                      "mode": "constant",
+                      "value": {
+                        "type": "solid",
+                        "color": {
+                          "red": 1,
+                          "green": 1,
+                          "blue": 1,
+                          "alpha": 1
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "issues": [
+      {
+        "kind": "unreached_keyframe",
+        "owner": {
+          "type": "source",
+          "source": "g1"
+        },
+        "property": "items[0].transform.opacity",
+        "time": 360000
+      }
+    ]
+  },
+  {
+    "name": "a-reversed-clip-reaches-a-shape-keyframe-at-its-source-end",
+    "project": {
+      "schema_version": 1,
+      "id": "lint",
+      "name": "Lint",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "shapes",
+            "items": [
+              {
+                "type": "group",
+                "transform": {
+                  "opacity": {
+                    "mode": "keyframes",
+                    "keyframes": [
+                      {
+                        "time": 0,
+                        "value": 0,
+                        "interpolation": {
+                          "type": "linear"
+                        }
+                      },
+                      {
+                        "time": 119999,
+                        "value": 1,
+                        "interpolation": {
+                          "type": "hold"
+                        }
+                      }
+                    ]
+                  }
+                },
+                "items": [
+                  {
+                    "type": "rectangle",
+                    "center": {
+                      "mode": "constant",
+                      "value": {
+                        "x": 0.5,
+                        "y": 0.5
+                      }
+                    },
+                    "size": {
+                      "mode": "constant",
+                      "value": {
+                        "x": 0.5,
+                        "y": 0.5
+                      }
+                    },
+                    "corner_radius": {
+                      "mode": "constant",
+                      "value": 0
+                    },
+                    "rotation_degrees": {
+                      "mode": "constant",
+                      "value": 0
+                    }
+                  },
+                  {
+                    "type": "fill",
+                    "paint": {
+                      "mode": "constant",
+                      "value": {
+                        "type": "solid",
+                        "color": {
+                          "red": 1,
+                          "green": 1,
+                          "blue": 1,
+                          "alpha": 1
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "time_map": {
+                  "type": "reverse"
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "issues": []
+  },
+  {
+    "name": "a-generator-keyframe-the-second-of-two-clips-reaches",
+    "project": {
+      "schema_version": 1,
+      "id": "lint",
+      "name": "Lint",
+      "settings": {
+        "width": 64,
+        "height": 36,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "shapes",
+            "items": [
+              {
+                "type": "group",
+                "transform": {
+                  "opacity": {
+                    "mode": "keyframes",
+                    "keyframes": [
+                      {
+                        "time": 0,
+                        "value": 0,
+                        "interpolation": {
+                          "type": "linear"
+                        }
+                      },
+                      {
+                        "time": 120000,
+                        "value": 1,
+                        "interpolation": {
+                          "type": "linear"
+                        }
+                      },
+                      {
+                        "time": 300000,
+                        "value": 0,
+                        "interpolation": {
+                          "type": "hold"
+                        }
+                      }
+                    ]
+                  }
+                },
+                "items": [
+                  {
+                    "type": "rectangle",
+                    "center": {
+                      "mode": "constant",
+                      "value": {
+                        "x": 0.5,
+                        "y": 0.5
+                      }
+                    },
+                    "size": {
+                      "mode": "constant",
+                      "value": {
+                        "x": 0.5,
+                        "y": 0.5
+                      }
+                    },
+                    "corner_radius": {
+                      "mode": "constant",
+                      "value": 0
+                    },
+                    "rotation_degrees": {
+                      "mode": "constant",
+                      "value": 0
+                    }
+                  },
+                  {
+                    "type": "fill",
+                    "paint": {
+                      "mode": "constant",
+                      "value": {
+                        "type": "solid",
+                        "color": {
+                          "red": 1,
+                          "green": 1,
+                          "blue": 1,
+                          "alpha": 1
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "Video",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 240000,
+                  "end": 360000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    },
+    "issues": []
   }
 ]

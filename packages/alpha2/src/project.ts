@@ -34,6 +34,7 @@ import type {
   Rgba,
   Track,
   Vec2,
+  VisualProperties,
 } from "./generated/project-schema.js";
 import {
   parseHex,
@@ -86,6 +87,8 @@ import {
   MAX_AUDIO_EFFECTS,
   MAX_CAPTION_FONT_SIZE,
   MAX_TEXT_GENERATOR_FONT_SIZE,
+  MAX_FONT_WEIGHT,
+  MAX_LETTER_SPACING,
   MAX_LINE_HEIGHT,
   MAX_TEXT_OUTLINE_WIDTH,
   MAX_TEXT_PADDING,
@@ -94,6 +97,8 @@ import {
   MAX_ENVELOPE_MS,
   MAX_EQ_BANDS,
   MAX_LOOKAHEAD_MS,
+  MIN_FONT_WEIGHT,
+  MIN_LETTER_SPACING,
   MIN_LINE_HEIGHT,
   MIN_LEVEL_DB,
   MAX_EQ_FREQUENCY_HZ,
@@ -1204,6 +1209,7 @@ function describeValue(value: unknown): string {
 const INTEGER_FORMATS: Readonly<
   Record<string, { readonly min: bigint; readonly max: bigint }>
 > = {
+  uint16: { min: 0n, max: 2n ** 16n - 1n },
   uint32: { min: 0n, max: 2n ** 32n - 1n },
   uint64: { min: 0n, max: 2n ** 64n - 1n },
   int64: { min: -(2n ** 63n), max: 2n ** 63n - 1n },
@@ -1451,7 +1457,9 @@ type CanonicalValue<T> = [T] extends [never]
         ? CanonicalInsets
         : Same<T, LayoutOffset> extends true
           ? CanonicalOffset
-          : CanonicalPart<T>;
+          : Same<T, VisualProperties> extends true
+            ? CanonicalPart<Required<VisualProperties>>
+            : CanonicalPart<T>;
 
 type CanonicalPart<T> = T extends string | number | boolean | bigint
   ? T
@@ -1611,7 +1619,13 @@ const canonicalShapes = new WeakMap<
 
 /** The defs a value is put in canonical form at, and every def that can hold one of them. */
 const CANONICAL_DEFS: ReadonlySet<string> = (() => {
-  const holding = new Set(["Rgba", "Paint", "Insets", "LayoutOffset"]);
+  const holding = new Set([
+    "Rgba",
+    "Paint",
+    "Insets",
+    "LayoutOffset",
+    "VisualProperties",
+  ]);
   const refs = Object.entries(SHAPE_DEFS).map(
     ([name, def]) => [name, refsIn(def)] as const,
   );
@@ -1706,6 +1720,13 @@ function canonicalWalk(node: ShapeNode, value: unknown): unknown {
     const before = value[key];
     const canonical = canonicalAt(field, before);
     if (canonical !== before) (read ??= {})[key] = canonical;
+  }
+  // A clip's visual is written whole: each field left out is the schema's default, the engine's.
+  if (schema === SHAPE_DEFS.VisualProperties) {
+    for (const [key, field] of Object.entries(properties)) {
+      if (value[key] === undefined && field.default !== undefined)
+        (read ??= {})[key] = structuredClone(field.default);
+    }
   }
   return read === undefined ? value : { ...value, ...read };
 }
@@ -2351,17 +2372,17 @@ function validVec2Animation(animation: unknown): boolean {
   return values !== undefined && values.every(validVec2);
 }
 
+/** Each field left out is its default, which is valid. */
 function validVisual(visual: unknown): boolean {
   if (visual === undefined) return true;
   return (
     isRecord(visual) &&
-    validVec2(visual.anchor) &&
-    validPointAnimation(visual.position) &&
-    validVec2Animation(visual.scale) &&
-    visual.rotation_degrees !== undefined &&
-    validScalarAnimation(visual.rotation_degrees) &&
-    visual.opacity !== undefined &&
-    validScalarAnimation(visual.opacity, 0, 1)
+    (visual.anchor === undefined || validVec2(visual.anchor)) &&
+    (visual.position === undefined || validPointAnimation(visual.position)) &&
+    (visual.scale === undefined || validVec2Animation(visual.scale)) &&
+    (visual.rotation_degrees === undefined ||
+      validScalarAnimation(visual.rotation_degrees)) &&
+    (visual.opacity === undefined || validScalarAnimation(visual.opacity, 0, 1))
   );
 }
 
@@ -2819,6 +2840,8 @@ function validTextStyle(style: unknown, maxFontSize: number): boolean {
     within(style.font_size ?? 0.05, 0, maxFontSize, true) &&
     (style.color === undefined || validRgba(style.color)) &&
     within(style.line_height ?? 1.2, MIN_LINE_HEIGHT, MAX_LINE_HEIGHT) &&
+    within(style.letter_spacing ?? 0, MIN_LETTER_SPACING, MAX_LETTER_SPACING) &&
+    validFontWeight(style.font_weight ?? 400) &&
     within(style.max_width ?? 0.9, 0, 1, true) &&
     (style.position === undefined || validVec2(style.position)) &&
     (style.anchor === undefined || validVec2(style.anchor)) &&
@@ -2830,6 +2853,15 @@ function validTextStyle(style: unknown, maxFontSize: number): boolean {
       (isRecord(background) &&
         validRgba(background.color) &&
         within(background.padding ?? 0, 0, MAX_TEXT_PADDING)))
+  );
+}
+
+/** A weight `FONT_WEIGHT_RANGE` holds: a whole number from 1 to 1000. */
+function validFontWeight(weight: unknown): boolean {
+  return (
+    Number.isInteger(weight) &&
+    (weight as number) >= MIN_FONT_WEIGHT &&
+    (weight as number) <= MAX_FONT_WEIGHT
   );
 }
 
@@ -3576,6 +3608,20 @@ function layoutStyleIssue(
     )
   ) {
     return outOfRange("line_height");
+  }
+  const letterSpacing = node.letter_spacing;
+  if (
+    present(letterSpacing) &&
+    !(
+      finiteNumber(letterSpacing) &&
+      letterSpacing >= MIN_LETTER_SPACING &&
+      letterSpacing <= MAX_LETTER_SPACING
+    )
+  ) {
+    return outOfRange("letter_spacing");
+  }
+  if (present(node.font_weight) && !validFontWeight(node.font_weight)) {
+    return outOfRange("font_weight");
   }
   const outline = node.outline;
   if (
@@ -4627,7 +4673,15 @@ export type LintOwner =
       readonly from_clip: string;
       readonly to_clip: string;
     }
-  | { readonly type: "cue"; readonly track: string; readonly index: number };
+  | { readonly type: "cue"; readonly track: string; readonly index: number }
+  /** A composition's node, whose settings are keyed in composition time. */
+  | {
+      readonly type: "composition_node";
+      readonly composition: string;
+      readonly node: string;
+    }
+  /** A generated source, whose shapes or layout tree is keyed in its picture's time. */
+  | { readonly type: "source"; readonly source: string };
 
 /** The shapes generator a shape {@link LintIssue} is about. */
 export type ShapeLintOwner =
@@ -4647,7 +4701,10 @@ export type LintIssue =
   | {
       readonly kind: "unreached_keyframe";
       readonly owner: LintOwner;
-      /** Such as `visual.opacity` or `masks[0].feather`. */
+      /**
+       * Such as `visual.opacity` or `masks[0].feather` on a clip, `effect.params.radius` on a
+       * composition node, or `items[0].transform.opacity` on a generated source.
+       */
       readonly property: string;
       readonly time: number;
     }
@@ -4701,7 +4758,10 @@ export interface LintBinding {
  * A valid project's non-fatal diagnostics, computed by the engine's own
  * `Project::lint`, in a fixed order: unused sources, then shapes generators
  * (sources', then composition nodes'), then HDR sources, then each track's
- * clips, transitions, and cues.
+ * clips, transitions, and cues, then compositions' nodes, then generated
+ * sources' trees. A keyframe is checked in its own time: a clip's in timeline
+ * time, a composition node's in the composition time the clips that show it
+ * map to, a generated source's in the picture time its clips' time maps reach.
  *
  * Diagnostics never block a load or an export; they flag what is probably a
  * mistake in a project the engine accepts.

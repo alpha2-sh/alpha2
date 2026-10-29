@@ -82,6 +82,17 @@ export interface NodeBounds {
   readonly overflow: boolean;
   /** A text node's line count; `null` for other nodes. */
   readonly lineCount: number | null;
+  /**
+   * A text node's first and last lines' alphabetic baselines, as fractions of the picture's height:
+   * its content box's top plus its text's baselines. `null` for other nodes and empty text.
+   */
+  readonly baselines: Baselines | null;
+}
+
+/** Where a text's first and last lines' alphabetic baselines lie, y as a fraction of the height. */
+export interface Baselines {
+  readonly first: number;
+  readonly last: number;
 }
 
 /** Where every node of a layout lies, the root first, in document order. */

@@ -13,7 +13,7 @@ use alpha2_model::{
     TextAlign, TextBackground, TextOutline, TextStyle, TimeMap, Timeline, Track, TrackId,
     TrackKind, Vec2, VisualProperties,
 };
-use alpha2_text::{TextFont, TextRasterRequest, TextRasterizer};
+use alpha2_text::{TextFont, TextRasterizer};
 use alpha2_time::{FrameRate, MediaTime, TICKS_PER_SECOND, TimeRange};
 
 use crate::lower::{
@@ -502,22 +502,21 @@ impl<'a> Context<'a> {
     }
 
     /// Lines and height in pixels of `text` at `font_px`, wrapping at
-    /// `max_width` pixels, as the fonts measure it; `None` without fonts.
+    /// `max_width` pixels, as the fonts measure it on the canvas, through the
+    /// request the engine draws a text generator's text with; `None` without
+    /// fonts.
     fn measure(&self, text: &str, font_px: f32, max_width: f32) -> Option<(u32, f32)> {
         let measurer = self.measurer.as_ref()?;
-        let request = TextRasterRequest {
-            text: text.to_owned(),
-            font_size: font_px.clamp(1.0, 2_048.0),
-            max_width: max_width.max(1.0),
-            line_height: TextStyle::default().line_height,
-            align: alpha2_media::TextAlign::Center,
-            color: [255; 4],
-            emoji_policy: alpha2_media::EmojiPolicy::Color,
-            content_version: 1,
-            outline: None,
-            background: None,
+        let (width, _) = self.canvas_px();
+        let style = TextStyle {
             font_family: self.theme.font_family.clone(),
+            font_size: font_px / self.short_side(),
+            align: TextAlign::Center,
+            max_width: max_width / width,
+            ..TextStyle::default()
         };
+        let canvas = alpha2_layout::PictureSize::new(self.width, self.height).ok()?;
+        let request = alpha2_layout::text_request(text, &style, canvas, 1);
         #[allow(clippy::cast_precision_loss)]
         measurer
             .measure(&request)
@@ -971,7 +970,8 @@ impl<'a> Context<'a> {
                 };
                 let style = TextStyle {
                     font_family: text.family.clone(),
-                    font_size: (font_px / height).min(alpha2_model::MAX_TEXT_GENERATOR_FONT_SIZE),
+                    font_size: (font_px / self.short_side())
+                        .min(alpha2_model::MAX_TEXT_GENERATOR_FONT_SIZE),
                     color: text.color,
                     align: match x {
                         x if x < 0.25 => TextAlign::Start,

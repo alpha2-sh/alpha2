@@ -240,33 +240,92 @@ impl Interpolation {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
+///
+/// Each field a document leaves out takes its default: the
+/// source centred on the canvas, unscaled, unrotated and opaque.
 pub struct VisualProperties {
     /// Animated normalized canvas translation, along spatial curves where its
     /// keyframes have tangents.
+    #[serde(default = "centre_point")]
     pub position: AnimatedPoint,
     /// Unanimated normalized point within the source rectangle.
+    #[serde(default = "centre")]
     pub anchor: Vec2,
     /// Animated per-axis scale.
+    #[serde(default = "unit_scale")]
     pub scale: Animated<Vec2>,
     /// Animated clockwise rotation in degrees.
+    #[serde(default = "no_rotation")]
     pub rotation_degrees: Animated<f32>,
     /// Animated opacity constrained to `0..=1`.
+    #[serde(default = "opaque")]
     pub opacity: Animated<f32>,
 }
 
 impl Default for VisualProperties {
     fn default() -> Self {
         Self {
-            position: AnimatedPoint::Constant {
-                value: Vec2::new(0.5, 0.5),
-            },
-            anchor: Vec2::new(0.5, 0.5),
-            scale: Animated::Constant {
-                value: Vec2::new(1.0, 1.0),
-            },
-            rotation_degrees: Animated::Constant { value: 0.0 },
-            opacity: Animated::Constant { value: 1.0 },
+            position: centre_point(),
+            anchor: centre(),
+            scale: unit_scale(),
+            rotation_degrees: no_rotation(),
+            opacity: opaque(),
         }
+    }
+}
+
+const fn centre() -> Vec2 {
+    Vec2::new(0.5, 0.5)
+}
+
+const fn centre_point() -> AnimatedPoint {
+    AnimatedPoint::Constant { value: centre() }
+}
+
+/// A constant scale of 1 on both axes.
+pub(crate) const fn unit_scale() -> Animated<Vec2> {
+    Animated::Constant {
+        value: Vec2::new(1.0, 1.0),
+    }
+}
+
+const fn no_rotation() -> Animated<f32> {
+    Animated::Constant { value: 0.0 }
+}
+
+/// A constant opacity of 1.
+pub(crate) const fn opaque() -> Animated<f32> {
+    Animated::Constant { value: 1.0 }
+}
+
+/// Calls `visit` with `at` and the times of `animated`'s keyframes, when it
+/// has them.
+pub(crate) fn visit_keyed<T>(
+    at: &str,
+    animated: &Animated<T>,
+    visit: &mut impl FnMut(&str, &[alpha2_time::MediaTime]),
+) {
+    if let Animated::Keyframes { keyframes } = animated {
+        let times = keyframes
+            .iter()
+            .map(|keyframe| keyframe.time)
+            .collect::<Vec<_>>();
+        visit(at, &times);
+    }
+}
+
+/// [`visit_keyed`] for a point along a spatial curve.
+pub(crate) fn visit_keyed_point(
+    at: &str,
+    animated: &AnimatedPoint,
+    visit: &mut impl FnMut(&str, &[alpha2_time::MediaTime]),
+) {
+    if let AnimatedPoint::Keyframes { keyframes } = animated {
+        let times = keyframes
+            .iter()
+            .map(|keyframe| keyframe.time)
+            .collect::<Vec<_>>();
+        visit(at, &times);
     }
 }
 

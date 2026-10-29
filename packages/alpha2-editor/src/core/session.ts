@@ -312,7 +312,7 @@ export class EditorSession {
     const { project, metadata } = this.#document;
     this.#clipboard = ids
       .map((id) => this.query().clips.get(id))
-      .filter((v): v is { clip: Clip; trackId: string } => !!v)
+      .filter((v): v is NonNullable<typeof v> => !!v)
       .map(({ clip, trackId }) => ({
         clip,
         trackId,

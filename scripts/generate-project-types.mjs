@@ -48,6 +48,7 @@ const PRIMITIVE_ARGUMENTS = new Map([
   ["double", "number"],
   ["int32", "number"],
   ["int64", "number"],
+  ["uint16", "number"],
   ["uint32", "number"],
   ["uint64", "number"],
   ["string", "string"],
@@ -369,11 +370,11 @@ const SHAPE_KEYWORDS = new Set([
 ]);
 
 /** Number formats `validateProject` reads as the engine does (`INTEGER_FORMATS` and `float`). */
-const SHAPE_FORMATS = new Set(["float", "uint32", "uint64", "int64"]);
+const SHAPE_FORMATS = new Set(["float", "uint16", "uint32", "uint64", "int64"]);
 
 /**
- * The schema without its prose: what `validateProject` walks at run time, so the package carries
- * the shape rules without the documentation.
+ * The schema without its prose: what `validateProject` and `canonicalProject` walk at run time, so
+ * the package carries the shape rules and defaults without the documentation.
  */
 function shapeOnly(node, key) {
   if (Array.isArray(node)) return node.map((item) => shapeOnly(item));
@@ -385,6 +386,10 @@ function shapeOnly(node, key) {
       kept[name] = shapeOnly(value);
     } else if (SHAPE_KEYWORDS.has(name)) {
       kept[name] = shapeOnly(value, name);
+    } else if (name === "default") {
+      // What a field a document leaves out reads as, a value and not a schema: `canonicalProject`
+      // writes it in.
+      kept[name] = value;
     } else if (name === "format") {
       // Read as the engine's Rust type: a float rounded to 32 bits, an integer within its range.
       if (!SHAPE_FORMATS.has(value)) {
@@ -393,7 +398,6 @@ function shapeOnly(node, key) {
       kept[name] = value;
     } else if (
       name !== "description" &&
-      name !== "default" &&
       name !== "title" &&
       name !== "$schema"
     ) {

@@ -17,12 +17,16 @@ use std::collections::{HashMap, HashSet};
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum LintIssue {
-    /// A keyframe that no time its owner is shown at depends on.
+    /// A keyframe that no time its owner is shown at depends on, checked in
+    /// the owner's own time: a clip's and a transition's in timeline time, a
+    /// composition node's in composition time, a generated source's tree in
+    /// its picture time.
     UnreachedKeyframe {
         /// What the keyframe animates.
         owner: LintOwner,
         /// The animated property, as a path such as `visual.opacity` or
-        /// `masks[0].feather`.
+        /// `masks[0].feather` (a clip), `effect.params.radius` (a composition
+        /// node) or `items[0].transform.opacity` (a generated source).
         property: String,
         /// The keyframe's time.
         time: MediaTime,
@@ -133,6 +137,19 @@ pub enum LintOwner {
         /// Its position among the track's cues.
         index: usize,
     },
+    /// A composition's node, whose settings are keyed in composition time.
+    CompositionNode {
+        /// The composition.
+        composition: CompositionId,
+        /// The node.
+        node: NodeId,
+    },
+    /// A generated source, whose shapes or layout tree is keyed in its
+    /// picture's time.
+    Source {
+        /// The source.
+        source: SourceId,
+    },
 }
 
 /// The end of a range a [`LintIssue`] is about.
@@ -149,7 +166,8 @@ impl Project {
     /// Diagnostics that do not stop the project rendering, in a fixed order:
     /// unused sources, then shapes generators (sources', then composition
     /// nodes'), then HDR sources, then tracks in order and each track's clips,
-    /// transitions, and cues in order.
+    /// transitions, and cues in order, then compositions' nodes in order, then
+    /// generated sources' trees in order.
     #[must_use]
     pub fn lint(&self) -> Vec<LintIssue> {
         let mut issues = Vec::new();
@@ -189,7 +207,7 @@ impl Project {
                 grid.check(&owner, clip.timeline_range, &mut issues);
                 let mut keyframes = Keyframes {
                     owner: &owner,
-                    active: clip.timeline_range,
+                    shown: &[span(clip.timeline_range)],
                     issues: &mut issues,
                 };
                 keyframes.check_clip(clip);
@@ -219,7 +237,7 @@ impl Project {
                 grid.check(&owner, transition.timeline_range, &mut issues);
                 let mut keyframes = Keyframes {
                     owner: &owner,
-                    active: transition.timeline_range,
+                    shown: &[span(transition.timeline_range)],
                     issues: &mut issues,
                 };
                 for (name, value) in &transition.effect.params {
@@ -239,7 +257,59 @@ impl Project {
                 grid.check(&owner, cue.timeline_range, &mut issues);
             }
         }
+        self.lint_keyframes_in_other_times(&mut issues);
         issues
+    }
+
+    /// Keyframes no shown time reaches in the two other time bases:
+    /// composition nodes' settings (and generator nodes' trees) in
+    /// composition time, generated sources' trees in picture time. A
+    /// composition or source no clip shows, or shown at times that cannot be
+    /// bounded, is not checked.
+    fn lint_keyframes_in_other_times(&self, issues: &mut Vec<LintIssue>) {
+        let shown = Shown::of(self);
+        for composition in &self.compositions {
+            let Some(spans) = shown.compositions.get(&composition.id) else {
+                continue;
+            };
+            for node in &composition.nodes {
+                let owner = LintOwner::CompositionNode {
+                    composition: composition.id.clone(),
+                    node: node.id.clone(),
+                };
+                let mut keyframes = Keyframes {
+                    owner: &owner,
+                    shown: spans,
+                    issues,
+                };
+                node_keyed(&node.op, &mut |property, times| {
+                    keyframes.check_times(property, times);
+                });
+            }
+        }
+        for source in &self.sources {
+            let Some(spans) = shown.sources.get(&source.id) else {
+                continue;
+            };
+            let owner = LintOwner::Source {
+                source: source.id.clone(),
+            };
+            let mut keyframes = Keyframes {
+                owner: &owner,
+                shown: spans,
+                issues,
+            };
+            let mut check = |property: &str, times: &[MediaTime]| {
+                keyframes.check_times(property, times);
+            };
+            match &source.generator {
+                Some(Generator::Shapes { items }) => {
+                    crate::shapes::for_each_keyed_item(items, "items", &mut check);
+                }
+                Some(Generator::Layout { root }) => root.for_each_keyed("root", &mut check),
+                _ => {}
+            }
+        }
     }
 
     /// Every shapes generator's and layout shape node's empty subpaths and
@@ -432,11 +502,17 @@ impl FrameGrid {
     }
 }
 
-/// Finds keyframes no time in `active` depends on.
+/// Finds keyframes no time its owner is shown at depends on: `shown` holds
+/// every span of ticks, first and last, it may be shown at.
 struct Keyframes<'a> {
     owner: &'a LintOwner,
-    active: TimeRange,
+    shown: &'a [(i64, i64)],
     issues: &'a mut Vec<LintIssue>,
+}
+
+/// The ticks of `range`, first and last.
+fn span(range: TimeRange) -> (i64, i64) {
+    (range.start().ticks(), range.end().ticks() - 1)
 }
 
 impl Keyframes<'_> {
@@ -455,32 +531,7 @@ impl Keyframes<'_> {
     }
 
     fn check_geometry(&mut self, at: &str, geometry: &ShapeGeometry) {
-        match geometry {
-            ShapeGeometry::Rectangle(rectangle) => {
-                self.check_point(&format!("{at}.center"), &rectangle.center);
-                self.check(&format!("{at}.size"), &rectangle.size);
-                self.check(&format!("{at}.corner_radius"), &rectangle.corner_radius);
-                self.check(
-                    &format!("{at}.rotation_degrees"),
-                    &rectangle.rotation_degrees,
-                );
-            }
-            ShapeGeometry::Ellipse(ellipse) => {
-                self.check_point(&format!("{at}.center"), &ellipse.center);
-                self.check(&format!("{at}.size"), &ellipse.size);
-                self.check(&format!("{at}.rotation_degrees"), &ellipse.rotation_degrees);
-            }
-            ShapeGeometry::Polystar(star) => {
-                self.check_point(&format!("{at}.center"), &star.center);
-                self.check(&format!("{at}.points"), &star.points);
-                self.check(&format!("{at}.outer_radius"), &star.outer_radius);
-                self.check(&format!("{at}.inner_radius"), &star.inner_radius);
-                self.check(&format!("{at}.outer_roundness"), &star.outer_roundness);
-                self.check(&format!("{at}.inner_roundness"), &star.inner_roundness);
-                self.check(&format!("{at}.rotation_degrees"), &star.rotation_degrees);
-            }
-            ShapeGeometry::Path(path) => self.check(&format!("{at}.path"), &path.path),
-        }
+        geometry.for_each_keyed(at, &mut |property, times| self.check_times(property, times));
     }
 
     fn check_point(&mut self, property: &str, animated: &AnimatedPoint) {
@@ -499,9 +550,8 @@ impl Keyframes<'_> {
 
     /// Keyframe `i` shapes values only strictly between its neighbours'
     /// times (the first one back to the start of time, the last one on to
-    /// its end); outside every shown tick of `active`, it has no effect.
+    /// its end); outside every shown tick, it has no effect.
     fn check_times(&mut self, property: &str, times: &[MediaTime]) {
-        let (start, last) = (self.active.start().ticks(), self.active.end().ticks() - 1);
         for (index, time) in times.iter().enumerate() {
             let after = index.checked_sub(1).map_or(i64::MIN, |previous| {
                 times[previous].ticks().saturating_add(1)
@@ -509,7 +559,11 @@ impl Keyframes<'_> {
             let before = times
                 .get(index + 1)
                 .map_or(i64::MAX, |next| next.ticks().saturating_sub(1));
-            if after.max(start) > before.min(last) {
+            let reached = self
+                .shown
+                .iter()
+                .any(|&(first, last)| after.max(first) <= before.min(last));
+            if !reached {
                 self.issues.push(LintIssue::UnreachedKeyframe {
                     owner: self.owner.clone(),
                     property: property.to_owned(),
@@ -517,6 +571,248 @@ impl Keyframes<'_> {
                 });
             }
         }
+    }
+}
+
+/// Every span of ticks, first and last, each composition and each generated
+/// or composition source may be shown at. Composition time is a clip's
+/// [`crate::ClipComposition`] mapping of its timeline range, a composition
+/// source's picture time, or the time of a composition that draws it as a
+/// group; picture time is a clip's source range through its time map (a
+/// freeze's instant), or a media node's `start` plus its composition's
+/// time. The spans hold every time shown and may hold more, so a keyframe
+/// outside them all is certainly unreached. One the spans cannot bound (an
+/// unrepresentable time) is left out, and so is everything it shows.
+#[derive(Default)]
+struct Shown<'a> {
+    compositions: HashMap<&'a CompositionId, Vec<(i64, i64)>>,
+    sources: HashMap<&'a SourceId, Vec<(i64, i64)>>,
+}
+
+impl<'a> Shown<'a> {
+    fn of(project: &'a Project) -> Self {
+        let (base, unbounded) = Self::clips(project);
+        let mut shown = base.propagated(project);
+        shown.drop_unbounded(project, unbounded);
+        shown
+    }
+
+    /// What the clips show directly: their sources at the picture times
+    /// their time maps reach, and their compositions at the composition
+    /// times their ranges map to; and the compositions a clip maps to times
+    /// that cannot be represented.
+    fn clips(project: &'a Project) -> (Self, Vec<&'a CompositionId>) {
+        let mut base = Self::default();
+        let mut unbounded = Vec::new();
+        for clip in project
+            .timeline
+            .tracks
+            .iter()
+            .flat_map(|track| &track.clips)
+        {
+            let picture = match clip.time_map {
+                crate::TimeMap::Freeze { source_time } => {
+                    (source_time.ticks(), source_time.ticks())
+                }
+                crate::TimeMap::Forward | crate::TimeMap::Reverse | crate::TimeMap::Loop { .. } => {
+                    span(clip.source_range)
+                }
+            };
+            base.sources
+                .entry(&clip.source_id)
+                .or_default()
+                .push(picture);
+            if let Some(composition) = &clip.composition {
+                let start = clip.timeline_range.start();
+                let last = MediaTime(clip.timeline_range.end().ticks() - 1);
+                match (
+                    composition.local_time(start, start),
+                    composition.local_time(start, last),
+                ) {
+                    (Some(first), Some(last)) => base
+                        .compositions
+                        .entry(&composition.id)
+                        .or_default()
+                        .push((first.ticks(), last.ticks())),
+                    _ => unbounded.push(&composition.id),
+                }
+            }
+        }
+        (base, unbounded)
+    }
+
+    /// `self` (what the clips show) and what that shows in turn: a
+    /// composition source's composition at its picture times, a group's
+    /// composition in its parent's time, a media node's source at its start
+    /// plus its composition's time. Each pass adds one more level; the graph
+    /// is acyclic, so as many passes as there are compositions and sources
+    /// reach every level.
+    fn propagated(self, project: &'a Project) -> Self {
+        let mut shown = Self {
+            compositions: self.compositions.clone(),
+            sources: self.sources.clone(),
+        };
+        shown.normalize();
+        for _ in 0..=project.compositions.len() + project.sources.len() {
+            let mut next = Self {
+                compositions: self.compositions.clone(),
+                sources: self.sources.clone(),
+            };
+            for source in &project.sources {
+                if let (Some(composition), Some(spans)) =
+                    (&source.composition, shown.sources.get(&source.id))
+                {
+                    next.compositions
+                        .entry(composition)
+                        .or_default()
+                        .extend(spans);
+                }
+            }
+            for composition in &project.compositions {
+                let Some(spans) = shown.compositions.get(&composition.id) else {
+                    continue;
+                };
+                for node in &composition.nodes {
+                    match &node.op {
+                        crate::NodeOp::Group { composition, .. } => {
+                            next.compositions
+                                .entry(composition)
+                                .or_default()
+                                .extend(spans);
+                        }
+                        crate::NodeOp::Media { source_id, start } => {
+                            next.sources
+                                .entry(source_id)
+                                .or_default()
+                                .extend(spans.iter().map(|&(first, last)| {
+                                    (
+                                        first.saturating_add(start.ticks()),
+                                        last.saturating_add(start.ticks()),
+                                    )
+                                }));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            next.normalize();
+            if next.compositions == shown.compositions && next.sources == shown.sources {
+                break;
+            }
+            shown = next;
+        }
+        shown
+    }
+
+    /// Leaves out the compositions in `unbounded`, and what they draw: their
+    /// groups' compositions and their media nodes' sources, unchecked.
+    fn drop_unbounded(&mut self, project: &'a Project, mut unbounded: Vec<&'a CompositionId>) {
+        while let Some(id) = unbounded.pop() {
+            self.compositions.remove(id);
+            let Some(composition) = project.compositions.iter().find(|held| held.id == *id) else {
+                continue;
+            };
+            for node in &composition.nodes {
+                match &node.op {
+                    crate::NodeOp::Group { composition, .. } => {
+                        if self.compositions.contains_key(composition) {
+                            unbounded.push(composition);
+                        }
+                    }
+                    crate::NodeOp::Media { source_id, .. } => {
+                        self.sources.remove(source_id);
+                        if let Some(inner) = project
+                            .sources
+                            .iter()
+                            .find(|source| source.id == *source_id)
+                            .and_then(|source| source.composition.as_ref())
+                            && self.compositions.contains_key(inner)
+                        {
+                            unbounded.push(inner);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    /// Each list sorted, and spans that meet or touch merged.
+    fn normalize(&mut self) {
+        fn merge(spans: &mut Vec<(i64, i64)>) {
+            spans.sort_unstable();
+            let mut merged: Vec<(i64, i64)> = Vec::with_capacity(spans.len());
+            for &(first, last) in spans.iter() {
+                match merged.last_mut() {
+                    Some(held) if first <= held.1.saturating_add(1) => held.1 = held.1.max(last),
+                    _ => merged.push((first, last)),
+                }
+            }
+            *spans = merged;
+        }
+        self.compositions.values_mut().for_each(merge);
+        self.sources.values_mut().for_each(merge);
+    }
+}
+
+/// Calls `visit` with each of a node's animated settings that has keyframes,
+/// by its path in the node (`effect.params.radius`, `transform.opacity`,
+/// `generator.items[0].transform.scale`), and their times.
+fn node_keyed(op: &crate::NodeOp, visit: &mut impl FnMut(&str, &[MediaTime])) {
+    use crate::animation::{visit_keyed, visit_keyed_point};
+    let params = |effect: &crate::ClipEffect, visit: &mut dyn FnMut(&str, &[MediaTime])| {
+        for (name, value) in &effect.params {
+            visit_keyed(&format!("effect.params.{name}"), value, &mut |at, times| {
+                visit(at, times);
+            });
+        }
+    };
+    match op {
+        crate::NodeOp::Effect { effect, .. } => params(effect, visit),
+        crate::NodeOp::Transition {
+            effect, progress, ..
+        } => {
+            params(effect, visit);
+            visit_keyed("progress", progress, visit);
+        }
+        crate::NodeOp::Transform { transform, .. } => {
+            visit_keyed_point("transform.position", &transform.position, visit);
+            visit_keyed("transform.scale", &transform.scale, visit);
+            visit_keyed(
+                "transform.rotation_degrees",
+                &transform.rotation_degrees,
+                visit,
+            );
+            visit_keyed("transform.opacity", &transform.opacity, visit);
+        }
+        crate::NodeOp::Merge { layers } => {
+            for (index, layer) in layers.iter().enumerate() {
+                visit_keyed(&format!("layers[{index}].opacity"), &layer.opacity, visit);
+            }
+        }
+        crate::NodeOp::ShapeMask { masks, .. } => {
+            for (index, mask) in masks.iter().enumerate() {
+                mask.shape
+                    .for_each_keyed(&format!("masks[{index}].shape"), visit);
+                visit_keyed(&format!("masks[{index}].feather"), &mask.feather, visit);
+            }
+        }
+        crate::NodeOp::Group { controls, .. } => {
+            for (name, value) in controls {
+                visit_keyed(&format!("controls.{name}"), value, visit);
+            }
+        }
+        crate::NodeOp::Generator { generator } => match generator {
+            Generator::Shapes { items } => {
+                crate::shapes::for_each_keyed_item(items, "generator.items", visit);
+            }
+            Generator::Layout { root } => root.for_each_keyed("generator.root", visit),
+            Generator::Fill { .. } | Generator::Text { .. } => {}
+        },
+        crate::NodeOp::Clip {}
+        | crate::NodeOp::Media { .. }
+        | crate::NodeOp::Matte { .. }
+        | crate::NodeOp::GroupInput { .. } => {}
     }
 }
 

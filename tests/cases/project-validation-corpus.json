@@ -17,6 +17,41 @@
     }
   },
   {
+    "name": "partial-visual-defaults-the-rest",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [{ "id": "v1", "kind": "video", "locator": "a.mp4" }],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "visual": { "opacity": { "mode": "constant", "value": 0.5 } }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
     "name": "sample-rate-over-budget",
     "valid": false,
     "rejected_by": "model",
@@ -26420,6 +26455,401 @@
                 "timeline_range": {
                   "start": 120000,
                   "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "generated-layout-letter-spacing-below-range",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[0].letter_spacing has a value out of range"
+    ],
+    "error": "source g1 has an invalid layout: root.children[0].letter_spacing has a value out of range",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "text": {
+                    "mode": "constant",
+                    "value": "a"
+                  },
+                  "font_size": {
+                    "mode": "constant",
+                    "value": 0.05
+                  },
+                  "letter_spacing": -0.6
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "generated-layout-letter-spacing-above-range",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid layout: root.children[0].letter_spacing has a value out of range"
+    ],
+    "error": "source g1 has an invalid layout: root.children[0].letter_spacing has a value out of range",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "layout",
+            "root": {
+              "children": [
+                {
+                  "text": {
+                    "mode": "constant",
+                    "value": "a"
+                  },
+                  "font_size": {
+                    "mode": "constant",
+                    "value": 0.05
+                  },
+                  "letter_spacing": 1.1
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "generated-text-letter-spacing-out-of-range",
+    "valid": false,
+    "rejected_by": "model",
+    "problems": [
+      "source g1 has an invalid generator"
+    ],
+    "error": "source g1 has an invalid generator",
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "v2",
+          "kind": "video",
+          "locator": "b.mp4"
+        },
+        {
+          "id": "a1",
+          "kind": "audio",
+          "locator": "c.m4a"
+        },
+        {
+          "id": "i1",
+          "kind": "image",
+          "locator": "d.png"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "text",
+            "text": "Big",
+            "style": {
+              "letter_spacing": 1.1
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "generated-text-letter-spacing-in-range",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": {
+          "num": 30,
+          "den": 1
+        },
+        "sample_rate": 48000
+      },
+      "sources": [
+        {
+          "id": "v1",
+          "kind": "video",
+          "locator": "a.mp4"
+        },
+        {
+          "id": "v2",
+          "kind": "video",
+          "locator": "b.mp4"
+        },
+        {
+          "id": "a1",
+          "kind": "audio",
+          "locator": "c.m4a"
+        },
+        {
+          "id": "i1",
+          "kind": "image",
+          "locator": "d.png"
+        },
+        {
+          "id": "g1",
+          "kind": "generated",
+          "generator": {
+            "type": "text",
+            "text": "Big",
+            "style": {
+              "letter_spacing": -0.5
+            }
+          }
+        }
+      ],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              },
+              {
+                "id": "c2",
+                "source_id": "g1",
+                "timeline_range": {
+                  "start": 120000,
+                  "end": 240000
+                },
+                "source_range": {
+                  "start": 0,
+                  "end": 120000
+                }
+              }
+            ],
+            "transitions": []
+          },
+          {
+            "id": "t2",
+            "name": "T2",
+            "kind": "audio",
+            "clips": [
+              {
+                "id": "c3",
+                "source_id": "a1",
+                "timeline_range": {
+                  "start": 0,
+                  "end": 120000
                 },
                 "source_range": {
                   "start": 0,

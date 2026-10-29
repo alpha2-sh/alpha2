@@ -12,6 +12,7 @@ members = [
     "crates/alpha2-engine",
     "crates/alpha2-assets",
     "crates/alpha2-geometry",
+    "crates/alpha2-layout",
     "crates/alpha2-compose",
     "extensions",
     "extensions/web",
@@ -64,6 +65,7 @@ alpha2-compose = { version = "0.4.6", path = "crates/alpha2-compose" }
 alpha2-engine = { version = "0.4.6", path = "crates/alpha2-engine" }
 alpha2-eval = { version = "0.4.6", path = "crates/alpha2-eval" }
 alpha2-geometry = { version = "0.4.6", path = "crates/alpha2-geometry" }
+alpha2-layout = { version = "0.4.6", path = "crates/alpha2-layout" }
 alpha2-gpu = { version = "0.4.6", path = "crates/alpha2-gpu" }
 alpha2-media = { version = "0.4.6", path = "crates/alpha2-media" }
 alpha2-model = { version = "0.4.6", path = "crates/alpha2-model" }

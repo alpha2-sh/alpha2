@@ -2536,6 +2536,24 @@ impl WebEffectRegistry {
             .map_err(|error| typed_error(&error))
     }
 
+    /// Appends every face of an OpenType font file to the fallback stack, in
+    /// the file's order: each weight of a collection (`.ttc`), all checked
+    /// before any is added, as the export host registers a file.
+    ///
+    /// # Errors
+    /// Returns an error for malformed font bytes, with no face added.
+    #[wasm_bindgen(js_name = addFontFile)]
+    pub fn add_font_file(&mut self, family: &str, bytes: Vec<u8>) -> Result<(), JsValue> {
+        let faces = crate::text::file_faces(family, bytes)
+            .map_err(|error| typed_error(&alpha2_engine::TextError::Raster(error)))?;
+        for face in faces {
+            self.texts
+                .add_font(face.family, face.bytes, face.face_index)
+                .map_err(|error| typed_error(&error))?;
+        }
+        Ok(())
+    }
+
     /// Drops every font, and the text drawn with them.
     #[wasm_bindgen(js_name = clearFonts)]
     pub fn clear_fonts(&mut self) {

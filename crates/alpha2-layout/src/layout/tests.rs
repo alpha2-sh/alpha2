@@ -40,7 +40,7 @@ fn text(content: &str, size: f64) -> serde_json::Value {
 }
 
 /// `root` resolved on a picture of `size`, which is also its canvas.
-fn resolved(rasterizer: &TextRasterizer, root: &LayoutNode, size: RenderSize) -> ResolvedLayout {
+fn resolved(rasterizer: &TextRasterizer, root: &LayoutNode, size: PictureSize) -> ResolvedLayout {
     let evaluated = LayoutPlan::new(root, (size.width, size.height)).evaluate(MediaTime::ZERO);
     let shaped = shape_texts(&evaluated, size, |request| {
         rasterizer.shape(request).map(Arc::new)
@@ -49,8 +49,8 @@ fn resolved(rasterizer: &TextRasterizer, root: &LayoutNode, size: RenderSize) ->
     resolve(&evaluated, size, &shaped)
 }
 
-fn size(width: u32, height: u32) -> RenderSize {
-    RenderSize::new(width, height).expect("a size")
+fn size(width: u32, height: u32) -> PictureSize {
+    PictureSize::new(width, height).expect("a size")
 }
 
 fn shaped(rasterizer: &TextRasterizer, content: &str, pixels: f32) -> ShapedText {
@@ -67,6 +67,8 @@ fn shaped(rasterizer: &TextRasterizer, content: &str, pixels: f32) -> ShapedText
             outline: None,
             background: None,
             font_family: None,
+            letter_spacing: 0.0,
+            font_weight: 400,
         })
         .expect("shapes")
 }
@@ -101,6 +103,69 @@ fn a_text_in_a_padded_box_sizes_the_box_to_the_text() {
     let label = layout.nodes[2];
     assert_eq!(label.line_count, Some(1));
     assert!(!label.overflow && !card.overflow);
+}
+
+#[test]
+fn a_text_node_reports_baselines_inside_its_content_box() {
+    let rasterizer = fixture();
+    let root = node(json!({
+        "align_items": "start",
+        "children": [
+            {
+                "padding": constant(json!({ "top": 0.02, "right": 0.03, "bottom": 0.02, "left": 0.03 })),
+                "line_height": 1.4,
+                "children": [text("Hello\nworld", 0.04)],
+            },
+            { "width": length(0.1), "height": length(0.1) },
+        ],
+    }));
+    let bounds = measure_layout(
+        &rasterizer,
+        &root,
+        MediaTime::ZERO,
+        size(1000, 1000),
+        (1000, 1000),
+    )
+    .expect("measures");
+    let text = &bounds.nodes[2];
+    assert_eq!(text.line_count, Some(2));
+    let baselines = text.baselines.expect("a text node has baselines");
+    assert!(text.content.top < baselines.first && baselines.last < text.content.bottom);
+    // 8 px of half-leading and 32 px of ascent below the content box's top; lines 56 px apart.
+    assert!((baselines.first - text.content.top - 0.04).abs() < 1e-6);
+    assert!((baselines.last - baselines.first - 0.056).abs() < 1e-6);
+    for node in [&bounds.nodes[0], &bounds.nodes[1], &bounds.nodes[3]] {
+        assert_eq!(node.baselines, None, "{}", node.at);
+    }
+}
+
+#[test]
+fn a_spaced_text_measures_as_wide_as_its_raster_lines() {
+    let rasterizer = fixture();
+    let root = node(json!({
+        "flex_direction": "row",
+        "align_items": "start",
+        "letter_spacing": 0.25,
+        "children": [text("Spaced", 0.04)],
+    }));
+    let picture = size(1000, 1000);
+    let bounds = measure_layout(&rasterizer, &root, MediaTime::ZERO, picture, (1000, 1000))
+        .expect("measures");
+    let content = bounds.nodes[1].content;
+    let evaluated = LayoutPlan::new(&root, (1000, 1000)).evaluate(MediaTime::ZERO);
+    let resolved = resolved(&rasterizer, &root, picture);
+    let (_, requests) = layout_texts(&evaluated, &resolved, picture);
+    let request = &requests[0].1;
+    assert!(
+        (request.letter_spacing - 10.0).abs() < 1e-6,
+        "a quarter of 40 px"
+    );
+    let raster = rasterizer.measure(request).expect("measures");
+    let line = raster.content[2] - raster.content[0];
+    // The box is its max-content width rounded to whole pixels; the raster's line is that width.
+    assert!(((content.right - content.left) * 1000.0 - line).abs() <= 1.0);
+    let unspaced = shaped(&rasterizer, "Spaced", 40.0).max_content_width();
+    assert!((line - unspaced - 50.0).abs() < 1e-3, "five gaps of 10 px");
 }
 
 #[test]
@@ -346,7 +411,7 @@ fn empty_text_measures_nothing_and_needs_no_fonts() {
             size(10, 10),
             (10, 10)
         ),
-        Err(TextError::Raster(TextRasterError::NoFonts))
+        Err(TextRasterError::NoFonts)
     );
 }
 
@@ -574,7 +639,7 @@ fn forty_nodes() -> LayoutNode {
 }
 
 /// What resolving costs, for reference only; never gated. Run with
-/// `cargo test -p alpha2-engine --release --lib layout_resolve_cost -- --ignored --nocapture`.
+/// `cargo test -p alpha2-layout --release --lib layout_resolve_cost -- --ignored --nocapture`.
 #[test]
 #[ignore = "timing only"]
 fn layout_resolve_cost() {
@@ -585,7 +650,7 @@ fn layout_resolve_cost() {
     assert_eq!(count, 41);
     let size = size(1920, 1080);
     let runs = 200;
-    let start = web_time::Instant::now();
+    let start = std::time::Instant::now();
     for _ in 0..runs {
         std::hint::black_box(
             measure_layout(&rasterizer, &root, MediaTime::ZERO, size, (1920, 1080))
@@ -598,7 +663,7 @@ fn layout_resolve_cost() {
         rasterizer.shape(request).map(Arc::new)
     })
     .expect("shapes");
-    let start = web_time::Instant::now();
+    let start = std::time::Instant::now();
     for _ in 0..runs {
         std::hint::black_box(resolve(&evaluated, size, &shaped));
     }

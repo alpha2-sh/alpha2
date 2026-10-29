@@ -65,6 +65,31 @@ console.log(
   `verified ${golden.cases.length} text rasters are identical in wasm and natively`,
 );
 
+// A collection registered whole: the weight picks its Bold face, as registering that face alone
+// draws it.
+const pair = await readFile(
+  join(root, "tests", "fonts", "Alpha2FixturePair.ttc"),
+);
+assert.equal(wasm.fontFaceCount(pair), 2);
+const whole = new WasmTextRasterizer(wasm);
+whole.addFontFile("Alpha2FixturePair", pair);
+const boldOnly = new WasmTextRasterizer(wasm);
+boldOnly.addFont("Alpha2FixturePair", pair, 1);
+const bold = (host) =>
+  fnv1a(
+    host.rasterize({
+      text: "HI",
+      fontSize: 50,
+      color: [255, 255, 255, 255],
+      fontWeight: 700,
+      contentVersion: 1n,
+    }).rgba8,
+  );
+assert.equal(bold(whole), bold(boldOnly));
+whole.close();
+boldOnly.close();
+console.log("verified a font collection registers every face in wasm");
+
 const { summarizeWaveform } = await import(
   pathToFileURL(join(packageRoot, "dist", "waveform.js")).href
 );

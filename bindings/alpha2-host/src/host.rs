@@ -1098,21 +1098,28 @@ impl Host {
     /// # Errors
     /// Returns a message naming a font file that cannot be read or parsed.
     pub fn set_fonts(&mut self, paths: &[PathBuf]) -> Result<Vec<std::sync::Arc<[u8]>>, String> {
+        let alpha2_layout::FontFiles {
+            faces,
+            bytes: fonts,
+        } = alpha2_layout::fonts_from_files(paths).map_err(|error| match error {
+            alpha2_layout::FontFileError::Read { path, error } => {
+                code_tag("MISSING_INPUT", format!("font {}: {error}", path.display()))
+            }
+            alpha2_layout::FontFileError::Invalid { path, error, .. } => code_tag(
+                "INVALID_INPUT",
+                format!(
+                    "font {}: {}",
+                    path.display(),
+                    alpha2_engine::TextError::Raster(error)
+                ),
+            ),
+            error => code_tag("INVALID_INPUT", error.to_string()),
+        })?;
         let mut texts = TextTextures::new();
-        let mut fonts = Vec::with_capacity(paths.len());
-        for path in paths {
-            let bytes: std::sync::Arc<[u8]> = std::fs::read(path)
-                .map_err(|error| {
-                    code_tag("MISSING_INPUT", format!("font {}: {error}", path.display()))
-                })?
-                .into();
-            fonts.push(std::sync::Arc::clone(&bytes));
-            let family = path
-                .file_stem()
-                .map_or_else(String::new, |stem| stem.to_string_lossy().into_owned());
-            texts.add_font(family, bytes, 0).map_err(|error| {
-                code_tag("INVALID_INPUT", format!("font {}: {error}", path.display()))
-            })?;
+        for face in faces {
+            texts
+                .add_font(face.family, face.bytes, face.face_index)
+                .map_err(|error| code_tag("INVALID_INPUT", error.to_string()))?;
         }
         *self
             .texts

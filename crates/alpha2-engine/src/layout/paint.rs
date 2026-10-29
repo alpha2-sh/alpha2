@@ -3,10 +3,11 @@
 //! into as few scenes as the order allows; texts are their textures, placed
 //! 1:1 at whole pixels; isolated nodes are groups.
 
-use super::{NodeRects, ResolvedLayout, unit_of};
+use super::unit_of;
 use alpha2_eval::{EvaluatedLayout, EvaluatedNode, NodeContent};
 use alpha2_geometry::kurbo::{Affine, BezPath, Point, Vec2};
 use alpha2_geometry::{CanvasSize, IRect, VectorOp, VectorScene, build_scene_in, scene_paint};
+use alpha2_layout::{NodeRects, ResolvedLayout};
 use alpha2_model::{FillRule, Paint, Rgba};
 use alpha2_render::RenderSize;
 use std::sync::Arc;
