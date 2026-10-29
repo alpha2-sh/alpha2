@@ -73,7 +73,7 @@ pub enum ExportStep {
 
 /// One step of an export that leaves its picture as a rendered texture.
 #[derive(Debug)]
-pub enum ExportTextureStep {
+pub enum ExportTextureStep<I = alpha2_render::RenderedTexture> {
     /// Required decoded frames are not available; retry without advancing.
     Waiting {
         /// Timeline timestamp that remains pending.
@@ -87,9 +87,10 @@ pub enum ExportTextureStep {
         index: u64,
         /// Exact rational-frame timestamp.
         time: MediaTime,
-        /// The frame at export quality, in the renderer's intermediate
-        /// format; its work is submitted.
-        texture: alpha2_render::RenderedTexture,
+        /// The frame at export quality: on the GPU a texture in the
+        /// renderer's intermediate format, its work submitted; on the CPU its
+        /// image.
+        texture: I,
     },
     /// Every scheduled frame has been produced.
     Complete,
@@ -182,6 +183,52 @@ impl Exporter {
         codec: VideoCodec,
     ) -> Result<Self, EngineError> {
         quality.export_size(&snapshot.project().settings)?;
+        Self::over(
+            snapshot,
+            range,
+            frame_rate,
+            quality,
+            YuvEncoding::export(codec),
+        )
+    }
+
+    /// An exporter of the one frame of `frame_rate`'s grid that holds
+    /// `time`, the frame an export of a range around it renders there, for a
+    /// host that takes the frame's picture
+    /// ([`Self::render_next_texture`]) rather than 4:2:0 frames: so the
+    /// project may be any size, an odd one too. [`Self::pending_time`] is
+    /// the frame's time.
+    ///
+    /// # Errors
+    /// Returns an error for invalid quality or a time past the timeline.
+    pub fn still(
+        snapshot: &EngineProject,
+        time: MediaTime,
+        frame_rate: FrameRate,
+        quality: QualityProfile,
+    ) -> Result<Self, EngineError> {
+        quality.render_size(&snapshot.project().settings)?;
+        let range = TimeRange::new(
+            time,
+            MediaTime::from_ticks(time.ticks().checked_add(1).ok_or(EngineError::OutOfRange)?),
+        )
+        .map_err(|_| EngineError::OutOfRange)?;
+        Self::over(
+            snapshot,
+            range,
+            frame_rate,
+            quality,
+            YuvEncoding::export(VideoCodec::H264),
+        )
+    }
+
+    fn over(
+        snapshot: &EngineProject,
+        range: TimeRange,
+        frame_rate: FrameRate,
+        quality: QualityProfile,
+        encoding: YuvEncoding,
+    ) -> Result<Self, EngineError> {
         if range.is_empty() {
             return Err(EngineError::EmptyExportRange);
         }
@@ -214,7 +261,7 @@ impl Exporter {
         Ok(Self {
             snapshot: snapshot.generation(),
             quality,
-            encoding: YuvEncoding::export(codec),
+            encoding,
             frame_rate,
             effective_range,
             next_frame,
@@ -589,12 +636,12 @@ impl Exporter {
     /// # Errors
     /// Returns an engine error when evaluation or rendering fails, and
     /// [`EngineError::ExportProjectChanged`] for another snapshot.
-    pub fn render_next_texture(
+    pub fn render_next_texture<R: crate::FrameRenderer + ?Sized>(
         &mut self,
         project: &EngineProject,
-        renderer: &Renderer,
+        renderer: &R,
         frames: &dyn FrameProvider,
-    ) -> Result<ExportTextureStep, EngineError> {
+    ) -> Result<ExportTextureStep<R::Image>, EngineError> {
         self.check(project)?;
         let Some(time) = self.pending_time() else {
             return Ok(ExportTextureStep::Complete);

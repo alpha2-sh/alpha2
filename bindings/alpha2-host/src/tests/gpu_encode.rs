@@ -328,7 +328,7 @@ fn the_input_policy_and_a_pinned_encoder_choose_the_output_path() {
             VideoQualityRequest::Level(QualityLevel::High),
             AudioQualityRequest::Level(QualityLevel::High),
             None,
-            &directory.join(name),
+            directory.join(name),
             &mut |_| Ok(()),
         );
         host.input_policy = VideoInputPolicy::Auto;
@@ -352,7 +352,7 @@ fn the_input_policy_and_a_pinned_encoder_choose_the_output_path() {
             policy,
         )
         .expect("pinned export");
-        assert_eq!(result["videoOutputPath"], json!("gpu-resident"), "{result}");
+        assert_eq!(result["videoPipeline"], json!("gpu-resident"), "{result}");
         assert_eq!(result["videoEncoder"], json!(encoder));
         assert_eq!(result["inputPolicy"], json!(policy.as_str()));
     }
@@ -369,7 +369,7 @@ fn the_input_policy_and_a_pinned_encoder_choose_the_output_path() {
         assert!(message.contains("takes GPU frames only"), "{message}");
     } else {
         let result = pinned_readback.expect("the pinned encoder on the readback path");
-        assert_eq!(result["videoOutputPath"], json!("readback"), "{result}");
+        assert_eq!(result["videoPipeline"], json!("readback"), "{result}");
         assert_eq!(result["videoEncoder"], json!(encoder), "{result}");
         assert!(
             result["gpuOutputPathUnavailable"]
@@ -395,7 +395,7 @@ fn the_input_policy_and_a_pinned_encoder_choose_the_output_path() {
         VideoInputPolicy::Auto,
     )
     .expect("readback export");
-    assert_eq!(readback["videoOutputPath"], json!("readback"));
+    assert_eq!(readback["videoPipeline"], json!("readback"));
     assert!(
         readback["gpuOutputPathUnavailable"]
             .as_str()

@@ -995,21 +995,12 @@ fn thumbnail_times(
 /// FIFO) is refused.
 fn write_png(path: &str, frame: &DecodedVideoFrame) -> Result<(), String> {
     let (width, height, straight) = png_pixels(frame)?;
-    alpha2_native::write_replacing(path, |file| {
-        let mut buffered = std::io::BufWriter::new(file);
-        let mut encoder = png::Encoder::new(&mut buffered, width, height);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
-        writer
-            .write_image_data(&straight)
-            .map_err(|error| error.to_string())?;
-        writer.finish().map_err(|error| error.to_string())?;
-        buffered
-            .into_inner()
-            .map(|_| ())
-            .map_err(|error| error.error().to_string())
-    })
+    alpha2_native::write_png(
+        alpha2_native::OutputTarget::replacing(path),
+        width,
+        height,
+        &straight,
+    )
     .map_err(|error| format!("writing {path}: {error}"))
 }
 

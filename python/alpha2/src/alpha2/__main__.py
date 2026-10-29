@@ -8,6 +8,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from .builder import TICKS_PER_SECOND
 from .client import ExportProgress, HostClient
 from .errors import Alpha2HostError, Alpha2HostInstallError
 from .install import (
@@ -122,6 +123,32 @@ def _export(arguments: argparse.Namespace) -> int:
     return 0
 
 
+def _still(arguments: argparse.Namespace) -> int:
+    project = json.loads(Path(arguments.project).read_text(encoding="utf-8"))
+    try:
+        result = HostClient(host_path=arguments.host).still(
+            project,
+            arguments.at,
+            arguments.output,
+            assets=_pairs(arguments.asset, "--asset"),
+            fonts=arguments.font,
+            size=tuple(arguments.size) if arguments.size else None,
+            overwrite=arguments.overwrite,
+        )
+    except Alpha2HostError as error:
+        print(f"alpha2 still: {error.code}: {error}", file=sys.stderr)
+        return 1
+    if arguments.json:
+        print(json.dumps(result, indent=2))
+    else:
+        frame = result["stills"][0]
+        print(
+            f"wrote {frame['output']} ({frame['width']}x{frame['height']}, "
+            f"frame at {frame['frameTime'] / TICKS_PER_SECOND:g} s)"
+        )
+    return 0
+
+
 def _capabilities(arguments: argparse.Namespace) -> int:
     try:
         report = HostClient(host_path=arguments.host).capabilities()
@@ -173,6 +200,29 @@ def main(argv: Sequence[str] | None = None) -> int:
     export.add_argument("--json", action="store_true", help="print the host's export result")
     export.add_argument("--host", help="the alpha2-host binary to run")
     export.set_defaults(run=_export)
+
+    still = commands.add_parser(
+        "still",
+        help="render one frame of a project JSON file to a PNG",
+        description="Renders the frame of the project's frame grid that holds --at, as an export "
+        "renders it, to an 8-bit RGBA PNG.",
+    )
+    still.add_argument("project", help="the project.v1 JSON file")
+    still.add_argument("output", help="the PNG to write")
+    still.add_argument(
+        "--at", type=float, required=True, metavar="SECONDS", help="the timeline time"
+    )
+    still.add_argument("--asset", action="append", default=[], metavar="ID=PATH")
+    still.add_argument("--font", action="append", default=[], metavar="PATH")
+    still.add_argument(
+        "--size", type=int, nargs=2, metavar=("WIDTH", "HEIGHT"), help="default: the canvas"
+    )
+    still.add_argument(
+        "--overwrite", action="store_true", help="replace a file already at the output"
+    )
+    still.add_argument("--json", action="store_true", help="print the host's result")
+    still.add_argument("--host", help="the alpha2-host binary to run")
+    still.set_defaults(run=_still)
 
     report = commands.add_parser("capabilities", help="print what the host can decode and encode")
     report.add_argument("--host", help="the alpha2-host binary to run")

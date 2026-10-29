@@ -4,15 +4,16 @@
 //! for, else the environment's `ALPHA2_*_BYTES` setting, else the default.
 //! The environment settings are this policy's defaults, not a second set of
 //! limits beside it. Each budget bounds memory this host allocates and
-//! reserves before allocating; none bounds the process as a whole, and
-//! decoder, encoder, and driver memory is outside all of them.
+//! reserves before allocating, except the decoder session budget, which bounds
+//! how many decoders open by an estimate of what each holds; none bounds the
+//! process as a whole, and encoder and driver memory is outside all of them.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{
-    DEFAULT_AUDIO_WINDOW_BYTES, DEFAULT_DECODE_QUEUE_BYTES, DEFAULT_EXPORT_IN_FLIGHT_BYTES,
-    DEFAULT_PROVIDER_SOURCE_BYTES, DEFAULT_REVERSE_CACHE_BYTES,
+    DEFAULT_AUDIO_WINDOW_BYTES, DEFAULT_DECODE_QUEUE_BYTES, DEFAULT_DECODER_SESSION_BYTES,
+    DEFAULT_EXPORT_IN_FLIGHT_BYTES, DEFAULT_PROVIDER_SOURCE_BYTES, DEFAULT_REVERSE_CACHE_BYTES,
 };
 
 /// The request's `memory`: any budget it names replaces the environment's.
@@ -34,6 +35,9 @@ pub struct MemoryRequest {
     /// Lottie, OpenEXR, image sequences) hold together: their kept frames
     /// and images.
     pub provider_source_bytes: Option<u64>,
+    /// What the open video decoder sessions hold together, by the host's
+    /// estimate of a session: it bounds how many sessions an export opens.
+    pub decoder_session_bytes: Option<u64>,
     /// A fraction, above 0 and at most 1, that every budget above is scaled
     /// by after it is resolved: how a retry asks for less in flight without
     /// knowing the host's defaults.
@@ -180,6 +184,8 @@ pub struct MemoryPolicy {
     pub reverse_cache: Budget,
     pub audio_window: Budget,
     pub provider_sources: Budget,
+    /// Decoder sessions, by estimate ([`crate::config::decoder_session_bytes`]).
+    pub decoder_sessions: Budget,
     /// What the resolved budgets were scaled by.
     pub scale: f64,
 }
@@ -202,6 +208,7 @@ impl MemoryPolicy {
             ("reverseCacheBytes", request.reverse_cache_bytes),
             ("audioWindowBytes", request.audio_window_bytes),
             ("providerSourceBytes", request.provider_source_bytes),
+            ("decoderSessionBytes", request.decoder_session_bytes),
         ] {
             if value == Some(0) {
                 return Err(format!("memory.{field} must be a positive byte count"));
@@ -237,6 +244,11 @@ impl MemoryPolicy {
                 "ALPHA2_PROVIDER_SOURCE_BYTES",
                 DEFAULT_PROVIDER_SOURCE_BYTES,
             ),
+            decoder_sessions: Budget::resolve(
+                request.decoder_session_bytes,
+                "ALPHA2_DECODER_SESSION_BYTES",
+                DEFAULT_DECODER_SESSION_BYTES,
+            ),
             scale,
         };
         Ok(policy.scaled())
@@ -255,6 +267,7 @@ impl MemoryPolicy {
                 &mut self.reverse_cache,
                 &mut self.audio_window,
                 &mut self.provider_sources,
+                &mut self.decoder_sessions,
             ] {
                 budget.bytes = ((budget.bytes as f64 * self.scale).floor() as u64).max(1);
             }
@@ -270,8 +283,9 @@ impl MemoryPolicy {
             "reverseCacheBytes": self.reverse_cache.to_json(),
             "audioWindowBytes": self.audio_window.to_json(),
             "providerSourceBytes": self.provider_sources.to_json(),
+            "decoderSessionBytes": self.decoder_sessions.to_json(),
             "scale": self.scale,
-            "scope": "memory this host reserves before allocating; decoder, encoder, and driver memory are outside every budget",
+            "scope": "memory this host reserves before allocating, and decoder sessions by estimate; encoder and driver memory are outside every budget",
         })
     }
 }

@@ -49,8 +49,8 @@ if (process.argv[2] === "serve" && scenario.startsWith("unavailable")) {
     JSON.stringify({
       ok: true,
       result: {
-        videoOutputPath: "readback",
-        performance: { videoOutputPath: "readback" },
+        videoPipeline: "readback",
+        performance: { videoPipeline: "readback" },
         gpuOutputPathUnavailable: scenario === "unavailable" ? reason : null,
         frames: 100,
       },
@@ -83,7 +83,7 @@ if (process.argv[2] === "serve" && scenario.startsWith("unavailable")) {
   if (process.env.ALPHA2_EXPORT_CANCEL_AT_FRAME === undefined) {
     writeFileSync(output, "fixture");
     console.log(
-      JSON.stringify({ ok: true, result: { videoOutputPath: "gpu-resident" } }),
+      JSON.stringify({ ok: true, result: { videoPipeline: "gpu-resident" } }),
     );
   } else {
     const clean = [

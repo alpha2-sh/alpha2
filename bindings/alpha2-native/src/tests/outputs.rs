@@ -115,16 +115,20 @@ fn an_output_that_fails_to_open_removes_the_partial_it_created() {
 
 /// Each transactional output, opened at `path`, as the value that holds its
 /// partial file until it is dropped.
-fn open_each_output(path: &Path, kind: &str) -> Result<Box<dyn std::any::Any>, EncodeError> {
+fn open_each_output(
+    target: impl Into<crate::OutputTarget>,
+    kind: &str,
+) -> Result<Box<dyn std::any::Any>, EncodeError> {
+    let target = target.into();
     Ok(match kind {
-        "av" => Box::new(NativeAvEncodeSink::create(path, av_config(48_000))?),
+        "av" => Box::new(NativeAvEncodeSink::create(&target, av_config(48_000))?),
         "video" => Box::new(NativeVideoEncodeSink::create(
-            path,
+            &target,
             av_config(48_000).video,
         )?),
-        "wav" => Box::new(NativeWavEncodeSink::create(path, 48_000, 2)?),
+        "wav" => Box::new(NativeWavEncodeSink::create(&target, 48_000, 2)?),
         "mux" => Box::new(crate::mux::Muxer::open(
-            path,
+            &target,
             alpha2_media::Container::Mp4,
             &mp4_video_encoder(),
             ra(1, 30),
@@ -191,6 +195,100 @@ fn a_partial_file_no_running_export_holds_is_taken_over() {
 }
 
 #[test]
+fn an_existing_output_is_refused_unless_the_output_replaces_it() {
+    for (kind, extension) in OUTPUT_KINDS {
+        let path = output_path(&format!("existing-{kind}")).with_extension(extension);
+        fs::write(&path, b"old").expect("old file");
+        let error = open_each_output(&path, kind)
+            .err()
+            .unwrap_or_else(|| panic!("{kind}: an existing output was opened"));
+        assert!(
+            error.to_string().contains("refusing to overwrite"),
+            "{kind}: {error}"
+        );
+        assert!(!partial_beside(&path).exists(), "{kind}");
+        // Replacing, the old file stays whole until the output is renamed over it: an output that
+        // ends without finishing (a failure or a cancel) leaves it.
+        let output = open_each_output(crate::OutputTarget::replacing(&path), kind)
+            .unwrap_or_else(|error| panic!("{kind}: replacing refused: {error}"));
+        assert_eq!(fs::read(&path).expect("old file"), b"old", "{kind}");
+        drop(output);
+        assert_eq!(fs::read(&path).expect("old file"), b"old", "{kind}");
+        assert!(!partial_beside(&path).exists(), "{kind}");
+        fs::remove_file(&path).expect("cleanup");
+    }
+}
+
+#[test]
+fn a_replacing_output_renames_over_the_old_file() {
+    let path = output_path("replacing-finished").with_extension("wav");
+    fs::write(&path, b"old").expect("old file");
+    #[cfg(unix)]
+    let old_inode = std::os::unix::fs::MetadataExt::ino(&fs::metadata(&path).expect("old"));
+    let cancel = CancelToken::default();
+    let mut sink = NativeWavEncodeSink::create(crate::OutputTarget::replacing(&path), 48_000, 1)
+        .expect("the sink opens");
+    sink.write_audio(
+        &AudioBlock {
+            start_sample: 0,
+            sample_rate: 48_000,
+            speakers: alpha2_media::SpeakerLayout::MONO,
+            channels: vec![vec![0.5_f32; 4]],
+        },
+        &cancel,
+    )
+    .expect("block");
+    assert_eq!(fs::read(&path).expect("old file"), b"old");
+    sink.finish_audio(&cancel).expect("finish");
+    let written = fs::read(&path).expect("new file");
+    assert!(
+        written.starts_with(b"RIFF"),
+        "the old bytes are still there"
+    );
+    // A rename, not a truncation: whoever has the old file open keeps its bytes.
+    #[cfg(unix)]
+    assert_ne!(
+        std::os::unix::fs::MetadataExt::ino(&fs::metadata(&path).expect("new")),
+        old_inode
+    );
+    assert!(!partial_beside(&path).exists());
+    fs::remove_file(path).expect("cleanup");
+}
+
+#[test]
+fn a_replacing_output_refuses_a_directory_or_a_symbolic_link_before_writing() {
+    let directory = output_path("replacing-directory-output");
+    let _ = fs::remove_dir(&directory);
+    fs::create_dir(&directory).expect("directory");
+    for (kind, _) in OUTPUT_KINDS {
+        let error = open_each_output(crate::OutputTarget::replacing(&directory), kind)
+            .err()
+            .unwrap_or_else(|| panic!("{kind}: a directory was opened as an output"));
+        assert!(
+            error.to_string().contains("not a regular file"),
+            "{kind}: {error}"
+        );
+        assert!(!partial_beside(&directory).exists(), "{kind}");
+    }
+    fs::remove_dir(&directory).expect("cleanup");
+    #[cfg(unix)]
+    {
+        let target = output_path("replacing-link-target").with_extension("wav");
+        let link = output_path("replacing-link").with_extension("wav");
+        fs::write(&target, b"linked").expect("target");
+        let _ = fs::remove_file(&link);
+        std::os::unix::fs::symlink(&target, &link).expect("link");
+        let error = open_each_output(crate::OutputTarget::replacing(&link), "wav")
+            .expect_err("a symbolic link was opened as an output");
+        assert!(error.to_string().contains("not a regular file"), "{error}");
+        assert!(!partial_beside(&link).exists());
+        assert_eq!(fs::read(&target).expect("target"), b"linked");
+        fs::remove_file(&link).expect("cleanup");
+        fs::remove_file(&target).expect("cleanup");
+    }
+}
+
+#[test]
 fn a_partial_file_a_running_export_holds_is_refused_by_name() {
     for (kind, extension) in OUTPUT_KINDS {
         let path = output_path(&format!("held-partial-{kind}")).with_extension(extension);
@@ -227,7 +325,7 @@ fn a_replacing_write_keeps_the_old_file_until_it_finishes() {
     let path = output_path("replacing-write").with_extension("png");
     let partial = partial_beside(&path);
     fs::write(&path, b"old").expect("old file");
-    let error = crate::write_replacing(&path, |file| {
+    let error = crate::write_whole(crate::OutputTarget::replacing(&path), |file| {
         std::io::Write::write_all(file, b"half").map_err(|error| error.to_string())?;
         Err("the disk is full".into())
     })
@@ -238,15 +336,17 @@ fn a_replacing_write_keeps_the_old_file_until_it_finishes() {
 
     let held_final = output_path("replacing-held").with_extension("png");
     let _ = fs::remove_file(&held_final);
-    let held = crate::partial::PartialOutput::claim(&held_final).expect("a running output");
-    let error = crate::write_replacing(&held_final, |_| Ok(())).expect_err("a held partial");
+    let held =
+        crate::partial::PartialOutput::claim(&(&held_final).into()).expect("a running output");
+    let error = crate::write_whole(crate::OutputTarget::replacing(&held_final), |_| Ok(()))
+        .expect_err("a held partial");
     assert!(
         error.to_string().contains(crate::PARTIAL_OUTPUT_IN_USE),
         "{error}"
     );
     drop(held);
 
-    crate::write_replacing(&path, |file| {
+    crate::write_whole(crate::OutputTarget::replacing(&path), |file| {
         std::io::Write::write_all(file, b"new").map_err(|error| error.to_string())
     })
     .expect("a regular file is replaced");
@@ -256,7 +356,8 @@ fn a_replacing_write_keeps_the_old_file_until_it_finishes() {
 
     let directory = output_path("replacing-directory").with_extension("png");
     fs::create_dir(&directory).expect("directory");
-    let error = crate::write_replacing(&directory, |_| Ok(())).expect_err("a directory");
+    let error = crate::write_whole(crate::OutputTarget::replacing(&directory), |_| Ok(()))
+        .expect_err("a directory");
     assert!(error.to_string().contains("not a regular file"), "{error}");
     assert!(directory.is_dir() && !partial_beside(&directory).exists());
     fs::remove_dir(directory).expect("cleanup");

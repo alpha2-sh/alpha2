@@ -137,7 +137,7 @@ fn software_decode_does_not_decode_on_the_encode_device() {
             VideoQualityRequest::Level(QualityLevel::High),
             AudioQualityRequest::Level(QualityLevel::High),
             None,
-            &directory.join("out.mp4"),
+            directory.join("out.mp4"),
             &mut |_| Ok(()),
         )
         .expect("export");
@@ -297,7 +297,7 @@ fn every_d3d12va_refusal_falls_back_with_its_reason() {
         )
         .unwrap_or_else(|error| panic!("{case}: the auto export failed: {error}"));
         assert_eq!(
-            result["videoOutputPath"],
+            result["videoPipeline"],
             json!("readback"),
             "{case}: {result}"
         );
@@ -361,7 +361,7 @@ fn each_codec_takes_the_gpu_path_or_says_why_not() {
             &output,
         ) {
             Ok(result) => {
-                assert_eq!(result["videoOutputPath"], json!("gpu-resident"), "{result}");
+                assert_eq!(result["videoPipeline"], json!("gpu-resident"), "{result}");
                 assert_eq!(result["videoEncoder"], json!(encoder), "{result}");
                 assert_eq!(result["videoCodec"], json!(codec.as_str()), "{result}");
             }

@@ -701,7 +701,7 @@ fn audio_and_video_start_together_on_the_gpu_resident_path() {
             (NativeVideoCodec::H264, 256, 144),
         );
         assert_eq!(
-            result["videoOutputPath"],
+            result["videoPipeline"],
             json!("gpu-resident"),
             "{case}: {result}"
         );
@@ -717,7 +717,7 @@ fn audio_and_video_start_together_on_the_gpu_resident_path() {
             start_ticks,
             (NativeVideoCodec::Mpeg4Part2, 256, 144),
         );
-        assert_eq!(reference["videoOutputPath"], json!("readback"), "{case}");
+        assert_eq!(reference["videoPipeline"], json!("readback"), "{case}");
         let (_, audio) = stream_spans(&output);
         let (_, expected) = stream_spans(&reference_output);
         assert_eq!(audio, expected, "{case}: the audio spans differ");
@@ -950,7 +950,7 @@ fn a_normalized_export_reports_its_output_on_every_path() {
             NativeVideoCodec::H264,
             &directory.join("gpu.mp4"),
         );
-        assert_eq!(result["videoOutputPath"], json!("gpu-resident"), "{result}");
+        assert_eq!(result["videoPipeline"], json!("gpu-resident"), "{result}");
         let loudness = &result["loudness"];
         assert_eq!(
             loudness["applied"]["limiterLimited"],
@@ -982,7 +982,7 @@ fn a_normalized_export_reports_its_output_on_every_path() {
         NativeVideoCodec::H264,
         &directory.join("copy.mp4"),
     );
-    assert_eq!(result["videoOutputPath"], json!("packet-copy"), "{result}");
+    assert_eq!(result["videoPipeline"], json!("packet-copy"), "{result}");
     assert_eq!(result["audioStrategy"], json!("encode"), "{result}");
     assert_output_as_planned(&result["loudness"], &file);
     std::fs::remove_dir_all(&directory).ok();

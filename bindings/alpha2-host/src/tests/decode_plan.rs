@@ -70,6 +70,7 @@ fn a_decoded_frame_set_from_another_generation_is_refused() {
         software_decoded_frames: 0,
         hardware_decoded_frames: 0,
         hardware_fallbacks: HardwareFallbackCounts::default(),
+        decoder_session_reopens: 0,
     };
     let mut scheduler = DecodeScheduler::new(2, &project);
     scheduler.generation = 3;
@@ -852,6 +853,172 @@ fn a_shard_past_its_sessions_evicts_the_least_recently_used_and_reopens_it() {
             .sum::<u64>();
         assert_eq!(state.reverse_cache_bytes, held);
     }
+}
+
+/// A decode state over the corpus's 61-frame H.264 source, which presents a
+/// frame every 4 000 ticks, holding at most `sessions` sessions.
+fn copy_source_state(sessions: usize) -> ExportDecodeState {
+    let project: Project = serde_json::from_str(include_str!(
+        "../../../../tests/cases/host-video-export-project.json"
+    ))
+    .expect("video export project");
+    let assets = HashMap::from([("video-source".to_owned(), corpus("h264-bt709-copy.mp4"))]);
+    ExportDecodeState::new_with_limits(&project, &assets, 1, sessions, 128 << 20)
+        .expect("decode state")
+}
+
+/// The job of output frame `frame`, reading `clips` at the same time.
+fn frame_job(frame: u64, clips: &[&str]) -> DecodeJob {
+    let time = MediaTime::from_ticks(i64::try_from(frame).expect("frame") * 4_000);
+    DecodeJob {
+        generation: 0,
+        index: frame,
+        time,
+        needs: clips
+            .iter()
+            .map(|clip| {
+                let (source_id, clip_id, reader) = cursor_of(clip);
+                FrameNeed {
+                    reader,
+                    clip_id,
+                    source_id,
+                    media_time: time,
+                }
+            })
+            .collect(),
+        reverse_runs: HashMap::new(),
+    }
+}
+
+/// Each decoded picture's planes, by clip.
+fn pictures(set: &crate::decode::DecodedFrameSet) -> Vec<(String, Vec<u8>)> {
+    set.frames
+        .iter()
+        .map(|frame| {
+            let alpha2_native::NativeVideoFrame::Cpu(picture) = &*frame.frame else {
+                panic!("a software session decodes on the CPU");
+            };
+            let bytes = picture
+                .planes
+                .iter()
+                .flat_map(|plane| plane.bytes.iter().copied())
+                .collect();
+            (frame.clip.as_str().to_owned(), bytes)
+        })
+        .collect()
+}
+
+/// One more cursor than sessions, read in one order every frame: the shard
+/// closes the one read next the latest, so a frame reopens at most two
+/// sessions (least recently used, it would reopen every one), and every
+/// picture is the one a shard with room for all of them decodes.
+#[test]
+fn a_shard_short_of_one_session_reopens_at_most_two_a_frame_and_decodes_the_same_pictures() {
+    const SESSIONS: usize = 3;
+    let clips = ["a", "b", "c", "d"];
+    let mut short = copy_source_state(SESSIONS);
+    let mut roomy = copy_source_state(clips.len());
+    let cancel = CancelToken::default();
+    let mut reopened = Vec::new();
+    for frame in 0..30 {
+        let decoded = short
+            .decode_job(frame_job(frame, &clips), &cancel)
+            .expect("decodes short");
+        let expected = roomy
+            .decode_job(frame_job(frame, &clips), &cancel)
+            .expect("decodes with room");
+        assert_eq!(pictures(&decoded), pictures(&expected), "frame {frame}");
+        assert!(short.decoders.len() <= SESSIONS);
+        reopened.push(decoded.decoder_session_reopens);
+        // With a session for every cursor, nothing opens twice.
+        assert_eq!(expected.decoder_session_reopens, 0, "frame {frame}");
+    }
+    assert_eq!(reopened[0], 0, "the first frame opens each cursor once");
+    assert!(
+        reopened[1..].iter().all(|count| *count <= 2),
+        "{reopened:?}"
+    );
+    assert!(reopened[1..].iter().any(|count| *count > 0), "{reopened:?}");
+    assert_eq!(short.session_reopens, reopened.iter().sum::<u64>());
+}
+
+/// A cursor the timeline reads no more is closed after the first frame that
+/// does not read it, and its plan goes with it.
+#[test]
+fn a_cursor_past_its_last_read_is_closed() {
+    let mut state = copy_source_state(8);
+    let span =
+        |end: i64| TimeRange::new(MediaTime::ZERO, MediaTime::from_ticks(end)).expect("span");
+    let read = |clip: &str, end: i64| {
+        let (source_id, clip_id, reader) = cursor_of(clip);
+        alpha2_eval::SourceRead {
+            source_id,
+            clip_id,
+            reader,
+            span: span(end),
+        }
+    };
+    state.reads = Arc::new(crate::decode::CursorReads::new(vec![
+        read("short", 3 * 4_000),
+        read("long", 60 * 4_000),
+    ]));
+    let cancel = CancelToken::default();
+    for frame in 0..6 {
+        let clips: &[&str] = if frame < 3 {
+            &["long", "short"]
+        } else {
+            &["long"]
+        };
+        state
+            .decode_job(frame_job(frame, clips), &cancel)
+            .expect("decodes");
+        assert_eq!(
+            state.decoders.contains_key(&cursor_of("short")),
+            frame < 3,
+            "frame {frame}"
+        );
+        assert!(state.decoders.contains_key(&cursor_of("long")));
+        assert_eq!(state.decoded.len(), state.decoders.len());
+    }
+    assert_eq!(state.session_reopens, 0);
+}
+
+/// A backward cursor whose session another cursor takes builds its window
+/// again from what its run has left, at the same size: the cache gives the
+/// bytes back when the window goes, and holds as much again after.
+#[test]
+fn an_evicted_backward_cursor_builds_its_window_again_from_the_rest_of_its_run() {
+    let mut state = long_gop_state(10);
+    state.max_sessions = 2;
+    let cancel = CancelToken::default();
+    let times = (0..20).rev().map(|frame| frame * 4_000).collect::<Vec<_>>();
+    state
+        .decode_job(run_job("reverse", &times), &cancel)
+        .expect("the run's first frame decodes");
+    let window_bytes = state.reverse_cache_bytes;
+    assert!(window_bytes > 0);
+    let mut others = frame_job(1, &["x", "y"]);
+    for need in &mut others.needs {
+        need.media_time = MediaTime::ZERO;
+    }
+    state.decode_job(others, &cancel).expect("decodes x and y");
+    assert!(!state.decoders.contains_key(&cursor_of("reverse")));
+    assert_eq!(state.reverse_cache_bytes, 0);
+    assert!(state.reverse_plans.contains_key(&cursor_of("reverse")));
+    let mut next = frame_job(2, &["reverse"]);
+    next.needs[0].media_time = MediaTime::from_ticks(times[1]);
+    let decoded = state.decode_job(next, &cancel).expect("decodes on");
+    assert_eq!(decoded.frames[0].frame.pts().ticks(), times[1]);
+    assert_eq!(decoded.decoder_session_reopens, 1);
+    assert_eq!(state.reverse_cache_bytes, window_bytes);
+    assert_eq!(
+        state
+            .reverse_windows
+            .values()
+            .map(|window| window.bytes)
+            .sum::<u64>(),
+        window_bytes
+    );
 }
 
 /// The reverse cache a frame set reports is what every shard's windows hold, a

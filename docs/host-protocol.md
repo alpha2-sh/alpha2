@@ -6,7 +6,7 @@
 
 Every message, both ways, is one JSON object on one line of UTF-8 text, and has `"protocolVersion": 1`.
 
-A request has a `requestId`, a string that is not empty, and an `operation`: `capabilities`, `conform` or `export`.
+A request has a `requestId`, a string that is not empty, and an `operation`: `capabilities`, `conform`, `export` or `still`.
 
 ```json
 {"protocolVersion":1,"requestId":"1","operation":"capabilities"}
@@ -56,7 +56,8 @@ Renders a range of a project and encodes it into an MP4, MOV, Matroska or WebM f
 | `assets` | `{ "<source-id>": "<path>" }` | required | The file of each source the export reads. |
 | `startTicks`, `endTicks` | integers | required | The timeline range, in ticks (120,000 a second), widened to the frame grid. |
 | `frameRate` | `{ "num", "den" }` | required | The output frame rate. |
-| `output` | path | required | The file to write. It must not exist. Its extension (`.mp4` or `.m4v`, `.mov`, `.mkv`, `.webm`, in any case) names the container unless `container` does, and must match it. |
+| `output` | path | required | The file to write. A file already there is refused unless `overwrite` is true. Its extension (`.mp4` or `.m4v`, `.mov`, `.mkv`, `.webm`, in any case) names the container unless `container` does, and must match it. |
+| `overwrite` | boolean | `false` | Replace a regular file at `output` once the export is whole, by rename: a failed or cancelled export leaves it as it was. Anything else there (a directory, a symbolic link) is refused with `IO_ERROR`. |
 | `container` | `mp4`, `mov`, `mkv`, `webm` | the output's extension's | |
 | `proxies`, `frames` | as for `conform` | `{}` | |
 | `media` | `original`, `proxies` | `original` | `proxies` reads fresh proxies where there are some, and originals elsewhere. |
@@ -74,7 +75,7 @@ Renders a range of a project and encodes it into an MP4, MOV, Matroska or WebM f
 | `inputPolicy` | `auto`, `gpu-required`, `cpu-readback` | `auto` | How frames reach the encoder: `auto` stays on the GPU where the host can and reads back otherwise; `gpu-required` fails with `GPU_OUTPUT_UNAVAILABLE` instead; `cpu-readback` always reads back. |
 | `strategy` | `render`, `prefer-copy`, `require-copy` | `render` | `prefer-copy` copies the sources' compressed packets instead of rendering when the range shows them untouched, and renders otherwise; `require-copy` fails with `COPY_INELIGIBLE` instead. |
 | `renderCache` | `{ "directory", "quotaBytes"?, "backlog"? }` | none | A directory to keep rendered frames in, so a later export of the same project, files and effects by the same host build on the same GPU takes them instead of rendering them again. `quotaBytes` is 4 GiB by default; `backlog` is `skip` (default) or `wait`. |
-| `memory` | `{ "inFlightBytes"?, "decodeQueueBytes"?, "reverseCacheBytes"?, "audioWindowBytes"?, "providerSourceBytes"?, "scale"? }` | host defaults | Byte budgets for the export. An export whose smallest working set does not fit fails with `RESOURCE_LIMIT` before it renders. |
+| `memory` | `{ "inFlightBytes"?, "decodeQueueBytes"?, "reverseCacheBytes"?, "audioWindowBytes"?, "providerSourceBytes"?, "decoderSessionBytes"?, "scale"? }` | host defaults | Byte budgets for the export. An export whose smallest working set does not fit fails with `RESOURCE_LIMIT` before it renders. `decoderSessionBytes` bounds how many video decoders stay open by an estimate of each, and never refuses an export: past it, videos take turns on fewer decoders (see `native.md`). |
 
 Each container offers only the codecs its mainstream players decode there; the first of each is the default:
 
@@ -87,11 +88,28 @@ Each container offers only the codecs its mainstream players decode there; the f
 
 An unknown container, an extension that names none or disagrees with `container`, and a codec the container does not offer are refused with `INVALID_INPUT` before anything opens, as is a codec this host's FFmpeg cannot encode. `capabilities` reports the same table as `encode.containers` (`[{ "id", "extensions", "video", "audio", "defaultVideoCodec", "defaultAudioCodec" }]`), beside the encoders this host has (`encode.video`, `encode.audio`). Matroska and WebM store each frame's time to the millisecond, so their frames sit on the frame grid only to within half a millisecond.
 
-The fields and the result are typed and described one by one in `@alpha2-sh/node` (`ExportProjectRequest`, `NativeExportResult`). The result reports, among others, the frames, the encoder and rate control used, the output path (`videoOutputPath`), what each source read (`media`) and timing (`renderMs`, `fps`).
+The fields and the result are typed and described one by one in `@alpha2-sh/node` (`ExportProjectRequest`, `NativeExportResult`). The result reports, among others, the frames, the encoder and rate control used, how frames reached the encoder (`videoPipeline`: `readback`, `gpu-resident` or `packet-copy`), the absolute path of the file written (`output`), what each source read (`media`) and timing (`renderMs`, `fps`).
 
-The host writes the file as `<stem>.alpha2-partial.<ext>` beside `output` and renames it into place when it is complete. A partial file another running export is writing makes the request fail with `OUTPUT_IN_USE`; one left by a process that was killed is taken over.
+The host writes the file as `<stem>.alpha2-partial.<ext>` beside `output` and renames it into place when it is complete. A partial file another running export is writing makes the request fail with `OUTPUT_IN_USE`, with or without `overwrite`; one left by a process that was killed is taken over. An `output` that is the same file as any of the request's inputs (an asset, a proxy, a frame, a resource, an effect asset or a font; compared by file identity, so a hard link counts) is refused with `INVALID_REQUEST` before any work, with or without `overwrite`.
 
 Before it renders, the host conforms the media for `export-original` (or `export-proxy` with `media: "proxies"`); an export whose media is not ready fails with `CONFORM_FAILED`, and the error's `details` is the conform report.
+
+## `still`
+
+Renders frames of a project to PNG files, each the frame an export of it draws there. One request decodes once for all its frames.
+
+| Field | Type | Default | |
+| --- | --- | --- | --- |
+| `project` | project document | required | |
+| `assets` | `{ "<source-id>": "<path>" }` | required | As for `export`. |
+| `stills` | `[{ "time": <ticks>, "output": "<path>" }, ...]` | required | 1 to 256 frames, each to its own file. `time` is an integer tick count from 0; the frame drawn is the one of the project's frame grid that holds it, as an export snaps its range. They are rendered in time order whatever order they are given in. |
+| `size` | `{ "width", "height" }` | the canvas | Renders the project at this canvas size, 1 to 16384 pixels each way; odd sizes too, since nothing is encoded. |
+| `overwrite` | boolean | `false` | As for `export`, for every output. |
+| `proxies`, `frames`, `media`, `resources`, `effectAssets`, `fonts`, `effects` | as for `export` | | |
+
+Each PNG is 8-bit RGBA: the renderer's picture before any video encoding, display-encoded (sRGB) with straight alpha. Every frame is opaque over the project's `background`. Every output is SDR BT.709. The PNG is written beside its output as a partial file and renamed into place, like an export's file. An output that is one of the request's inputs is refused with `INVALID_REQUEST`, and an empty list, more than 256 frames, two frames to one file, a negative time or a size out of range with `INVALID_INPUT`, before anything renders.
+
+The result is `{ "stills": [{ "output", "frameTime", "width", "height" }], "renderer", "renderMs", "timings": { "decodeMs", "renderMs", "writeMs" }, "media", "decodeDiagnostics" }`, the frames in the order they were asked for. `output` is the absolute path written and `frameTime` the time of the frame drawn, in ticks. A still writes no progress lines.
 
 ## Cancelling
 
@@ -102,7 +120,7 @@ To cancel the running export, send the process `SIGTERM` or `SIGINT` (a console 
 | Code | Meaning |
 | --- | --- |
 | `UNSUPPORTED_PROTOCOL` | `protocolVersion` is missing or not 1. |
-| `INVALID_REQUEST` | The line is not a request: not UTF-8, not a JSON object, too long, an unknown or missing `operation`, a missing or mistyped field, an empty `requestId`. |
+| `INVALID_REQUEST` | The line is not a request: not UTF-8, not a JSON object, too long, an unknown or missing `operation`, a missing or mistyped field, an empty `requestId`; or an output is one of the request's inputs. |
 | `INVALID_INPUT` | A value is not accepted: an invalid project, range, rate or setting, or settings that do not go together. |
 | `CONFORM_FAILED` | The export's media is not ready; `details` is the conform report. |
 | `MISSING_INPUT` | A file the render needs was not given: an asset, an effect resource, a font or a frame. |
@@ -117,7 +135,7 @@ To cancel the running export, send the process `SIGTERM` or `SIGINT` (a console 
 | `COPY_INELIGIBLE` | `strategy: "require-copy"` and the range cannot be copied. |
 | `GPU_OUTPUT_UNAVAILABLE` | `inputPolicy: "gpu-required"` and the GPU-resident encode path cannot take the export. |
 | `ENCODE_ERROR` | Encoding or muxing failed. |
-| `IO_ERROR` | A file could not be read or written, or `output` already exists. |
+| `IO_ERROR` | A file could not be read or written, or `output` already exists and the request does not overwrite it. |
 | `OUTPUT_IN_USE` | Another running export is writing the same `output`. |
 | `CANCELLED` | The export was cancelled. |
 | `RESOURCE_LIMIT` | A budget or limit refused the work, such as a memory budget too small for the export. |

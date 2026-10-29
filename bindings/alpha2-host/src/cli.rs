@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 
 /// The command-line synopsis, returned as the error for an unrecognized command line or `--help`.
 pub fn usage() -> String {
-    "usage: alpha2-host serve\n       alpha2-host conform --project <project.json> --asset <source-id>=<path> [--proxy <source-id>=<path>]... [--purpose preview|preview-proxy|thumbnail|remote-edit|export-original|export-proxy]\n       alpha2-host export --project <project.json> --asset <source-id>=<path> [--proxy <source-id>=<path>]... [--frames <source-id>=<path>,...]... [--resource <source-id> <locator> <path>]... [--media original|proxies] --effect-asset <resource-id>=<path> [--font <font-file>]... --out <output.mp4|.mov|.mkv|.webm> [--container mp4|mov|mkv|webm] [--effects <effects.json>] [--start-ticks <ticks>] [--end-ticks <ticks>] [--frame-rate <num>/<den>] [--no-audio] [--video-codec <id>] [--video-encoder <ffmpeg-name>] [--input-policy auto|gpu-required|cpu-readback] [--strategy render|prefer-copy|require-copy] [--video-quality very-low|low|medium|high|very-high|<bits-per-second>] [--video-quantizer <n>] [--audio-codec aac|opus] [--audio-quality very-low|low|medium|high|very-high|<bits-per-second>] [--loudness-target <LUFS> [--true-peak-ceiling <dBTP>]] [--video-decode software|auto|hardware-required] [--renderer auto|gpu|cpu] [--render-cache <dir> [--render-cache-quota <bytes>] [--render-cache-backlog skip|wait]]".to_owned()
+    "usage: alpha2-host serve\n       alpha2-host conform --project <project.json> --asset <source-id>=<path> [--proxy <source-id>=<path>]... [--purpose preview|preview-proxy|thumbnail|remote-edit|export-original|export-proxy]\n       alpha2-host export --project <project.json> --asset <source-id>=<path> [--proxy <source-id>=<path>]... [--frames <source-id>=<path>,...]... [--resource <source-id> <locator> <path>]... [--media original|proxies] --effect-asset <resource-id>=<path> [--font <font-file>]... --out <output.mp4|.mov|.mkv|.webm> [--overwrite] [--container mp4|mov|mkv|webm] [--effects <effects.json>] [--start-ticks <ticks>] [--end-ticks <ticks>] [--frame-rate <num>/<den>] [--no-audio] [--video-codec <id>] [--video-encoder <ffmpeg-name>] [--input-policy auto|gpu-required|cpu-readback] [--strategy render|prefer-copy|require-copy] [--video-quality very-low|low|medium|high|very-high|<bits-per-second>] [--video-quantizer <n>] [--audio-codec aac|opus] [--audio-quality very-low|low|medium|high|very-high|<bits-per-second>] [--loudness-target <LUFS> [--true-peak-ceiling <dBTP>]] [--video-decode software|auto|hardware-required] [--renderer auto|gpu|cpu] [--render-cache <dir> [--render-cache-quota <bytes>] [--render-cache-backlog skip|wait]]".to_owned()
 }
 
 /// The flags shared by `conform` and `export`, as parsed. `include_audio` is true unless
@@ -36,6 +36,8 @@ pub struct ExportCliOptions {
     pub font_files: Vec<PathBuf>,
     pub effects: Option<PathBuf>,
     pub output: Option<PathBuf>,
+    /// Replace a regular file at `output` once the export is whole.
+    pub overwrite: bool,
     pub start_ticks: Option<i64>,
     pub end_ticks: Option<i64>,
     pub frame_rate: Option<RateRequest>,
@@ -223,6 +225,7 @@ pub fn export_request(options: ExportCliOptions) -> Result<(Request, PathBuf), H
         )?,
         memory: crate::memory::MemoryRequest::default(),
         output: output.clone(),
+        overwrite: options.overwrite,
     };
     request.check()?;
     Ok((Request::Export(Box::new(request)), output))
@@ -386,6 +389,7 @@ pub fn parse_export_args(args: Vec<String>) -> Result<ExportCliOptions, HostErro
                     den: parse_arg("--frame-rate denominator", den)?,
                 });
             }
+            "--overwrite" => options.overwrite = true,
             "--no-audio" => options.include_audio = false,
             "--include-audio" => options.include_audio = true,
             "--container" => {

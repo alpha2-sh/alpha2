@@ -159,7 +159,7 @@ fn an_openh264_export_reports_its_encoder_and_repeats_byte_for_byte() {
     assert_eq!(result["videoEncoder"], json!("openh264"), "{result}");
     assert_eq!(result["videoEncoderClass"], json!("software"));
     assert_eq!(result["videoEncoderHardware"], json!(false));
-    assert_eq!(result["videoOutputPath"], json!("readback"));
+    assert_eq!(result["videoPipeline"], json!("readback"));
     assert_eq!(result["videoThreadCount"], json!(2), "720 rows: two slices");
     assert_eq!(
         result["videoRateControl"]["applied"],

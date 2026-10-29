@@ -665,7 +665,7 @@ createInterface({ input: process.stdin }).once("line", (line) => {
     send({ ok: false, error: {
       code: "ALPHA2_ERROR",
       message: "GPU texture readback failed: map-failed",
-      failure: { code: "OUT_OF_MEMORY", origin: "native-host", operation: "export", backend: "native", phase: "readback", stage: "map-failed", frameIndex: 4, resource: "gpu", diagnostics: { videoOutputPath: "readback" } },
+      failure: { code: "OUT_OF_MEMORY", origin: "native-host", operation: "export", backend: "native", phase: "readback", stage: "map-failed", frameIndex: 4, resource: "gpu", diagnostics: { videoPipeline: "readback" } },
     } });
   });
 });
@@ -684,7 +684,7 @@ createInterface({ input: process.stdin }).once("line", (line) => {
       assert.equal(error.failure.code, "OUT_OF_MEMORY");
       assert.equal(error.failure.phase, "readback");
       assert.equal(error.failure.frameIndex, 4);
-      assert.equal(error.failure.diagnostics.videoOutputPath, "readback");
+      assert.equal(error.failure.diagnostics.videoPipeline, "readback");
       assert.match(error.failure.stderr, /out-of-memory error: staging/);
       assert.ok(Buffer.byteLength(error.stderr) <= 16_384);
       return true;
@@ -994,7 +994,7 @@ createInterface({ input: process.stdin }).once("line", (line) => {
   const request = JSON.parse(line);
   const send = (message) => process.stdout.write(JSON.stringify({ protocolVersion: 1, requestId: request.requestId, ...message }) + "\\n");
   if (process.env.ALPHA2_VIDEO_DECODE === "software") {
-    process.stderr.write("second host\\n", () => send({ ok: false, error: { code: "RESOURCE_LIMIT", message: "decode queue budget too small", failure: { code: "RESOURCE_LIMIT", origin: "native-host", operation: "export", backend: "native", phase: "decode", resource: "cpu", diagnostics: { videoOutputPath: "readback" } } } }));
+    process.stderr.write("second host\\n", () => send({ ok: false, error: { code: "RESOURCE_LIMIT", message: "decode queue budget too small", failure: { code: "RESOURCE_LIMIT", origin: "native-host", operation: "export", backend: "native", phase: "decode", resource: "cpu", diagnostics: { videoPipeline: "readback" } } } }));
   } else {
     process.stderr.write("first host: decoder stuck\\n", () => send({ ok: false, error: { code: "DECODE_STALLED", message: "decode shard 0 has been inside one decoder operation for 40001 ms", failure: { code: "GPU_TIMEOUT", origin: "native-host", operation: "export", backend: "native", phase: "decode", resource: "gpu" } } }));
   }
@@ -1011,7 +1011,7 @@ createInterface({ input: process.stdin }).once("line", (line) => {
   assert.equal(error.code, "RESOURCE_LIMIT");
   assert.equal(error.failure.code, "RESOURCE_LIMIT");
   assert.match(error.stderr, /second host/);
-  assert.equal(error.failure.diagnostics.videoOutputPath, "readback");
+  assert.equal(error.failure.diagnostics.videoPipeline, "readback");
   assert.equal(error.cause?.code, "DECODE_STALLED");
   assert.equal(
     error.failure.diagnostics.decodeStall.hostCode,

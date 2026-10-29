@@ -6,7 +6,7 @@
 //! for another platform plugs in below this file rather than beside it.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Instant;
 
 use crate::audio::WindowedAudioSources;
@@ -21,7 +21,7 @@ use crate::failure::ExportPhase;
 use crate::gpu_output::GpuOutputRefusal;
 use crate::host::{Host, cancelled_export, effective_range_json, normalize_export_audio};
 use crate::metrics::{
-    ExportMetrics, VideoOutputPath, export_metrics_json, frames_per_second, gpu_encode_frame_bound,
+    ExportMetrics, VideoPipeline, export_metrics_json, frames_per_second, gpu_encode_frame_bound,
     gpu_encode_pipeline_limits,
 };
 use crate::protocol::{HostError, LoudnessRequest};
@@ -313,7 +313,7 @@ impl Host {
         audio_codec: NativeAudioCodec,
         audio_rate: ResolvedAudioRate,
         loudness: Option<LoudnessRequest>,
-        output: &Path,
+        output: &alpha2_native::OutputTarget,
         started: Instant,
         (device, capability): (&HardwareEncodeDevice, &HardwareEncodeCapability),
         transcode: &Result<TranscodePlan, String>,
@@ -370,8 +370,8 @@ impl Host {
             })?;
         let gpu_selection = session.selection().clone();
         self.failure.note(
-            "videoOutputPath",
-            json!(crate::metrics::VideoOutputPath::GpuResident.as_str()),
+            "videoPipeline",
+            json!(crate::metrics::VideoPipeline::GpuResident.as_str()),
         );
         self.failure
             .note("videoEncoder", json!(gpu_selection.encoder_name));
@@ -425,10 +425,11 @@ impl Host {
         let mut encode_state = EncodeProgressState::default();
         let cancel_at_frame = configured_cancel_at_frame();
         let mut metrics = ExportMetrics {
-            video_output_path: VideoOutputPath::GpuResident,
+            video_pipeline: VideoPipeline::GpuResident,
             pipeline_enabled: true,
             decode_lookahead,
             decode_concurrency: codec_threads.decode_concurrency,
+            decoder_sessions: Some(plan.decoder_sessions),
             decoder_threads: codec_threads.decoder_threads,
             hardware_decoder_threads: codec_threads.hardware_decoder_threads,
             codec_thread_budget: codec_threads.total_threads,
@@ -604,6 +605,9 @@ impl Host {
                 }
                 metrics.decode = metrics.decode.saturating_add(decoded.decode_time);
                 metrics.decode_stages = metrics.decode_stages.merged(decoded.stage_timings);
+                metrics.decoder_session_reopens = metrics
+                    .decoder_session_reopens
+                    .saturating_add(decoded.decoder_session_reopens);
                 metrics.software_decoded_frames = metrics
                     .software_decoded_frames
                     .saturating_add(decoded.software_decoded_frames);
@@ -863,7 +867,7 @@ impl Host {
         metrics.encoder_input_copy_operations = pool.copy_operations;
         metrics.encoder_input_copy_bytes = pool.copy_bytes;
         // Same order as the cancel path: handoffs are waited on before the planes they read drop.
-        metrics.retired_leases_at_exit = self.clean_up_after_output(output, || {
+        metrics.retired_leases_at_exit = self.clean_up_after_output(&output.path, || {
             input.finish().map_err(error_message)?;
             self.gpu_renderer()
                 .reclaim_external_leases()
@@ -890,7 +894,7 @@ impl Host {
         result["videoEncoderLibrary"] = Value::Null;
         result["videoEncoderPreferred"] = json!(gpu_selection.encoder_name);
         result["videoEncoderFallbacks"] = json!([]);
-        result["videoOutputPath"] = json!(VideoOutputPath::GpuResident.as_str());
+        result["videoPipeline"] = json!(VideoPipeline::GpuResident.as_str());
         result["gpuOutputPathUnavailable"] = Value::Null;
         result["videoTranscode"] = json!(transcode_plan.map(|_| "yuv-repack"));
         result["yuvTranscodeIneligible"] = json!(transcode.as_ref().err());
@@ -919,6 +923,9 @@ impl Host {
         let after = self.gpu_renderer().diagnostics();
         metrics.peak_provider_source_bytes = plan.providers.peak_bytes();
         metrics.provider_source_reopens = plan.providers.reopens();
+        self.failure
+            .decoding()
+            .note_decoder_sessions(plan.decoder_sessions, metrics.decoder_session_reopens);
         result["performance"] =
             export_metrics_json(&metrics, Some((&graph_before, &after)), &pipeline_limits);
         Ok(result)

@@ -23,7 +23,7 @@ fn export_line(video_quality: Option<Value>) -> String {
 fn parsed_video_quality(video_quality: Option<Value>) -> Result<VideoQualityRequest, HostError> {
     match parse_request(&export_line(video_quality))? {
         Request::Export(export) => Ok(export.video_quality),
-        Request::Capabilities { .. } | Request::Conform(_) => {
+        Request::Capabilities { .. } | Request::Conform(_) | Request::Still(_) => {
             unreachable!("an export line parses as an export")
         }
     }
@@ -861,7 +861,7 @@ fn an_export_includes_audio_unless_the_request_says_not_to() {
         }
         match parse_request(&request.to_string()).expect("export") {
             Request::Export(export) => export.include_audio,
-            Request::Capabilities { .. } | Request::Conform(_) => {
+            Request::Capabilities { .. } | Request::Conform(_) | Request::Still(_) => {
                 unreachable!("an export line parses as an export")
             }
         }
@@ -1061,7 +1061,7 @@ fn audio_quality_takes_a_level_or_a_bitrate_and_names_itself_when_wrong() {
         }
         match parse_request(&request.to_string())? {
             Request::Export(export) => Ok(export.audio_quality),
-            Request::Capabilities { .. } | Request::Conform(_) => {
+            Request::Capabilities { .. } | Request::Conform(_) | Request::Still(_) => {
                 unreachable!("an export line parses as an export")
             }
         }
@@ -1223,7 +1223,7 @@ fn format_line(fields: &Value) -> String {
 fn resolved_format(fields: &Value) -> Result<crate::protocol::ResolvedFormat, HostError> {
     match parse_request(&format_line(fields))? {
         Request::Export(export) => export.format(),
-        Request::Capabilities { .. } | Request::Conform(_) => {
+        Request::Capabilities { .. } | Request::Conform(_) | Request::Still(_) => {
             unreachable!("an export line parses as an export")
         }
     }
@@ -1348,7 +1348,9 @@ fn a_cli_export_resolves_its_container_as_the_protocol_does() {
             .and_then(crate::cli::export_request)
             .and_then(|(request, _)| match request {
                 Request::Export(export) => export.format(),
-                Request::Capabilities { .. } | Request::Conform(_) => unreachable!("an export"),
+                Request::Capabilities { .. } | Request::Conform(_) | Request::Still(_) => {
+                    unreachable!("an export")
+                }
             })
     };
     let webm = format("out.webm", &[]).expect("webm");

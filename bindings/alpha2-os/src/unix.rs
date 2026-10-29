@@ -119,6 +119,18 @@ pub(crate) fn same_file(file: &File, path: &Path) -> io::Result<bool> {
     }
 }
 
+pub(crate) fn same_file_at(a: &Path, b: &Path) -> io::Result<bool> {
+    let identity = |path: &Path| match fs::metadata(path) {
+        Ok(metadata) => Ok(Some((metadata.dev(), metadata.ino()))),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    };
+    Ok(match (identity(a)?, identity(b)?) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    })
+}
+
 pub(crate) fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
     match rename_exclusive(from, to) {
         Err(error) if flag_refused(&error) => {}

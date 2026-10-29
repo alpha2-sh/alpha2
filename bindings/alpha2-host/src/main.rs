@@ -6,8 +6,9 @@
 //! input and output. Every message contains `protocolVersion: 1`. Requests
 //! contain a caller-unique string `requestId` and an `operation`. The v1
 //! operations are `capabilities`, `conform` (which media each source would
-//! read, without rendering) and `export`. Browser hosts preview through the
-//! wasm engine; this process renders only exports. Successful responses are
+//! read, without rendering), `export` and `still` (frames of a project to
+//! PNG, as an export draws them). Browser hosts preview through the wasm
+//! engine; this process renders only exports and their frames. Successful responses are
 //! `{protocolVersion, requestId, ok: true, result}`. Failures are
 //! `{protocolVersion, requestId, ok: false, error: {code, message}}`.
 //! During export the host may emit unsolicited
@@ -70,6 +71,8 @@ mod providers;
 mod recovery;
 mod render_cache;
 mod renderer_backend;
+mod request_inputs;
+mod still;
 mod tag;
 mod teardown;
 mod termination;
@@ -121,8 +124,17 @@ const DEFAULT_DECODE_LOOKAHEAD: usize = 2;
 const MAX_DECODE_LOOKAHEAD: usize = 3;
 const DEFAULT_DECODE_CONCURRENCY: usize = 2;
 const MAX_DECODE_CONCURRENCY: usize = 4;
+/// The fewest decoder sessions an export keeps open, whatever the fewest
+/// videos it reads at once.
 const DEFAULT_DECODER_SESSIONS: usize = 8;
+/// The most decoder sessions an export keeps open. Thirty-two 4K hardware
+/// sessions open on the hardware it was measured on (an RTX 4090 with Vulkan
+/// video), and software sessions this many are bounded by memory first.
 const MAX_DECODER_SESSIONS: usize = 32;
+/// What an export's open decoder sessions may hold together, by
+/// [`config::decoder_session_bytes`]'s estimate: thirty-two 1080p software
+/// sessions, or twelve 4K ones, at the default decoder threads.
+const DEFAULT_DECODER_SESSION_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const DEFAULT_REVERSE_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 const DEFAULT_REVERSE_HARDWARE_SURFACES: usize = 8;
 /// Decoder surfaces all decode sessions may retain at once
@@ -402,7 +414,7 @@ fn render_gpu_encode_slice(
                 quantizer: None,
             },
             color: alpha2_media::ColorMetadata::EXPORT,
-            output: std::path::Path::new(path),
+            output: &alpha2_native::OutputTarget::from(std::path::Path::new(path)),
             container: alpha2_media::Container::Mp4,
             audio: None,
         })

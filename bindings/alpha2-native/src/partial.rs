@@ -31,6 +31,82 @@ fn output_error_at(path: &Path, error: impl std::fmt::Display) -> EncodeError {
     EncodeError::Output(format!("{}: {error}", path.display()))
 }
 
+/// What an output does with a file already at its path.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ExistingOutput {
+    /// Refuse it, before writing and again at the rename (the default).
+    #[default]
+    Refuse,
+    /// Replace a regular file there once the output is whole, by rename.
+    /// A symbolic link, a device, a FIFO, a socket or a directory is refused.
+    Replace,
+}
+
+/// Where an output goes and what it does with a file already there.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OutputTarget {
+    /// The output's final path.
+    pub path: PathBuf,
+    /// What happens to a file already at `path`.
+    pub existing: ExistingOutput,
+}
+
+impl OutputTarget {
+    /// `path`, replacing a regular file there.
+    #[must_use]
+    pub fn replacing(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            existing: ExistingOutput::Replace,
+        }
+    }
+}
+
+impl From<PathBuf> for OutputTarget {
+    fn from(path: PathBuf) -> Self {
+        Self {
+            path,
+            existing: ExistingOutput::Refuse,
+        }
+    }
+}
+
+impl From<&Path> for OutputTarget {
+    fn from(path: &Path) -> Self {
+        path.to_owned().into()
+    }
+}
+
+impl From<&PathBuf> for OutputTarget {
+    fn from(path: &PathBuf) -> Self {
+        path.clone().into()
+    }
+}
+
+impl From<String> for OutputTarget {
+    fn from(path: String) -> Self {
+        PathBuf::from(path).into()
+    }
+}
+
+impl From<&String> for OutputTarget {
+    fn from(path: &String) -> Self {
+        PathBuf::from(path).into()
+    }
+}
+
+impl From<&str> for OutputTarget {
+    fn from(path: &str) -> Self {
+        PathBuf::from(path).into()
+    }
+}
+
+impl From<&OutputTarget> for OutputTarget {
+    fn from(target: &OutputTarget) -> Self {
+        target.clone()
+    }
+}
+
 /// How many times a claim opens the partial again when the file it locked
 /// was removed or replaced under it, by the export that held it finishing.
 const CLAIM_ATTEMPTS: usize = 8;
@@ -154,21 +230,26 @@ pub(crate) struct PartialLock {
 }
 
 impl PartialOutput {
-    /// Claims the partial file of an output at `final_path`: refuses an
-    /// existing output, creates the partial and locks it, or takes over a
-    /// stale one, emptied.
+    /// Claims the partial file of an output at `target`: refuses an existing
+    /// output (or, replacing, anything there but a regular file), creates the
+    /// partial and locks it, or takes over a stale one, emptied.
     ///
     /// # Errors
-    /// For an existing output, a partial a live export holds
+    /// For an output the target refuses, a partial a live export holds
     /// ([`PARTIAL_OUTPUT_IN_USE`]), a path without a UTF-8 file name, or a
     /// file-system failure.
-    pub(crate) fn claim(final_path: &Path) -> Result<Self, EncodeError> {
-        if final_path.exists() {
-            return Err(EncodeError::Output(
-                "refusing to overwrite an existing output file".into(),
-            ));
+    pub(crate) fn claim(target: &OutputTarget) -> Result<Self, EncodeError> {
+        match target.existing {
+            ExistingOutput::Refuse => {
+                if target.path.exists() {
+                    return Err(EncodeError::Output(
+                        "refusing to overwrite an existing output file".into(),
+                    ));
+                }
+            }
+            ExistingOutput::Replace => ensure_replaceable(&target.path)?,
         }
-        Self::claim_partial(final_path)
+        Self::claim_partial(&target.path)
     }
 
     /// [`Self::claim`] without looking at what is at `final_path`.
@@ -248,14 +329,25 @@ impl Drop for PartialOutput {
     }
 }
 
-/// Renames a finished partial file into place at `final_path`, which must
-/// still be free: a file that appeared there while the export ran (another
-/// program saved one, or another export of the same path finished first) is
-/// left as it is, and the export fails rather than replace it.
+/// Renames a finished partial file into place at `target`.
+///
+/// Refusing, the path must still be free: a file that appeared there while
+/// the export ran (another program saved one, or another export of the same
+/// path finished first) is left as it is, and the export fails rather than
+/// replace it. Replacing, a regular file there is renamed over, and anything
+/// else is refused (what changes between that look and the rename is not
+/// guarded against, as the caller chose the path).
 ///
 /// # Errors
-/// When a file is at `final_path`, or the rename fails.
-pub(crate) fn publish(partial_path: &Path, final_path: &Path) -> Result<(), EncodeError> {
+/// When the target refuses what is at its path, or the rename fails.
+pub(crate) fn publish(partial_path: &Path, target: &OutputTarget) -> Result<(), EncodeError> {
+    let final_path = target.path.as_path();
+    if target.existing == ExistingOutput::Replace {
+        ensure_replaceable(final_path)?;
+        // `std::fs::rename` replaces a file on Windows too.
+        return fs::rename(partial_path, final_path)
+            .map_err(|error| output_error_at(final_path, error));
+    }
     alpha2_os::rename_no_replace(partial_path, final_path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::AlreadyExists {
             EncodeError::Output(format!(
@@ -283,36 +375,68 @@ fn ensure_replaceable(final_path: &Path) -> Result<(), EncodeError> {
     }
 }
 
-/// Writes a whole file at `final_path`, replacing a regular file there only
-/// once `write` has written all of it: `write` fills the claimed partial file
-/// beside it (the same claim and lock a video output takes), which is synced
-/// and renamed into place. Any failure removes the partial and leaves what was
-/// at `final_path`. Only a regular file is replaced; anything else there is
-/// refused before anything is written (and again just before the rename, as
-/// it may have changed meanwhile; what changes between that look and the
-/// rename is not guarded against, as the caller chose the path).
+/// Writes a whole file at `target`, published only once `write` has written
+/// all of it: `write` fills the claimed partial file beside it (the same
+/// claim and lock a video output takes), which is synced and renamed into
+/// place as [`publish`] does. Any failure removes the partial and leaves what
+/// was at the target's path. What is there is looked at before anything is
+/// written, and again at the rename, as it may have changed meanwhile.
 ///
 /// # Errors
-/// When `final_path` names something other than a regular file, its partial
-/// is held by a live export ([`PARTIAL_OUTPUT_IN_USE`]), `write` fails, or
-/// the file system refuses.
-pub fn write_replacing(
-    final_path: impl AsRef<Path>,
+/// When the target refuses what is at its path, its partial is held by a
+/// live export ([`PARTIAL_OUTPUT_IN_USE`]), `write` fails, or the file system
+/// refuses.
+pub fn write_whole(
+    target: impl Into<OutputTarget>,
     write: impl FnOnce(&mut File) -> Result<(), String>,
 ) -> Result<(), EncodeError> {
-    let final_path = final_path.as_ref();
-    ensure_replaceable(final_path)?;
-    let partial = PartialOutput::claim_partial(final_path)?;
+    let target = target.into();
+    let partial = PartialOutput::claim(&target)?;
     let mut file = partial.open_file()?;
     write(&mut file).map_err(|error| output_error_at(partial.path(), error))?;
     file.sync_all()
         .map_err(|error| output_error_at(partial.path(), error))?;
     drop(file);
-    ensure_replaceable(final_path)?;
-    fs::rename(partial.path(), final_path).map_err(|error| output_error_at(final_path, error))?;
+    publish(partial.path(), &target)?;
     // Renamed: nothing is left to remove, and the lock goes with the file it was on.
     drop(partial.keep());
     Ok(())
+}
+
+/// Writes `rgba`, `width` by `height` 8-bit RGBA pixels with straight alpha,
+/// row by row, as a PNG at `target`, published as [`write_whole`] publishes a
+/// file: whole or not at all.
+///
+/// # Errors
+/// When `rgba` is not that many pixels, or as [`write_whole`].
+pub fn write_png(
+    target: impl Into<OutputTarget>,
+    width: u32,
+    height: u32,
+    rgba: &[u8],
+) -> Result<(), EncodeError> {
+    let expected = u64::from(width) * u64::from(height) * 4;
+    if u64::try_from(rgba.len()).ok() != Some(expected) {
+        return Err(EncodeError::Adapter(format!(
+            "a {width}x{height} RGBA image is {expected} bytes, not {}",
+            rgba.len()
+        )));
+    }
+    write_whole(target, |file| {
+        let mut buffered = std::io::BufWriter::new(file);
+        let mut encoder = png::Encoder::new(&mut buffered, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
+        writer
+            .write_image_data(rgba)
+            .map_err(|error| error.to_string())?;
+        writer.finish().map_err(|error| error.to_string())?;
+        buffered
+            .into_inner()
+            .map(|_| ())
+            .map_err(|error| error.error().to_string())
+    })
 }
 
 /// Removes a sibling partial file left by an interrupted transactional export.
@@ -396,7 +520,7 @@ mod tests {
         // take it.
         let path = final_path("removed-while-claimed");
         let partial = partial_output_path(&path).expect("partial path");
-        let mut holder = Some(PartialOutput::claim(&path).expect("holder"));
+        let mut holder = Some(PartialOutput::claim(&OutputTarget::from(&path)).expect("holder"));
         let claimed = PartialOutput::claim_partial_locking(&path, &mut |file| {
             drop(holder.take());
             alpha2_os::try_lock_exclusive(file)

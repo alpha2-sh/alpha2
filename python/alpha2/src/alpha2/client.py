@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 from . import _native
+from .builder import Time, to_ticks
 from .errors import (
     Alpha2AbortError,
     Alpha2ConformError,
@@ -38,6 +39,7 @@ from .errors import (
 )
 from .install import cached_host_binary, host_cache_directory, host_executable_name, package_version
 from .protocol import UNREAD_REQUEST_ID, create_request, loader_refused, parse_host_message
+from .results import ExportResult, StillResult
 
 if TYPE_CHECKING:
     from .compose import Compiled
@@ -132,6 +134,9 @@ class MemoryBudget(TypedDict, total=False):
     reverse_cache_bytes: int
     audio_window_bytes: int
     provider_source_bytes: int
+    decoder_session_bytes: int
+    """What the open video decoder sessions hold together, by the host's estimate of a session; it
+    bounds how many sessions an export keeps open."""
     scale: float
     """A fraction in (0, 1] every budget is scaled by once resolved."""
 
@@ -142,6 +147,7 @@ _MEMORY_FIELDS = {
     "reverse_cache_bytes": "reverseCacheBytes",
     "audio_window_bytes": "audioWindowBytes",
     "provider_source_bytes": "providerSourceBytes",
+    "decoder_session_bytes": "decoderSessionBytes",
 }
 
 
@@ -380,6 +386,65 @@ def _frames_payload(frames: object) -> dict[str, list[str | None]]:
             entries.append(text)
         payload[source] = entries
     return payload
+
+
+def _request_inputs(
+    project: Mapping[str, Any],
+    assets: object,
+    proxies: object,
+    frames: object,
+    resources: object,
+    media: object,
+    effect_assets: object,
+    fonts: object,
+    effects: object,
+) -> dict[str, Any]:
+    """The project and every file a rendering request reads, as the host takes them; refuses one
+    that is not shaped as the host reads it before a host starts."""
+    effect_payload = _path_record("effect_assets", effect_assets, "effect asset path")
+    resources_payload: dict[str, dict[str, str]] = {}
+    if resources is not None:
+        if not isinstance(resources, Mapping):
+            raise _invalid("resources must map source ids to their files")
+        for source, files in resources.items():
+            resources_payload[source] = _path_record(f"resources.{source}", files, "resource path")
+    if effects is not None and (
+        isinstance(effects, (str, bytes, Mapping)) or not isinstance(effects, Sequence)
+    ):
+        raise _invalid("effects must be a list of effect definitions")
+    if media not in ("original", "proxies"):
+        raise _invalid('media must be "original" or "proxies"')
+    font_paths: list[str] = []
+    if fonts is not None:
+        if isinstance(fonts, (str, bytes, os.PathLike)) or not isinstance(fonts, Sequence):
+            raise _invalid("fonts must be a list of font file paths")
+        for font in fonts:
+            text = os.fspath(font) if isinstance(font, (str, os.PathLike)) else None
+            if not isinstance(text, str) or not text:
+                raise _invalid("fonts must be a list of font file paths")
+            font_paths.append(text)
+    for resource in project.get("effect_resources") or []:
+        if not effect_payload.get(resource["id"]):
+            raise Alpha2HostError(
+                "MISSING_INPUT", f"missing effect asset path for resource {resource['id']}"
+            )
+    return {
+        "project": project,
+        "assets": _path_record("assets", assets, "asset path"),
+        "proxies": _proxies_payload(proxies),
+        "frames": _frames_payload(frames),
+        "resources": resources_payload,
+        "media": media,
+        "effectAssets": effect_payload,
+        "fonts": font_paths,
+        "effects": list(effects or []),
+    }
+
+
+def _flag(field: str, value: object) -> bool:
+    if not isinstance(value, bool):
+        raise _invalid(f"{field} must be true or false")
+    return value
 
 
 def _safe_integer(value: object) -> bool:
@@ -721,9 +786,10 @@ class HostClient:
         memory: MemoryBudget | None = None,
         video_decode: VideoDecodeMode | None = None,
         renderer: RendererMode | None = None,
+        overwrite: bool = False,
         on_progress: ProgressCallback | None = None,
         cancel: threading.Event | None = None,
-    ) -> dict[str, Any]:
+    ) -> ExportResult:
         """Renders and encodes ``project`` to ``output`` and returns the host's export result.
 
         ``assets`` maps source ids to the files a render reads; the host checks them before it
@@ -733,6 +799,11 @@ class HostClient:
         (default: the project's). ``output``'s extension (``.mp4``, ``.m4v``, ``.mov``, ``.mkv``
         or ``.webm``) names the container, which must agree with ``container`` when both are given;
         absent codecs are the container's defaults.
+
+        A file already at ``output`` is refused unless ``overwrite`` is true; then a regular file
+        there is replaced once the export is whole, so a failed or cancelled export leaves it as it
+        was. An ``output`` that is one of the request's inputs (an asset, a proxy, a font, ...) is
+        refused either way.
 
         ``on_progress`` receives each :class:`ExportProgress` on the calling thread; an exception
         it raises fails the export with ``PROGRESS_CALLBACK_FAILED`` and ends its host. Setting
@@ -750,8 +821,9 @@ class HostClient:
         ``project`` may be a :class:`~alpha2.compose.Compiled` spec: its ``assets``, ``fonts`` and
         ``loudness`` are the defaults of those options.
 
-        The result's keys are the host protocol's (``videoOutputPath``, ``effectiveRange``,
-        ``performance``, ...).
+        The result is an :class:`~alpha2.results.ExportResult`, with the host protocol's keys:
+        ``output`` (the absolute path written), ``videoPipeline`` (how frames reached the encoder),
+        ``frames``, ``effectiveRange``, ``performance``, ...
         """
         from .compose import Compiled  # here: compose imports this module
 
@@ -782,35 +854,9 @@ class HostClient:
             frame_rate if frame_rate is not None else project["settings"]["frame_rate"]
         )
         memory_payload = _memory(memory)
-        effect_payload = _path_record("effect_assets", effect_assets, "effect asset path")
-        resources_payload: dict[str, dict[str, str]] = {}
-        if resources is not None:
-            if not isinstance(resources, Mapping):
-                raise _invalid("resources must map source ids to their files")
-            for source, files in resources.items():
-                resources_payload[source] = _path_record(
-                    f"resources.{source}", files, "resource path"
-                )
-        if effects is not None and (
-            isinstance(effects, (str, bytes, Mapping)) or not isinstance(effects, Sequence)
-        ):
-            raise _invalid("effects must be a list of effect definitions")
-        if media not in ("original", "proxies"):
-            raise _invalid('media must be "original" or "proxies"')
-        font_paths: list[str] = []
-        if fonts is not None:
-            if isinstance(fonts, (str, bytes, os.PathLike)) or not isinstance(fonts, Sequence):
-                raise _invalid("fonts must be a list of font file paths")
-            for font in fonts:
-                text = os.fspath(font) if isinstance(font, (str, os.PathLike)) else None
-                if not isinstance(text, str) or not text:
-                    raise _invalid("fonts must be a list of font file paths")
-                font_paths.append(text)
-        for resource in project.get("effect_resources") or []:
-            if not effect_payload.get(resource["id"]):
-                raise Alpha2HostError(
-                    "MISSING_INPUT", f"missing effect asset path for resource {resource['id']}"
-                )
+        inputs = _request_inputs(
+            project, assets, proxies, frames, resources, media, effect_assets, fonts, effects
+        )
         _check_video_decode("video_decode", video_decode)
         _check_renderer("renderer", renderer)
         # The engine's container policy, which the host applies to the same request: a container
@@ -840,15 +886,7 @@ class HostClient:
         cache_payload = _render_cache(render_cache)
 
         payload: dict[str, Any] = {
-            "project": project,
-            "assets": _path_record("assets", assets, "asset path"),
-            "proxies": _proxies_payload(proxies),
-            "frames": _frames_payload(frames),
-            "resources": resources_payload,
-            "media": media,
-            "effectAssets": effect_payload,
-            "fonts": font_paths,
-            "effects": list(effects or []),
+            **inputs,
             "startTicks": start_ticks,
             "endTicks": end_ticks,
             "frameRate": rate,
@@ -856,6 +894,7 @@ class HostClient:
             "inputPolicy": input_policy,
             "strategy": strategy,
             "output": output_text,
+            "overwrite": _flag("overwrite", overwrite),
         }
         # The host resolves what is not named from the container, so there is one rule.
         named: tuple[tuple[str, object], ...] = (
@@ -910,6 +949,117 @@ class HostClient:
                     raise _record_decode_stall(retry_error, stall) from stall
         finally:
             self._slots.release()
+
+    def stills(
+        self,
+        project: Mapping[str, Any] | Compiled,
+        stills: Sequence[tuple[Time, PathLike]],
+        *,
+        assets: Mapping[str, PathLike] | None = None,
+        proxies: Mapping[str, Sequence[ProxyFile]] | None = None,
+        frames: Mapping[str, Sequence[PathLike | None]] | None = None,
+        resources: Mapping[str, Mapping[str, PathLike]] | None = None,
+        media: Literal["original", "proxies"] = "original",
+        effect_assets: Mapping[str, PathLike] | None = None,
+        fonts: Sequence[PathLike] | None = None,
+        effects: Sequence[Mapping[str, Any]] | None = None,
+        size: tuple[int, int] | None = None,
+        overwrite: bool = False,
+        video_decode: VideoDecodeMode | None = None,
+        renderer: RendererMode | None = None,
+        cancel: threading.Event | None = None,
+    ) -> StillResult:
+        """Renders frames of ``project`` to PNG files, each as an export renders that frame.
+
+        ``stills`` pairs a time (seconds, or exact :class:`~alpha2.Ticks`) with the PNG to write,
+        1 to 256 of them; one host decodes for all of them, in time order whatever order they are
+        given in. Each frame is the one of the project's frame grid that holds its time, reported
+        as ``frameTime`` in ticks. The pixels are the renderer's 8-bit sRGB RGBA before any video
+        encoding. ``size`` (width, height) renders the project at that canvas size instead of its
+        own; any size from 1 to 16384 pixels each way. An existing file is refused unless
+        ``overwrite`` is true, and an output that is one of the request's inputs always is.
+
+        The other options are :meth:`export`'s. Returns the host's result: ``stills`` (each one's
+        ``output``, ``frameTime``, ``width`` and ``height``, in the order asked for), ``renderer``
+        and ``timings``.
+        """
+        from .compose import Compiled  # here: compose imports this module
+
+        if isinstance(project, Compiled):
+            compiled = project
+            project = compiled.project
+            assets = compiled.assets if assets is None else assets
+            fonts = compiled.fonts if fonts is None else fonts
+        problems = _project_problems(project)
+        if problems:
+            raise Alpha2ProjectValidationError(problems)
+        if isinstance(stills, (str, bytes, Mapping)) or not isinstance(stills, Sequence):
+            raise _invalid("stills must be a list of (time, output) pairs")
+        if not 1 <= len(stills) <= _MAX_STILLS:
+            raise _invalid(f"a still request renders 1 to {_MAX_STILLS} stills, not {len(stills)}")
+        entries: list[dict[str, Any]] = []
+        outputs: set[str] = set()
+        for entry in stills:
+            if not isinstance(entry, (tuple, list)) or len(entry) != 2:
+                raise _invalid("stills must be a list of (time, output) pairs")
+            time_value, output = entry
+            try:
+                at = to_ticks(time_value)
+            except ValueError as error:
+                raise _invalid(f"a still's time: {error}") from None
+            if at < 0:
+                raise _invalid(f"a still's time is from 0, not {time_value!r}")
+            output_text = os.fspath(output) if isinstance(output, (str, os.PathLike)) else None
+            if not isinstance(output_text, str) or not output_text:
+                raise _invalid("a still's output must not be empty")
+            if output_text in outputs:
+                raise _invalid(f"two stills write {output_text}")
+            outputs.add(output_text)
+            entries.append({"time": at, "output": output_text})
+        payload: dict[str, Any] = {
+            **_request_inputs(
+                project, assets, proxies, frames, resources, media, effect_assets, fonts, effects
+            ),
+            "stills": entries,
+            "overwrite": _flag("overwrite", overwrite),
+        }
+        if size is not None:
+            if (
+                not isinstance(size, (tuple, list))
+                or len(size) != 2
+                or not all(
+                    _safe_integer(side) and 1 <= side <= _MAX_STILL_DIMENSION for side in size
+                )
+            ):
+                raise _invalid(
+                    f"size must be (width, height), each 1 to {_MAX_STILL_DIMENSION} pixels"
+                )
+            payload["size"] = {"width": size[0], "height": size[1]}
+        _check_video_decode("video_decode", video_decode)
+        _check_renderer("renderer", renderer)
+        mode = video_decode if video_decode is not None else self.video_decode
+        drawn_by = renderer if renderer is not None else self.renderer
+        self._slots.acquire(cancel)
+        try:
+            return _request_host(  # type: ignore[no-any-return]
+                self.host_path, "still", payload, _HostModes(mode, drawn_by), cancel, None
+            )
+        finally:
+            self._slots.release()
+
+    def still(
+        self,
+        project: Mapping[str, Any] | Compiled,
+        time: Time,
+        output: PathLike,
+        **options: Any,
+    ) -> StillResult:
+        """One frame of ``project`` at ``time`` to the PNG ``output``: :meth:`stills` of one."""
+        return self.stills(project, [(time, output)], **options)
+
+
+_MAX_STILLS = 256
+_MAX_STILL_DIMENSION = 16384
 
 
 def _record_decode_stall(retry_error: Alpha2HostError, stall: Alpha2HostError) -> Alpha2HostError:
@@ -1339,9 +1489,40 @@ def export(
     cache_directory: PathLike | None = None,
     concurrency: int = 1,
     **options: Any,
-) -> dict[str, Any]:
+) -> ExportResult:
     """:meth:`HostClient.export` on a shared client (see :func:`capabilities`), so ``concurrency``
     holds across calls whatever decode mode and renderer each asks for."""
     return _shared_client(host_path, cache_directory, concurrency).export(
         project, output, **options
     )
+
+
+def stills(
+    project: Mapping[str, Any] | Compiled,
+    stills: Sequence[tuple[Time, PathLike]],
+    *,
+    client: HostClient | None = None,
+    host_path: PathLike | None = None,
+    cache_directory: PathLike | None = None,
+    concurrency: int = 1,
+    **options: Any,
+) -> StillResult:
+    """:meth:`HostClient.stills` on ``client``, else on a shared one (see :func:`capabilities`)."""
+    runner = client or _shared_client(host_path, cache_directory, concurrency)
+    return runner.stills(project, stills, **options)
+
+
+def still(
+    project: Mapping[str, Any] | Compiled,
+    time: Time,
+    output: PathLike,
+    *,
+    client: HostClient | None = None,
+    host_path: PathLike | None = None,
+    cache_directory: PathLike | None = None,
+    concurrency: int = 1,
+    **options: Any,
+) -> StillResult:
+    """:meth:`HostClient.still` on ``client``, else on a shared one (see :func:`capabilities`)."""
+    runner = client or _shared_client(host_path, cache_directory, concurrency)
+    return runner.still(project, time, output, **options)

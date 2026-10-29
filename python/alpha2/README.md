@@ -26,11 +26,13 @@ result = alpha2.export(
     assets=project.assets(),
     on_progress=lambda p: print(f"{p.completed}/{p.total}"),
 )
-print(result["videoOutputPath"], result["frames"])
+print(result["output"], result["videoPipeline"], result["frames"])
 ```
 
 - `alpha2.export`, `alpha2.conform` and `alpha2.capabilities` run on a shared `HostClient`; make
   your own (`alpha2.HostClient(concurrency=2)`) to bound or separate them.
+- An existing `output` is refused unless you pass `overwrite=True`, which replaces it only once
+  the export is whole. An output that is one of the export's inputs is always refused.
 - Setting a `cancel` event (`threading.Event`) or pressing Ctrl-C ends the host, which removes its
   partial output, before the call returns.
 - Every failure is an `alpha2.Alpha2HostError` with a machine-readable `code` and a classified
@@ -38,13 +40,31 @@ print(result["videoOutputPath"], result["frames"])
 - Options you write use snake_case (`loudness={"target_lufs": -14, ...}`); what the host reports
   keeps the protocol's camelCase keys (`result["effectiveRange"]`).
 
+## Check a frame
+
+`alpha2.still` renders one frame of a project to a PNG, the frame an export draws there, without
+encoding a video:
+
+```python
+result = alpha2.still(project.build(), 1.5, "check.png", assets=project.assets())
+print(result["stills"][0]["frameTime"])  # the grid frame that holds 1.5 s, in ticks
+```
+
+- Times are seconds or exact `alpha2.Ticks`. The frame drawn is the one of the project's frame
+  grid that holds the time; `frameTime` says which.
+- `alpha2.stills(project, [(0, "a.png"), (2.5, "b.png")], ...)` renders up to 256 frames with one
+  host, decoding once; `size=(width, height)` renders the project at another canvas size.
+- The PNG is 8-bit RGBA, the picture before any video encoding. `overwrite=True` replaces an
+  existing file, as for `export`.
+- From a shell: `python -m alpha2 still project.json check.png --at 1.5 --asset title=title.png`.
+
 ## Renderer and video decode
 
 `renderer=` (`"auto"`, `"gpu"`, `"cpu"`; typed as `alpha2.client.RendererMode`) chooses what draws
 the frames, and `video_decode=` (`"software"`, `"auto"`, `"hardware-required"`) how video is
-decoded, on `HostClient(...)` for every request or per call to `export` and `capabilities`. Unset,
-the host reads `ALPHA2_RENDERER` and `ALPHA2_VIDEO_DECODE`, else decides: `auto` renderer, and
-`auto` decode on Linux, `software` on macOS and Windows.
+decoded, on `HostClient(...)` for every request or per call to `export`, `still` and
+`capabilities`. Unset, the host reads `ALPHA2_RENDERER` and `ALPHA2_VIDEO_DECODE`, else decides:
+`auto` renderer, and `auto` decode on Linux, `software` on macOS and Windows.
 
 - `auto` renders on a hardware GPU when there is one and on the CPU otherwise, never on a software
   GPU adapter (lavapipe, llvmpipe, WARP, SwiftShader). `gpu` takes whatever adapter the host finds

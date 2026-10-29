@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 use std::fs;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -17,7 +17,7 @@ use crate::convert::{
     codec_thread_budget, configure_rgba_to_yuv, encode_adapter_error, encode_adapter_error_at,
     tick_base,
 };
-use crate::partial::PartialOutput;
+use crate::partial::{OutputTarget, PartialOutput};
 use alpha2_ffmpeg_bridge::OutputFile;
 use alpha2_ffmpeg_bridge::Yuv420pFrameBuffer;
 use alpha2_media::{
@@ -146,7 +146,7 @@ pub(crate) fn timed<T>(total: &mut Duration, body: impl FnOnce() -> T) -> T {
 
 /// Transactional IEEE-f32 WAV encoder used by native offline audio export.
 pub struct NativeWavEncodeSink {
-    pub(crate) final_path: PathBuf,
+    pub(crate) target: OutputTarget,
     pub(crate) partial_path: PathBuf,
     /// Held until the partial file is renamed into place or removed.
     pub(crate) _partial_lock: crate::partial::PartialLock,
@@ -177,7 +177,7 @@ const WAV_WRITE_BUFFER: usize = 1 << 20;
 /// and audio blocks must be submitted in nondecreasing start-timestamp order;
 /// ready packets are muxed incrementally instead of retained for the full file.
 pub struct NativeAvEncodeSink {
-    pub(crate) final_path: PathBuf,
+    pub(crate) target: OutputTarget,
     pub(crate) partial_path: PathBuf,
     /// Held until the partial file is renamed into place or removed.
     pub(crate) _partial_lock: crate::partial::PartialLock,
@@ -299,7 +299,10 @@ impl NativeAvEncodeSink {
     /// # Errors
     /// Returns an encoder error for invalid configuration, paths, or stale
     /// component outputs.
-    pub fn create(path: impl AsRef<Path>, config: AvEncodeConfig) -> Result<Self, EncodeError> {
+    pub fn create(
+        path: impl Into<OutputTarget>,
+        config: AvEncodeConfig,
+    ) -> Result<Self, EncodeError> {
         Self::create_selected(path, config, None, &codec_thread_budget)
     }
 
@@ -309,7 +312,7 @@ impl NativeAvEncodeSink {
     /// Returns an encoder error when the name is unavailable, implements a
     /// different codec, or the remaining configuration is invalid.
     pub fn create_with_video_encoder(
-        path: impl AsRef<Path>,
+        path: impl Into<OutputTarget>,
         config: AvEncodeConfig,
         encoder_name: &str,
     ) -> Result<Self, EncodeError> {
@@ -332,7 +335,7 @@ impl NativeAvEncodeSink {
     /// Returns an encoder error when no candidate opens, or for invalid
     /// configuration, paths, codecs, or muxers.
     pub fn create_with_video_encoder_threads(
-        path: impl AsRef<Path>,
+        path: impl Into<OutputTarget>,
         config: AvEncodeConfig,
         encoder_name: Option<&str>,
         software_threads: &dyn Fn() -> i64,
@@ -342,7 +345,7 @@ impl NativeAvEncodeSink {
 
     #[allow(clippy::too_many_lines)]
     pub(crate) fn create_selected(
-        path: impl AsRef<Path>,
+        path: impl Into<OutputTarget>,
         config: AvEncodeConfig,
         encoder_name: Option<&str>,
         software_threads: &dyn Fn() -> i64,
@@ -369,8 +372,8 @@ impl NativeAvEncodeSink {
                 config.audio_channels, config.audio_sample_rate, config.audio_bit_rate
             )));
         }
-        let final_path = path.as_ref().to_owned();
-        let partial = PartialOutput::claim(&final_path)?;
+        let target = path.into();
+        let partial = PartialOutput::claim(&target)?;
         let partial_path = partial.path().to_owned();
         let mut output = partial.open_muxer(config.video.container)?;
         let global_header =
@@ -457,7 +460,7 @@ impl NativeAvEncodeSink {
         })?;
         let partial_lock = partial.keep();
         Ok(Self {
-            final_path,
+            target,
             partial_path,
             _partial_lock: partial_lock,
             output: Some(output),
@@ -959,7 +962,7 @@ impl EncodeSink for NativeAvEncodeSink {
                 .close()
                 .map_err(|error| encode_adapter_error_at("closing the output", error))?;
         }
-        crate::partial::publish(&self.partial_path, &self.final_path)?;
+        crate::partial::publish(&self.partial_path, &self.target)?;
         self.complete = true;
         Ok(())
     }
@@ -984,7 +987,7 @@ impl NativeWavEncodeSink {
     /// Returns an error for invalid PCM format, existing paths, or filesystem
     /// failures.
     pub fn create(
-        path: impl AsRef<Path>,
+        path: impl Into<OutputTarget>,
         sample_rate: u32,
         channels: u16,
     ) -> Result<Self, EncodeError> {
@@ -1005,7 +1008,7 @@ impl NativeWavEncodeSink {
     /// cannot say (an unnamed or repeated speaker, or one past the 18 WAVE
     /// positions), existing paths, or filesystem failures.
     pub fn create_with_speakers(
-        path: impl AsRef<Path>,
+        path: impl Into<OutputTarget>,
         sample_rate: u32,
         speakers: SpeakerLayout,
     ) -> Result<Self, EncodeError> {
@@ -1014,8 +1017,8 @@ impl NativeWavEncodeSink {
             .filter(|_| sample_rate != 0 && speakers.channels() <= MAX_AUDIO_CHANNELS)
             .ok_or_else(|| EncodeError::Adapter("invalid WAV format".into()))?;
         let (channel_mask, plane_order) = wav_channel_layout(&speakers)?;
-        let final_path = path.as_ref().to_owned();
-        let partial = PartialOutput::claim(&final_path)?;
+        let target = path.into();
+        let partial = PartialOutput::claim(&target)?;
         let partial_path = partial.path().to_owned();
         let mut file = BufWriter::with_capacity(WAV_WRITE_BUFFER, partial.open_file()?);
         file.write_all(&wav_header_with_mask(
@@ -1027,7 +1030,7 @@ impl NativeWavEncodeSink {
         .map_err(encode_adapter_error)?;
         let partial_lock = partial.keep();
         Ok(Self {
-            final_path,
+            target,
             partial_path,
             _partial_lock: partial_lock,
             file: Some(file),
@@ -1125,7 +1128,7 @@ impl NativeWavEncodeSink {
             .and_then(|()| file.flush())
             .map_err(encode_adapter_error)?;
         drop(file);
-        crate::partial::publish(&self.partial_path, &self.final_path)?;
+        crate::partial::publish(&self.partial_path, &self.target)?;
         self.complete = true;
         Ok(())
     }

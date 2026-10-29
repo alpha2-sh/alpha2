@@ -68,7 +68,13 @@ Every result says which renderer drew it: `renderer` (`gpu` or `cpu`), `renderer
 
 `alpha2-host` decodes video in one of three modes, chosen when it starts: `software` decodes every frame on the CPU; `auto` decodes on the GPU where the device and the stream allow it and on the CPU otherwise; `hardware-required` fails instead of decoding a frame on the CPU. The default is `auto` on Linux and `software` on macOS and Windows. `export` and `conform` take `--video-decode <mode>`; `@alpha2-sh/node` takes the `videoDecode` option.
 
-An export hands its frames to the encoder either by reading them back from the GPU or, where the host has a GPU-resident encode path that takes the codec and the output size, without leaving the GPU. The `capabilities` request reports the decode mode and the hardware decoders (`decode`), and the encoders and the GPU-resident path (`encode`); every export result reports the decode mode it ran (`videoDecodeMode`) and the output path it took (`videoOutputPath`).
+An export hands its frames to the encoder either by reading them back from the GPU or, where the host has a GPU-resident encode path that takes the codec and the output size, without leaving the GPU. The `capabilities` request reports the decode mode and the hardware decoders (`decode`), and the encoders and the GPU-resident path (`encode`); every export result reports the decode mode it ran (`videoDecodeMode`) and how its frames reached the encoder (`videoPipeline`: `readback`, `gpu-resident` or `packet-copy`).
+
+### Decoder sessions
+
+An export keeps one video decoder session open for each video it reads at once: each clip's own video and each media node of its compositions that reads one, counted over the exported range, and never fewer than 8. A session holds decoded frames outside every other budget, so their number is also held to the decoder session budget (`memory.decoderSessionBytes` in the request, else `ALPHA2_DECODER_SESSION_BYTES`, else 4 GiB, scaled by `memory.scale`) over an estimate of one session of the largest video: its 8-bit 4:2:0 frame times two per decoder thread plus four. At most 32 are open. `ALPHA2_DECODER_SESSIONS` sets the number instead, from 1 to 32. A session closes once the timeline reads its video no more.
+
+With fewer sessions than videos read at once, the videos take turns: when a session is needed, the one whose video is read next the latest is closed, and reopened (decoding again from the keyframe before its time) when its turn comes. The frames are the same; the export is slower. The result reports `performance.decoderSessions`, `decoderSessionLimit` (`workload`, `memory`, `override` or `cap`), `decoderSessionPeak` and `decoderSessionReopens`, and, when sessions ran short, a `decoderSessionsShort` entry in `decodeDiagnostics`.
 
 ### Encoders
 

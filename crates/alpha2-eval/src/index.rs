@@ -207,14 +207,7 @@ impl ActiveIndex {
                 continue;
             };
             let [composition, source_composition] = clip_plans(entry);
-            let draws_source = entry.generator.is_none()
-                && source_composition.is_none()
-                && composition.is_none_or(|slot| {
-                    slot.as_ref()
-                        .as_ref()
-                        .is_ok_and(crate::CompositionPlan::uses_clip)
-                });
-            let mut reads = usize::from(draws_source && counted(&entry.source_id));
+            let mut reads = usize::from(draws_own_source(entry) && counted(&entry.source_id));
             for slot in [composition, source_composition].into_iter().flatten() {
                 reads += *plan_reads
                     .entry(std::sync::Arc::as_ptr(slot))
@@ -245,6 +238,88 @@ impl ActiveIndex {
         }
         peak
     }
+
+    /// Every sequential read of a host-supplied source that `counted`
+    /// selects over `range`: the reader, named as [`crate::frame_needs`]
+    /// names it (the clip, and the composition step reading for it, `/`
+    /// before a step of its composition source), and the part of `range` it
+    /// may read in, the clip's span there. The reads
+    /// [`Self::peak_source_reads`] counts, one entry each, in index order.
+    ///
+    /// A reader reads only inside its span: a host can close the decoder of
+    /// a reader whose span has ended, and tell which open decoder it reads
+    /// last. Within its span a reader may still skip frames (a frame another
+    /// reader of the same source frame asks for, or a matte no clip names).
+    #[must_use]
+    pub fn source_reads(
+        &self,
+        range: TimeRange,
+        mut counted: impl FnMut(&SourceId) -> bool,
+    ) -> Vec<SourceRead> {
+        let mut reads = Vec::new();
+        for entry in self.nodes.iter().map(IntervalNode::entry) {
+            let Some(span) = entry.timeline_range.intersection(range) else {
+                continue;
+            };
+            let read = |source_id: &SourceId, reader| SourceRead {
+                source_id: source_id.clone(),
+                clip_id: entry.clip_id.clone(),
+                reader,
+                span,
+            };
+            if draws_own_source(entry) && counted(&entry.source_id) {
+                reads.push(read(&entry.source_id, None));
+            }
+            let [composition, source_composition] = clip_plans(entry);
+            for (slot, of_source) in [(composition, false), (source_composition, true)] {
+                let Some(Ok(plan)) = slot.map(|slot| slot.as_ref().as_ref()) else {
+                    continue;
+                };
+                for step in &plan.steps {
+                    let crate::StepOp::Media { source_id, .. } = &step.op else {
+                        continue;
+                    };
+                    if !counted(source_id) {
+                        continue;
+                    }
+                    let reader = if of_source {
+                        alpha2_model::NodeId::new(format!("/{}", step.node)).ok()
+                    } else {
+                        Some(step.node.clone())
+                    };
+                    reads.push(read(source_id, reader));
+                }
+            }
+        }
+        reads
+    }
+}
+
+/// One reader of a source over an export range ([`ActiveIndex::source_reads`]).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SourceRead {
+    /// The source read.
+    pub source_id: SourceId,
+    /// The clip that reads it, or shows the composition that does.
+    pub clip_id: alpha2_model::ClipId,
+    /// The composition step that reads, as [`crate::FrameNeed::reader`]
+    /// names it; `None` for the clip's own source.
+    pub reader: Option<alpha2_model::NodeId>,
+    /// Where on the timeline it may read.
+    pub span: TimeRange,
+}
+
+/// Whether `entry` draws its own source picture: it has no generator or
+/// composition source, and any composition it shows uses its clip.
+fn draws_own_source(entry: &IndexedClip) -> bool {
+    let [composition, source_composition] = clip_plans(entry);
+    entry.generator.is_none()
+        && source_composition.is_none()
+        && composition.is_none_or(|slot| {
+            slot.as_ref()
+                .as_ref()
+                .is_ok_and(crate::CompositionPlan::uses_clip)
+        })
 }
 
 /// The compiled compositions `entry` draws: its own, then its composition

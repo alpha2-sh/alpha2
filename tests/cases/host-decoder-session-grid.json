@@ -1,0 +1,233 @@
+{
+  "schema_version": 1,
+  "id": "decoder-session-grid",
+  "name": "Decoder session grid",
+  "settings": {
+    "width": 384,
+    "height": 288,
+    "frame_rate": { "num": 30, "den": 1 },
+    "sample_rate": 48000
+  },
+  "sources": [
+    { "id": "v0", "kind": "video", "locator": "fixture://v0" },
+    { "id": "v1", "kind": "video", "locator": "fixture://v1" },
+    { "id": "v2", "kind": "video", "locator": "fixture://v2" },
+    { "id": "v3", "kind": "video", "locator": "fixture://v3" },
+    { "id": "v4", "kind": "video", "locator": "fixture://v4" },
+    { "id": "v5", "kind": "video", "locator": "fixture://v5" },
+    { "id": "v6", "kind": "video", "locator": "fixture://v6" },
+    { "id": "v7", "kind": "video", "locator": "fixture://v7" },
+    { "id": "v8", "kind": "video", "locator": "fixture://v8" }
+  ],
+  "timeline": {
+    "tracks": [
+      {
+        "id": "t0",
+        "name": "t0",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "c0",
+            "source_id": "v0",
+            "timeline_range": { "start": 0, "end": 120000 },
+            "source_range": { "start": 0, "end": 120000 },
+            "visual": {
+              "position": {
+                "mode": "constant",
+                "value": { "x": 0.16666666666666666, "y": 0.16666666666666666 }
+              },
+              "scale": {
+                "mode": "constant",
+                "value": { "x": 0.3333333333333333, "y": 0.3333333333333333 }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "t1",
+        "name": "t1",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "c1",
+            "source_id": "v1",
+            "timeline_range": { "start": 0, "end": 120000 },
+            "source_range": { "start": 12000, "end": 132000 },
+            "visual": {
+              "position": {
+                "mode": "constant",
+                "value": { "x": 0.5, "y": 0.16666666666666666 }
+              },
+              "scale": {
+                "mode": "constant",
+                "value": { "x": 0.3333333333333333, "y": 0.3333333333333333 }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "t2",
+        "name": "t2",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "c2",
+            "source_id": "v2",
+            "timeline_range": { "start": 0, "end": 120000 },
+            "source_range": { "start": 24000, "end": 144000 },
+            "visual": {
+              "position": {
+                "mode": "constant",
+                "value": { "x": 0.8333333333333334, "y": 0.16666666666666666 }
+              },
+              "scale": {
+                "mode": "constant",
+                "value": { "x": 0.3333333333333333, "y": 0.3333333333333333 }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "t3",
+        "name": "t3",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "c3",
+            "source_id": "v3",
+            "timeline_range": { "start": 0, "end": 120000 },
+            "source_range": { "start": 0, "end": 120000 },
+            "visual": {
+              "position": {
+                "mode": "constant",
+                "value": { "x": 0.16666666666666666, "y": 0.5 }
+              },
+              "scale": {
+                "mode": "constant",
+                "value": { "x": 0.3333333333333333, "y": 0.3333333333333333 }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "t4",
+        "name": "t4",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "c4",
+            "source_id": "v4",
+            "timeline_range": { "start": 0, "end": 120000 },
+            "source_range": { "start": 12000, "end": 132000 },
+            "visual": {
+              "position": {
+                "mode": "constant",
+                "value": { "x": 0.5, "y": 0.5 }
+              },
+              "scale": {
+                "mode": "constant",
+                "value": { "x": 0.3333333333333333, "y": 0.3333333333333333 }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "t5",
+        "name": "t5",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "c5",
+            "source_id": "v5",
+            "timeline_range": { "start": 0, "end": 120000 },
+            "source_range": { "start": 24000, "end": 144000 },
+            "visual": {
+              "position": {
+                "mode": "constant",
+                "value": { "x": 0.8333333333333334, "y": 0.5 }
+              },
+              "scale": {
+                "mode": "constant",
+                "value": { "x": 0.3333333333333333, "y": 0.3333333333333333 }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "t6",
+        "name": "t6",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "c6",
+            "source_id": "v6",
+            "timeline_range": { "start": 0, "end": 120000 },
+            "source_range": { "start": 0, "end": 120000 },
+            "visual": {
+              "position": {
+                "mode": "constant",
+                "value": { "x": 0.16666666666666666, "y": 0.8333333333333334 }
+              },
+              "scale": {
+                "mode": "constant",
+                "value": { "x": 0.3333333333333333, "y": 0.3333333333333333 }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "t7",
+        "name": "t7",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "c7",
+            "source_id": "v7",
+            "timeline_range": { "start": 0, "end": 120000 },
+            "source_range": { "start": 12000, "end": 132000 },
+            "visual": {
+              "position": {
+                "mode": "constant",
+                "value": { "x": 0.5, "y": 0.8333333333333334 }
+              },
+              "scale": {
+                "mode": "constant",
+                "value": { "x": 0.3333333333333333, "y": 0.3333333333333333 }
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "t8",
+        "name": "t8",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "c8",
+            "source_id": "v8",
+            "timeline_range": { "start": 0, "end": 120000 },
+            "source_range": { "start": 24000, "end": 144000 },
+            "visual": {
+              "position": {
+                "mode": "constant",
+                "value": { "x": 0.8333333333333334, "y": 0.8333333333333334 }
+              },
+              "scale": {
+                "mode": "constant",
+                "value": { "x": 0.3333333333333333, "y": 0.3333333333333333 }
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

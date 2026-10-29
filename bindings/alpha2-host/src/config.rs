@@ -106,7 +106,7 @@ pub fn configured_yuv_transcode() -> Result<(), String> {
 ///
 /// The codec and a pinned encoder say *what* encodes; this says whether the
 /// frames may, must, or must not reach it without a CPU readback. Every
-/// export reports the path it took as `videoOutputPath`, and why the GPU
+/// export reports the path it took as `videoPipeline`, and why the GPU
 /// path was not taken as `gpuOutputPathUnavailable`.
 #[derive(Copy, Clone, Debug, Default, serde::Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "kebab-case")]
@@ -417,9 +417,13 @@ const fn decode_concurrency_policy(hardware_decode: bool) -> (usize, usize) {
 
 /// The most video decoder cursors reading at once over `export_range`: each
 /// clip's own source and each media step of its compositions, as
-/// [`alpha2_eval::ActiveIndex::peak_source_reads`] counts them. A source an
-/// extension provider draws opens no decoder.
-pub fn visual_decode_parallelism(project: &Project, export_range: TimeRange) -> usize {
+/// [`alpha2_eval::ActiveIndex::peak_source_reads`] counts them; and when each
+/// of those cursors reads ([`alpha2_eval::ActiveIndex::source_reads`]), from
+/// one index. A source an extension provider draws opens no decoder.
+pub fn visual_decode_reads(
+    project: &Project,
+    export_range: TimeRange,
+) -> (usize, crate::decode::CursorReads) {
     let decoded = project
         .sources
         .iter()
@@ -428,11 +432,13 @@ pub fn visual_decode_parallelism(project: &Project, export_range: TimeRange) -> 
         .collect::<std::collections::HashSet<_>>();
     // An export validated the project already; an index it cannot build reads nothing.
     let Ok(index) = alpha2_eval::ActiveIndex::build(project) else {
-        return 1;
+        return (1, crate::decode::CursorReads::default());
     };
-    index
-        .peak_source_reads(export_range, |source| decoded.contains(source))
-        .max(1)
+    let counted = |source: &alpha2_media::SourceId| decoded.contains(source);
+    (
+        index.peak_source_reads(export_range, counted).max(1),
+        crate::decode::CursorReads::new(index.source_reads(export_range, counted)),
+    )
 }
 
 /// How a run may decode video.
@@ -676,14 +682,109 @@ where
     default
 }
 
-/// The most decoder sessions an export keeps open, from `ALPHA2_DECODER_SESSIONS`, clamped to
-/// `1..=MAX_DECODER_SESSIONS`.
-pub fn configured_decoder_sessions() -> usize {
-    env::var("ALPHA2_DECODER_SESSIONS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(DEFAULT_DECODER_SESSIONS)
-        .clamp(1, MAX_DECODER_SESSIONS)
+/// The decoder sessions `ALPHA2_DECODER_SESSIONS` asks for, clamped to
+/// `1..=MAX_DECODER_SESSIONS`; `None` when it is unset, or not an integer
+/// (named on stderr).
+pub fn configured_decoder_session_override() -> Option<usize> {
+    let setting = env::var_os("ALPHA2_DECODER_SESSIONS")?;
+    if let Some(sessions) = setting.to_str().and_then(|text| text.parse::<usize>().ok()) {
+        return Some(sessions.clamp(1, MAX_DECODER_SESSIONS));
+    }
+    alpha2_os::diagnostic!(
+        "alpha2-host: ignoring ALPHA2_DECODER_SESSIONS={setting:?}: not an integer; \
+         sizing decoder sessions to the export"
+    );
+    None
+}
+
+/// What decided how many decoder sessions an export keeps open.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum DecoderSessionLimit {
+    /// The most videos the export reads at once, or the floor of
+    /// `DEFAULT_DECODER_SESSIONS` above it.
+    Workload,
+    /// The decoder session budget (`memory.decoderSessionBytes`) over the
+    /// estimate for one session of the largest video.
+    Memory,
+    /// `ALPHA2_DECODER_SESSIONS`.
+    Override,
+    /// `MAX_DECODER_SESSIONS`.
+    Cap,
+}
+
+impl DecoderSessionLimit {
+    /// The name results and diagnostics use.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Workload => "workload",
+            Self::Memory => "memory",
+            Self::Override => "override",
+            Self::Cap => "cap",
+        }
+    }
+}
+
+/// How many decoder sessions an export keeps open, and why.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct DecoderSessionCount {
+    pub sessions: usize,
+    pub limit: DecoderSessionLimit,
+    /// The most video decoder cursors the export reads at once
+    /// ([`visual_decode_reads`]).
+    pub peak: usize,
+}
+
+/// The decoder sessions of an export that reads `peak` videos at once: the
+/// lowest of the workload (`peak`, at least `DEFAULT_DECODER_SESSIONS`, so a
+/// project that reads few never runs short), what `budget_bytes` holds of
+/// sessions of `session_bytes` each, and `MAX_DECODER_SESSIONS`; at least one.
+/// `requested` (`ALPHA2_DECODER_SESSIONS`) replaces all three. A tie names
+/// the first of workload, memory, cap: the one a caller can change least.
+pub fn decoder_session_count(
+    peak: usize,
+    session_bytes: u64,
+    budget_bytes: u64,
+    requested: Option<usize>,
+) -> DecoderSessionCount {
+    if let Some(sessions) = requested {
+        return DecoderSessionCount {
+            sessions: sessions.clamp(1, MAX_DECODER_SESSIONS),
+            limit: DecoderSessionLimit::Override,
+            peak,
+        };
+    }
+    let fit = usize::try_from(budget_bytes / session_bytes.max(1))
+        .unwrap_or(usize::MAX)
+        .max(1);
+    let (sessions, limit) = [
+        (
+            peak.max(DEFAULT_DECODER_SESSIONS),
+            DecoderSessionLimit::Workload,
+        ),
+        (fit, DecoderSessionLimit::Memory),
+        (MAX_DECODER_SESSIONS, DecoderSessionLimit::Cap),
+    ]
+    .into_iter()
+    .min_by_key(|(sessions, _)| *sessions)
+    .unwrap_or((DEFAULT_DECODER_SESSIONS, DecoderSessionLimit::Workload));
+    DecoderSessionCount {
+        sessions,
+        limit,
+        peak,
+    }
+}
+
+/// What one decoder session of a video of `luma_samples` per frame is
+/// estimated to hold: 8-bit 4:2:0 frames, as many as `threads` frame
+/// threads keep (two each: the one it decodes and the one it hands on) plus
+/// four, for the references, the frame returned and the one decoded ahead.
+/// Measured with H.264 at the default threads, software sessions held 24
+/// frames at 1080p and at 4K, against 26 here; one with a single thread held
+/// four.
+pub fn decoder_session_bytes(luma_samples: u64, threads: i64) -> u64 {
+    let frame = luma_samples.saturating_mul(3).div_ceil(2);
+    let threads = u64::try_from(threads.max(1)).unwrap_or(1);
+    frame.saturating_mul(threads.saturating_mul(2).saturating_add(4))
 }
 
 /// Video frames in flight between render and encode, from `ALPHA2_EXPORT_IN_FLIGHT_FRAMES`,
@@ -881,7 +982,7 @@ mod tests {
         );
     }
 
-    use super::visual_decode_parallelism;
+    use super::visual_decode_reads;
     use alpha2_time::{MediaTime, TimeRange};
 
     fn range(start: i64, end: i64) -> TimeRange {
@@ -967,11 +1068,67 @@ mod tests {
             "id": "c", "source_id": "a", "composition": {"id": "quad"},
             "timeline_range": span(0, 120_000), "source_range": span(0, 120_000)
         }));
-        assert_eq!(visual_decode_parallelism(&composed, range(0, 120_000)), 4);
+        assert_eq!(visual_decode_reads(&composed, range(0, 120_000)).0, 4);
         let source = project(json!({
             "id": "c", "source_id": "split",
             "timeline_range": span(0, 120_000), "source_range": span(0, 120_000)
         }));
-        assert_eq!(visual_decode_parallelism(&source, range(0, 120_000)), 4);
+        assert_eq!(visual_decode_reads(&source, range(0, 120_000)).0, 4);
+    }
+
+    #[test]
+    fn a_decoder_session_is_estimated_as_its_frames_and_two_per_thread() {
+        use super::decoder_session_bytes;
+
+        let hd = 1920 * 1080;
+        // 1080p at eleven threads, the default split of this machine's 22: 26 frames, against the
+        // 24 measured.
+        assert_eq!(decoder_session_bytes(hd, 11), 3_110_400 * 26);
+        assert_eq!(decoder_session_bytes(hd, 1), 3_110_400 * 6);
+        // No thread count below one, and no video at all costs nothing.
+        assert_eq!(decoder_session_bytes(hd, 0), decoder_session_bytes(hd, 1));
+        assert_eq!(decoder_session_bytes(0, 11), 0);
+    }
+
+    #[test]
+    fn decoder_sessions_are_the_lowest_of_the_workload_the_memory_and_the_cap() {
+        use super::{DecoderSessionLimit as Limit, decoder_session_count};
+        use crate::{DEFAULT_DECODER_SESSIONS, MAX_DECODER_SESSIONS};
+
+        let mb = 1 << 20;
+        let count = |peak, session, budget, requested| {
+            let count = decoder_session_count(peak, session, budget, requested);
+            assert_eq!(count.peak, peak);
+            (count.sessions, count.limit)
+        };
+        // The videos read at once, never fewer than the floor.
+        assert_eq!(count(12, 80 * mb, 4096 * mb, None), (12, Limit::Workload));
+        assert_eq!(
+            count(2, 80 * mb, 4096 * mb, None),
+            (DEFAULT_DECODER_SESSIONS, Limit::Workload)
+        );
+        // What the budget holds, at least one.
+        assert_eq!(count(16, 320 * mb, 4096 * mb, None), (12, Limit::Memory));
+        assert_eq!(count(16, 320 * mb, 100 * mb, None), (1, Limit::Memory));
+        // No video to estimate fits any number.
+        assert_eq!(count(16, 0, 4096 * mb, None), (16, Limit::Workload));
+        // The cap.
+        assert_eq!(
+            count(40, 10 * mb, 4096 * mb, None),
+            (MAX_DECODER_SESSIONS, Limit::Cap)
+        );
+        // A tie names the workload, then the memory.
+        assert_eq!(count(12, 100 * mb, 1200 * mb, None), (12, Limit::Workload));
+        assert_eq!(count(40, 128 * mb, 4096 * mb, None), (32, Limit::Memory));
+        // The setting replaces all three, within one and the cap.
+        assert_eq!(
+            count(40, 320 * mb, 100 * mb, Some(20)),
+            (20, Limit::Override)
+        );
+        assert_eq!(count(2, 1, 1, Some(0)), (1, Limit::Override));
+        assert_eq!(
+            count(2, 1, 1, Some(500)),
+            (MAX_DECODER_SESSIONS, Limit::Override)
+        );
     }
 }

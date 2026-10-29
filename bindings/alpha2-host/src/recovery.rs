@@ -23,6 +23,9 @@ thread_local! {
 pub struct ExportDecoding {
     policy: DecodePolicy,
     sources: Mutex<BTreeMap<String, DecodeDiagnosticCounts>>,
+    /// Fewer decoder sessions than the videos read at once, and what that
+    /// cost: reported after the sources.
+    short_of_sessions: Mutex<Option<Value>>,
 }
 
 impl ExportDecoding {
@@ -42,6 +45,33 @@ impl ExportDecoding {
         Self {
             policy,
             sources: Mutex::default(),
+            short_of_sessions: Mutex::default(),
+        }
+    }
+
+    /// Notes an export that kept fewer decoder sessions open than the
+    /// videos it reads at once: those past the sessions reopen a decoder
+    /// (and decode from a keyframe) as they come round. Nothing is noted
+    /// when every video had a session.
+    pub fn note_decoder_sessions(&self, count: crate::config::DecoderSessionCount, reopens: u64) {
+        if count.sessions >= count.peak {
+            return;
+        }
+        let entry = json!({
+            "type": "decoderSessionsShort",
+            "peak": count.peak,
+            "decoderSessions": count.sessions,
+            "limit": count.limit.as_str(),
+            "reopens": reopens,
+            "message": format!(
+                "{} videos are read at once but {} decoder sessions fit ({}); {reopens} decoders were reopened",
+                count.peak,
+                count.sessions,
+                count.limit.as_str(),
+            ),
+        });
+        if let Ok(mut noted) = self.short_of_sessions.lock() {
+            *noted = Some(entry);
         }
     }
 
@@ -68,6 +98,11 @@ impl ExportDecoding {
             .lock()
             .map(|sources| sources.clone())
             .unwrap_or_default();
+        let short_of_sessions = self
+            .short_of_sessions
+            .lock()
+            .ok()
+            .and_then(|noted| noted.clone());
         Value::Array(
             sources
                 .into_iter()
@@ -81,6 +116,7 @@ impl ExportDecoding {
                         "droppedAudioSamples": counts.dropped_audio_samples,
                     })
                 })
+                .chain(short_of_sessions)
                 .collect(),
         )
     }

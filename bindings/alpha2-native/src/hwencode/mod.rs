@@ -30,7 +30,6 @@ mod videotoolbox;
 #[cfg(target_os = "linux")]
 mod vulkan;
 
-use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use alpha2_media::{ColorMetadata, EncodeError, VideoRateControl};
@@ -273,8 +272,9 @@ pub struct HardwareEncodeRequest<'a> {
     pub rate_control: VideoRateControl,
     /// The color the pack encodes, which the stream is tagged with.
     pub color: ColorMetadata,
-    /// Where the file goes; a partial file sits beside it until it finishes.
-    pub output: &'a Path,
+    /// Where the file goes, and what it does with a file there; a partial
+    /// file sits beside it until it finishes.
+    pub output: &'a crate::OutputTarget,
     /// The file format written there, which must offer `codec` and the audio
     /// codec.
     pub container: alpha2_media::Container,

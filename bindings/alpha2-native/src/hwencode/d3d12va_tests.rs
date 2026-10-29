@@ -27,6 +27,7 @@ use super::super::{
     HardwareEncodeRequest, HardwareEncodeSession, SessionBackend,
 };
 use super::*;
+use crate::OutputTarget;
 
 thread_local! {
     static ACCEPT_UNDECODABLE: Cell<bool> = const { Cell::new(false) };
@@ -146,7 +147,7 @@ fn encodable(capability: &HardwareEncodeCapability) -> VideoRateControl {
 
 fn request<'a>(
     capability: &HardwareEncodeCapability,
-    output: &'a Path,
+    output: &'a OutputTarget,
     size: (u32, u32),
     rate_control: VideoRateControl,
 ) -> HardwareEncodeRequest<'a> {
@@ -170,7 +171,12 @@ fn open(
     size: (u32, u32),
 ) -> (HardwareEncodeSession, HardwareEncodeInput) {
     device
-        .open(&request(capability, output, size, encodable(capability)))
+        .open(&request(
+            capability,
+            &OutputTarget::from(output),
+            size,
+            encodable(capability),
+        ))
         .unwrap_or_else(|error| panic!("the session opens: {error}"))
 }
 
@@ -499,7 +505,12 @@ fn an_export_size_outside_the_device_extents_is_refused_before_any_output() {
         256,
     );
     for size in [too_wide, (257, 256)] {
-        let refused = device.open(&request(&capability, &output, size, encodable(&capability)));
+        let refused = device.open(&request(
+            &capability,
+            &OutputTarget::from(&output),
+            size,
+            encodable(&capability),
+        ));
         let Err(HardwareEncodeOpenError::Refused(reason)) = refused else {
             panic!("a {size:?} export is refused before the output exists");
         };
@@ -528,7 +539,12 @@ fn a_bitrate_the_device_cannot_encode_with_is_refused_before_any_output_naming_i
             continue;
         }
         let rate = VideoRateControl::bitrate(4_000_000, mode).expect("rate");
-        let opened = device.open(&request(&capability, &output, (256, 192), rate));
+        let opened = device.open(&request(
+            &capability,
+            &OutputTarget::from(&output),
+            (256, 192),
+            rate,
+        ));
         let Err(HardwareEncodeOpenError::Refused(reason)) = opened else {
             panic!("{name} is refused before the output exists");
         };

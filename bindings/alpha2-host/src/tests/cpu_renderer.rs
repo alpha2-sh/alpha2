@@ -66,7 +66,7 @@ fn a_cpu_export_draws_the_frames_the_gpu_draws() {
             .as_u64()
             .is_some_and(|threads| threads >= 1)
     );
-    assert_eq!(cpu["videoOutputPath"], json!("readback"));
+    assert_eq!(cpu["videoPipeline"], json!("readback"));
     assert!(
         cpu["performance"]["cpuRenderMs"]
             .as_f64()

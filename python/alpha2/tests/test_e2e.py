@@ -139,6 +139,9 @@ def test_the_client_exports_a_project_through_the_host_binary(
         **image_export(output, video_codec="mpeg4-part2", on_progress=progress.append)
     )
     assert output.read_bytes()[4:8] == b"ftyp"
+    assert Path(result["output"]).is_absolute()
+    assert Path(result["output"]) == output.resolve()
+    assert result["videoPipeline"] in ("readback", "gpu-resident")
     assert progress, "the host must report export progress"
     for report in progress:
         assert 0 <= report.completed <= report.total
@@ -150,8 +153,181 @@ def test_the_client_exports_a_project_through_the_host_binary(
     assert result["color"]["output"] == "bt709_sdr"
     assert result["color"]["intermediateFormat"] in ("rgba16float", "rgba8unorm")
     assert isinstance(result["performance"]["frameSubmitMs"], (int, float))
-    assert_declared_performance(result["performance"], result["videoOutputPath"])
+    assert_declared_performance(result["performance"], result["videoPipeline"])
     assert result["decodeDiagnostics"] == []
+
+
+def test_an_existing_output_is_replaced_only_with_overwrite_and_an_input_is_never_an_output(
+    client: HostClient, tmp_path: Path
+) -> None:
+    output = tmp_path / "export.mp4"
+    output.write_bytes(b"old")
+    with pytest.raises(Alpha2HostError) as refused:
+        client.export(**image_export(output, video_codec="mpeg4-part2"))
+    assert refused.value.code == "IO_ERROR"
+    assert output.read_bytes() == b"old"
+    for _ in range(2):
+        client.export(**image_export(output, video_codec="mpeg4-part2", overwrite=True))
+        assert output.read_bytes()[4:8] == b"ftyp"
+    # Named like an output, so only the identity check can refuse it.
+    asset = tmp_path / "asset.mp4"
+    asset.write_bytes(ASSET.read_bytes())
+    for overwrite in (False, True):
+        with pytest.raises(Alpha2HostError) as same:
+            client.export(
+                **image_export(
+                    asset,
+                    video_codec="mpeg4-part2",
+                    assets={"image-source": asset},
+                    overwrite=overwrite,
+                )
+            )
+        assert same.value.code == "INVALID_REQUEST"
+        assert 'the asset "image-source"' in str(same.value)
+    with pytest.raises(Alpha2HostError, match="overwrite must be true or false"):
+        client.export(**image_export(output, overwrite="yes"))
+
+
+def read_rgba_png(path: Path) -> tuple[int, int, bytes]:
+    """An 8-bit RGBA PNG's size and pixels, read with the standard library."""
+    import struct
+    import zlib
+
+    data = path.read_bytes()
+    assert data[:8] == b"\x89PNG\r\n\x1a\n"
+    position, width, height, compressed = 8, 0, 0, b""
+    while position < len(data):
+        (length,) = struct.unpack(">I", data[position : position + 4])
+        kind = data[position + 4 : position + 8]
+        body = data[position + 8 : position + 8 + length]
+        if kind == b"IHDR":
+            width, height, depth, color = struct.unpack(">IIBB", body[:10])
+            assert (depth, color) == (8, 6), "8-bit RGBA"
+        elif kind == b"IDAT":
+            compressed += body
+        position += 12 + length
+    raw = zlib.decompress(compressed)
+    stride = width * 4
+    rows: list[bytearray] = []
+    previous = bytearray(stride)
+    for row in range(height):
+        start = row * (stride + 1)
+        kind, line = raw[start], bytearray(raw[start + 1 : start + 1 + stride])
+        for i in range(stride):
+            left = line[i - 4] if i >= 4 else 0
+            up = previous[i]
+            corner = previous[i - 4] if i >= 4 else 0
+            if kind == 1:
+                line[i] = (line[i] + left) & 0xFF
+            elif kind == 2:
+                line[i] = (line[i] + up) & 0xFF
+            elif kind == 3:
+                line[i] = (line[i] + (left + up) // 2) & 0xFF
+            elif kind == 4:
+                estimate = left + up - corner
+                near = min(
+                    (abs(estimate - left), 0, left),
+                    (abs(estimate - up), 1, up),
+                    (abs(estimate - corner), 2, corner),
+                )[2]
+                line[i] = (line[i] + near) & 0xFF
+        rows.append(line)
+        previous = line
+    return width, height, b"".join(rows)
+
+
+SOLID: dict[str, Any] = {
+    "schema_version": 1,
+    "id": "solid",
+    "name": "Solid",
+    "settings": {
+        "width": 64,
+        "height": 48,
+        "frame_rate": {"num": 30, "den": 1},
+        "sample_rate": 48000,
+    },
+    "sources": [
+        {
+            "id": "red",
+            "kind": "generated",
+            "generator": {
+                "type": "fill",
+                "paint": {"type": "solid", "color": {"red": 1, "green": 0, "blue": 0, "alpha": 1}},
+            },
+        }
+    ],
+    "timeline": {
+        "tracks": [
+            {
+                "id": "v",
+                "name": "V",
+                "kind": "video",
+                "clips": [
+                    {
+                        "id": "clip",
+                        "source_id": "red",
+                        "timeline_range": {"start": 0, "end": 120_000},
+                        "source_range": {"start": 0, "end": 120_000},
+                    }
+                ],
+            }
+        ]
+    },
+}
+
+
+def test_a_still_is_a_png_of_the_canvas_in_the_projects_colors(
+    client: HostClient, tmp_path: Path
+) -> None:
+    output = tmp_path / "frame.png"
+    result = client.still(SOLID, 0.51, output)
+    frame = result["stills"][0]
+    # 0.51 s is between frames 15 and 16 at 30 fps: the grid frame holding it is 15.
+    assert frame["frameTime"] == 15 * 4_000
+    assert Path(frame["output"]) == output.resolve()
+    width, height, pixels = read_rgba_png(output)
+    assert (width, height) == (frame["width"], frame["height"]) == (64, 48)
+    assert pixels[: 4 * 2] == bytes([255, 0, 0, 255]) * 2
+    assert set(pixels[i : i + 4] for i in range(0, len(pixels), 4)) == {bytes([255, 0, 0, 255])}
+
+    # Several at once, in the order asked for, at a size of their own.
+    times = [(1.0, tmp_path / "late.png"), (0, tmp_path / "early.png")]
+    result = client.stills(SOLID, times, size=(31, 17))
+    assert [entry["frameTime"] for entry in result["stills"]] == [120_000, 0]
+    assert read_rgba_png(tmp_path / "late.png")[:2] == (31, 17)
+
+    with pytest.raises(Alpha2HostError) as existing:
+        client.still(SOLID, 0, output)
+    assert existing.value.code == "IO_ERROR"
+    client.still(SOLID, 0, output, overwrite=True)
+    with pytest.raises(Alpha2HostError, match="two stills write"):
+        client.stills(SOLID, [(0, output), (1, output)])
+
+
+def test_the_command_line_writes_a_still(tmp_path: Path) -> None:
+    project = tmp_path / "project.json"
+    project.write_text(json.dumps(SOLID))
+    output = tmp_path / "frame.png"
+    run = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "alpha2",
+            "still",
+            str(project),
+            str(output),
+            "--at",
+            "0.5",
+            "--host",
+            str(HOST),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert run.returncode == 0, run.stderr
+    assert "frame at 0.5 s" in run.stdout
+    assert read_rgba_png(output)[:2] == (64, 48)
 
 
 def test_a_compose_spec_compiles_from_the_hosts_facts_and_exports(
@@ -211,7 +387,7 @@ def test_a_failed_readback_reaches_the_client_classified_with_the_hosts_evidence
     )
     assert failure["frameIndex"] == 1
     assert failure["origin"] == "native-host"
-    assert failure["diagnostics"]["videoOutputPath"] == "readback"
+    assert failure["diagnostics"]["videoPipeline"] == "readback"
     assert failure["diagnostics"]["request"]["startTicks"] == "0"
     assert failure["diagnostics"]["gpu"]["deviceLost"] is False
     assert isinstance(error.stderr, str)
@@ -523,7 +699,7 @@ def test_a_range_that_is_its_source_untouched_is_copied_and_one_that_cannot_be_i
         include_audio=False,
         strategy="require-copy",
     )
-    assert result["videoOutputPath"] == "packet-copy"
+    assert result["videoPipeline"] == "packet-copy"
     assert_declared_performance(result["performance"], "packet-copy")
     assert (result["strategy"], result["requestedStrategy"]) == ("copy", "require-copy")
     assert result["frames"] == 30
@@ -537,7 +713,7 @@ def test_a_range_that_is_its_source_untouched_is_copied_and_one_that_cannot_be_i
         end_ticks=second,
         strategy="require-copy",
     )
-    assert result["videoOutputPath"] == "packet-copy"
+    assert result["videoPipeline"] == "packet-copy"
     assert result["audio"] is True
     assert result["audioStrategy"] == "encode"
 
@@ -719,18 +895,18 @@ def test_the_client_can_tell_in_advance_whether_an_export_will_be_gpu_resident(
     if has_below:
         try:
             result = export_size(client, tmp_path, *below, "below-minimum.mp4")
-            assert result["videoOutputPath"] == "readback"
+            assert result["videoPipeline"] == "readback"
         except Alpha2HostError as error:
             assert "encoder" in error.message.lower(), error.message
     inside = (even(max(gpu["minimumWidth"], 256)), even(max(gpu["minimumHeight"], 192)))
     result = export_size(client, tmp_path, *inside, "inside-extent.mp4")
-    assert result["videoOutputPath"] == "gpu-resident"
+    assert result["videoPipeline"] == "gpu-resident"
     assert result["videoEncoder"] == gpu["encoder"]
     assert result["inputPolicy"] == "auto"
     assert result["performance"]["readbackCopyBytes"] == 0
     for options in ({"video_encoder": gpu["encoder"]}, {"input_policy": "gpu-required"}):
         pinned = export_size(client, tmp_path, *inside, "required.mp4", **options)
-        assert pinned["videoOutputPath"] == "gpu-resident", options
+        assert pinned["videoPipeline"] == "gpu-resident", options
         (tmp_path / "required.mp4").unlink()
     # Required outside the extent is an error naming the path, never a fallback.
     outside = [(gpu["maximumWidth"] + even(gpu["widthAlignment"]), inside[1])]
@@ -775,7 +951,7 @@ def test_a_clip_shown_as_it_is_reaches_the_gpu_encoder_as_its_decoded_planes(
         )
 
     transcoded = export_at(width, height, "transcoded.mp4")
-    assert transcoded["videoOutputPath"] == "gpu-resident"
+    assert transcoded["videoPipeline"] == "gpu-resident"
     assert transcoded["strategy"] == "render"
     assert transcoded["videoTranscode"] == "yuv-repack"
     assert transcoded["yuvTranscodeIneligible"] is None

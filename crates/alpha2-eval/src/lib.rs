@@ -34,7 +34,7 @@ pub use frame::{
     ActiveCaption, ActiveClip, ActiveEffect, ActiveTransition, EvaluatedVisual, FrameDesc,
     FrameNeed,
 };
-pub use index::ActiveIndex;
+pub use index::{ActiveIndex, SourceRead};
 pub(crate) use interval_tree::{
     IntervalNode, build_tree, collect_active, collect_overlapping, count_overlapping,
 };

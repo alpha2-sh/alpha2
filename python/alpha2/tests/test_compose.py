@@ -194,7 +194,7 @@ def test_exporting_a_compiled_spec_sends_its_assets_fonts_and_loudness(
         f"""
         request, line = read_request()
         open({str(recorded)!r}, "w", encoding="utf-8").write(line)
-        send(request, ok=True, result={{"videoOutputPath": request["output"]}})
+        send(request, ok=True, result={{"videoPipeline": request["output"]}})
         """,
     )
     compiled = c.Video(c.Media("talk.mp4"), loudness=-14).compile(facts=FACTS, fonts=[FONT])

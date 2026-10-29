@@ -11,8 +11,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows_sys::Win32::Foundation::{ERROR_LOCK_VIOLATION, HANDLE};
 use windows_sys::Win32::Storage::FileSystem::{
-    BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle, LOCKFILE_EXCLUSIVE_LOCK,
-    LOCKFILE_FAIL_IMMEDIATELY, LockFileEx, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+    BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, GetFileInformationByHandle,
+    LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY, LockFileEx, MOVEFILE_WRITE_THROUGH,
+    MoveFileExW,
 };
 use windows_sys::Win32::System::Console::{
     CTRL_BREAK_EVENT, CTRL_C_EVENT, CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT,
@@ -84,6 +85,25 @@ pub(crate) fn same_file(file: &File, path: &Path) -> io::Result<bool> {
         Err(error) => return Err(error),
     };
     Ok(identity(file)? == identity(&named)?)
+}
+
+pub(crate) fn same_file_at(a: &Path, b: &Path) -> io::Result<bool> {
+    use std::os::windows::fs::OpenOptionsExt;
+    // Backup semantics opens a directory too; no access is asked for, so a
+    // file another program holds without sharing still opens.
+    let open = |path: &Path| match std::fs::OpenOptions::new()
+        .access_mode(0)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+    {
+        Ok(file) => Ok(Some(identity(&file)?)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    };
+    Ok(match (open(a)?, open(b)?) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    })
 }
 
 pub(crate) fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {

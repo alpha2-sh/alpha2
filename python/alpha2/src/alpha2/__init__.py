@@ -36,6 +36,8 @@ from .client import (
     conform,
     export,
     resolve_host_binary,
+    still,
+    stills,
 )
 from .errors import (
     Alpha2AbortError,
@@ -57,6 +59,7 @@ from .install import (
     install_openh264,
 )
 from .protocol import PROTOCOL_VERSION
+from .results import ExportResult, StillResult
 
 __all__ = [
     "HOST_DOWNLOAD_URL",
@@ -73,10 +76,12 @@ __all__ = [
     "Alpha2ProjectValidationError",
     "CaptionTrackBuilder",
     "ExportProgress",
+    "ExportResult",
     "HostClient",
     "InstallResult",
     "OpenH264InstallResult",
     "ProjectBuilder",
+    "StillResult",
     "Ticks",
     "TrackBuilder",
     "__version__",
@@ -91,6 +96,8 @@ __all__ = [
     "resolve_host_binary",
     "seconds_to_ticks",
     "sequential_ids",
+    "still",
+    "stills",
     "ticks",
     "ticks_to_seconds",
     "to_ticks",

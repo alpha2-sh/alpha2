@@ -40,7 +40,7 @@ fn a_repeated_frame_is_drawn_once_per_export() {
             VideoQualityRequest::Level(QualityLevel::VeryHigh),
             AudioQualityRequest::Level(QualityLevel::VeryHigh),
             None,
-            &directory.join(name),
+            directory.join(name),
             &mut |_| Ok(()),
         )
         .expect("export")
@@ -453,7 +453,7 @@ fn an_export_holds_only_the_stills_its_frame_shows() {
         request["videoCodec"] = json!("h264");
         let request = parse_request(&request.to_string()).expect("request");
         let gpu = host.handle(request, &mut |_| Ok(())).expect("export");
-        assert_eq!(gpu["videoOutputPath"], json!("gpu-resident"), "{gpu}");
+        assert_eq!(gpu["videoPipeline"], json!("gpu-resident"), "{gpu}");
         assert_eq!(
             gpu["performance"]["peakResidentStills"],
             json!(1),
@@ -503,7 +503,7 @@ fn a_copy_and_a_gpu_resident_export_report_the_render_cache_unavailable() {
     )
     .expect("request");
     let copied = host.handle(copy, &mut |_| Ok(())).expect("copy");
-    assert_eq!(copied["videoOutputPath"], json!("packet-copy"), "{copied}");
+    assert_eq!(copied["videoPipeline"], json!("packet-copy"), "{copied}");
     assert_eq!(
         copied["renderCache"],
         json!({"status": "unavailable", "reason": "a copy renders nothing to bake"}),
@@ -527,7 +527,7 @@ fn a_copy_and_a_gpu_resident_export_report_the_render_cache_unavailable() {
                 request["videoCodec"] = json!("h264");
                 let request = parse_request(&request.to_string()).expect("request");
                 let gpu = host.handle(request, &mut |_| Ok(())).expect("export");
-                assert_eq!(gpu["videoOutputPath"], json!("gpu-resident"), "{gpu}");
+                assert_eq!(gpu["videoPipeline"], json!("gpu-resident"), "{gpu}");
                 assert_eq!(
                     gpu["renderCache"],
                     json!({
@@ -1300,7 +1300,7 @@ fn a_render_cache_that_cannot_be_opened_never_fails_the_export() {
             .is_some_and(|reason| reason.contains("cannot be created")),
         "{report}"
     );
-    assert_eq!(result["videoOutputPath"], json!("readback"), "{result}");
+    assert_eq!(result["videoPipeline"], json!("readback"), "{result}");
     assert!(directory.join("a.mp4").is_file());
     std::fs::remove_dir_all(&directory).ok();
 }

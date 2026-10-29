@@ -1,5 +1,5 @@
 use super::*;
-use crate::{ActiveIndex, EvalError, FrameNeed, evaluate, frame_needs};
+use crate::{ActiveIndex, EvalError, FrameNeed, SourceRead, evaluate, frame_needs};
 use alpha2_model::{
     ClipComposition, CompositionNode, MediaSource, MergeLayer, NodeOp, Project, ProjectId,
     ProjectSettings, TimeMap, TimeScale, Track, TrackId, TrackKind,
@@ -1158,6 +1158,39 @@ fn reads_and_effects_of_a_shared_composition_are_counted_per_clip_and_walked_onc
     assert_eq!(index.peak_source_reads(all, |source| source == &other), 2);
     assert_eq!(index.peak_source_reads(range(2_000, 10_000), |_| true), 2);
     assert_eq!(index.peak_source_reads(range(3_000, 10_000), |_| true), 0);
+    // One read per clip and source, each named as the needs name its cursor, over its clip's span:
+    // every need of every frame is one of them, read inside its span.
+    let reads = index.source_reads(all, |_| true);
+    assert_eq!(reads.len(), 6, "{reads:?}");
+    let mut asked = 0;
+    for ticks in (0..3_000).step_by(50) {
+        let time = MediaTime(ticks);
+        for need in frame_needs(&project, &index, time).expect("needs") {
+            asked += 1;
+            assert!(
+                reads.iter().any(|read| read.source_id == need.source_id
+                    && read.clip_id == need.clip_id
+                    && read.reader == need.reader
+                    && read.span.contains(time)),
+                "{need:?} at {ticks}: {reads:?}"
+            );
+        }
+    }
+    assert!(asked > 0);
+    assert_eq!(
+        index.source_reads(range(2_000, 10_000), |source| source == &other),
+        reads
+            .iter()
+            .filter(|read| read.source_id == other && read.span.end().ticks() > 2_000)
+            .map(|read| SourceRead {
+                span: read
+                    .span
+                    .intersection(range(2_000, 10_000))
+                    .expect("overlaps"),
+                ..read.clone()
+            })
+            .collect::<Vec<_>>()
+    );
     // The three clips share one compiled composition, so its one blur is listed once.
     assert_eq!(
         index

@@ -36,6 +36,7 @@ pub enum Request {
     },
     Export(Box<ExportRequest>),
     Conform(ConformRequest),
+    Still(Box<StillRequest>),
 }
 
 /// A request's project document as the text it arrived in. The engine checks
@@ -142,6 +143,10 @@ pub struct ExportRequest {
     #[serde(default)]
     pub memory: crate::memory::MemoryRequest,
     pub output: PathBuf,
+    /// Replace a regular file at `output` once the export is whole; absent:
+    /// an existing output is refused.
+    #[serde(default)]
+    pub overwrite: bool,
 }
 
 impl ExportRequest {
@@ -311,6 +316,120 @@ pub struct ConformRequest {
     pub purpose: PurposeRequest,
 }
 
+/// The `still` operation's fields: frames of a project rendered as an export
+/// renders them, each written to a PNG.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StillRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub operation: String,
+    pub project: ProjectJson,
+    pub assets: HashMap<String, PathBuf>,
+    #[serde(default)]
+    pub proxies: HashMap<String, Vec<ProxyRequest>>,
+    /// Each image sequence's frame files, as an export takes them.
+    #[serde(default)]
+    pub frames: HashMap<String, Vec<Option<PathBuf>>>,
+    #[serde(default)]
+    pub resources: HashMap<String, HashMap<String, PathBuf>>,
+    #[serde(default)]
+    pub media: ExportMedia,
+    #[serde(default)]
+    pub effect_assets: HashMap<String, PathBuf>,
+    #[serde(rename = "fonts", default)]
+    pub font_files: Vec<PathBuf>,
+    #[serde(default)]
+    pub effects: Vec<EffectRequest>,
+    /// The picture's size; absent: the project's canvas. The project is
+    /// rendered as an export of it at that canvas size would be.
+    #[serde(default)]
+    pub size: Option<StillSize>,
+    /// The frames to render, 1 to [`MAX_STILLS`], each to its own file.
+    pub stills: Vec<StillEntry>,
+    /// Replace a regular file at an output once it is whole.
+    #[serde(default)]
+    pub overwrite: bool,
+}
+
+/// The most frames one `still` request renders.
+pub const MAX_STILLS: usize = 256;
+
+/// The largest still, either way, in pixels: the largest canvas.
+pub const MAX_STILL_DIMENSION: u32 = alpha2_model::MAX_CANVAS_DIMENSION;
+
+/// A still's width and height, in pixels.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct StillSize {
+    pub width: u32,
+    pub height: u32,
+}
+
+/// One frame of a `still` request.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct StillEntry {
+    /// A timeline time in ticks; the frame drawn is the one of the project's
+    /// frame grid that holds it.
+    pub time: i64,
+    /// The PNG to write.
+    pub output: PathBuf,
+}
+
+impl StillRequest {
+    /// The rules a still request's fields have between them.
+    ///
+    /// # Errors
+    /// `INVALID_INPUT` for no stills or more than [`MAX_STILLS`], a time
+    /// before zero, two stills to one output, or a size out of
+    /// `1..=MAX_STILL_DIMENSION`.
+    pub fn check(&self) -> Result<(), HostError> {
+        if self.operation != "still" {
+            return Err(HostError::new(
+                "INVALID_REQUEST",
+                "invalid request: the operation is not `still`",
+            ));
+        }
+        if self.stills.is_empty() || self.stills.len() > MAX_STILLS {
+            return Err(HostError::invalid_input(format!(
+                "stills has {} entries; a still request renders 1 to {MAX_STILLS}",
+                self.stills.len()
+            )));
+        }
+        let mut outputs = std::collections::HashSet::new();
+        for still in &self.stills {
+            if still.time < 0 {
+                return Err(HostError::invalid_input(format!(
+                    "a still's time is a timeline time from 0, not {}",
+                    still.time
+                )));
+            }
+            if still.output.as_os_str().is_empty() {
+                return Err(HostError::invalid_input(
+                    "a still's output must not be empty",
+                ));
+            }
+            if !outputs.insert(&still.output) {
+                return Err(HostError::invalid_input(format!(
+                    "two stills write {}",
+                    still.output.display()
+                )));
+            }
+        }
+        let fits = |pixels: u32| (1..=MAX_STILL_DIMENSION).contains(&pixels);
+        if self
+            .size
+            .is_some_and(|size| !fits(size.width) || !fits(size.height))
+        {
+            return Err(HostError::invalid_input(format!(
+                "a still's size is 1 to {MAX_STILL_DIMENSION} pixels each way"
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// Which media an export reads.
 #[derive(Copy, Clone, Debug, Default, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "kebab-case")]
@@ -363,6 +482,7 @@ impl Request {
             Self::Capabilities { request_id, .. } => request_id,
             Self::Export(export) => &export.request_id,
             Self::Conform(conform) => &conform.request_id,
+            Self::Still(still) => &still.request_id,
         }
     }
 
@@ -373,6 +493,7 @@ impl Request {
             } => *protocol_version,
             Self::Export(export) => export.protocol_version,
             Self::Conform(conform) => conform.protocol_version,
+            Self::Still(still) => still.protocol_version,
         }
     }
 }
@@ -445,11 +566,16 @@ pub fn parse_request(line: &str) -> Result<Request, HostError> {
             Request::Export(Box::new(export))
         }
         Some("conform") => Request::Conform(serde_json::from_str(line).map_err(invalid)?),
+        Some("still") => {
+            let still: StillRequest = serde_json::from_str(line).map_err(invalid)?;
+            still.check()?;
+            Request::Still(Box::new(still))
+        }
         Some(other) => {
             return Err(HostError::new(
                 "INVALID_REQUEST",
                 format!(
-                    "invalid request: unknown operation `{other}`, expected one of `capabilities`, `export`, `conform`"
+                    "invalid request: unknown operation `{other}`, expected one of `capabilities`, `export`, `conform`, `still`"
                 ),
             ));
         }

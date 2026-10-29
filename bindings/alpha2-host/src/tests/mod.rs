@@ -46,17 +46,20 @@ mod cpu_renderer;
 #[cfg(all(target_os = "windows", feature = "hwencode"))]
 mod d3d12va_encode;
 mod decode_plan;
+mod decoder_sessions;
 mod export_pipeline;
 mod failures;
 mod gpu_encode;
 mod gpu_resident;
 mod hardware_decode;
 mod openh264;
+mod outputs;
 mod providers;
 mod render_cache;
 mod rendering;
 mod requests;
 mod stalls;
+mod stills;
 
 /// Serializes the tests that create a GPU device. Devices created and named
 /// from many threads at once crash inside the Vulkan loader (seen with
@@ -373,6 +376,22 @@ fn still_project(background: [f32; 3], cache: &str) -> Value {
     project
 }
 
+/// Whether `named`, a path a result reports, is the file at `written` by an
+/// absolute path as people write them: no `.` or `..` in it, and on Windows
+/// without the `\\?\` prefix `std::fs::canonicalize` adds.
+fn names_written_file(named: &Path, written: &Path) -> bool {
+    named.is_absolute()
+        && named.components().all(|part| {
+            !matches!(
+                part,
+                std::path::Component::CurDir | std::path::Component::ParentDir
+            )
+        })
+        && !named.to_string_lossy().starts_with(r"\\?\")
+        && std::fs::canonicalize(named).ok() == std::fs::canonicalize(written).ok()
+        && named.is_file()
+}
+
 /// An empty scratch directory `alpha2-<name>-<pid>` for this test. A run
 /// that panics keeps its directory, and a later process can get the same
 /// id, so whatever is left there goes first.
@@ -467,6 +486,7 @@ fn decode_worker_over(
         decoder_threads: 1,
         hardware_decoder_threads: 1,
         max_sessions: concurrency,
+        reads: Arc::default(),
         reverse_cache_bytes: 0,
         reverse_hardware_surfaces: 0,
         stall_timeout: Duration::from_secs(20),

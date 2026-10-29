@@ -1006,7 +1006,7 @@ fn check_audio_span(
 /// or write failure, a failed mix, audio the plan does not copy, or a cancel.
 pub fn copy_packets(
     copy: &PacketCopy,
-    output: &Path,
+    output: impl Into<crate::OutputTarget>,
     container: alpha2_media::Container,
     audio: CopyAudio<'_>,
     cancel: &CancelToken,

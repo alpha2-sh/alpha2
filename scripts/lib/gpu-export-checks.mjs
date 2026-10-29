@@ -144,11 +144,11 @@ export function readbackFallbackProblem(exported, frames) {
     return `the auto export exited ${exported.status}, expected 0`;
   }
   const result = exported.result ?? {};
-  if (result.videoOutputPath !== "readback") {
-    return `videoOutputPath is ${JSON.stringify(result.videoOutputPath)}, expected "readback"`;
+  if (result.videoPipeline !== "readback") {
+    return `videoPipeline is ${JSON.stringify(result.videoPipeline)}, expected "readback"`;
   }
-  if (result.performance?.videoOutputPath !== "readback") {
-    return `performance.videoOutputPath is ${JSON.stringify(result.performance?.videoOutputPath)}, expected "readback"`;
+  if (result.performance?.videoPipeline !== "readback") {
+    return `performance.videoPipeline is ${JSON.stringify(result.performance?.videoPipeline)}, expected "readback"`;
   }
   if (
     typeof result.gpuOutputPathUnavailable !== "string" ||

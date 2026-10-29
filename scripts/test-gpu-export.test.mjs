@@ -412,8 +412,8 @@ test("the unavailable checks hold on a host's refusal and fail on each way it ca
     status: 0,
     outputExists: true,
     result: {
-      videoOutputPath: "readback",
-      performance: { videoOutputPath: "readback" },
+      videoPipeline: "readback",
+      performance: { videoPipeline: "readback" },
       gpuOutputPathUnavailable: reason,
       frames: 100,
     },
@@ -424,10 +424,10 @@ test("the unavailable checks hold on a host's refusal and fail on each way it ca
     [{ status: 1 }, /exited 1/],
     [{ outputExists: false }, /left no output/],
     [
-      result({ videoOutputPath: "gpu-resident" }),
-      /videoOutputPath is "gpu-resident"/,
+      result({ videoPipeline: "gpu-resident" }),
+      /videoPipeline is "gpu-resident"/,
     ],
-    [result({ performance: {} }), /performance\.videoOutputPath/],
+    [result({ performance: {} }), /performance\.videoPipeline/],
     [
       result({ gpuOutputPathUnavailable: null }),
       /gpuOutputPathUnavailable is null/,

@@ -24,7 +24,7 @@
 
 use std::cell::Cell;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -35,7 +35,7 @@ use crate::failure::ExportPhase;
 use crate::heartbeat::InjectedStall;
 use crate::heartbeat::{Watched, WorkerHeartbeat, run_watched};
 use crate::host::{Host, effective_range_json, normalize_export_audio};
-use crate::metrics::{VideoOutputPath, frames_per_second};
+use crate::metrics::{VideoPipeline, frames_per_second};
 use crate::protocol::{HostError, LoudnessRequest};
 use alpha2_audio::TransportState;
 use alpha2_engine::{AudioRenderer, EngineProject, PassthroughAudio};
@@ -365,7 +365,7 @@ impl AudioBlockFeed for ExportAudioFeed {
 /// export normalized it.
 fn copy_with_audio(
     plan: &PacketCopy,
-    output: &Path,
+    output: &alpha2_native::OutputTarget,
     container: alpha2_media::Container,
     mut feed: Option<ExportAudioFeed>,
     audio_config: AudioStreamConfig,
@@ -421,7 +421,7 @@ pub(crate) struct CopyExport<'a> {
     pub audio_encoder: Option<String>,
     pub audio_rate: ResolvedAudioRate,
     pub loudness: Option<LoudnessRequest>,
-    pub output: &'a Path,
+    pub output: &'a alpha2_native::OutputTarget,
     pub started: Instant,
 }
 
@@ -472,10 +472,8 @@ impl Host {
             "alpha2 native export: copying {total} video packets from the source, audio {}",
             audio_strategy.unwrap_or("none")
         );
-        self.failure.note(
-            "videoOutputPath",
-            json!(VideoOutputPath::PacketCopy.as_str()),
-        );
+        self.failure
+            .note("videoPipeline", json!(VideoPipeline::PacketCopy.as_str()));
         self.failure.note("videoEncoder", Value::Null);
         self.failure.note(
             "audioEncoder",
@@ -487,7 +485,7 @@ impl Host {
         let (heartbeat, limit) = copy_worker_watch("copy");
         let beat = Arc::clone(&heartbeat);
         let worker_plan = plan.clone();
-        let output = export.output.to_owned();
+        let output = export.output.clone();
         let container = export.container;
         let worker_cancel = cancel.clone();
         let copied = run_watched(
@@ -551,7 +549,7 @@ impl Host {
         result["videoEncoderLibrary"] = Value::Null;
         result["videoEncoderPreferred"] = Value::Null;
         result["videoEncoderFallbacks"] = json!([]);
-        result["videoOutputPath"] = json!(VideoOutputPath::PacketCopy.as_str());
+        result["videoPipeline"] = json!(VideoPipeline::PacketCopy.as_str());
         result["gpuOutputPathUnavailable"] = Value::Null;
         result["videoTranscode"] = Value::Null;
         result["yuvTranscodeIneligible"] = Value::Null;
@@ -585,7 +583,7 @@ impl Host {
             started.elapsed().as_secs_f64()
         ));
         result["performance"] = json!({
-            "videoOutputPath": VideoOutputPath::PacketCopy.as_str(),
+            "videoPipeline": VideoPipeline::PacketCopy.as_str(),
             "copiedVideoPackets": report.video_packets,
             "copiedAudioPackets": report.audio_packets,
             "encodedAudioFrames": report.encoded_audio_frames,

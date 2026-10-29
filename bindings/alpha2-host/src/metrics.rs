@@ -8,7 +8,8 @@ use crate::{MAX_ENCODE_CHANNEL_DEPTH, MAX_IN_FLIGHT_VIDEO_FRAMES, MIN_ENCODE_CHA
 use alpha2_render::RenderSize;
 use serde_json::{Value, json};
 
-/// Which output path produced a metrics file.
+/// How an export's frames reached the encoder, which every result and
+/// metrics file names as `videoPipeline`.
 ///
 /// Seven counters (`encodeQueueWaitMs`, `encodeWorkerIdleMs`,
 /// `encodeChannelDepth`, `encoderFramesAllocated`, `inFlightDepth`,
@@ -18,7 +19,7 @@ use serde_json::{Value, json};
 /// metrics files cannot otherwise tell "zero because idle" from "zero because
 /// absent", so every file says which path wrote it.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
-pub enum VideoOutputPath {
+pub enum VideoPipeline {
     /// Rendered into a staging buffer, mapped, packed, and encoded from CPU
     /// memory.
     #[default]
@@ -30,7 +31,7 @@ pub enum VideoOutputPath {
     PacketCopy,
 }
 
-impl VideoOutputPath {
+impl VideoPipeline {
     /// Stable identifier used by the export result and the metrics file.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -47,8 +48,8 @@ impl VideoOutputPath {
 /// [`export_metrics_json`].
 #[derive(Default)]
 pub struct ExportMetrics {
-    /// Which of the two output paths this export took.
-    pub video_output_path: VideoOutputPath,
+    /// How this export's frames reached the encoder.
+    pub video_pipeline: VideoPipeline,
     pub pipeline_enabled: bool,
     pub decode_lookahead: usize,
     pub decode: Duration,
@@ -101,6 +102,10 @@ pub struct ExportMetrics {
     pub decode_backpressure: u64,
     pub ready_readback_dispatches: u64,
     pub decode_concurrency: usize,
+    /// The decoder sessions the export kept open, and why that many.
+    pub decoder_sessions: Option<crate::config::DecoderSessionCount>,
+    /// Sessions opened again for a cursor that had one before.
+    pub decoder_session_reopens: u64,
     pub decoder_threads: i64,
     pub hardware_decoder_threads: i64,
     pub codec_thread_budget: usize,
@@ -630,7 +635,7 @@ pub fn export_metrics_json(
     limits: &ExportPipelineLimits,
 ) -> Value {
     let mut value = json!({
-        "videoOutputPath": metrics.video_output_path.as_str(),
+        "videoPipeline": metrics.video_pipeline.as_str(),
         "pipelineEnabled": metrics.pipeline_enabled,
         "decodeLookahead": metrics.decode_lookahead,
         "decodeMs": metrics.decode.as_secs_f64() * 1_000.0,
@@ -678,6 +683,11 @@ pub fn export_metrics_json(
     add_decode_path_metrics(&mut value, metrics);
     add_stage_split_metrics(&mut value, metrics);
     value["decodeConcurrency"] = json!(metrics.decode_concurrency);
+    value["decoderSessions"] = json!(metrics.decoder_sessions.map(|count| count.sessions));
+    value["decoderSessionLimit"] =
+        json!(metrics.decoder_sessions.map(|count| count.limit.as_str()));
+    value["decoderSessionPeak"] = json!(metrics.decoder_sessions.map(|count| count.peak));
+    value["decoderSessionReopens"] = json!(metrics.decoder_session_reopens);
     value["decoderThreads"] = json!(metrics.decoder_threads);
     value["hardwareDecoderThreads"] = json!(metrics.hardware_decoder_threads);
     value["codecThreadBudget"] = json!(metrics.codec_thread_budget);

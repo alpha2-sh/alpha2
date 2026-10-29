@@ -322,7 +322,7 @@ fn text_exports_with_the_requested_fonts() {
             VideoQualityRequest::Level(QualityLevel::VeryHigh),
             AudioQualityRequest::Level(QualityLevel::High),
             None,
-            &directory.join(name),
+            directory.join(name),
             &mut |_| Ok(()),
         )
     };

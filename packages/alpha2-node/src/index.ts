@@ -241,11 +241,14 @@ export interface NativeExportResult {
   /** The CPU renderer's threads; absent on a GPU host. */
   readonly rendererThreads?: number;
   /**
-   * Which output path produced this export. Several `performance` counters are structurally absent
-   * on one of them rather than merely zero, so a reader comparing two exports needs this to tell
-   * the two kinds of zero apart.
+   * How this export's frames reached the encoder: read back from the GPU, rendered into the
+   * encoder's own GPU images, or copied as the source's packets. It is not a file path (that is
+   * `output`). Several `performance` counters are structurally absent on one of them rather than
+   * merely zero, so a reader comparing two exports needs this to tell the two kinds of zero apart.
    */
-  readonly videoOutputPath: "readback" | "gpu-resident" | "packet-copy";
+  readonly videoPipeline: "readback" | "gpu-resident" | "packet-copy";
+  /** The absolute path of the file the export wrote. */
+  readonly output: string;
   /**
    * Why the export took the readback path: the host has no GPU encode device, the codec or a pinned
    * encoder is not the GPU path's, `inputPolicy` is `cpu-readback`, an old validation layer,
@@ -329,7 +332,9 @@ export interface NativeExportResult {
    * `tolerant` decode policy (`ALPHA2_DECODE_POLICY`) skipped, and silence inserted where a clean
    * stream's timestamps jump; `[]` when they reported nothing.
    */
-  readonly decodeDiagnostics: readonly DecodeDiagnostics[];
+  readonly decodeDiagnostics: readonly (
+    DecodeDiagnostics | DecoderSessionsShortDiagnostic
+  )[];
   /**
    * What the renderer's result cache did: repeated frames and unchanged clip pictures are found
    * instead of drawn, with the same output.
@@ -414,6 +419,19 @@ export interface ExportPerformance {
   readonly cpuPresentedSources?: number;
   /** Bytes of the largest set of pictures one graph held at once on the CPU renderer. */
   readonly cpuImageHighWaterBytes?: number;
+  /**
+   * Video decoder sessions the export kept open: the most videos it reads at once (at least 8),
+   * unless the decoder session budget (`memory.decoderSessionBytes`), the cap of 32 or
+   * `ALPHA2_DECODER_SESSIONS` held it lower. Absent on a packet copy.
+   */
+  readonly decoderSessions?: number | null;
+  /** What decided `decoderSessions`. */
+  readonly decoderSessionLimit?:
+    "workload" | "memory" | "override" | "cap" | null;
+  /** The most videos the export reads at once. */
+  readonly decoderSessionPeak?: number | null;
+  /** Decoders opened again for a video that had one: what running short of sessions cost. */
+  readonly decoderSessionReopens?: number;
   readonly [counter: string]: PerformanceValue | undefined;
 }
 
@@ -468,6 +486,19 @@ export interface DecodeDiagnostics {
   readonly timestampGapSamples: number;
   /** Audio samples dropped because their timestamps repeated samples already decoded. */
   readonly droppedAudioSamples: number;
+}
+
+/**
+ * An export that kept fewer decoder sessions open than the videos it reads at once: those past the
+ * sessions took turns, reopening a decoder each turn.
+ */
+export interface DecoderSessionsShortDiagnostic {
+  readonly type: "decoderSessionsShort";
+  readonly peak: number;
+  readonly decoderSessions: number;
+  readonly limit: "memory" | "override" | "cap";
+  readonly reopens: number;
+  readonly message: string;
 }
 
 /** Where {@link ExportProjectRequest.renderCache} bakes frames. */
@@ -596,7 +627,7 @@ export interface ExportProjectRequest {
    * How the encoder receives frames: `auto` (default) takes the GPU-resident path where the host,
    * codec, size, and budget allow it and the readback path otherwise; `gpu-required` fails with
    * `GPU_OUTPUT_UNAVAILABLE` instead of falling back; `cpu-readback` always reads back. The
-   * result's `videoOutputPath` says which ran.
+   * result's `videoPipeline` says which ran.
    */
   readonly inputPolicy?: InputPolicy;
   /**
@@ -660,6 +691,12 @@ export interface ExportProjectRequest {
    */
   readonly output: string;
   /**
+   * Replaces a regular file already at `output` once the export is whole, so a failed or cancelled
+   * export leaves it as it was. Defaults to `false`: an existing output is refused. An `output`
+   * that is one of the request's inputs (an asset, a proxy, a font, ...) is refused either way.
+   */
+  readonly overwrite?: boolean;
+  /**
    * Cancels the export: the host removes its partial file and exits, and the promise rejects with
    * `Alpha2AbortError` once it has.
    */
@@ -693,6 +730,13 @@ export interface ExportMemoryBudget {
    * opens them again when shown. Default 512 MiB.
    */
   readonly providerSourceBytes?: number;
+  /**
+   * What the open video decoder sessions hold together, by the host's estimate of one session of
+   * the largest video (its frames, two per decoder thread and four more): it bounds how many
+   * sessions the export keeps open. Past the sessions, videos read at once take turns, reopening a
+   * decoder each turn: slower, with the same frames. Default 4 GiB.
+   */
+  readonly decoderSessionBytes?: number;
   /**
    * A fraction in (0, 1] every budget is scaled by once resolved: how a retry asks for less in
    * flight.
@@ -774,7 +818,7 @@ export interface OpenH264Capability {
  * `gpuInputOnly` encoder asks for this path), and the output size must be even and within the
  * reported extents. Under `inputPolicy: "auto"` an export outside them still succeeds on the
  * readback path; under `gpu-required` it fails with `GPU_OUTPUT_UNAVAILABLE`. Every export reports
- * the path it took as `videoOutputPath`.
+ * the path it took as `videoPipeline`.
  */
 export interface GpuOutputPathCapability {
   readonly available: boolean;
@@ -1154,6 +1198,71 @@ export function resolveHostBinary(
  * `concurrency` at a time; further requests wait for a slot. Every rejection is an
  * {@link Alpha2HostError}.
  */
+/** Frames of a project to render to PNG, each as an export renders it. */
+export interface StillsRequest extends RenderInputs {
+  /**
+   * The frames: each a timeline time in ticks, and the PNG to write; 1 to 256 of them, to distinct
+   * files. Each frame is the one of the project's frame grid that holds its time. They are rendered
+   * in time order, decoding forward once, whatever order they are given in.
+   */
+  readonly stills: readonly StillEntry[];
+  /** Renders the project at this canvas size instead of its own: 1 to 16384 pixels each way. */
+  readonly size?: { readonly width: number; readonly height: number };
+  /**
+   * Replaces a regular file already at an output once the PNG is whole. Defaults to `false`: an
+   * existing output is refused. An output that is one of the inputs is refused either way.
+   */
+  readonly overwrite?: boolean;
+  /** Overrides the client's decode mode for this request. */
+  readonly videoDecode?: VideoDecodeMode;
+  /** Overrides the client's renderer for this request. */
+  readonly renderer?: RendererMode;
+  /** Cancels the request: the host removes its partial file and exits. */
+  readonly signal?: AbortSignal;
+}
+
+/** One frame of a {@link StillsRequest}. */
+export interface StillEntry {
+  /** A timeline time in ticks (120,000 a second). */
+  readonly time: number;
+  /** The PNG to write. */
+  readonly output: string;
+}
+
+/** One frame of a {@link StillsRequest} at its time, to its PNG. */
+export type StillRequest = Omit<StillsRequest, "stills"> & StillEntry;
+
+/** One PNG a still request wrote. */
+export interface StillFrame {
+  /** The absolute path of the file written. */
+  readonly output: string;
+  /** The time of the frame drawn, in ticks: the grid frame that holds the time asked for. */
+  readonly frameTime: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+/** What a still request did. */
+export interface StillResult {
+  /** In the order they were asked for. */
+  readonly stills: readonly StillFrame[];
+  readonly renderer: "gpu" | "cpu";
+  readonly renderMs: number;
+  readonly timings: {
+    readonly decodeMs: number;
+    readonly renderMs: number;
+    readonly writeMs: number;
+  };
+  readonly media: Readonly<Record<string, Selection>>;
+  readonly decodeDiagnostics: readonly unknown[];
+  readonly [metadata: string]: unknown;
+}
+
+/** The most frames one still request renders. */
+const MAX_STILLS = 256;
+/** The largest still, either way, in pixels. */
+const MAX_STILL_DIMENSION = 16_384;
+
 export class Alpha2NodeClient {
   readonly #binary: string;
   readonly #slots: Semaphore;
@@ -1323,15 +1432,7 @@ export class Alpha2NodeClient {
           this.#binary,
           "export",
           {
-            project: request.project,
-            assets: request.assets,
-            proxies: proxiesPayload(request.proxies),
-            frames: request.frames ?? {},
-            resources: request.resources ?? {},
-            media: request.media ?? "original",
-            effectAssets: request.effectAssets ?? {},
-            fonts: request.fonts ?? [],
-            effects: request.effects ?? [],
+            ...renderInputsPayload(request),
             startTicks: request.startTicks,
             endTicks: request.endTicks,
             frameRate: request.frameRate,
@@ -1355,6 +1456,7 @@ export class Alpha2NodeClient {
             renderCache: request.renderCache,
             ...(request.memory === undefined ? {} : { memory: request.memory }),
             output: request.output,
+            overwrite: request.overwrite ?? false,
           },
           { videoDecode: mode, renderer },
           request.signal,
@@ -1386,6 +1488,54 @@ export class Alpha2NodeClient {
     } finally {
       release();
     }
+  }
+
+  /**
+   * Renders frames of `request.project` to PNG files, each the frame an export of it draws there,
+   * read before any video encoding: 8-bit sRGB RGBA. One host decodes for every frame.
+   *
+   * Rejects with an {@link Alpha2ProjectValidationError} or an `INVALID_INPUT` error before a host
+   * starts when the project or request is invalid, an {@link Alpha2ConformError} when the media is
+   * not ready, an {@link Alpha2AbortError} when `signal` aborts, and an {@link Alpha2HostError}
+   * otherwise.
+   */
+  async stills(request: StillsRequest): Promise<StillResult> {
+    const problems = projectProblems(request.project);
+    if (problems.length > 0) throw new Alpha2ProjectValidationError(problems);
+    validateStillsRequest(request);
+    const release = await this.#slots.acquire(request.signal);
+    try {
+      return (await requestHost(
+        this.#binary,
+        "still",
+        {
+          ...renderInputsPayload(request),
+          stills: request.stills.map(({ time, output }) => ({ time, output })),
+          overwrite: request.overwrite ?? false,
+          ...(request.size === undefined
+            ? {}
+            : {
+                size: {
+                  width: request.size.width,
+                  height: request.size.height,
+                },
+              }),
+        },
+        {
+          videoDecode: request.videoDecode ?? this.#videoDecode,
+          renderer: request.renderer ?? this.#renderer,
+        },
+        request.signal,
+      )) as StillResult;
+    } finally {
+      release();
+    }
+  }
+
+  /** One frame of `request.project` at `request.time` to `request.output`: {@link stills} of one. */
+  async still(request: StillRequest): Promise<StillResult> {
+    const { time, output, ...rest } = request;
+    return this.stills({ ...rest, stills: [{ time, output }] });
   }
 }
 
@@ -1475,6 +1625,34 @@ export async function exportProject(
 }
 
 /**
+ * Renders frames of a project to PNG on a client shared by every module-level call with the same
+ * host binary and `concurrency` ({@link Alpha2NodeClient.stills}).
+ */
+export async function stills(
+  request: StillsRequest,
+  options: Alpha2NodeOptions = {},
+): Promise<StillResult> {
+  return sharedClient(options).stills({
+    ...request,
+    ...(request.videoDecode === undefined && options.videoDecode !== undefined
+      ? { videoDecode: options.videoDecode }
+      : {}),
+    ...(request.renderer === undefined && options.renderer !== undefined
+      ? { renderer: options.renderer }
+      : {}),
+  });
+}
+
+/** One frame of a project to a PNG, on the shared client ({@link Alpha2NodeClient.still}). */
+export async function still(
+  request: StillRequest,
+  options: Alpha2NodeOptions = {},
+): Promise<StillResult> {
+  const { time, output, ...rest } = request;
+  return stills({ ...rest, stills: [{ time, output }] }, options);
+}
+
+/**
  * The pool is the host binary and `concurrency`: the decode mode and renderer travel with each
  * request, so calls that differ only in them still share the bound.
  */
@@ -1493,6 +1671,136 @@ function sharedClient(options: Alpha2NodeOptions): Alpha2NodeClient {
     convenienceClients.set(key, client);
   }
   return client;
+}
+
+/** What every rendering request reads: the project and the files its sources and effects name. */
+type RenderInputs = Pick<
+  ExportProjectRequest,
+  | "project"
+  | "assets"
+  | "proxies"
+  | "frames"
+  | "resources"
+  | "media"
+  | "effectAssets"
+  | "fonts"
+  | "effects"
+>;
+
+/**
+ * Refuses render inputs not shaped as the host reads them, before a host starts. Media usability is
+ * the host's conform check, which answers with a structured report.
+ */
+function validateRenderInputs(request: RenderInputs): void {
+  validateMediaPaths(request, true);
+  checkPathRecord("effectAssets", request.effectAssets, "effect asset path");
+  if (request.resources !== undefined) {
+    if (!isRecord(request.resources))
+      invalidShape("resources must map source ids to their files");
+    for (const [id, files] of Object.entries(request.resources))
+      checkPathRecord(`resources.${id}`, files, "resource path");
+  }
+  if (request.effects !== undefined && !Array.isArray(request.effects))
+    invalidShape("effects must be a list of effect definitions");
+  if (
+    request.media !== undefined &&
+    !["original", "proxies"].includes(request.media)
+  ) {
+    throw new Alpha2HostError(
+      "INVALID_INPUT",
+      'media must be "original" or "proxies"',
+    );
+  }
+  if (
+    request.fonts !== undefined &&
+    (!Array.isArray(request.fonts) || !request.fonts.every(nonEmptyString))
+  )
+    invalidShape("fonts must be a list of font file paths");
+  for (const resource of request.project.effect_resources ?? []) {
+    const path = request.effectAssets?.[resource.id];
+    if (typeof path !== "string" || path.length === 0) {
+      throw new Alpha2HostError(
+        "MISSING_INPUT",
+        `missing effect asset path for resource ${resource.id}`,
+      );
+    }
+  }
+}
+
+/** The render inputs as the host takes them. */
+function renderInputsPayload(request: RenderInputs): Record<string, unknown> {
+  return {
+    project: request.project,
+    assets: request.assets,
+    proxies: proxiesPayload(request.proxies),
+    frames: request.frames ?? {},
+    resources: request.resources ?? {},
+    media: request.media ?? "original",
+    effectAssets: request.effectAssets ?? {},
+    fonts: request.fonts ?? [],
+    effects: request.effects ?? [],
+  };
+}
+
+function validateStillsRequest(request: StillsRequest): void {
+  validateRenderInputs(request);
+  if (
+    !Array.isArray(request.stills) ||
+    request.stills.length === 0 ||
+    request.stills.length > MAX_STILLS
+  )
+    throw new Alpha2HostError(
+      "INVALID_INPUT",
+      `stills must list 1 to ${MAX_STILLS} frames`,
+    );
+  const outputs = new Set<string>();
+  for (const still of request.stills) {
+    if (
+      !isRecord(still) ||
+      !Number.isSafeInteger(still.time) ||
+      (still.time as number) < 0
+    )
+      throw new Alpha2HostError(
+        "INVALID_INPUT",
+        "a still's time is a non-negative integer tick count",
+      );
+    if (!nonEmptyString(still.output))
+      throw new Alpha2HostError(
+        "INVALID_INPUT",
+        "a still's output must not be empty",
+      );
+    if (outputs.has(still.output))
+      throw new Alpha2HostError(
+        "INVALID_INPUT",
+        `two stills write ${still.output}`,
+      );
+    outputs.add(still.output);
+  }
+  const fits = (side: unknown): boolean =>
+    Number.isSafeInteger(side) &&
+    (side as number) >= 1 &&
+    (side as number) <= MAX_STILL_DIMENSION;
+  if (
+    request.size !== undefined &&
+    (!isRecord(request.size) ||
+      !fits(request.size.width) ||
+      !fits(request.size.height))
+  )
+    throw new Alpha2HostError(
+      "INVALID_INPUT",
+      `size must be { width, height }, each 1 to ${MAX_STILL_DIMENSION} pixels`,
+    );
+  checkOverwrite(request.overwrite);
+  checkVideoDecode("videoDecode", request.videoDecode);
+  checkRenderer("renderer", request.renderer);
+}
+
+function checkOverwrite(overwrite: unknown): void {
+  if (overwrite !== undefined && typeof overwrite !== "boolean")
+    throw new Alpha2HostError(
+      "INVALID_INPUT",
+      "overwrite must be true or false",
+    );
 }
 
 function validateExportRequest(request: ExportProjectRequest): void {
@@ -1537,6 +1845,7 @@ function validateExportRequest(request: ExportProjectRequest): void {
         "reverseCacheBytes",
         "audioWindowBytes",
         "providerSourceBytes",
+        "decoderSessionBytes",
       ].includes(field)
     )
       throw new Alpha2HostError(
@@ -1549,43 +1858,11 @@ function validateExportRequest(request: ExportProjectRequest): void {
         `memory.${field} must be a positive byte count`,
       );
   }
-  // Media usability is the host's conform check, which answers with a structured report.
-  validateMediaPaths(request, true);
-  checkPathRecord("effectAssets", request.effectAssets, "effect asset path");
-  if (request.resources !== undefined) {
-    if (!isRecord(request.resources))
-      invalidShape("resources must map source ids to their files");
-    for (const [id, files] of Object.entries(request.resources))
-      checkPathRecord(`resources.${id}`, files, "resource path");
-  }
-  if (request.effects !== undefined && !Array.isArray(request.effects))
-    invalidShape("effects must be a list of effect definitions");
-  if (
-    request.media !== undefined &&
-    !["original", "proxies"].includes(request.media)
-  ) {
-    throw new Alpha2HostError(
-      "INVALID_INPUT",
-      'media must be "original" or "proxies"',
-    );
-  }
-  if (
-    request.fonts !== undefined &&
-    (!Array.isArray(request.fonts) || !request.fonts.every(nonEmptyString))
-  )
-    invalidShape("fonts must be a list of font file paths");
-  for (const resource of request.project.effect_resources ?? []) {
-    const path = request.effectAssets?.[resource.id];
-    if (typeof path !== "string" || path.length === 0) {
-      throw new Alpha2HostError(
-        "MISSING_INPUT",
-        `missing effect asset path for resource ${resource.id}`,
-      );
-    }
-  }
+  validateRenderInputs(request);
   if (typeof request.output !== "string" || request.output.length === 0) {
     throw new Alpha2HostError("INVALID_INPUT", "output must not be empty");
   }
+  checkOverwrite(request.overwrite);
   checkVideoDecode("videoDecode", request.videoDecode);
   checkRenderer("renderer", request.renderer);
   // The engine's container policy, which the host applies to the same request: a container the
@@ -1813,7 +2090,7 @@ function validateQuality(
 
 async function requestHost(
   binary: string,
-  operation: "capabilities" | "export" | "conform",
+  operation: "capabilities" | "export" | "conform" | "still",
   payload: Readonly<Record<string, unknown>>,
   settings: {
     readonly videoDecode?: VideoDecodeMode | undefined;

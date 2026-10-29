@@ -65,6 +65,18 @@ pub fn same_file(file: &File, path: &Path) -> io::Result<bool> {
     platform::same_file(file, path)
 }
 
+/// Whether the paths `a` and `b` name one file: the same device and inode on
+/// Unix, the same volume serial and file index on Windows. Hard links and
+/// paths through symbolic links to one file are the same file; two copies are
+/// not. `false` when either path names nothing.
+///
+/// # Errors
+/// When either path's identity cannot be read for a reason other than
+/// nothing being there.
+pub fn same_file_at(a: &Path, b: &Path) -> io::Result<bool> {
+    platform::same_file_at(a, b)
+}
+
 /// Renames `from` to `to` unless `to` exists, in one step: a file that
 /// appears at `to` at any moment, up to the rename itself, is never replaced,
 /// and the rename fails with [`io::ErrorKind::AlreadyExists`].
@@ -413,6 +425,41 @@ mod tests {
         assert!(same_file(&file, &moved).expect("moved"));
         let _ = fs::remove_file(&path);
         let _ = fs::remove_file(&moved);
+    }
+
+    #[test]
+    fn a_hard_link_and_a_path_through_a_linked_directory_are_the_same_file() {
+        let directory = scratch("identity-paths");
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir(&directory).expect("directory");
+        let (file, copy, link) = (
+            directory.join("file"),
+            directory.join("copy"),
+            directory.join("link"),
+        );
+        fs::write(&file, b"source").expect("file");
+        fs::write(&copy, b"source").expect("copy");
+        fs::hard_link(&file, &link).expect("hard link");
+        assert!(same_file_at(&file, &file).expect("itself"));
+        assert!(same_file_at(&file, &link).expect("hard link"));
+        assert!(!same_file_at(&file, &copy).expect("copy"));
+        assert!(!same_file_at(&file, &directory.join("missing")).expect("missing"));
+        let linked = scratch("identity-paths-linked");
+        let _ = fs::remove_file(&linked);
+        #[cfg(unix)]
+        let symlinked = std::os::unix::fs::symlink(&directory, &linked);
+        #[cfg(windows)]
+        let symlinked = std::os::windows::fs::symlink_dir(&directory, &linked);
+        // Windows creates symbolic links only in developer mode or as an administrator.
+        if symlinked.is_ok() {
+            assert!(same_file_at(&file, &linked.join("file")).expect("through the link"));
+            assert!(!same_file_at(&copy, &linked.join("file")).expect("another file"));
+            #[cfg(unix)]
+            fs::remove_file(&linked).expect("cleanup");
+            #[cfg(windows)]
+            fs::remove_dir(&linked).expect("cleanup");
+        }
+        fs::remove_dir_all(&directory).expect("cleanup");
     }
 
     #[test]

@@ -505,7 +505,7 @@ def test_a_failed_export_keeps_the_hosts_failure_report_and_its_stderr(
             "failure": {"code": "OUT_OF_MEMORY", "origin": "native-host", "operation": "export",
                         "backend": "native", "phase": "readback", "stage": "map-failed",
                         "frameIndex": 4, "resource": "gpu",
-                        "diagnostics": {"videoOutputPath": "readback"}},
+                        "diagnostics": {"videoPipeline": "readback"}},
         })
         """,
     )
@@ -520,7 +520,7 @@ def test_a_failed_export_keeps_the_hosts_failure_report_and_its_stderr(
     assert error.failure["phase"] == "readback"
     assert error.failure["frameIndex"] == 4
     assert error.failure["message"] == "GPU texture readback failed: map-failed"
-    assert error.failure["diagnostics"]["videoOutputPath"] == "readback"
+    assert error.failure["diagnostics"]["videoPipeline"] == "readback"
     assert re.search("out-of-memory error: staging", error.failure["stderr"])
     assert error.stderr is not None and len(error.stderr.encode()) <= 16_384
     assert phases == ["frames"]
@@ -730,7 +730,7 @@ def test_a_software_run_after_a_stall_that_fails_too_keeps_the_stall(
             send(request, ok=False, error={"code": "RESOURCE_LIMIT", "message": "decode queue budget too small",
                 "failure": {"code": "RESOURCE_LIMIT", "origin": "native-host", "operation": "export",
                             "backend": "native", "phase": "decode", "resource": "cpu",
-                            "diagnostics": {"videoOutputPath": "readback"}}})
+                            "diagnostics": {"videoPipeline": "readback"}}})
         else:
             sys.stderr.write("first host: decoder stuck\\n"); sys.stderr.flush()
             send(request, ok=False, error={"code": "DECODE_STALLED",
@@ -747,7 +747,7 @@ def test_a_software_run_after_a_stall_that_fails_too_keeps_the_stall(
     assert error.code == "RESOURCE_LIMIT"
     assert error.failure["code"] == "RESOURCE_LIMIT"
     assert error.stderr is not None and "second host" in error.stderr
-    assert error.failure["diagnostics"]["videoOutputPath"] == "readback"
+    assert error.failure["diagnostics"]["videoPipeline"] == "readback"
     assert isinstance(error.__cause__, Alpha2HostError)
     assert error.__cause__.code == "DECODE_STALLED"
     stall = error.failure["diagnostics"]["decodeStall"]

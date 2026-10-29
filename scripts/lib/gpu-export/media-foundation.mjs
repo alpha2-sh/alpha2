@@ -40,7 +40,7 @@ export function compareWithMediaFoundation(
         `the ${encoder} export failed (${exported.status}): ${exported.stderr.slice(-2000)}`,
       );
     }
-    assertEqual(exported.result.videoOutputPath, "readback", "videoOutputPath");
+    assertEqual(exported.result.videoPipeline, "readback", "videoPipeline");
     assertEqual(exported.result.videoEncoder, encoder, "videoEncoder");
     readback = exported;
     const way = exported.result.videoEncoderHardware

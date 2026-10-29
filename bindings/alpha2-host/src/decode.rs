@@ -28,7 +28,7 @@ use alpha2_native_gpu::SharedD3D12Context;
 use alpha2_native_gpu::SharedMetalContext;
 #[cfg(all(target_os = "linux", feature = "hwdecode"))]
 use alpha2_native_gpu::SharedVulkanContext;
-use alpha2_time::MediaTime;
+use alpha2_time::{MediaTime, TimeRange};
 
 /// One output frame's sources for the decode pool to decode.
 pub struct DecodeJob {
@@ -80,6 +80,9 @@ pub struct DecodedFrameSet {
     pub software_decoded_frames: u64,
     pub hardware_decoded_frames: u64,
     pub hardware_fallbacks: HardwareFallbackCounts,
+    /// Decoder sessions reopened for this frame
+    /// ([`ExportDecodeState::session_reopens`]).
+    pub decoder_session_reopens: u64,
 }
 
 /// Software fallbacks counted per reason.
@@ -374,6 +377,8 @@ pub struct DecodeWorkerConfig {
     /// Workers a hardware session opens with; `decoder_threads` is a software one's.
     pub hardware_decoder_threads: i64,
     pub max_sessions: usize,
+    /// When each cursor reads over the export range.
+    pub reads: Arc<CursorReads>,
     pub reverse_cache_bytes: u64,
     pub reverse_hardware_surfaces: usize,
     /// See [`crate::config::configured_stall_timeout`].
@@ -440,6 +445,7 @@ impl DecodeWorker {
                 state.hardware_decoder_threads = config.hardware_decoder_threads;
                 state.providers = Arc::clone(&config.providers);
                 state.decoding = Arc::clone(&config.decoding);
+                state.reads = Arc::clone(&config.reads);
                 #[cfg(test)]
                 {
                     state.heartbeat = Arc::new(WorkerHeartbeat::stalling(config.stall));
@@ -973,6 +979,54 @@ pub fn decode_cursor_key(need: &FrameNeed) -> DecodeCursorKey {
     )
 }
 
+/// Where on the timeline each decode cursor of an export may read
+/// ([`alpha2_eval::ActiveIndex::source_reads`]), which tells a shard which
+/// session it can close and which one it reads last. A cursor it does not
+/// know (none, when the index could not be built) is taken to be read now,
+/// so it is never closed early and is evicted only by recency.
+#[derive(Debug, Default)]
+pub struct CursorReads {
+    /// Each cursor's spans, by start.
+    spans: HashMap<DecodeCursorKey, Vec<TimeRange>>,
+}
+
+impl CursorReads {
+    pub fn new(reads: Vec<alpha2_eval::SourceRead>) -> Self {
+        let mut spans = HashMap::<DecodeCursorKey, Vec<TimeRange>>::new();
+        for read in reads {
+            spans
+                .entry((read.source_id, read.clip_id, read.reader))
+                .or_default()
+                .push(read.span);
+        }
+        for cursor_spans in spans.values_mut() {
+            cursor_spans.sort_unstable_by_key(|span| span.start());
+        }
+        Self { spans }
+    }
+
+    /// Whether `cursor`'s reads are known.
+    pub fn knows(&self, cursor: &DecodeCursorKey) -> bool {
+        self.spans.contains_key(cursor)
+    }
+
+    /// The earliest time at or after `time` that `cursor` may read: `time`
+    /// itself inside one of its spans, else the start of its next one;
+    /// `None` when it reads nothing from `time` on, or is not known.
+    pub fn next_read(&self, cursor: &DecodeCursorKey, time: MediaTime) -> Option<MediaTime> {
+        self.spans
+            .get(cursor)?
+            .iter()
+            .find(|span| span.end() > time)
+            .map(|span| span.start().max(time))
+    }
+
+    /// Whether `cursor` is known to read nothing at `time` or after it.
+    pub fn finished(&self, cursor: &DecodeCursorKey, time: MediaTime) -> bool {
+        self.knows(cursor) && self.next_read(cursor, time).is_none()
+    }
+}
+
 /// `error`, met decoding what `what` names, saying so. The code and
 /// evidence it carries stay its own: the words of a source or clip ID
 /// joining it decide nothing.
@@ -997,6 +1051,20 @@ pub fn describe_need(need: &FrameNeed) -> String {
     )
 }
 
+/// When a cursor with an open session is read next, in the order a shard
+/// evicts by: the later, the greater.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum NextRead {
+    /// Later in the current frame, at this place in its order.
+    ThisFrame(usize),
+    /// In the next frame, at this place in its order.
+    NextFrame(usize),
+    /// First at this timeline time, after the next frame.
+    Later(MediaTime),
+    /// Not at all.
+    Never,
+}
+
 /// One decode shard's sessions, reverse windows, and counters.
 pub struct ExportDecodeState {
     /// Sources an extension provider draws, which no decoder opens.
@@ -1018,6 +1086,19 @@ pub struct ExportDecodeState {
     pub max_sessions: usize,
     pub session_clock: u64,
     pub session_use: HashMap<DecodeCursorKey, u64>,
+    /// When each cursor reads, which decides what closes and what is evicted.
+    pub reads: Arc<CursorReads>,
+    /// Every video cursor this shard opened a session for this run.
+    pub opened: HashSet<DecodeCursorKey>,
+    /// Sessions opened again for a cursor that had one before this run: what
+    /// running short of sessions cost.
+    pub session_reopens: u64,
+    /// The timeline time of the job being decoded.
+    pub job_time: MediaTime,
+    /// Where each cursor the current job reads comes in its order.
+    pub job_order: HashMap<DecodeCursorKey, usize>,
+    /// The place in that order of the need being decoded.
+    pub job_position: usize,
     /// Times each backward cursor has still to ask for, ascending: the rest
     /// of the run its latest job planned.
     pub reverse_plans: HashMap<DecodeCursorKey, Vec<MediaTime>>,
@@ -1175,6 +1256,12 @@ impl ExportDecodeState {
             max_sessions: max_sessions.max(1),
             session_clock: 0,
             session_use: HashMap::new(),
+            reads: Arc::default(),
+            opened: HashSet::new(),
+            session_reopens: 0,
+            job_time: MediaTime::ZERO,
+            job_order: HashMap::new(),
+            job_position: 0,
             reverse_plans: HashMap::new(),
             reverse_frame_bytes: HashMap::new(),
             job_cursors: HashSet::new(),
@@ -1248,6 +1335,8 @@ impl ExportDecodeState {
         let software_before = self.software_decoded_frames;
         let hardware_before = self.hardware_decoded_frames;
         let fallbacks_before = self.hardware_fallbacks;
+        let reopens_before = self.session_reopens;
+        self.job_time = job.time;
         self.job_cursors = job.needs.iter().map(decode_cursor_key).collect();
         for (cursor, mut times) in std::mem::take(&mut job.reverse_runs) {
             times.sort_unstable();
@@ -1262,8 +1351,15 @@ impl ExportDecodeState {
                 .then(left.media_time.cmp(&right.media_time))
         });
         let stills = shown_stills(&job.needs, &self.kinds);
+        self.job_order.clear();
+        for (position, need) in job.needs.iter().enumerate() {
+            self.job_order
+                .entry(decode_cursor_key(need))
+                .or_insert(position);
+        }
         let mut frames = Vec::<DecodedSourceFrame>::with_capacity(job.needs.len());
-        for need in job.needs {
+        for (position, need) in job.needs.into_iter().enumerate() {
+            self.job_position = position;
             if cancel.is_cancelled() {
                 return Err("decode worker was cancelled".to_owned());
             }
@@ -1287,6 +1383,9 @@ impl ExportDecodeState {
                 frames.push(frame);
             }
         }
+        // Past the job, each of its cursors is read next frame, as far as anything knows.
+        self.job_order.clear();
+        self.close_finished_sessions(job.time);
         let bytes = unique_decoded_frame_bytes(&frames);
         // Untouched sessions report zero, so draining all of them gives the same total.
         let stage_timings = self
@@ -1310,7 +1409,56 @@ impl ExportDecodeState {
             software_decoded_frames: self.software_decoded_frames.saturating_sub(software_before),
             hardware_decoded_frames: self.hardware_decoded_frames.saturating_sub(hardware_before),
             hardware_fallbacks: self.hardware_fallbacks.since(fallbacks_before),
+            decoder_session_reopens: self.session_reopens.saturating_sub(reopens_before),
         })
+    }
+
+    /// Opens a session for `cursor`, after making room for it, counting it
+    /// when the cursor had one before.
+    fn open_session(&mut self, cursor: &DecodeCursorKey, kind: MediaKind) -> Result<(), String> {
+        self.evict_decoder_session();
+        let decoder = self.open_decoder(&cursor.0, kind)?;
+        self.insert_session(cursor, kind, decoder);
+        Ok(())
+    }
+
+    /// Keeps `decoder` as `cursor`'s session, counting a reopen.
+    fn insert_session(
+        &mut self,
+        cursor: &DecodeCursorKey,
+        kind: MediaKind,
+        decoder: NativeExportDecoder,
+    ) {
+        // A still's session closes once its picture is decoded, every time: only videos reopen.
+        if kind == MediaKind::Video && !self.opened.insert(cursor.clone()) {
+            self.session_reopens = self.session_reopens.saturating_add(1);
+        }
+        self.decoders.insert(cursor.clone(), decoder);
+    }
+
+    /// Closes `cursor`'s session: its decoder, its position, and its reverse
+    /// window. A backward run keeps its plan, so a window evicted mid-run is
+    /// built again from what the run has left.
+    fn close_session(&mut self, cursor: &DecodeCursorKey) {
+        self.decoders.remove(cursor);
+        self.decoded.remove(cursor);
+        self.session_use.remove(cursor);
+        self.drop_reverse_window(cursor);
+    }
+
+    /// Closes the session of every cursor that reads nothing from `time` on.
+    fn close_finished_sessions(&mut self, time: MediaTime) {
+        let finished = self
+            .decoders
+            .keys()
+            .filter(|cursor| self.reads.finished(cursor, time))
+            .cloned()
+            .collect::<Vec<_>>();
+        for cursor in finished {
+            self.close_session(&cursor);
+            self.reverse_plans.remove(&cursor);
+            self.reverse_frame_bytes.remove(&cursor);
+        }
     }
 
     /// Opens one decode session, preferring the shared GPU decoder.
@@ -1530,9 +1678,7 @@ impl ExportDecodeState {
         }
         let cursor = decode_cursor_key(need);
         if !self.decoders.contains_key(&cursor) {
-            self.evict_decoder_session();
-            let decoder = self.open_decoder(&need.source_id, kind)?;
-            self.decoders.insert(cursor.clone(), decoder);
+            self.open_session(&cursor, kind)?;
         }
         self.session_clock = self.session_clock.saturating_add(1);
         self.session_use.insert(cursor.clone(), self.session_clock);
@@ -1668,22 +1814,56 @@ impl ExportDecodeState {
         Ok(frame)
     }
 
+    /// Closes one session when the shard holds all it may: the one read
+    /// next the latest, as the timeline says (Belady's rule). Reading every
+    /// cursor of a frame in one order, closing the least recently used one
+    /// instead would close the very next one each time, and reopen every
+    /// session every frame.
     fn evict_decoder_session(&mut self) {
         if self.decoders.len() < self.max_sessions {
             return;
         }
         let Some(cursor) = self
-            .session_use
-            .iter()
-            .min_by_key(|(_, used)| *used)
-            .map(|(cursor, _)| cursor.clone())
+            .decoders
+            .keys()
+            .max_by_key(|cursor| {
+                (
+                    self.next_read_rank(cursor),
+                    std::cmp::Reverse(self.session_use.get(*cursor).copied().unwrap_or(0)),
+                    std::cmp::Reverse(*cursor),
+                )
+            })
+            .cloned()
         else {
             return;
         };
-        self.decoders.remove(&cursor);
-        self.decoded.remove(&cursor);
-        self.session_use.remove(&cursor);
-        self.drop_reverse_window(&cursor);
+        self.close_session(&cursor);
+    }
+
+    /// How late `cursor` is read next, from the current need on; the greater,
+    /// the later. Within this frame a cursor is read in the job's order, so
+    /// one still to come this frame is read before one already read, which is
+    /// read next frame; one this frame does not read is read when the
+    /// timeline says, and one read no more is the latest of all.
+    fn next_read_rank(&self, cursor: &DecodeCursorKey) -> NextRead {
+        if let Some(&position) = self.job_order.get(cursor) {
+            return if position >= self.job_position {
+                NextRead::ThisFrame(position)
+            } else {
+                NextRead::NextFrame(position)
+            };
+        }
+        if !self.reads.knows(cursor) {
+            // Not known: as soon as can be after this frame.
+            return NextRead::NextFrame(usize::MAX);
+        }
+        match self.reads.next_read(cursor, self.job_time) {
+            None => NextRead::Never,
+            Some(time) if time > self.job_time => NextRead::Later(time),
+            // Read now, by the spans, though not by this frame: a frame another reader of the
+            // same source frame asked for.
+            Some(_) => NextRead::NextFrame(usize::MAX),
+        }
     }
 
     /// The frame `cursor`'s reverse window holds for `requested`, counted as
@@ -1848,7 +2028,7 @@ impl ExportDecodeState {
                     &self.decoding,
                 )
             };
-            self.decoders.insert(cursor.clone(), decoder);
+            self.insert_session(cursor, MediaKind::Video, decoder);
         }
         self.drop_reverse_window(cursor);
         let decoder = self
@@ -2170,6 +2350,7 @@ pub fn decode_pool_loop(
                 let mut software_decoded_frames = 0_u64;
                 let mut hardware_decoded_frames = 0_u64;
                 let mut hardware_fallbacks = HardwareFallbackCounts::default();
+                let mut decoder_session_reopens = 0_u64;
                 let mut stage_timings = DecodeStageTimings::default();
                 for _ in 0..active.len() {
                     let Ok(shard_result) = result_receiver.recv() else {
@@ -2207,6 +2388,8 @@ pub fn decode_pool_loop(
                                 .saturating_add(decoded.hardware_decoded_frames);
                             hardware_fallbacks =
                                 hardware_fallbacks.merged(decoded.hardware_fallbacks);
+                            decoder_session_reopens = decoder_session_reopens
+                                .saturating_add(decoded.decoder_session_reopens);
                             stage_timings = stage_timings.merged(decoded.stage_timings);
                             decoded_frames.append(&mut decoded.frames);
                         }
@@ -2248,6 +2431,7 @@ pub fn decode_pool_loop(
                     software_decoded_frames,
                     hardware_decoded_frames,
                     hardware_fallbacks,
+                    decoder_session_reopens,
                 };
                 let budget_started = Instant::now();
                 let reserved = budget.reserve(decoded.bytes, cancel);

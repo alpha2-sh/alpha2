@@ -247,7 +247,7 @@ function serve({ name, fixture, exports }) {
     .filter((message) => "ok" in message);
   const resident = answers.filter(
     (answer) =>
-      answer.ok === true && answer.result?.videoOutputPath === "gpu-resident",
+      answer.ok === true && answer.result?.videoPipeline === "gpu-resident",
   );
   if (answers.length !== exports || resident.length !== exports) {
     process.stdout.write(
@@ -321,9 +321,9 @@ function run({
   // The layer prints a line of its own to stdout before the host's JSON.
   const line = result.stdout.split("\n").find((text) => text.startsWith("{"));
   const report = JSON.parse(line ?? "{}").result ?? {};
-  if (report.videoOutputPath !== "gpu-resident") {
+  if (report.videoPipeline !== "gpu-resident") {
     process.stdout.write(
-      `FAIL ${name}: the export took ${report.videoOutputPath}, not the GPU-resident path\n`,
+      `FAIL ${name}: the export took ${report.videoPipeline}, not the GPU-resident path\n`,
     );
     return null;
   }

@@ -31,7 +31,7 @@ use crate::frames::{NativeFrames, packed_yuv420_bytes};
 use crate::gpu_export::GpuEncodeOutcome;
 use crate::media::{PendingMedia, PendingVideoReadback, ready_pending_media, unpack_baked};
 use crate::metrics::{
-    ExportMetrics, VideoOutputPath, export_metrics_json, export_pipeline_limits, frames_per_second,
+    ExportMetrics, VideoPipeline, export_metrics_json, export_pipeline_limits, frames_per_second,
 };
 use crate::protocol::LoudnessRequest;
 use crate::protocol::{
@@ -39,6 +39,7 @@ use crate::protocol::{
     code_tag, codec_capabilities_json, decode_capabilities_json,
 };
 use crate::render_cache::BakedFrame;
+use crate::request_inputs::RequestInputs;
 use crate::trace::{AudioBlockTrace, ExportTrace, VideoFrameTrace};
 use crate::{MAX_PENDING_MEDIA_EVENTS, WORKER_RETRY_INTERVAL, error_message};
 use alpha2_assets::MediaPurpose;
@@ -51,8 +52,8 @@ use alpha2_gpu::CapabilityTier;
 use alpha2_media::{CancelToken, ColorMetadata, EncodeEvent};
 use alpha2_model::{MediaFingerprint, MediaKind, Project};
 use alpha2_native::{
-    AvEncodeConfig, NativeAvEncodeSink, NativeVideoCodec, NativeVideoEncodeSink, VideoEncodeConfig,
-    codec_capabilities, ffmpeg_runtime_identity,
+    AvEncodeConfig, ExistingOutput, NativeAvEncodeSink, NativeVideoCodec, NativeVideoEncodeSink,
+    OutputTarget, VideoEncodeConfig, codec_capabilities, ffmpeg_runtime_identity,
 };
 #[cfg(all(target_os = "windows", feature = "hwdevice"))]
 use alpha2_native_gpu::SharedD3D12Context;
@@ -589,7 +590,7 @@ impl Host {
         request: Request,
         progress: &mut dyn FnMut(crate::protocol::Progress) -> Result<(), HostError>,
     ) -> Result<Value, HostError> {
-        let export = matches!(request, Request::Export(_));
+        let export = matches!(request, Request::Export(_) | Request::Still(_));
         match catch_unwind(AssertUnwindSafe(|| self.handle_request(request, progress))) {
             Ok(result) => result,
             Err(payload) => {
@@ -625,6 +626,7 @@ impl Host {
             }
             Request::Conform(request) => return conform_answer(request, self.decode_policy),
             Request::Export(export) => return self.handle_export(*export, progress),
+            Request::Still(still) => return self.handle_still(*still),
         };
         result.map_err(HostError::classify)
     }
@@ -661,8 +663,13 @@ impl Host {
             strategy,
             memory,
             output,
+            overwrite,
             ..
         } = request;
+        let output = OutputTarget {
+            path: output,
+            existing: existing_output(overwrite),
+        };
         let project = project.text();
         self.begin_export(
             &ExportRequestFacts {
@@ -679,26 +686,26 @@ impl Host {
             },
             memory,
         )?;
-        let resolved = self.conform_export(project, &assets, &proxies, &frames, media)?;
-        Project::from_json(project)
-            .map_err(error_message)
-            .and_then(|parsed| crate::providers::check_resources(&parsed, &resources))
-            .map_err(|error| self.attach_failure(HostError::classify(error), None))?;
-        let selections = media_selections(&resolved.report);
-        // What the renderer keeps only for reuse goes back before an export starts: a resident
-        // host's last export must not crowd this one.
-        let released = self
-            .renderer
-            .release_idle_memory()
-            .saturating_add(self.release_idle_decode_copies());
+        let PreparedRequest {
+            resolved,
+            selections,
+            released,
+            provider_files,
+        } = self.prepare_request(
+            project,
+            &RequestInputs {
+                assets: &assets,
+                proxies: &proxies,
+                frames: &frames,
+                resources: &resources,
+                effect_assets: &effect_assets,
+                font_files: &font_files,
+            },
+            media,
+            &[&output.path],
+        )?;
         self.input_policy = input_policy;
         self.strategy = strategy;
-        let provider_files = crate::providers::ProviderFiles {
-            originals: resolved.paths.clone(),
-            frames,
-            fonts: Vec::new(),
-            resources,
-        };
         let render_cache_unavailable = render_cache.and_then(|request| {
             self.open_render_cache(
                 request,
@@ -710,7 +717,6 @@ impl Host {
                 &effects,
             )
         });
-        self.conformed_video_pixels = Some(resolved.video_pixels.clone());
         self.provider_files = provider_files;
         let exported = self
             .set_fonts(&font_files)
@@ -755,6 +761,120 @@ impl Host {
             let message = crate::termination::cancelled_by_termination(message);
             let error = HostError::classify(message);
             self.attach_failure(error, position)
+        })
+    }
+
+    /// The setup `export` and `still` share, once the request's failure
+    /// record has begun: refuses an output that is one of the request's
+    /// inputs, conforms the media the request reads, checks the files the
+    /// project's providers name, gives back what the renderer keeps only for
+    /// reuse, and lists the files extension providers read (the fonts once
+    /// the text store has read them).
+    fn prepare_request(
+        &mut self,
+        project: &str,
+        inputs: &RequestInputs<'_>,
+        media: crate::protocol::ExportMedia,
+        outputs: &[&Path],
+    ) -> Result<PreparedRequest, HostError> {
+        for output in outputs {
+            inputs
+                .refuse_output(output)
+                .map_err(|error| self.attach_failure(error, None))?;
+        }
+        let resolved =
+            self.conform_export(project, inputs.assets, inputs.proxies, inputs.frames, media)?;
+        Project::from_json(project)
+            .map_err(error_message)
+            .and_then(|parsed| crate::providers::check_resources(&parsed, inputs.resources))
+            .map_err(|error| self.attach_failure(HostError::classify(error), None))?;
+        let selections = media_selections(&resolved.report);
+        // What the renderer keeps only for reuse goes back before a request renders: a resident
+        // host's last request must not crowd this one.
+        let released = self
+            .renderer
+            .release_idle_memory()
+            .saturating_add(self.release_idle_decode_copies());
+        let provider_files = crate::providers::ProviderFiles {
+            originals: resolved.paths.clone(),
+            frames: inputs.frames.clone(),
+            fonts: Vec::new(),
+            resources: inputs.resources.clone(),
+        };
+        self.conformed_video_pixels = Some(resolved.video_pixels.clone());
+        Ok(PreparedRequest {
+            resolved,
+            selections,
+            released,
+            provider_files,
+        })
+    }
+
+    /// Conforms a still request's media, then renders each frame it asks for
+    /// to its PNG.
+    fn handle_still(&mut self, request: crate::protocol::StillRequest) -> Result<Value, HostError> {
+        let crate::protocol::StillRequest {
+            project,
+            assets,
+            proxies,
+            frames,
+            resources,
+            media,
+            effect_assets,
+            font_files,
+            effects,
+            size,
+            stills,
+            overwrite,
+            ..
+        } = request;
+        let project = still_project(project.text(), size)?;
+        self.begin_request(crate::memory::MemoryRequest::default(), None)?;
+        let outputs = stills
+            .iter()
+            .map(|still| still.output.as_path())
+            .collect::<Vec<_>>();
+        let PreparedRequest {
+            resolved,
+            selections,
+            released,
+            provider_files,
+        } = self.prepare_request(
+            &project,
+            &RequestInputs {
+                assets: &assets,
+                proxies: &proxies,
+                frames: &frames,
+                resources: &resources,
+                effect_assets: &effect_assets,
+                font_files: &font_files,
+            },
+            media,
+            &outputs,
+        )?;
+        self.provider_files = provider_files;
+        let rendered = self
+            .set_fonts(&font_files)
+            .and_then(|fonts| {
+                self.provider_files.fonts = fonts;
+                self.render_stills(
+                    &project,
+                    &resolved.paths,
+                    &effect_assets,
+                    effects,
+                    &stills,
+                    existing_output(overwrite),
+                )
+            })
+            .map(|mut result| {
+                result["media"] = Value::Object(selections);
+                result["idleBytesReleasedAtStart"] = json!(released);
+                result["decodeDiagnostics"] = self.failure.decode_diagnostics();
+                result
+            });
+        self.end_export();
+        rendered.map_err(|message| {
+            HostError::classify(crate::termination::cancelled_by_termination(message))
         })
     }
 
@@ -852,9 +972,22 @@ impl Host {
         facts: &ExportRequestFacts<'_>,
         memory: crate::memory::MemoryRequest,
     ) -> Result<(), HostError> {
+        self.begin_request(memory, Some(facts))
+    }
+
+    /// Starts a request that renders: its byte budgets, and a failure record
+    /// with what an export asked for (`facts`). Device events before it are
+    /// forgotten, a loss excepted.
+    fn begin_request(
+        &mut self,
+        memory: crate::memory::MemoryRequest,
+        facts: Option<&ExportRequestFacts<'_>>,
+    ) -> Result<(), HostError> {
         self.failure.begin();
         self.gpu_log.clear();
-        self.note_request(facts);
+        if let Some(facts) = facts {
+            self.note_request(facts);
+        }
         let decoding = crate::recovery::ExportDecoding::from_env()
             .map_err(|error| self.attach_failure(HostError::invalid_input(error), None))?;
         self.failure.begin_decoding(decoding);
@@ -1320,9 +1453,10 @@ impl Host {
         video_quality: VideoQualityRequest,
         audio_quality: AudioQualityRequest,
         loudness: Option<LoudnessRequest>,
-        output: &Path,
+        output: impl Into<OutputTarget>,
         progress: &mut dyn FnMut(crate::protocol::Progress) -> Result<(), HostError>,
     ) -> Result<Value, String> {
+        let output = output.into();
         #[cfg(all(target_os = "linux", feature = "hwdecode"))]
         let tickets_before = self
             .shared_vulkan
@@ -1347,7 +1481,7 @@ impl Host {
                 video_quality,
                 audio_quality,
                 loudness,
-                output,
+                &output,
                 &pipeline_failure,
                 progress,
             )
@@ -1367,6 +1501,7 @@ impl Host {
         result["resultCache"] =
             result_cache_json(&cache_before, &self.renderer.result_cache_stats());
         result["container"] = json!(format.container.as_str());
+        result["output"] = json!(written_path(&output.path));
         Ok(result)
     }
 
@@ -1386,7 +1521,7 @@ impl Host {
         video_quality: VideoQualityRequest,
         audio_quality: AudioQualityRequest,
         loudness: Option<LoudnessRequest>,
-        output: &Path,
+        output: &OutputTarget,
         pipeline_failure: &PipelineFailure,
         progress: &mut dyn FnMut(crate::protocol::Progress) -> Result<(), HostError>,
     ) -> Result<Value, String> {
@@ -1749,7 +1884,7 @@ impl Host {
         // fall through to a software one, which needs a software encoder's share of the CPU.
         let software_split = std::cell::OnceCell::new();
         let decide_software_split = || {
-            *software_split.get_or_init(|| {
+            software_split.get_or_init(|| {
                 self.export_codec_split(&project, assets, range, pipeline_enabled, true)
             })
         };
@@ -1785,7 +1920,7 @@ impl Host {
         let split = if video_encoder_hardware {
             self.export_codec_split(&project, assets, range, pipeline_enabled, false)
         } else {
-            decide_software_split()
+            decide_software_split().clone()
         };
         let plan = ExportDecodePlan::new(split, providers);
         let hardware_decode = plan.hardware_decode;
@@ -1804,7 +1939,7 @@ impl Host {
         // What opened, not what was advertised: a candidate can register and still fail to open.
         let selection = sink.video_selection().clone();
         self.failure
-            .note("videoOutputPath", json!(VideoOutputPath::Readback.as_str()));
+            .note("videoPipeline", json!(VideoPipeline::Readback.as_str()));
         self.failure
             .note("videoEncoder", json!(selection.encoder_name));
         self.failure.note("audioEncoder", json!(audio_encoder_name));
@@ -1887,10 +2022,11 @@ impl Host {
         let mut pending_videos = 0_usize;
         let mut pending_readback_bytes = 0_u64;
         let mut metrics = ExportMetrics {
-            video_output_path: VideoOutputPath::Readback,
+            video_pipeline: VideoPipeline::Readback,
             pipeline_enabled,
             decode_lookahead,
             decode_concurrency: codec_threads.decode_concurrency,
+            decoder_sessions: Some(plan.decoder_sessions),
             decoder_threads: codec_threads.decoder_threads,
             hardware_decoder_threads: codec_threads.hardware_decoder_threads,
             codec_thread_budget: codec_threads.total_threads,
@@ -1980,6 +2116,9 @@ impl Host {
                         metrics.reverse_cache_hits = metrics
                             .reverse_cache_hits
                             .saturating_add(decoded.reverse_cache_hits);
+                        metrics.decoder_session_reopens = metrics
+                            .decoder_session_reopens
+                            .saturating_add(decoded.decoder_session_reopens);
                         metrics.software_decoded_frames = metrics
                             .software_decoded_frames
                             .saturating_add(decoded.software_decoded_frames);
@@ -2570,7 +2709,7 @@ impl Host {
             ));
         }
         metrics.retired_leases_at_exit =
-            self.clean_up_after_output(output, || parked_leases.release());
+            self.clean_up_after_output(&output.path, || parked_leases.release());
         metrics.encoder_frames_allocated = frame_pool.allocated();
         let mut result = self.response_metadata(started.elapsed().as_secs_f64() * 1_000.0);
         result["frames"] = json!(encode_state.completed_video);
@@ -2593,7 +2732,7 @@ impl Host {
                 }))
                 .collect::<Vec<_>>()
         );
-        result["videoOutputPath"] = json!(VideoOutputPath::Readback.as_str());
+        result["videoPipeline"] = json!(VideoPipeline::Readback.as_str());
         result["gpuOutputPathUnavailable"] = json!(gpu_output_unavailable);
         result["videoTranscode"] = Value::Null;
         result["yuvTranscodeIneligible"] = json!("only the GPU-resident path transcodes");
@@ -2634,6 +2773,9 @@ impl Host {
         let graph_after = self.renderer.gpu().map(Renderer::diagnostics);
         metrics.peak_provider_source_bytes = plan.providers.peak_bytes();
         metrics.provider_source_reopens = plan.providers.reopens();
+        self.failure
+            .decoding()
+            .note_decoder_sessions(plan.decoder_sessions, metrics.decoder_session_reopens);
         result["performance"] = export_metrics_json(
             &metrics,
             graph_before.as_ref().zip(graph_after.as_ref()),
@@ -3001,7 +3143,7 @@ pub(crate) fn finish_loudness(report: Option<Value>, renderer: Option<&AudioRend
 /// changing frame are found when only what is over them changed.
 const EXPORT_RESULT_CACHE_FRAMES: u64 = 4;
 
-fn result_cache_budget(size: RenderSize, format: wgpu::TextureFormat) -> u64 {
+pub(crate) fn result_cache_budget(size: RenderSize, format: wgpu::TextureFormat) -> u64 {
     let texel = u64::from(format.block_copy_size(None).unwrap_or(8));
     EXPORT_RESULT_CACHE_FRAMES * u64::from(size.width) * u64::from(size.height) * texel
 }
@@ -3081,6 +3223,70 @@ impl Host {
             0
         })
     }
+}
+
+/// The media a request reads, conformed, before anything renders
+/// ([`Host::prepare_request`]).
+struct PreparedRequest {
+    resolved: ResolvedMedia,
+    selections: serde_json::Map<String, Value>,
+    released: u64,
+    provider_files: crate::providers::ProviderFiles,
+}
+
+/// What an output asked to `overwrite` does with a file at its path.
+const fn existing_output(overwrite: bool) -> ExistingOutput {
+    if overwrite {
+        ExistingOutput::Replace
+    } else {
+        ExistingOutput::Refuse
+    }
+}
+
+/// The project a still request renders: its own, or, given a `size`, the
+/// same document at that canvas size, as an export of it at that size would
+/// render it.
+///
+/// # Errors
+/// `INVALID_INPUT` when the document is not a JSON object with settings.
+fn still_project(
+    project: &str,
+    size: Option<crate::protocol::StillSize>,
+) -> Result<String, HostError> {
+    let Some(size) = size else {
+        return Ok(project.to_owned());
+    };
+    let mut document: Value = serde_json::from_str(project)
+        .map_err(|error| HostError::invalid_input(format!("invalid project: {error}")))?;
+    let settings = document
+        .get_mut("settings")
+        .and_then(Value::as_object_mut)
+        .ok_or_else(|| HostError::invalid_input("invalid project: settings is not an object"))?;
+    settings.insert("width".to_owned(), json!(size.width));
+    settings.insert("height".to_owned(), json!(size.height));
+    Ok(document.to_string())
+}
+
+/// The absolute path of a file an export or a still has just published at
+/// `path`, as text. The file is there, so it resolves; were it removed
+/// meanwhile, the path is made absolute without resolving links. On Windows
+/// the resolved path loses the `\\?\` prefix `canonicalize` adds, as every
+/// other program writes paths without it.
+pub(crate) fn written_path(path: &Path) -> String {
+    let text = std::fs::canonicalize(path)
+        .or_else(|_| std::path::absolute(path))
+        .unwrap_or_else(|_| path.to_owned())
+        .display()
+        .to_string();
+    if cfg!(windows) {
+        if let Some(share) = text.strip_prefix(r"\\?\UNC\") {
+            return format!(r"\\{share}");
+        }
+        if let Some(local) = text.strip_prefix(r"\\?\") {
+            return local.to_owned();
+        }
+    }
+    text
 }
 
 /// Answers a `conform` request: what each source the project reads resolves

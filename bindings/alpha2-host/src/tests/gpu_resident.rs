@@ -154,7 +154,7 @@ fn imported_frames_reuse_their_vulkan_import_tickets() {
                 VideoQualityRequest::Level(QualityLevel::High),
                 AudioQualityRequest::Level(QualityLevel::High),
                 None,
-                &directory.join(name),
+                directory.join(name),
                 &mut |_| Ok(()),
             )
             .expect("export");
@@ -241,7 +241,7 @@ fn a_resident_host_exports_again_after_a_gpu_resident_export_fails_midway() {
             VideoQualityRequest::Level(QualityLevel::High),
             AudioQualityRequest::Level(QualityLevel::High),
             None,
-            &directory.join(name),
+            directory.join(name),
             &mut |progress| match fail_at {
                 Some(frame) if progress.completed >= frame => {
                     Err(HostError::new("TEST_FAILURE", "the export stops midway"))
@@ -268,7 +268,7 @@ fn a_resident_host_exports_again_after_a_gpu_resident_export_fails_midway() {
     }
     let result =
         export(alpha2_time::TICKS_PER_SECOND / 2, "succeeds.mp4", None).expect("second export");
-    assert_eq!(result["videoOutputPath"], json!("gpu-resident"), "{result}");
+    assert_eq!(result["videoPipeline"], json!("gpu-resident"), "{result}");
     let facts = host.failure.facts();
     assert_eq!(facts.get("audioEncoder"), Some(&Value::Null), "{facts:?}");
     assert_eq!(
@@ -353,12 +353,12 @@ fn a_software_decoded_export_still_encodes_on_the_gpu() {
             VideoQualityRequest::Level(QualityLevel::High),
             AudioQualityRequest::Level(QualityLevel::High),
             None,
-            &directory.join("out.mp4"),
+            directory.join("out.mp4"),
             &mut |_| Ok(()),
         )
         .expect("export");
     let _ = std::fs::remove_dir_all(directory);
-    assert_eq!(result["videoOutputPath"], json!("gpu-resident"), "{result}");
+    assert_eq!(result["videoPipeline"], json!("gpu-resident"), "{result}");
     assert_eq!(result["hardwareDecodeReady"], json!(false), "{result}");
     assert_eq!(result.get("renderCache"), Some(&Value::Null), "{result}");
     let performance = &result["performance"];
@@ -554,7 +554,7 @@ fn an_untouched_clip_is_transcoded_from_its_decoded_planes() {
     ] {
         let (result, output) = export(host, &source, 256, 144, &format!("{name}.mp4"));
         assert_eq!(
-            result["videoOutputPath"],
+            result["videoPipeline"],
             json!("gpu-resident"),
             "{name}: {result}"
         );
@@ -648,7 +648,7 @@ fn an_untouched_clip_is_transcoded_from_its_decoded_planes() {
     // H.264 sites its chroma left and this VP9 file reads as centred, so repacking would move the
     // chroma half a sample.
     let rendered = |result: &Value, reason: &str| {
-        assert_eq!(result["videoOutputPath"], json!("gpu-resident"), "{result}");
+        assert_eq!(result["videoPipeline"], json!("gpu-resident"), "{result}");
         assert_eq!(result["videoTranscode"], Value::Null, "{result}");
         assert!(
             result["yuvTranscodeIneligible"]
@@ -752,7 +752,7 @@ fn a_rendered_gpu_resident_export_carries_each_frames_colors_into_its_chroma() {
             &mut |_| Ok(()),
         )
         .expect("export");
-    assert_eq!(result["videoOutputPath"], json!("gpu-resident"), "{result}");
+    assert_eq!(result["videoPipeline"], json!("gpu-resident"), "{result}");
     assert_eq!(result["videoTranscode"], Value::Null, "{result}");
     assert_eq!(
         result["performance"]["outputReadbackBytes"],
@@ -1009,6 +1009,7 @@ fn a_transcoded_picture_is_the_last_of_its_frame_set() {
         software_decoded_frames: 1,
         hardware_decoded_frames: 0,
         hardware_fallbacks: HardwareFallbackCounts::default(),
+        decoder_session_reopens: 0,
     };
     let picture = plan.picture(set).expect("the frame's picture");
     drop(picture);
@@ -1203,7 +1204,7 @@ fn a_gpu_resident_export_writes_every_container_that_offers_its_codec() {
                 &mut |_| Ok(()),
             )
             .unwrap_or_else(|error| panic!("{container} {}: {error}", audio.as_str()));
-        assert_eq!(result["videoOutputPath"], json!("gpu-resident"), "{result}");
+        assert_eq!(result["videoPipeline"], json!("gpu-resident"), "{result}");
         assert_eq!(result["container"], json!(container.as_str()));
         assert_eq!(result["audioCodec"], json!(audio.as_str()));
         let probed = alpha2_native::probe(&output).expect("probe");

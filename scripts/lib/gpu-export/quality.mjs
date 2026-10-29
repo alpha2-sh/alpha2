@@ -36,7 +36,7 @@ export function qualityChecks(harness, { projectPath, assets, readbackCodec }) {
             `${quality} export failed (${exported.status}): ${exported.stderr.slice(-2000)}`,
           );
         }
-        assertEqual(exported.result.videoOutputPath, path, "videoOutputPath");
+        assertEqual(exported.result.videoPipeline, path, "videoPipeline");
         const rate = exported.result.videoRateControl;
         assertEqual(
           rate?.source,
@@ -98,7 +98,7 @@ export function qualityChecks(harness, { projectPath, assets, readbackCodec }) {
             `${level} export failed (${exported.status}): ${exported.stderr.slice(-2000)}`,
           );
         }
-        assertEqual(exported.result.videoOutputPath, path, "videoOutputPath");
+        assertEqual(exported.result.videoPipeline, path, "videoPipeline");
         const rate = exported.result.audioRateControl;
         assertEqual(rate?.level, level, `${level} audioRateControl.level`);
         return { level, rate, bytes: statSync(output).size };

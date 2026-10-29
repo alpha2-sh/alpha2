@@ -166,3 +166,67 @@ fn an_unregistered_effect_is_named_by_every_entry_point() {
         Some(expected)
     );
 }
+
+/// A still is the one frame of the grid that holds its time, as an export of a range around it
+/// renders there, and takes any size: nothing packs it into 4:2:0.
+#[test]
+fn a_still_renders_the_grid_frame_that_holds_its_time_at_an_odd_size() {
+    use crate::{ExportTextureStep, Exporter, QualityProfile};
+    let project: alpha2_model::Project = serde_json::from_value(serde_json::json!({
+        "schema_version": 1, "id": "still", "name": "Still",
+        "settings": {"width": 33, "height": 17, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
+        "sources": [{"id": "fill", "kind": "generated",
+            "generator": {"type": "fill", "paint": {"type": "solid", "color": {"red": 1, "green": 0, "blue": 0, "alpha": 1}}}}],
+        "timeline": {"tracks": [{"id": "v", "name": "V", "kind": "video", "clips": [{
+            "id": "clip", "source_id": "fill",
+            "timeline_range": {"start": 0, "end": 120_000},
+            "source_range": {"start": 0, "end": 120_000}
+        }]}]}
+    }))
+    .expect("project");
+    let snapshot = crate::EngineProject::new(project).expect("snapshot");
+    let rate = alpha2_time::FrameRate::new(30, 1).expect("rate");
+    assert!(
+        Exporter::new(
+            &snapshot,
+            alpha2_time::TimeRange::new(MediaTime::ZERO, MediaTime::from_ticks(4_000))
+                .expect("range"),
+            rate,
+            QualityProfile::export(),
+            alpha2_media::VideoCodec::H264,
+        )
+        .is_err(),
+        "an export refuses an odd size"
+    );
+    // Between the frames at 4 000 and 8 000 ticks: the one at 4 000 holds it.
+    let mut still = Exporter::still(
+        &snapshot,
+        MediaTime::from_ticks(5_000),
+        rate,
+        QualityProfile::export(),
+    )
+    .expect("a still takes an odd size");
+    assert_eq!(still.pending_time(), Some(MediaTime::from_ticks(4_000)));
+    let renderer = alpha2_render::CpuRenderer::new(2);
+    let step = still
+        .render_next_texture(&snapshot, &renderer, &MissingFrames)
+        .expect("a step");
+    let ExportTextureStep::Rendered {
+        index,
+        time,
+        texture,
+    } = step
+    else {
+        panic!("a generated source waits for nothing: {step:?}");
+    };
+    assert_eq!((index, time), (0, MediaTime::from_ticks(4_000)));
+    let pixels = texture.read_rgba8();
+    assert_eq!(pixels.len(), 33 * 17 * 4);
+    assert_eq!(&pixels[..4], &[255, 0, 0, 255]);
+    assert!(matches!(
+        still
+            .render_next_texture(&snapshot, &renderer, &MissingFrames)
+            .expect("a step"),
+        ExportTextureStep::Complete
+    ));
+}

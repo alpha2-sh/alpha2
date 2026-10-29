@@ -5,7 +5,7 @@ export const PROTOCOL_VERSION = 1 as const;
  * A request object for the host: `payload`'s fields beside the protocol version, operation and id.
  */
 export function createRequest(
-  operation: "capabilities" | "export" | "conform",
+  operation: "capabilities" | "export" | "conform" | "still",
   requestId: string,
   payload: Readonly<Record<string, unknown>> = {},
 ): Readonly<Record<string, unknown>> {

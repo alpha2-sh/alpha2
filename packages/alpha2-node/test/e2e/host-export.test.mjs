@@ -5,9 +5,16 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm, stat, readFile, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import test from "node:test";
 
 import {
@@ -208,7 +215,7 @@ test("the client can tell in advance whether an export will be GPU-resident", as
       );
     } else {
       assert.equal(
-        belowMinimum.videoOutputPath,
+        belowMinimum.videoPipeline,
         "readback",
         "an output below the encoder's minimum extent must not claim the GPU path",
       );
@@ -222,9 +229,9 @@ test("the client can tell in advance whether an export will be GPU-resident", as
     name: "inside-extent.mp4",
   });
   assert.equal(
-    inside.videoOutputPath,
+    inside.videoPipeline,
     "gpu-resident",
-    `an output inside the advertised extent took the ${inside.videoOutputPath} path`,
+    `an output inside the advertised extent took the ${inside.videoPipeline} path`,
   );
   assert.equal(inside.videoEncoder, gpu.encoder);
   assert.equal(inside.inputPolicy, "auto");
@@ -244,11 +251,7 @@ test("the client can tell in advance whether an export will be GPU-resident", as
       name: "required.mp4",
       ...options,
     });
-    assert.equal(
-      pinned.videoOutputPath,
-      "gpu-resident",
-      JSON.stringify(options),
-    );
+    assert.equal(pinned.videoPipeline, "gpu-resident", JSON.stringify(options));
   }
   // Required outside the extent is an error naming the path, never a fallback.
   const outside = [
@@ -325,6 +328,8 @@ test("the client exports a project through the host binary", async () => {
     });
 
     assert.equal(written, output);
+    assert.ok(isAbsolute(result.output), result.output);
+    assert.equal(result.output, await realpath(output));
     const { size } = await stat(output);
     assert.ok(size > 0, "the export must not be empty");
     // ISO base media files carry `ftyp` at byte four.
@@ -350,8 +355,166 @@ test("the client exports a project through the host binary", async () => {
       ["rgba16float", "rgba8unorm"].includes(result?.color?.intermediateFormat),
     );
     assert.equal(typeof result?.performance?.frameSubmitMs, "number");
-    assertDeclaredPerformance(result.performance, result.videoOutputPath);
+    assertDeclaredPerformance(result.performance, result.videoPipeline);
     assert.deepEqual(result?.decodeDiagnostics, []);
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+});
+
+test("an existing output is replaced only with overwrite, and an input is never an output", async () => {
+  const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-overwrite-"));
+  const output = join(scratch, "export.mp4");
+  const request = (fields) => ({
+    project,
+    assets: { "image-source": assetPath },
+    startTicks: 0,
+    endTicks: 5_000,
+    frameRate: { num: 24, den: 1 },
+    includeAudio: false,
+    videoCodec: "mpeg4-part2",
+    output,
+    ...fields,
+  });
+  try {
+    await writeFile(output, "old");
+    await assert.rejects(client.exportProject(request({})), (error) => {
+      assert.equal(error.code, "IO_ERROR");
+      return true;
+    });
+    assert.equal(await readFile(output, "utf8"), "old");
+    for (let run = 0; run < 2; run += 1) {
+      await client.exportProject(request({ overwrite: true }));
+      const header = (await readFile(output)).subarray(4, 8).toString("ascii");
+      assert.equal(header, "ftyp");
+    }
+    // Named like an output, so only the identity check can refuse it.
+    const asset = join(scratch, "asset.mp4");
+    await writeFile(asset, await readFile(assetPath));
+    for (const overwrite of [false, true]) {
+      await assert.rejects(
+        client.exportProject(
+          request({
+            assets: { "image-source": asset },
+            output: asset,
+            overwrite,
+          }),
+        ),
+        (error) => {
+          assert.equal(error.code, "INVALID_REQUEST");
+          assert.match(error.message, /the asset "image-source"/);
+          return true;
+        },
+      );
+    }
+    await assert.rejects(
+      client.exportProject(request({ overwrite: "yes" })),
+      /overwrite must be true or false/,
+    );
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
+  }
+});
+
+test("a still is the PNG of the frame of the grid that holds its time", async () => {
+  const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-still-"));
+  const solid = {
+    schema_version: 1,
+    id: "solid",
+    name: "Solid",
+    settings: {
+      width: 64,
+      height: 48,
+      frame_rate: { num: 30, den: 1 },
+      sample_rate: 48000,
+    },
+    sources: [
+      {
+        id: "red",
+        kind: "generated",
+        generator: {
+          type: "fill",
+          paint: {
+            type: "solid",
+            color: { red: 1, green: 0, blue: 0, alpha: 1 },
+          },
+        },
+      },
+    ],
+    timeline: {
+      tracks: [
+        {
+          id: "v",
+          name: "V",
+          kind: "video",
+          clips: [
+            {
+              id: "clip",
+              source_id: "red",
+              timeline_range: { start: 0, end: 120_000 },
+              source_range: { start: 0, end: 120_000 },
+            },
+          ],
+        },
+      ],
+    },
+  };
+  try {
+    const output = join(scratch, "frame.png");
+    // 61 200 ticks is between frames 15 and 16 at 30 fps.
+    const result = await client.still({
+      project: solid,
+      assets: {},
+      time: 61_200,
+      output,
+    });
+    assert.equal(result.stills[0].frameTime, 60_000);
+    assert.equal(result.stills[0].output, await realpath(output));
+    const png = await readFile(output);
+    assert.equal(png.subarray(1, 4).toString("ascii"), "PNG");
+    // IHDR: width and height, then 8-bit RGBA.
+    assert.deepEqual(
+      [png.readUInt32BE(16), png.readUInt32BE(20), png[24], png[25]],
+      [64, 48, 8, 6],
+    );
+    const many = await client.stills({
+      project: solid,
+      assets: {},
+      stills: [
+        { time: 120_000, output: join(scratch, "late.png") },
+        { time: 0, output: join(scratch, "early.png") },
+      ],
+      size: { width: 31, height: 17 },
+    });
+    assert.deepEqual(
+      many.stills.map((still) => [still.frameTime, still.width, still.height]),
+      [
+        [120_000, 31, 17],
+        [0, 31, 17],
+      ],
+    );
+    await assert.rejects(
+      client.still({ project: solid, assets: {}, time: 0, output }),
+      (error) => error.code === "IO_ERROR",
+    );
+    await client.still({
+      project: solid,
+      assets: {},
+      time: 0,
+      output,
+      overwrite: true,
+    });
+    await assert.rejects(
+      client.stills({
+        project: solid,
+        assets: {},
+        stills: [
+          { time: 0, output },
+          { time: 4_000, output },
+        ],
+      }),
+      /two stills write/,
+    );
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }
@@ -385,7 +548,7 @@ test("a failed readback reaches the client classified, at its frame, with the ho
         assert.equal(error.failure.frameIndex, 1);
         assert.equal(error.failure.origin, "native-host");
         const diagnostics = error.failure.diagnostics;
-        assert.equal(diagnostics.videoOutputPath, "readback");
+        assert.equal(diagnostics.videoPipeline, "readback");
         assert.equal(diagnostics.request.startTicks, "0");
         assert.equal(diagnostics.gpu.deviceLost, false);
         assert.equal(
@@ -953,7 +1116,7 @@ test("a range that is its source untouched is copied, and a copy that cannot be 
         result = value;
       },
     });
-    assert.equal(result.videoOutputPath, "packet-copy");
+    assert.equal(result.videoPipeline, "packet-copy");
     assertDeclaredPerformance(result.performance, "packet-copy");
     assert.equal(result.strategy, "copy");
     assert.equal(result.requestedStrategy, "require-copy");
@@ -975,7 +1138,7 @@ test("a range that is its source untouched is copied, and a copy that cannot be 
         result = value;
       },
     });
-    assert.equal(result.videoOutputPath, "packet-copy");
+    assert.equal(result.videoPipeline, "packet-copy");
     assert.equal(result.audio, true);
     assert.equal(result.audioStrategy, "encode");
     assert.match(result.audioCopyIneligible, /limiter|whole/);
@@ -1064,7 +1227,7 @@ test("a clip shown as it is reaches the GPU encoder as its decoded planes", asyn
   };
   try {
     const transcoded = await exportAt(width, height, "transcoded.mp4");
-    assert.equal(transcoded.videoOutputPath, "gpu-resident");
+    assert.equal(transcoded.videoPipeline, "gpu-resident");
     assert.equal(transcoded.strategy, "render");
     assert.equal(transcoded.videoTranscode, "yuv-repack");
     assert.equal(transcoded.yuvTranscodeIneligible, null);

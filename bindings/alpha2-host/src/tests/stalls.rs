@@ -307,6 +307,7 @@ fn a_long_provider_open_that_keeps_decoding_is_not_a_stall() {
         decoder_threads: 1,
         hardware_decoder_threads: 1,
         max_sessions: 2,
+        reads: Arc::default(),
         reverse_cache_bytes: 0,
         reverse_hardware_surfaces: 0,
         stall_timeout: LIMIT,
@@ -408,6 +409,7 @@ fn a_shard_stuck_inside_an_extension_provider_is_reported_there() {
         decoder_threads: 1,
         hardware_decoder_threads: 1,
         max_sessions: 1,
+        reads: Arc::default(),
         reverse_cache_bytes: 0,
         reverse_hardware_surfaces: 0,
         stall_timeout: Duration::from_millis(200),
@@ -647,7 +649,7 @@ fn a_cleanup_failure_after_the_output_is_written_does_not_fail_the_export() {
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");
     let output = directory.join("readback.mp4");
     let result = export(&mut host, encode_stall_request(&output), &output);
-    assert_eq!(result["videoOutputPath"], json!("readback"), "{result}");
+    assert_eq!(result["videoPipeline"], json!("readback"), "{result}");
 
     #[cfg(all(
         any(target_os = "linux", target_os = "macos", target_os = "windows"),
@@ -672,7 +674,7 @@ fn a_cleanup_failure_after_the_output_is_written_does_not_fail_the_export() {
             parse_request(&request.to_string()).expect("request"),
             &output,
         );
-        assert_eq!(result["videoOutputPath"], json!("gpu-resident"), "{result}");
+        assert_eq!(result["videoPipeline"], json!("gpu-resident"), "{result}");
     }
     std::fs::remove_dir_all(&directory).ok();
 }
@@ -977,7 +979,7 @@ fn a_copy_whose_output_stops_answering_fails_as_an_encode_stall() {
     assert_eq!(failure["hostCode"], "ENCODE_STALLED");
     assert_eq!(failure["phase"], "encode", "{failure}");
     assert_eq!(
-        failure["diagnostics"]["videoOutputPath"],
+        failure["diagnostics"]["videoPipeline"],
         json!("packet-copy"),
         "{failure}"
     );

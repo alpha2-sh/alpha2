@@ -160,7 +160,7 @@ fn extension_sources_export_through_their_providers() {
     assert!(failure["diagnostics"]["memory"]["gpu"]["textures"]["highWaterBytes"].is_u64());
     // A failed export's report is not the previous success's: the output path is not recorded
     // before the encoder opens.
-    assert!(failure["diagnostics"].get("videoOutputPath").is_none());
+    assert!(failure["diagnostics"].get("videoPipeline").is_none());
     let details = error.details.expect("report");
     let seq = details["sources"]
         .as_array()

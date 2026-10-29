@@ -13,6 +13,7 @@ use alpha2_time::{FrameRate, MediaTime, TICKS_PER_SECOND};
 
 use super::super::{HardwareEncodeDevice, HardwareEncodeOpenError, HardwareEncodeRequest};
 use super::*;
+use crate::OutputTarget;
 
 thread_local! {
     static REFUSE_CONSTANT_BIT_RATE: Cell<bool> = const { Cell::new(false) };
@@ -55,7 +56,7 @@ fn scratch(name: &str) -> PathBuf {
     directory
 }
 
-fn request(output: &Path, rate_control: VideoRateControl) -> HardwareEncodeRequest<'_> {
+fn request(output: &OutputTarget, rate_control: VideoRateControl) -> HardwareEncodeRequest<'_> {
     HardwareEncodeRequest {
         width: 128,
         height: 96,
@@ -82,7 +83,7 @@ fn open(
     super::super::HardwareEncodeInput,
 ) {
     device
-        .open(&request(output, rate_control))
+        .open(&request(&OutputTarget::from(output), rate_control))
         .unwrap_or_else(|error| panic!("the session opens: {error}"))
 }
 
@@ -209,7 +210,7 @@ fn without_a_constant_bit_rate_cbr_is_not_claimed_and_its_refusal_says_why() {
     let directory = scratch("no-cbr");
     let output = directory.join("out.mp4");
     let constant = VideoRateControl::bitrate(4_000_000, BitrateMode::Constant).expect("rate");
-    let refused = device.open(&request(&output, constant));
+    let refused = device.open(&request(&OutputTarget::from(&output), constant));
     REFUSE_CONSTANT_BIT_RATE.set(false);
     assert_eq!(modes, Ok(vec!["vbr"]));
     let Err(HardwareEncodeOpenError::Refused(reason)) = refused else {

@@ -45,7 +45,7 @@ fn progress_never_goes_back_when_the_export_finishes() {
         VideoQualityRequest::Level(QualityLevel::High),
         AudioQualityRequest::Level(QualityLevel::High),
         None,
-        &directory.join("progress.mp4"),
+        directory.join("progress.mp4"),
         &mut |event| {
             events.push((event.phase.as_str(), event.completed, event.total));
             Ok(())
@@ -108,7 +108,7 @@ fn a_failed_copy_reports_its_step_and_its_output_path() {
     assert_eq!(failure["phase"], json!("encode"), "{failure}");
     assert_eq!(failure["frameIndex"], json!(30), "{failure}");
     assert_eq!(
-        failure["diagnostics"]["videoOutputPath"],
+        failure["diagnostics"]["videoPipeline"],
         json!("packet-copy"),
         "{failure}"
     );
@@ -180,7 +180,7 @@ fn a_copy_is_taken_only_where_the_packets_are_the_rendered_frames() {
             VideoQualityRequest::Level(QualityLevel::High),
             AudioQualityRequest::Level(QualityLevel::High),
             None,
-            &directory.join(name),
+            directory.join(name),
             &mut |_| Ok(()),
         );
         host.strategy = ExportStrategy::Render;
@@ -209,7 +209,7 @@ fn a_copy_is_taken_only_where_the_packets_are_the_rendered_frames() {
         ExportStrategy::PreferCopy,
     )
     .expect("whole copy");
-    assert_eq!(whole["videoOutputPath"], json!("packet-copy"), "{whole}");
+    assert_eq!(whole["videoPipeline"], json!("packet-copy"), "{whole}");
     assert_eq!(whole["strategy"], json!("copy"));
     assert_eq!(whole.get("renderCache"), Some(&Value::Null), "{whole}");
     assert_eq!(whole["frames"], json!(60));
@@ -228,7 +228,7 @@ fn a_copy_is_taken_only_where_the_packets_are_the_rendered_frames() {
         ExportStrategy::RequireCopy,
     )
     .expect("GOP copy");
-    assert_eq!(gop["videoOutputPath"], json!("packet-copy"), "{gop}");
+    assert_eq!(gop["videoPipeline"], json!("packet-copy"), "{gop}");
     assert_eq!(gop["frames"], json!(30));
     let times = decoded_frames("gop.mp4");
     assert_eq!(times.len(), 30);
@@ -260,11 +260,7 @@ fn a_copy_is_taken_only_where_the_packets_are_the_rendered_frames() {
         ExportStrategy::RequireCopy,
     )
     .expect("trimmed audio");
-    assert_eq!(
-        trimmed["videoOutputPath"],
-        json!("packet-copy"),
-        "{trimmed}"
-    );
+    assert_eq!(trimmed["videoPipeline"], json!("packet-copy"), "{trimmed}");
     assert_eq!(trimmed["audioStrategy"], json!("encode"));
     assert!(
         trimmed["audioCopyIneligible"]
@@ -295,11 +291,7 @@ fn a_copy_is_taken_only_where_the_packets_are_the_rendered_frames() {
         ExportStrategy::RequireCopy,
     )
     .expect("limited");
-    assert_eq!(
-        limited["videoOutputPath"],
-        json!("packet-copy"),
-        "{limited}"
-    );
+    assert_eq!(limited["videoPipeline"], json!("packet-copy"), "{limited}");
     assert_eq!(limited["audioStrategy"], json!("encode"));
     assert!(
         limited["audioCopyIneligible"]
@@ -379,7 +371,7 @@ fn a_copy_shows_and_sounds_as_the_render_of_its_range() {
             VideoQualityRequest::Level(QualityLevel::High),
             AudioQualityRequest::Level(QualityLevel::High),
             None,
-            &directory.join(name),
+            directory.join(name),
             &mut |_| Ok(()),
         );
         host.strategy = ExportStrategy::Render;
@@ -544,7 +536,7 @@ fn clips_cut_at_idr_pictures_are_copied_back_to_back() {
             VideoQualityRequest::Level(QualityLevel::High),
             AudioQualityRequest::Level(QualityLevel::High),
             None,
-            &directory.join(name),
+            directory.join(name),
             &mut |_| Ok(()),
         );
         host.strategy = ExportStrategy::Render;
@@ -566,7 +558,7 @@ fn clips_cut_at_idr_pictures_are_copied_back_to_back() {
     };
 
     let joined = export("joined.mp4", project(0), ExportStrategy::RequireCopy).expect("join");
-    assert_eq!(joined["videoOutputPath"], json!("packet-copy"), "{joined}");
+    assert_eq!(joined["videoPipeline"], json!("packet-copy"), "{joined}");
     assert_eq!(joined["copiedSegments"], json!(2));
     assert_eq!(joined["frames"], json!(60));
     let source = luma(&corpus("h264-bt709-copy.mp4"));

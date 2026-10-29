@@ -47,7 +47,7 @@ const output = await client.exportProject({
 });
 ```
 
-Each export runs in its own `alpha2-host` process. The project is checked with `validateProject` from `alpha2/project` before a process starts; an invalid one is refused with an `Alpha2ProjectValidationError` listing the problems. The output must not exist yet: the host writes `<stem>.alpha2-partial.<ext>` beside it and renames it into place when it is complete. `exportProject` resolves with the output path once the file is complete; `onResult` receives what the host reports about the export (frames, encoder, rate control, timing, which media each source read).
+Each export runs in its own `alpha2-host` process. The project is checked with `validateProject` from `alpha2/project` before a process starts; an invalid one is refused with an `Alpha2ProjectValidationError` listing the problems. An existing output is refused unless the request sets `overwrite: true`, and an output that is one of the request's inputs is always refused: the host writes `<stem>.alpha2-partial.<ext>` beside it and renames it into place when it is complete. `exportProject` resolves with the output path once the file is complete; `onResult` receives what the host reports about the export (frames, encoder, rate control, timing, which media each source read).
 
 The request's fields are typed and described in `ExportProjectRequest`; the [host protocol](https://github.com/alpha2-sh/alpha2/blob/main/docs/host-protocol.md) lists them with their defaults. Among them: `container` (`mp4`, `mov`, `mkv` or `webm`; by default the one the output's extension names), `videoCodec` and `audioCodec` (by default the container's: `h264` and `aac`, or `vp9` and `opus` for WebM; `hevc`, `av1` and `mpeg4-part2` are the other video codecs, and each container offers only some, as `encode.containers` lists), `videoQuality` and `audioQuality` (a level, `very-low` to `very-high`, `high` by default, which the host turns into a rate for the codec, size and frame rate, or an explicit bitrate), `includeAudio`, `loudness`, `fonts`, `effectAssets`, `proxies` with `media: "proxies"`, `renderCache` and `memory`.
 
@@ -97,7 +97,9 @@ Every rejection is an `Alpha2HostError` with a `code`, the protocol's error code
 
 ## Concurrency
 
-`concurrency` (default 1) is how many host processes a client runs at once, and so how many exports share the GPU; more requests wait for a slot. The module-level `exportProject(request, options)` and `getCapabilities(options)` share one client per host binary and `concurrency`.
+`client.still({ project, assets, time, output })` renders one frame to a PNG, the frame an export draws at that time (the frame of the project's grid that holds it, `stills[0].frameTime` in the result), without encoding a video; `client.stills({ ..., stills: [{ time, output }, ...] })` renders up to 256 with one host. `time` is in ticks.
+
+`concurrency` (default 1) is how many host processes a client runs at once, and so how many exports share the GPU; more requests wait for a slot. The module-level `exportProject(request, options)`, `still`, `stills` and `getCapabilities(options)` share one client per host binary and `concurrency`.
 
 ## Electron
 

@@ -14,10 +14,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::config::{
-    configured_decode_concurrency, configured_decode_lookahead, configured_decoder_sessions,
-    configured_reverse_hardware_surfaces, visual_decode_parallelism,
+    DecoderSessionCount, configured_decode_concurrency, configured_decode_lookahead,
+    configured_decoder_session_override, configured_reverse_hardware_surfaces,
+    decoder_session_bytes, decoder_session_count, visual_decode_reads,
 };
-use crate::decode::DecodeWorkerConfig;
+use crate::decode::{CursorReads, DecodeWorkerConfig};
 use crate::frames::NativeGpuFrames;
 use crate::host::Host;
 use alpha2_model::Project;
@@ -31,7 +32,9 @@ pub struct ExportDecodePlan {
     /// on the synchronous comparison path.
     pub hardware_decode: bool,
     pub decode_lookahead: usize,
-    pub decoder_sessions: usize,
+    pub decoder_sessions: DecoderSessionCount,
+    /// When each decode cursor reads over the export range.
+    pub reads: Arc<CursorReads>,
     pub codec_threads: CodecThreadAllocation,
     /// Luma samples in the largest video source, which sizes a software
     /// decoder that shares the CPU with a software encoder; zero otherwise.
@@ -53,6 +56,7 @@ impl ExportDecodePlan {
             hardware_decode: split.hardware_decode,
             decode_lookahead: split.decode_lookahead,
             decoder_sessions: split.decoder_sessions,
+            reads: split.reads,
             codec_threads: split.codec_threads,
             source_frame_pixels: split.source_frame_pixels,
             source_probe: split.source_probe,
@@ -63,11 +67,12 @@ impl ExportDecodePlan {
 
 /// The thread half of an [`ExportDecodePlan`]: what the split between decode
 /// and the video encoder is, before the decode pool exists.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct ExportCodecSplit {
     pub hardware_decode: bool,
     pub decode_lookahead: usize,
-    pub decoder_sessions: usize,
+    pub decoder_sessions: DecoderSessionCount,
+    pub reads: Arc<CursorReads>,
     pub codec_threads: CodecThreadAllocation,
     pub source_frame_pixels: u64,
     pub source_probe: Duration,
@@ -178,36 +183,61 @@ impl Host {
         // decoders on the coordinator, whatever the host may decode on.
         let hardware_decode = pipeline_enabled && self.hardware_decode_ready();
         let decode_lookahead = configured_decode_lookahead(pipeline_enabled);
-        let decoder_sessions = configured_decoder_sessions();
-        let workload_parallelism = visual_decode_parallelism(project, range);
-        // Frame area only sizes a software decode session that shares the budget with a
-        // software encoder, so no other run pays to read it; a conformed export already read it.
+        let (workload_parallelism, reads) = visual_decode_reads(project, range);
+        // The largest video sizes every decoder session's estimate; a conformed export already
+        // read it.
         let probe_started = Instant::now();
+        let largest_video_pixels = crate::host::max_video_source_pixels(
+            project,
+            assets,
+            self.conformed_video_pixels.as_ref(),
+        );
+        let source_probe = probe_started.elapsed();
+        // Frame area sizes the threads of a software decode session only when it shares the
+        // budget with a software encoder.
         let source_frame_pixels = if hardware_decode || !software_video_encoder {
             0
         } else {
-            crate::host::max_video_source_pixels(
-                project,
-                assets,
-                self.conformed_video_pixels.as_ref(),
-            )
+            largest_video_pixels
         };
-        let source_probe = probe_started.elapsed();
-        let codec_threads = codec_thread_allocation(CodecThreadRequest {
-            decode_concurrency: configured_decode_concurrency(
-                pipeline_enabled,
+        let requested_sessions = configured_decoder_session_override();
+        let threads_for = |sessions: usize| {
+            codec_thread_allocation(CodecThreadRequest {
+                decode_concurrency: configured_decode_concurrency(
+                    pipeline_enabled,
+                    hardware_decode,
+                    workload_parallelism,
+                )
+                .min(sessions),
                 hardware_decode,
-                workload_parallelism,
-            )
-            .min(decoder_sessions),
-            hardware_decode,
-            source_frame_pixels,
-            software_video_encoder,
-        });
+                source_frame_pixels,
+                software_video_encoder,
+            })
+        };
+        let mut codec_threads =
+            threads_for(requested_sessions.unwrap_or(crate::MAX_DECODER_SESSIONS));
+        let decoder_sessions = decoder_session_count(
+            workload_parallelism,
+            decoder_session_bytes(
+                largest_video_pixels,
+                if hardware_decode {
+                    codec_threads.hardware_decoder_threads
+                } else {
+                    codec_threads.decoder_threads
+                },
+            ),
+            self.memory.decoder_sessions.bytes,
+            requested_sessions,
+        );
+        // No more shards than sessions: a shard with none to hold could decode nothing.
+        if decoder_sessions.sessions < codec_threads.decode_concurrency {
+            codec_threads = threads_for(decoder_sessions.sessions);
+        }
         ExportCodecSplit {
             hardware_decode,
             decode_lookahead,
             decoder_sessions,
+            reads: Arc::new(reads),
             codec_threads,
             source_frame_pixels,
             source_probe,
@@ -247,7 +277,8 @@ impl Host {
             concurrency: plan.codec_threads.decode_concurrency,
             decoder_threads: plan.codec_threads.decoder_threads,
             hardware_decoder_threads: plan.codec_threads.hardware_decoder_threads,
-            max_sessions: plan.decoder_sessions,
+            max_sessions: plan.decoder_sessions.sessions,
+            reads: Arc::clone(&plan.reads),
             reverse_cache_bytes: self.memory.reverse_cache.bytes,
             reverse_hardware_surfaces: configured_reverse_hardware_surfaces(self.decode_policy),
             stall_timeout: crate::config::configured_stall_timeout(),

@@ -1,7 +1,7 @@
 //! Video-only encode sink.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::capabilities::{
     NativeVideoCodec, NativeVideoEncoderSelection, VideoEncoderOpenRequest, open_video_encoder,
@@ -11,7 +11,7 @@ use crate::convert::{
     tick_base,
 };
 use crate::encode::{EncodeStageTimings, timed};
-use crate::partial::PartialOutput;
+use crate::partial::{OutputTarget, PartialOutput};
 use alpha2_ffmpeg_bridge::OutputFile;
 use alpha2_ffmpeg_bridge::Yuv420pFrameBuffer;
 use alpha2_media::{
@@ -136,7 +136,7 @@ pub(crate) fn describe_output_stream(
 /// Frames are encoded into a sibling partial file. Only a successful encoder
 /// drain and trailer write renames it to the requested destination.
 pub struct NativeVideoEncodeSink {
-    pub(crate) final_path: PathBuf,
+    pub(crate) target: OutputTarget,
     pub(crate) partial_path: PathBuf,
     /// Held until the partial file is renamed into place or removed.
     pub(crate) _partial_lock: crate::partial::PartialLock,
@@ -163,7 +163,10 @@ impl NativeVideoEncodeSink {
     ///
     /// # Errors
     /// Returns an adapter failure for invalid dimensions, paths, codecs, or muxers.
-    pub fn create(path: impl AsRef<Path>, config: VideoEncodeConfig) -> Result<Self, EncodeError> {
+    pub fn create(
+        path: impl Into<OutputTarget>,
+        config: VideoEncodeConfig,
+    ) -> Result<Self, EncodeError> {
         Self::create_selected(path, config, None, &codec_thread_budget)
     }
 
@@ -173,7 +176,7 @@ impl NativeVideoEncodeSink {
     /// Returns an adapter failure when the name is unavailable, implements a
     /// different codec, or the remaining configuration is invalid.
     pub fn create_with_encoder(
-        path: impl AsRef<Path>,
+        path: impl Into<OutputTarget>,
         config: VideoEncodeConfig,
         encoder_name: &str,
     ) -> Result<Self, EncodeError> {
@@ -197,7 +200,7 @@ impl NativeVideoEncodeSink {
     /// Returns an adapter failure when no candidate opens or the output
     /// configuration is invalid.
     pub fn create_with_encoder_threads(
-        path: impl AsRef<Path>,
+        path: impl Into<OutputTarget>,
         config: VideoEncodeConfig,
         encoder_name: Option<&str>,
         software_threads: &dyn Fn() -> i64,
@@ -207,14 +210,14 @@ impl NativeVideoEncodeSink {
 
     #[allow(clippy::too_many_lines)]
     pub(crate) fn create_selected(
-        path: impl AsRef<Path>,
+        path: impl Into<OutputTarget>,
         config: VideoEncodeConfig,
         encoder_name: Option<&str>,
         software_threads: &dyn Fn() -> i64,
     ) -> Result<Self, EncodeError> {
         check_video_config(&config)?;
-        let final_path = path.as_ref().to_owned();
-        let partial = PartialOutput::claim(&final_path)?;
+        let target = path.into();
+        let partial = PartialOutput::claim(&target)?;
         let partial_path = partial.path().to_owned();
         let mut output = partial.open_muxer(config.container)?;
         let width = i32::try_from(config.width)
@@ -269,7 +272,7 @@ impl NativeVideoEncodeSink {
         configure_rgba_to_yuv(&mut scaler, config.color).map_err(encode_adapter_error)?;
         let partial_lock = partial.keep();
         Ok(Self {
-            final_path,
+            target,
             partial_path,
             _partial_lock: partial_lock,
             output: Some(output),
@@ -481,7 +484,7 @@ impl EncodeSink for NativeVideoEncodeSink {
                 .close()
                 .map_err(|error| encode_adapter_error_at("closing the output", error))?;
         }
-        crate::partial::publish(&self.partial_path, &self.final_path)?;
+        crate::partial::publish(&self.partial_path, &self.target)?;
         self.complete = true;
         Ok(())
     }
