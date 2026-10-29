@@ -2,19 +2,25 @@
 //!
 //! It gives Python the engine's own answers where a second implementation would drift: whether a
 //! project document is valid (`alpha2_model`, the validator the host runs), where a project ends,
-//! which container and codecs an export resolves to (`alpha2_media`), and what a compose spec
-//! compiles to (`alpha2_compose`, the compiler every binding shares). It links neither a GPU nor
+//! which container and codecs an export resolves to (`alpha2_media`), what a compose spec
+//! compiles to (`alpha2_compose`, the compiler every binding shares), and where text and layout
+//! boxes lie (`alpha2_layout`, the placement the engine draws by). It links neither a GPU nor
 //! `FFmpeg`; rendering is the `alpha2-host` process's.
 //!
 //! Documents cross the boundary as JSON text, which the Python side writes once with the same
 //! rules it sends the host.
 
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use alpha2_layout::FontFileError;
+use alpha2_layout::json::{MeasureError, measure_layout_json, measure_text_json};
 use alpha2_media::{AudioCodec, Container, VideoCodec};
 use alpha2_model::{CURRENT_SCHEMA_VERSION, MAX_PROJECT_JSON_BYTES, Project};
-use pyo3::exceptions::PyValueError;
+use alpha2_text::TextRasterizer;
+use alpha2_time::MediaTime;
+use pyo3::exceptions::{PyFileNotFoundError, PyOSError, PyValueError};
 use pyo3::prelude::*;
 
 /// The problems the engine finds in a project document, as JSON text: empty when it is valid. The
@@ -35,6 +41,18 @@ fn project_end_ticks(py: Python<'_>, json: &str) -> PyResult<Option<i64>> {
     py.detach(|| Project::from_json(json))
         .map(|project| project.timeline.extent().map(|extent| extent.end().ticks()))
         .map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
+/// A valid project's non-fatal diagnostics (`Project::lint`), as a JSON array of issues. Raises
+/// `ValueError` for a document that is not a valid project.
+#[pyfunction]
+fn lint_project_json(py: Python<'_>, json: &str) -> PyResult<String> {
+    py.detach(|| {
+        let project =
+            Project::from_json(json).map_err(|error| PyValueError::new_err(error.to_string()))?;
+        serde_json::to_string(&project.lint())
+            .map_err(|error| PyValueError::new_err(error.to_string()))
+    })
 }
 
 /// An export's container, video codec and audio codec, as the host resolves them: `container`, or
@@ -94,6 +112,89 @@ fn compose(py: Python<'_>, spec: &str, facts: &str, fonts: Vec<Vec<u8>>) -> PyRe
     .map_err(|error| compose_error(&error))
 }
 
+/// A text and layout measurer over the export's font files, registered as the host registers
+/// them (every face of a collection, in order). Measuring only reads it, so threads share one.
+#[pyclass(module = "alpha2._native", frozen)]
+struct TextMeasurer {
+    inner: TextRasterizer,
+}
+
+/// A font file the measurer cannot register, as the error Python raises for it: a missing file as
+/// `FileNotFoundError`, another read failure as `OSError`, a file with no face drawn as
+/// `ValueError`.
+fn font_error(error: &FontFileError) -> PyErr {
+    match error {
+        FontFileError::Read { error: io, .. } if io.kind() == std::io::ErrorKind::NotFound => {
+            PyFileNotFoundError::new_err(error.to_string())
+        }
+        FontFileError::Read { .. } => PyOSError::new_err(error.to_string()),
+        _ => PyValueError::new_err(error.to_string()),
+    }
+}
+
+fn measure_error(error: &MeasureError) -> PyErr {
+    PyValueError::new_err(error.to_string())
+}
+
+#[pymethods]
+impl TextMeasurer {
+    /// A measurer drawing with the font files at `fonts`, in fallback order. Raises
+    /// `FileNotFoundError` naming a missing file and `ValueError` naming one with no face drawn.
+    #[new]
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "Python arguments arrive owned"
+    )]
+    fn new(py: Python<'_>, fonts: Vec<PathBuf>) -> PyResult<Self> {
+        py.detach(|| {
+            let files =
+                alpha2_layout::fonts_from_files(&fonts).map_err(|error| font_error(&error))?;
+            let mut inner = TextRasterizer::empty();
+            for face in files.faces {
+                inner
+                    .add_font(face)
+                    .map_err(|error| PyValueError::new_err(error.to_string()))?;
+            }
+            Ok(Self { inner })
+        })
+    }
+
+    /// Where the text generator `generator` (JSON text) lies on a `width` by `height` canvas, as
+    /// JSON text `{layout, content, ink, lineCount, baselines}`. Raises `ValueError` with the
+    /// engine's message for a generator it refuses.
+    fn text(&self, py: Python<'_>, generator: &str, width: u32, height: u32) -> PyResult<String> {
+        py.detach(|| measure_text_json(&self.inner, generator, width, height))
+            .map_err(|error| measure_error(&error))
+    }
+
+    /// Where each node of the layout generator `generator` (JSON text) lies on a `width` by
+    /// `height` picture at picture time `time` (ticks), its `"<n>px"` lengths pixels of `canvas`
+    /// (the picture's size when `None`), as JSON text `{nodes}`. Raises `ValueError` with the
+    /// engine's message for a generator it refuses.
+    #[pyo3(signature = (generator, width, height, time, canvas=None))]
+    fn layout(
+        &self,
+        py: Python<'_>,
+        generator: &str,
+        width: u32,
+        height: u32,
+        time: i64,
+        canvas: Option<(u32, u32)>,
+    ) -> PyResult<String> {
+        py.detach(|| {
+            measure_layout_json(
+                &self.inner,
+                generator,
+                width,
+                height,
+                MediaTime::from_ticks(time),
+                canvas,
+            )
+        })
+        .map_err(|error| measure_error(&error))
+    }
+}
+
 #[pymodule]
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
@@ -102,10 +203,12 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("TICKS_PER_SECOND", alpha2_time::TICKS_PER_SECOND)?;
     module.add_function(wrap_pyfunction!(validate_project_json, module)?)?;
     module.add_function(wrap_pyfunction!(project_end_ticks, module)?)?;
+    module.add_function(wrap_pyfunction!(lint_project_json, module)?)?;
     module.add_function(wrap_pyfunction!(resolve_export_format, module)?)?;
     module.add("COMPOSE_VERSION", alpha2_compose::COMPOSE_VERSION)?;
     module.add("COMPOSE_THEMES", alpha2_compose::THEMES.to_vec())?;
     module.add_function(wrap_pyfunction!(compose_requirements, module)?)?;
     module.add_function(wrap_pyfunction!(compose, module)?)?;
+    module.add_class::<TextMeasurer>()?;
     Ok(())
 }

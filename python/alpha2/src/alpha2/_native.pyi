@@ -16,6 +16,12 @@ def project_end_ticks(json: str) -> int | None:
     Raises ValueError for a document that is not a valid project.
     """
 
+def lint_project_json(json: str) -> str:
+    """A valid project's non-fatal diagnostics, as a JSON array of issues.
+
+    Raises ValueError for a document that is not a valid project.
+    """
+
 def resolve_export_format(
     container: str | None = None,
     extension: str | None = None,
@@ -39,3 +45,26 @@ def compose(spec: str, facts: str, fonts: list[bytes]) -> str:
 
     Raises ValueError(message, path, problem) for a spec that does not compile.
     """
+
+class TextMeasurer:
+    """A text and layout measurer over the export's font files, registered as the host registers
+    them (every face of a collection, in order)."""
+
+    def __init__(self, fonts: list[str]) -> None:
+        """Raises FileNotFoundError naming a missing file, OSError for another read failure and
+        ValueError naming a file with no face drawn."""
+
+    def text(self, generator: str, width: int, height: int) -> str:
+        """Where a text generator (JSON text) lies on a canvas, as JSON text
+        ``{layout, content, ink, lineCount, baselines}``. Raises ValueError for one it refuses."""
+
+    def layout(
+        self,
+        generator: str,
+        width: int,
+        height: int,
+        time: int,
+        canvas: tuple[int, int] | None = None,
+    ) -> str:
+        """Where each node of a layout generator (JSON text) lies on a picture at picture time
+        ``time`` (ticks), as JSON text ``{nodes}``. Raises ValueError for one it refuses."""

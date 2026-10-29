@@ -13,7 +13,8 @@ engine's own validator in-process; rendering runs the native ``alpha2-host`` pro
     alpha2.export(project.build(), "intro.mp4", assets=project.assets())
 """
 
-from . import compose
+from . import compose, layout, shapes
+from . import effect_values as fx
 from ._native import __version__
 from .builder import (
     TICKS_PER_SECOND,
@@ -21,12 +22,15 @@ from .builder import (
     ProjectBuilder,
     Ticks,
     TrackBuilder,
+    effect,
+    lint_project,
     seconds_to_ticks,
     sequential_ids,
     ticks,
     ticks_to_seconds,
     to_ticks,
     validate_project,
+    visual,
 )
 from .client import (
     QUALITY_LEVELS,
@@ -58,8 +62,10 @@ from .install import (
     install_host,
     install_openh264,
 )
+from .measure import LayoutBounds, NodeBounds, TextBounds, TextMeasurer
 from .protocol import PROTOCOL_VERSION
 from .results import ExportResult, StillResult
+from .values import constant, key, keyframes, lift, point_key, point_keyframes
 
 __all__ = [
     "HOST_DOWNLOAD_URL",
@@ -79,27 +85,43 @@ __all__ = [
     "ExportResult",
     "HostClient",
     "InstallResult",
+    "LayoutBounds",
+    "NodeBounds",
     "OpenH264InstallResult",
     "ProjectBuilder",
     "StillResult",
+    "TextBounds",
+    "TextMeasurer",
     "Ticks",
     "TrackBuilder",
     "__version__",
     "capabilities",
     "compose",
     "conform",
+    "constant",
+    "effect",
     "export",
+    "fx",
     "host_cache_directory",
     "host_target",
     "install_host",
     "install_openh264",
+    "key",
+    "keyframes",
+    "layout",
+    "lift",
+    "lint_project",
+    "point_key",
+    "point_keyframes",
     "resolve_host_binary",
     "seconds_to_ticks",
     "sequential_ids",
+    "shapes",
     "still",
     "stills",
     "ticks",
     "ticks_to_seconds",
     "to_ticks",
     "validate_project",
+    "visual",
 ]

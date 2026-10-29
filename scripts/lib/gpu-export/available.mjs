@@ -61,11 +61,7 @@ export function runAvailable(harness) {
     );
   }
   check("the export reports the GPU-resident path", () => {
-    assertEqual(
-      baseline.result.videoPipeline,
-      "gpu-resident",
-      "videoPipeline",
-    );
+    assertEqual(baseline.result.videoPipeline, "gpu-resident", "videoPipeline");
     assertEqual(baseline.result.videoEncoder, gpu.encoder, "videoEncoder");
     assertEqual(
       baseline.result.performance.videoPipeline,

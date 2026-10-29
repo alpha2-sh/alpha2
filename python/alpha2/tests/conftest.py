@@ -134,3 +134,51 @@ def expand_repeats(value: Any) -> Any:
     if isinstance(value, dict):
         return {key: expand_repeats(field) for key, field in value.items()}
     return value
+
+
+def read_rgba_png(path: Path) -> tuple[int, int, bytes]:
+    """An 8-bit RGBA PNG's size and pixels, read with the standard library."""
+    import struct
+    import zlib
+
+    data = path.read_bytes()
+    assert data[:8] == b"\x89PNG\r\n\x1a\n"
+    position, width, height, compressed = 8, 0, 0, b""
+    while position < len(data):
+        (length,) = struct.unpack(">I", data[position : position + 4])
+        kind = data[position + 4 : position + 8]
+        body = data[position + 8 : position + 8 + length]
+        if kind == b"IHDR":
+            width, height, depth, color = struct.unpack(">IIBB", body[:10])
+            assert (depth, color) == (8, 6), "8-bit RGBA"
+        elif kind == b"IDAT":
+            compressed += body
+        position += 12 + length
+    raw = zlib.decompress(compressed)
+    stride = width * 4
+    rows: list[bytearray] = []
+    previous = bytearray(stride)
+    for row in range(height):
+        start = row * (stride + 1)
+        kind, line = raw[start], bytearray(raw[start + 1 : start + 1 + stride])
+        for i in range(stride):
+            left = line[i - 4] if i >= 4 else 0
+            up = previous[i]
+            corner = previous[i - 4] if i >= 4 else 0
+            if kind == 1:
+                line[i] = (line[i] + left) & 0xFF
+            elif kind == 2:
+                line[i] = (line[i] + up) & 0xFF
+            elif kind == 3:
+                line[i] = (line[i] + (left + up) // 2) & 0xFF
+            elif kind == 4:
+                estimate = left + up - corner
+                near = min(
+                    (abs(estimate - left), 0, left),
+                    (abs(estimate - up), 1, up),
+                    (abs(estimate - corner), 2, corner),
+                )[2]
+                line[i] = (line[i] + near) & 0xFF
+        rows.append(line)
+        previous = line
+    return width, height, b"".join(rows)

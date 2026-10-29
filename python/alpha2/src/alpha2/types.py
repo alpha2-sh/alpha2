@@ -2046,7 +2046,9 @@ class ShapeGeometryRectangle(TypedDict):
     Default: `{"mode":"constant","value":0}`.
     """
     size: Animated[Vec2]
-    """Full width and height, before rotation. Non-negative."""
+    """Full width and height, before rotation, per axis: x a fraction of
+    the picture's width, y of its height. Non-negative.
+    """
     type: Literal["rectangle"]
 
 
@@ -2061,7 +2063,9 @@ class ShapeGeometryEllipse(TypedDict):
     Default: `{"mode":"constant","value":0}`.
     """
     size: Animated[Vec2]
-    """Full width and height, before rotation. Non-negative."""
+    """Full width and height, before rotation, per axis: x a fraction of
+    the picture's width, y of its height. Non-negative.
+    """
     type: Literal["ellipse"]
 
 
@@ -2148,7 +2152,9 @@ class ShapeItemRectangle(TypedDict):
     Default: `{"mode":"constant","value":0}`.
     """
     size: Animated[Vec2]
-    """Full width and height, before rotation. Non-negative."""
+    """Full width and height, before rotation, per axis: x a fraction of
+    the picture's width, y of its height. Non-negative.
+    """
     type: Literal["rectangle"]
 
 
@@ -2163,7 +2169,9 @@ class ShapeItemEllipse(TypedDict):
     Default: `{"mode":"constant","value":0}`.
     """
     size: Animated[Vec2]
-    """Full width and height, before rotation. Non-negative."""
+    """Full width and height, before rotation, per axis: x a fraction of
+    the picture's width, y of its height. Non-negative.
+    """
     type: Literal["ellipse"]
 
 

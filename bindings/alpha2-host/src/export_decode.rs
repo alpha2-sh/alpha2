@@ -239,8 +239,8 @@ impl Host {
                 .allocated_threads
                 .saturating_sub(usize::try_from(codec_threads.encoder_threads).unwrap_or(0));
             codec_threads.encoder_threads = encoder_threads;
-            codec_threads.allocated_threads = decode_assigned
-                .saturating_add(usize::try_from(encoder_threads).unwrap_or(0));
+            codec_threads.allocated_threads =
+                decode_assigned.saturating_add(usize::try_from(encoder_threads).unwrap_or(0));
         }
         ExportCodecSplit {
             hardware_decode,

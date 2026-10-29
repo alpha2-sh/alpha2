@@ -1,0 +1,85 @@
+{
+  "cases": [
+    {
+      "expected": "{\"baselines\":{\"first\":0.9048148393630981,\"last\":0.9048148393630981},\"content\":{\"bottom\":0.9198148250579834,\"left\":0.4510696530342102,\"right\":0.5489303469657898,\"top\":0.8598148226737976},\"ink\":{\"bottom\":0.9152151942253113,\"left\":0.4512893557548523,\"right\":0.5461151003837585,\"top\":0.8668265342712402},\"layout\":{\"bottom\":0.9200000166893005,\"left\":0.05000000074505806,\"right\":0.949999988079071,\"top\":0.8598148226737976},\"lineCount\":1}",
+      "generator": {
+        "text": "Alpha2",
+        "type": "text"
+      },
+      "height": 1080,
+      "name": "one-line-centre",
+      "width": 1920
+    },
+    {
+      "expected": "{\"baselines\":{\"first\":0.17999999225139618,\"last\":0.40400001406669617},\"content\":{\"bottom\":0.4360000193119049,\"left\":0.10000000149011612,\"right\":0.49961671233177185,\"top\":0.10000000149011612},\"ink\":{\"bottom\":0.40513283014297485,\"left\":0.10035156458616257,\"right\":0.4985400438308716,\"top\":0.11921875923871994},\"layout\":{\"bottom\":0.43611112236976624,\"left\":0.10000000149011612,\"right\":0.5,\"top\":0.10000000149011612},\"lineCount\":3}",
+      "generator": {
+        "style": {
+          "align": "start",
+          "anchor": {
+            "x": 0,
+            "y": 0
+          },
+          "font_size": 0.08,
+          "line_height": 1.4,
+          "max_width": 0.4,
+          "position": {
+            "x": 0.1,
+            "y": 0.1
+          }
+        },
+        "text": "Alpha2 wraps a longer line of text here",
+        "type": "text"
+      },
+      "height": 1080,
+      "name": "wrapped-loose-lines",
+      "width": 1920
+    },
+    {
+      "expected": "{\"baselines\":{\"first\":0.8691250085830688,\"last\":0.9096249938011169},\"content\":{\"bottom\":0.9197500348091125,\"left\":0.6690722703933716,\"right\":0.949999988079071,\"top\":0.8387500047683716},\"ink\":{\"bottom\":0.910102903842926,\"left\":0.6730273962020874,\"right\":0.9485644102096558,\"top\":0.8434829115867615},\"layout\":{\"bottom\":0.9200000166893005,\"left\":0.05000000074505806,\"right\":0.949999988079071,\"top\":0.8387500047683716},\"lineCount\":2}",
+      "generator": {
+        "style": {
+          "align": "end",
+          "font_size": 0.06,
+          "letter_spacing": 0.2
+        },
+        "text": "Spaced\nout",
+        "type": "text"
+      },
+      "height": 1920,
+      "name": "portrait-letter-spaced",
+      "width": 1080
+    },
+    {
+      "expected": "{\"baselines\":{\"first\":0.8794444799423218,\"last\":0.8794444799423218},\"content\":{\"bottom\":0.9191667437553406,\"left\":0.407958984375,\"right\":0.592041015625,\"top\":0.779722273349762},\"ink\":{\"bottom\":0.9014444947242737,\"left\":0.41230273246765137,\"right\":0.5876972675323486,\"top\":0.7940790057182312},\"layout\":{\"bottom\":0.9200000166893005,\"left\":0.04453124850988388,\"right\":0.9554687738418579,\"top\":0.779722273349762},\"lineCount\":1}",
+      "generator": {
+        "style": {
+          "background": {
+            "color": "#202020",
+            "padding": 0.02
+          },
+          "font_size": 0.1,
+          "outline": {
+            "color": "#000000",
+            "width": 0.08
+          }
+        },
+        "text": "Boxed",
+        "type": "text"
+      },
+      "height": 720,
+      "name": "outline-and-background",
+      "width": 1280
+    },
+    {
+      "expected": "{\"baselines\":{\"first\":0.9038889408111572,\"last\":0.9038889408111572},\"content\":{\"bottom\":0.9188889265060425,\"left\":0.5,\"right\":0.5,\"top\":0.8588889241218567},\"ink\":null,\"layout\":{\"bottom\":0.9200000166893005,\"left\":0.05000000074505806,\"right\":0.949999988079071,\"top\":0.8588889241218567},\"lineCount\":1}",
+      "generator": {
+        "text": "   ",
+        "type": "text"
+      },
+      "height": 360,
+      "name": "empty-ink",
+      "width": 640
+    }
+  ],
+  "font": "tests/fonts/Alpha2Fixture.ttf"
+}

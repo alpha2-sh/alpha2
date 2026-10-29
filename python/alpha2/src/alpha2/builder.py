@@ -23,6 +23,8 @@ from . import _native
 
 if TYPE_CHECKING:
     from .types import (
+        Animated,
+        AnimatedPoint,
         ClipEffect,
         CompositionNode,
         Easing,
@@ -30,6 +32,8 @@ if TYPE_CHECKING:
         Project,
         Rgb,
         TextStyle,
+        Vec2,
+        VisualProperties,
     )
 
 __all__ = [
@@ -41,12 +45,15 @@ __all__ = [
     "Ticks",
     "Time",
     "TrackBuilder",
+    "effect",
+    "lint_project",
     "seconds_to_ticks",
     "sequential_ids",
     "ticks",
     "ticks_to_seconds",
     "to_ticks",
     "validate_project",
+    "visual",
 ]
 
 TICKS_PER_SECOND: int = _native.TICKS_PER_SECOND
@@ -108,6 +115,96 @@ def validate_project(project: Mapping[str, Any]) -> list[str]:
     except (TypeError, ValueError) as error:
         return [f"project cannot be written as JSON: {error}"]
     return list(_native.validate_project_json(text))
+
+
+def lint_project(project: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """What a valid ``project`` probably does not mean to do, as the engine's ``Project::lint``
+    finds it: each issue a dict whose ``kind`` names it, such as ``unreached_keyframe`` (a
+    keyframe no frame reaches, which is how a keyframe in the wrong time base shows),
+    ``hidden_clip`` or ``short_transition``. An issue never blocks an export.
+
+    Raises ``ValueError`` naming the problem for a project that does not validate.
+    """
+    problems = validate_project(project)
+    if problems:
+        raise ValueError(f"invalid project: {'; '.join(problems)}")
+    text = json.dumps(project, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+    return cast("list[dict[str, Any]]", json.loads(_native.lint_project_json(text)))
+
+
+def visual(
+    *,
+    position: tuple[float, float]
+    | Vec2
+    | AnimatedPoint
+    | Animated[tuple[float, float]]
+    | None = None,
+    anchor: tuple[float, float] | Vec2 | None = None,
+    scale: float
+    | tuple[float, float]
+    | Vec2
+    | Animated[Vec2]
+    | Animated[float]
+    | Animated[tuple[float, float]]
+    | None = None,
+    rotation: float | Animated[float] | None = None,
+    opacity: float | Animated[float] | None = None,
+) -> VisualProperties:
+    """A clip's ``visual``, with only the fields given: the others take their defaults (the source
+    centred on the canvas, unscaled, unrotated and opaque).
+
+    ``position`` (normalized canvas coordinates) and ``anchor`` (normalized source coordinates)
+    take ``(x, y)``; ``scale`` takes one number for both axes or ``(x, y)``; ``rotation`` is
+    clockwise degrees. Every field but ``anchor`` may be animated (:func:`alpha2.keyframes`, keyed
+    in timeline time), its keyframe values written the same ways.
+    """
+    from .values import map_values, point  # here: values imports this module
+
+    def scaled(value: Any) -> Vec2:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return {"x": value, "y": value}
+        return point(value)
+
+    properties: dict[str, Any] = {}
+    if position is not None:
+        properties["position"] = map_values(position, point)
+    if anchor is not None:
+        properties["anchor"] = point(anchor)
+    if scale is not None:
+        properties["scale"] = map_values(scale, scaled)
+    if rotation is not None:
+        properties["rotation_degrees"] = map_values(rotation, lambda degrees: degrees)
+    if opacity is not None:
+        properties["opacity"] = map_values(opacity, lambda alpha: alpha)
+    return cast("VisualProperties", properties)
+
+
+def effect(
+    id: str,
+    /,
+    version: int = 1,
+    *,
+    resources: Mapping[str, str] | None = None,
+    **params: Any,
+) -> ClipEffect:
+    """An invocation of the effect ``id`` at definition ``version`` (every built-in effect is at
+    1), for :meth:`TrackBuilder.clip`'s ``effects``, :meth:`TrackBuilder.transition` or a
+    composition's effect node.
+
+    Each of ``params`` goes through :func:`alpha2.fx.param`: an ``fx`` value, or a plain value that
+    is not ambiguous (a ``float``, a ``bool``, an ``(x, y)`` pair, a hex color), constant or keyed
+    (in composition time in a clip's effects, timeline time in a transition). Parameters left out
+    take the definition's defaults. ``resources`` names the effect's external resources (a LUT)
+    by the project's resource ids.
+    """
+    from . import effect_values
+
+    invocation: dict[str, Any] = {"id": id, "version": version}
+    if params:
+        invocation["params"] = {name: effect_values.param(value) for name, value in params.items()}
+    if resources:
+        invocation["resources"] = dict(resources)
+    return cast("ClipEffect", invocation)
 
 
 IdKind = Literal["source", "track", "clip", "composition"]
@@ -336,9 +433,14 @@ class TrackBuilder:
         """Places a clip of ``source``; returns its id.
 
         ``source_duration`` defaults to ``duration`` (untouched speed); twice ``duration`` plays
-        twice as fast. With ``effects``, a composition chaining them is added to the project and
-        the clip shows it. ``fields`` are any other clip fields: ``visual``, ``composition``,
-        ``blend_mode``, ``masks``, and so on.
+        twice as fast. With ``effects`` (:func:`alpha2.effect`), a composition chaining them is
+        added to the project and the clip shows it. ``fields`` are any other clip fields:
+        ``visual`` (:func:`alpha2.visual`), ``composition``, ``blend_mode``, ``masks``, and so on.
+
+        Keyframes are keyed in three time bases (the README's "Time bases"): a clip's ``visual``
+        and ``masks`` in timeline time, from the project's start; its ``effects`` in composition
+        time, from the clip's start; a generated source's shapes or layout in picture time, the
+        source's own time that ``source_in`` and ``source_duration`` select.
 
         Raises ``ValueError`` for ``effects`` together with a ``composition``, a field the builder
         sets itself, or a time that is not finite; nothing is added then.

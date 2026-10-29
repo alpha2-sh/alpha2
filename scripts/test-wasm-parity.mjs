@@ -334,3 +334,29 @@ measurer.free();
 console.log(
   `verified ${layoutGolden.cases.length} layouts measure the same in wasm and natively`,
 );
+
+// Text: the browser module measures the pinned text generators to the same bits as natively and
+// as the Python package, which registers the font file by its stem.
+const textGolden = JSON.parse(
+  await readFile(join(root, "tests", "golden", "text_measure.json"), "utf8"),
+);
+const textMeasurer = new wasm.WasmTextMeasurer();
+textMeasurer.addFontFile(
+  "Alpha2Fixture",
+  await readFile(join(root, textGolden.font)),
+);
+for (const textCase of textGolden.cases) {
+  assert.equal(
+    textMeasurer.measure(
+      JSON.stringify(textCase.generator),
+      textCase.width,
+      textCase.height,
+    ),
+    textCase.expected,
+    textCase.name,
+  );
+}
+textMeasurer.free();
+console.log(
+  `verified ${textGolden.cases.length} texts measure the same in wasm and natively`,
+);

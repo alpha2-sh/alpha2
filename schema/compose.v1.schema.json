@@ -6280,7 +6280,7 @@
             },
             "size": {
               "$ref": "#/$defs/Animated_Vec2",
-              "description": "Full width and height, before rotation. Non-negative."
+              "description": "Full width and height, before rotation, per axis: x a fraction of\nthe picture's width, y of its height. Non-negative."
             },
             "type": {
               "const": "rectangle",
@@ -6312,7 +6312,7 @@
             },
             "size": {
               "$ref": "#/$defs/Animated_Vec2",
-              "description": "Full width and height, before rotation. Non-negative."
+              "description": "Full width and height, before rotation, per axis: x a fraction of\nthe picture's width, y of its height. Non-negative."
             },
             "type": {
               "const": "ellipse",
@@ -6499,7 +6499,7 @@
             },
             "size": {
               "$ref": "#/$defs/Animated_Vec2",
-              "description": "Full width and height, before rotation. Non-negative."
+              "description": "Full width and height, before rotation, per axis: x a fraction of\nthe picture's width, y of its height. Non-negative."
             },
             "type": {
               "const": "rectangle",
@@ -6531,7 +6531,7 @@
             },
             "size": {
               "$ref": "#/$defs/Animated_Vec2",
-              "description": "Full width and height, before rotation. Non-negative."
+              "description": "Full width and height, before rotation, per axis: x a fraction of\nthe picture's width, y of its height. Non-negative."
             },
             "type": {
               "const": "ellipse",

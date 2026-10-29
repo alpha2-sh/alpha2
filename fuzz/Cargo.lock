@@ -49,6 +49,7 @@ dependencies = [
  "alpha2-eval",
  "alpha2-geometry",
  "alpha2-gpu",
+ "alpha2-layout",
  "alpha2-media",
  "alpha2-model",
  "alpha2-render",
@@ -58,7 +59,6 @@ dependencies = [
  "libm",
  "serde",
  "serde_json",
- "taffy",
  "web-time",
  "wgpu",
 ]
@@ -109,7 +109,6 @@ dependencies = [
  "alpha2-geometry",
  "alpha2-media",
  "alpha2-model",
- "alpha2-render",
  "alpha2-text",
  "alpha2-time",
  "libfuzzer-sys",
@@ -133,6 +132,20 @@ version = "0.4.6"
 dependencies = [
  "web-time",
  "wgpu",
+]
+
+[[package]]
+name = "alpha2-layout"
+version = "0.4.6"
+dependencies = [
+ "alpha2-eval",
+ "alpha2-geometry",
+ "alpha2-media",
+ "alpha2-model",
+ "alpha2-text",
+ "alpha2-time",
+ "serde_json",
+ "taffy",
 ]
 
 [[package]]

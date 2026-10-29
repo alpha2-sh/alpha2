@@ -1,8 +1,7 @@
 #![no_main]
 
-use alpha2_engine::measure_layout;
+use alpha2_engine::{PictureSize, measure_layout};
 use alpha2_model::{Generator, LayoutNode};
-use alpha2_render::RenderSize;
 use alpha2_text::{TextFont, TextRasterizer};
 use alpha2_time::MediaTime;
 use libfuzzer_sys::fuzz_target;
@@ -40,7 +39,7 @@ fuzz_target!(|data: &[u8]| {
     }
     .validate_on(width, height)
     .is_ok();
-    let size = RenderSize::new(width, height).expect("a size within the limits");
+    let size = PictureSize::new(width, height).expect("a size within the limits");
     let Ok(bounds) = measure_layout(rasterizer(), &root, time, size, (width, height)) else {
         return;
     };

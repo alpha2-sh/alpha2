@@ -40,6 +40,111 @@ print(result["output"], result["videoPipeline"], result["frames"])
 - Options you write use snake_case (`loudness={"target_lufs": -14, ...}`); what the host reports
   keeps the protocol's camelCase keys (`result["effectiveRange"]`).
 
+## Authoring helpers
+
+The document is plain dicts, and the helpers write them: values, effects, a clip's `visual`,
+layouts and shapes. They write the document's own field names, so a helper and a hand-written dict
+mix freely, and `validate_project` checks the result with the engine's messages.
+
+```python
+from alpha2 import effect, fx, key, keyframes, visual
+from alpha2.layout import box, layout, text
+from alpha2.shapes import circle, fill, shapes
+
+card = project.generated(
+    layout(
+        box(
+            text("Hello", font_size="40px", line_height=1.4),
+            padding="12px 20px",
+            background="#1e2230",
+            border_radius="16px",
+        )
+    )
+)
+project.video_track().clip(
+    card,
+    at=0,
+    duration=3,
+    visual=visual(opacity=keyframes(key(0, 0.0), key(0.5, 1.0)), scale=1.2),
+    effects=[effect("alpha2.effect.gaussian-blur", radius=0.002)],
+)
+dot = project.generated(shapes(circle((0.5, 0.5), 0.2, picture=(1280, 720)), fill("#ffb020")))
+```
+
+- `key(at, value)` takes `at` in seconds or `alpha2.Ticks`; `keyframes(*keys)` refuses keys out of
+  order instead of sorting them. Every other field takes a plain value, which becomes a constant.
+- An effect parameter is typed in the document. `fx.param` (which `effect` applies) lifts a
+  `float`, a `bool`, an `(x, y)` pair and a hex color; an `int` or a 4-tuple is ambiguous and raises
+  `TypeError` naming the constructors (`fx.scalar(1.0)` or `fx.enum(1)`, `fx.vec4` or `fx.color`).
+- `alpha2.layout` is the TypeScript `alpha2/layout` builder: `box(*children, **props)`,
+  `text(content, **props)`, `shape(items, **props)`. Length and CSS strings are not parsed in
+  Python; the engine reports a bad one.
+
+### Units
+
+| What | Unit |
+| --- | --- |
+| Positions: a clip's `position` and `anchor`, a shape's `center`, path vertices | Per axis: x a fraction of the width, y of the height |
+| Sizes of shapes (`rect`, `ellipse`) | Per axis, as positions: `(0.5, 0.5)` is round only on a square picture |
+| Lengths: corner radii, stroke widths, dashes, blur radii, layout numbers | A fraction of the picture's shorter side |
+| Font sizes (text generators, layouts) | A fraction of the picture's shorter side, or `"40px"` of the canvas in a layout |
+| Letter spacing, outline width | A fraction of the font size |
+
+`circle(center, diameter, picture=(w, h))` gives a round ellipse: the diameter is a shorter-side
+fraction, and `picture` is the size of what the shapes draw on (the canvas for a shapes generator,
+the content box for a shape inside a layout box), so it has no default.
+
+### Time bases
+
+| Owner | Keyed in | Why |
+| --- | --- | --- |
+| A clip's `visual`, its masks, a transition | Timeline time, from the project's start | They place the clip on the timeline. |
+| A composition's settings (a clip's `effects`) | Composition time, from the clip's start | The composition moves with the clip that shows it. |
+| Shapes and layout generators | Picture time: the source time a clip selects | A generated picture is a source, trimmed and placed by its clips as a video file is. |
+
+A keyframe in the wrong base usually falls outside the time its owner is shown.
+`alpha2.lint_project(document)` reports each keyframe no frame reaches as `unreached_keyframe`,
+with its owner, property and time.
+
+### Layers
+
+A track shows one clip at a time: clips on one track may not overlap, except where a transition
+joins them. Overlapping layers are one track each, the later track drawn on top. For many layers in
+one place, use `compose.Stack`, a composition `merge` node (up to 32 layers in one clip), or one
+shapes or layout generator that draws them all.
+
+### Animated text
+
+A layout `text` takes keyframes of strings, so a count-up is one clip:
+
+```python
+count = keyframes(*(key(i / 30, str(i)) for i in range(101)))
+counter = project.generated(layout(box(text(count, font_size=0.2), justify_content="center")))
+```
+
+Text holds from one key to the next: `text` writes `key`'s default `linear` as `hold`, and refuses
+any other interpolation.
+
+### Measure text
+
+`alpha2.TextMeasurer(fonts)` measures text and layout generators with the engine's own placement
+code and without a GPU. Give it the font files an export gets, in the same order: it registers the
+same faces (every face of a `.ttc`).
+
+```python
+measurer = alpha2.TextMeasurer(["fonts/Inter.ttc"])
+bounds = measurer.layout(card_layout, picture=(1280, 720))
+title = bounds["nodes"][1]
+print(title["border"], title["lineCount"], title["overflow"], title["baselines"])
+words = measurer.text({"type": "text", "text": "Hi"}, canvas=(1280, 720))
+```
+
+Rectangles are fractions of the picture, `(0, 0)` top-left to `(1, 1)` bottom-right; `baselines`
+holds the first and last lines' alphabetic baselines as fractions of its height, to line a text up
+with another or with a shape by arithmetic. Measure at the size the picture is drawn at: at another
+size lines can break elsewhere. The measurer reads its fonts once, so a loop that shrinks a text
+until it fits is quick; measuring releases the GIL.
+
 ## Check a frame
 
 `alpha2.still` renders one frame of a project to a PNG, the frame an export draws there, without

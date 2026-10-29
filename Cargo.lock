@@ -395,10 +395,13 @@ name = "alpha2-python"
 version = "0.4.6"
 dependencies = [
  "alpha2-compose",
+ "alpha2-layout",
  "alpha2-media",
  "alpha2-model",
+ "alpha2-text",
  "alpha2-time",
  "pyo3",
+ "serde_json",
 ]
 
 [[package]]

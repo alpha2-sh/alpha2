@@ -15,7 +15,6 @@ alpha2-extensions = { path = "../extensions" }
 alpha2-geometry = { path = "../crates/alpha2-geometry" }
 alpha2-media = { path = "../crates/alpha2-media" }
 alpha2-model = { path = "../crates/alpha2-model" }
-alpha2-render = { path = "../crates/alpha2-render" }
 alpha2-text = { path = "../bindings/alpha2-text" }
 alpha2-time = { path = "../crates/alpha2-time" }
 libfuzzer-sys = "0.4"

@@ -9,7 +9,8 @@
  * tuple the sides object, an `[x, y]` tuple a vector. Lengths are written as the document writes
  * them: a number is a fraction of the picture's shorter side, `"12px"` pixels of the project
  * canvas, `"50%"` a percent of the parent's content box. Text style (`font_family`, `font_size`,
- * `color`, `line_height`, `text_align`, `outline`) may be set on any box and is inherited. Its
+ * `font_weight`, `color`, `line_height`, `letter_spacing`, `text_align`, `outline`) may be set on
+ * any box and is inherited. Its
  * output is a plain document that `validateProject` accepts; a CSS value string it cannot read
  * throws, with the parser's message.
  */
@@ -172,8 +173,12 @@ export type Offset =
 export interface TextStyleProps {
   readonly font_family?: string;
   readonly font_size?: Value<Size>;
+  /** The weight the family's faces are matched by, in `[1, 1000]`. Not animated. */
+  readonly font_weight?: number;
   readonly color?: Color;
   readonly line_height?: number;
+  /** Space after each character, as a fraction of the font size, in `[-0.5, 1]`. Not animated. */
+  readonly letter_spacing?: number;
   readonly text_align?: TextAlign;
   readonly outline?: TextOutline;
 }

@@ -2646,7 +2646,8 @@ export type ShapeGeometry =
        */
       readonly rotation_degrees?: Animated<number>;
       /**
-       * Full width and height, before rotation. Non-negative.
+       * Full width and height, before rotation, per axis: x a fraction of
+       * the picture's width, y of its height. Non-negative.
        */
       readonly size: Animated<Vec2>;
       /**
@@ -2666,7 +2667,8 @@ export type ShapeGeometry =
        */
       readonly rotation_degrees?: Animated<number>;
       /**
-       * Full width and height, before rotation. Non-negative.
+       * Full width and height, before rotation, per axis: x a fraction of
+       * the picture's width, y of its height. Non-negative.
        */
       readonly size: Animated<Vec2>;
       /**
@@ -2781,7 +2783,8 @@ export type ShapeItem =
        */
       readonly rotation_degrees?: Animated<number>;
       /**
-       * Full width and height, before rotation. Non-negative.
+       * Full width and height, before rotation, per axis: x a fraction of
+       * the picture's width, y of its height. Non-negative.
        */
       readonly size: Animated<Vec2>;
       /**
@@ -2801,7 +2804,8 @@ export type ShapeItem =
        */
       readonly rotation_degrees?: Animated<number>;
       /**
-       * Full width and height, before rotation. Non-negative.
+       * Full width and height, before rotation, per axis: x a fraction of
+       * the picture's width, y of its height. Non-negative.
        */
       readonly size: Animated<Vec2>;
       /**

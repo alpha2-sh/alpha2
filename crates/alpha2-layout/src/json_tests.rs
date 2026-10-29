@@ -210,3 +210,52 @@ fn layout_measurements_match_the_pinned_answers() {
         std::fs::write(path, text).expect("golden written");
     }
 }
+
+/// The pinned text measurements the browser's `WasmTextMeasurer.measure` and the Python
+/// package's `TextMeasurer.text` must reproduce bit for bit (`npm run test:wasm-parity`, the
+/// package's `pytest`). Run with `ALPHA2_UPDATE_GOLDENS=1` to re-pin after an intended change.
+#[test]
+fn text_measurements_match_the_pinned_answers() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/golden/text_measure.json"
+    );
+    let mut golden: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path).expect("golden")).expect("JSON");
+    let bytes = std::fs::read(format!(
+        "{}/../../{}",
+        env!("CARGO_MANIFEST_DIR"),
+        golden["font"].as_str().expect("font")
+    ))
+    .expect("font");
+    let mut rasterizer = TextRasterizer::empty();
+    rasterizer.add_font(fixture(bytes)).expect("valid font");
+    let update =
+        std::env::var_os("ALPHA2_UPDATE_GOLDENS").as_deref() == Some(std::ffi::OsStr::new("1"));
+    for case in golden["cases"].as_array_mut().expect("cases") {
+        let number =
+            |key: &str| u32::try_from(case[key].as_u64().expect("a size")).expect("a side");
+        let measured = measure_text_json(
+            &rasterizer,
+            &case["generator"].to_string(),
+            number("width"),
+            number("height"),
+        )
+        .expect("measures");
+        if update {
+            case["expected"] = serde_json::Value::String(measured);
+        } else {
+            assert_eq!(
+                case["expected"].as_str(),
+                Some(measured.as_str()),
+                "{}",
+                case["name"]
+            );
+        }
+    }
+    if update {
+        let mut text = serde_json::to_string_pretty(&golden).expect("JSON");
+        text.push('\n');
+        std::fs::write(path, text).expect("golden written");
+    }
+}

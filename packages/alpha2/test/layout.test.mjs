@@ -1,6 +1,7 @@
 // The layout builder's shorthands and the measuring wrapper. Measuring itself is the engine's,
 // checked against the native engine by `npm run test:wasm-parity`.
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { box, layout, measureLayout, shape, text } from "../dist/layout.js";
@@ -106,6 +107,36 @@ test("props become the document, CSS value strings as written", () => {
   assert.equal(root.opacity.mode, "keyframes");
   // The root is the picture: the box sits in one.
   assert.deepEqual(validateProject(projectOf(layout(box({}, root)))), []);
+});
+
+test("the builder writes the shared cases' documents, as the Python builder does", async () => {
+  // tests/cases/layout-builder-cases.json is asserted by python/alpha2/tests/test_layout.py too.
+  const { cases } = JSON.parse(
+    await readFile(
+      new URL(
+        "../../../tests/cases/layout-builder-cases.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  const build = (call) => {
+    switch (call.builder) {
+      case "box":
+        return box(call.props, ...(call.children ?? []).map(build));
+      case "text":
+        return text(call.content, call.props);
+      case "shape":
+        return shape(call.items, call.props);
+      default:
+        throw new Error(`unknown builder ${call.builder}`);
+    }
+  };
+  for (const { name, root, document } of cases) {
+    const generator = layout(build(root));
+    assert.deepEqual(generator, document, name);
+    assert.deepEqual(validateProject(projectOf(generator)), [], name);
+  }
 });
 
 test("a CSS value string the engine cannot read throws its message", () => {

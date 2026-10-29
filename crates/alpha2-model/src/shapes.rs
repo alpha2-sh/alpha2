@@ -107,7 +107,8 @@ pub enum ShapeGeometry {
 pub struct RectangleGeometry {
     /// Centre.
     pub center: AnimatedPoint,
-    /// Full width and height, before rotation. Non-negative.
+    /// Full width and height, before rotation, per axis: x a fraction of
+    /// the picture's width, y of its height. Non-negative.
     pub size: Animated<Vec2>,
     /// Corner radius, as a fraction of the shorter side. Non-negative; a
     /// radius past half the rectangle is capped.
@@ -126,7 +127,8 @@ pub struct RectangleGeometry {
 pub struct EllipseGeometry {
     /// Centre.
     pub center: AnimatedPoint,
-    /// Full width and height, before rotation. Non-negative.
+    /// Full width and height, before rotation, per axis: x a fraction of
+    /// the picture's width, y of its height. Non-negative.
     pub size: Animated<Vec2>,
     /// Clockwise rotation about the centre, in degrees.
     #[serde(default = "zero")]

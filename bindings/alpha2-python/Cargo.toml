@@ -1,7 +1,7 @@
 [package]
 name = "alpha2-python"
 version.workspace = true
-description = "The native module of the alpha2 Python package: project validation, the engine's export policy, and the compose compiler."
+description = "The native module of the alpha2 Python package: project validation, the engine's export policy, etc."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -16,9 +16,12 @@ doctest = false
 
 [dependencies]
 alpha2-compose.workspace = true
+alpha2-layout.workspace = true
 alpha2-media.workspace = true
 alpha2-model.workspace = true
+alpha2-text.workspace = true
 alpha2-time.workspace = true
+serde_json.workspace = true
 # abi3: one wheel per platform for every CPython from 3.11. `extension-module` leaves libpython
 # unlinked, as an extension module must be.
 pyo3 = { version = "0.30.1", features = ["abi3-py311", "extension-module"] }
