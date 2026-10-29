@@ -146,7 +146,10 @@ async function exportTone(projectRate, total, sizes, sinkOptions) {
   });
   const fileRate = (await input.getPrimaryAudioTrack()).sampleRate;
   input.dispose();
-  const encoded = given.splice(0);
+  // The sink leads AAC with a frame of silence, which Safari's encoder drops in place of the audio
+  // (aac-encoder-delay.test.mjs).
+  const [lead, ...encoded] = given.splice(0);
+  assert.ok(lead.planes.every((plane) => plane.every((value) => value === 0)));
   const length = encoded.reduce(
     (sum, sample) => sum + sample.planes[0].length,
     0,

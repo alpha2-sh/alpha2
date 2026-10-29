@@ -1840,8 +1840,10 @@ const ENCODER_SAMPLE_RATES = {
  * The rate this browser encodes `codec` audio of a project at `sampleRate` with, by the rule a
  * native host follows: the project rate when the browser's encoder takes it, else the lowest rate
  * the codec carries above it that the encoder takes, else the highest below it; `null` when the
- * encoder takes none. Pass it to {@link MediabunnySink} as `audioSampleRate`, so every project
- * rate exports where the browser encodes the codec at all.
+ * encoder takes none. AAC is encoded at the MPEG-4 rates only, the ones a native host's FFmpeg
+ * `aac` encoder takes, and an AAC encoder that accepts a rate but puts out another (Safari's above
+ * 48 kHz) does not take it. Pass it to {@link MediabunnySink} as `audioSampleRate`, so every
+ * project rate exports where the browser encodes the codec at all.
  */
 export async function audioEncoderSampleRate(
   codec: "aac" | "opus",
@@ -1852,9 +1854,9 @@ export async function audioEncoderSampleRate(
   },
 ): Promise<number | null> {
   const rate = options.sampleRate;
-  const carried = ENCODER_SAMPLE_RATES[codec];
+  const carried: readonly number[] = ENCODER_SAMPLE_RATES[codec];
   const candidates = new Set([
-    rate,
+    ...(codec === "opus" || carried.includes(rate) ? [rate] : []),
     ...carried.filter((candidate) => candidate > rate),
     ...carried.filter((candidate) => candidate < rate).reverse(),
   ]);
@@ -1863,10 +1865,268 @@ export async function audioEncoderSampleRate(
       numberOfChannels: options.numberOfChannels,
       sampleRate: candidate,
       quality: new Quality({ bitrate: options.bitrate }),
+      ...(codec === "aac" ? { fullCodecString: AAC_CODEC_STRING } : {}),
     }).catch(() => false);
-    if (supported) return candidate;
+    if (!supported) continue;
+    if (codec === "opus") return candidate;
+    const { rate: putOut } = await probeAacEncoder({
+      ...options,
+      sampleRate: candidate,
+    });
+    if (putOut === undefined || putOut === candidate) return candidate;
   }
   return null;
+}
+
+/**
+ * The AAC profile {@link MediabunnySink} encodes at every rate: AAC-LC, as a native host's FFmpeg
+ * `aac` encoder does, where mediabunny would pick HE-AAC at 24 kHz and below.
+ */
+const AAC_CODEC_STRING = "mp4a.40.2";
+/** The frames in one AAC-LC frame. */
+const AAC_FRAME_FRAMES = 1_024;
+/**
+ * The rates AAC's two-byte `AudioSpecificConfig` names by index (ISO/IEC 14496-3,
+ * `samplingFrequencyIndex`).
+ */
+const AAC_SAMPLING_FREQUENCIES = [
+  96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000,
+  12_000, 11_025, 8_000, 7_350,
+];
+
+/**
+ * AAC-LC's two-byte `AudioSpecificConfig`; undefined for a rate without an index or a channel
+ * count without a channel configuration (7, or more than 8).
+ */
+function aacLcAudioSpecificConfig(
+  sampleRate: number,
+  numberOfChannels: number,
+): Uint8Array | undefined {
+  const frequency = AAC_SAMPLING_FREQUENCIES.indexOf(sampleRate);
+  const channels =
+    numberOfChannels === 8 ? 7 : numberOfChannels <= 6 ? numberOfChannels : 0;
+  if (frequency < 0 || channels < 1) return undefined;
+  return new Uint8Array([
+    (2 << 3) | (frequency >> 1),
+    ((frequency & 1) << 7) | (channels << 3),
+  ]);
+}
+
+/** The low-passed noise burst an AAC delay probe encodes, in frames. */
+const AAC_DELAY_PROBE_FRAMES = 2_048;
+/** The longest delay a probe looks for, in frames; the silence after the burst is this long. */
+const AAC_DELAY_MAX_FRAMES = 8_192;
+/** How long a delay probe has to encode and decode the burst. */
+const AAC_DELAY_PROBE_TIMEOUT_MS = 1_500;
+/** How closely the decoded audio must match the burst at the lag found for it to count. */
+const AAC_DELAY_MIN_CORRELATION = 0.5;
+
+/** What an AAC-LC encoder made of a probe: see {@link probeAacEncoder}. */
+interface AacEncoderProbe {
+  /** The rate its stream declares; undefined when it put out nothing. */
+  readonly rate?: number;
+  /** Its priming in frames; 0 when it was not found or the stream is at another rate. */
+  readonly delay: number;
+}
+const aacProbes = new Map<string, Promise<AacEncoderProbe>>();
+
+/**
+ * The frames of priming this browser's AAC-LC encoder puts before the audio it is given at
+ * `sampleRate` with `numberOfChannels`. WebCodecs stamps the first chunk with the first input's
+ * time although the decoded audio starts with the encoder's delay (2112 frames on Chrome's and
+ * Safari's macOS encoders), and does not say how long that is. Measured once per configuration by
+ * encoding a noise burst and finding it in what the browser's decoder makes of it; 0 where either
+ * fails.
+ */
+export async function aacEncoderDelay(options: {
+  readonly sampleRate: number;
+  readonly numberOfChannels: number;
+  readonly bitrate: number;
+}): Promise<number> {
+  return (await probeAacEncoder(options)).delay;
+}
+
+/**
+ * This browser's AAC-LC encoder at `sampleRate` with `numberOfChannels`, probed once per
+ * configuration: the rate of the stream it puts out and its priming ({@link aacEncoderDelay}).
+ */
+function probeAacEncoder(options: {
+  readonly sampleRate: number;
+  readonly numberOfChannels: number;
+  readonly bitrate: number;
+}): Promise<AacEncoderProbe> {
+  const config: AudioEncoderConfig = {
+    codec: AAC_CODEC_STRING,
+    sampleRate: options.sampleRate,
+    numberOfChannels: options.numberOfChannels,
+    bitrate: options.bitrate,
+  };
+  const key = JSON.stringify(config);
+  let probe = aacProbes.get(key);
+  if (probe === undefined) {
+    probe = measureAacEncoder(config);
+    aacProbes.set(key, probe);
+  }
+  return probe;
+}
+
+async function measureAacEncoder(
+  config: AudioEncoderConfig,
+): Promise<AacEncoderProbe> {
+  if (
+    typeof AudioEncoder === "undefined" ||
+    typeof AudioDecoder === "undefined"
+  )
+    return { delay: 0 };
+  let encoder: AudioEncoder | undefined;
+  let decoder: AudioDecoder | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), AAC_DELAY_PROBE_TIMEOUT_MS);
+  });
+  try {
+    if (!(await AudioEncoder.isConfigSupported(config)).supported)
+      return { delay: 0 };
+    let failed = false;
+    const chunks: EncodedAudioChunk[] = [];
+    let decoderConfig: AudioDecoderConfig | undefined;
+    encoder = new AudioEncoder({
+      output: (chunk, metadata) => {
+        chunks.push(chunk);
+        decoderConfig ??= metadata?.decoderConfig;
+      },
+      error: () => (failed = true),
+    });
+    encoder.configure(config);
+    // The burst follows a frame of silence, which Safari's encoder drops as it drops the first
+    // frame of any input (see `#encodeAudio`).
+    const probe = aacDelayProbe();
+    const frames =
+      AAC_FRAME_FRAMES + AAC_DELAY_PROBE_FRAMES + AAC_DELAY_MAX_FRAMES;
+    const planar = new Float32Array(frames * config.numberOfChannels);
+    for (let channel = 0; channel < config.numberOfChannels; channel += 1)
+      planar.set(probe, channel * frames + AAC_FRAME_FRAMES);
+    const input = new AudioData({
+      format: "f32-planar",
+      sampleRate: config.sampleRate,
+      numberOfFrames: frames,
+      numberOfChannels: config.numberOfChannels,
+      timestamp: 0,
+      data: planar,
+    });
+    try {
+      encoder.encode(input);
+    } finally {
+      input.close();
+    }
+    if ((await Promise.race([encoder.flush(), timedOut])) === "timeout")
+      return { delay: 0 };
+    if (failed || decoderConfig === undefined) return { delay: 0 };
+    const rate = decoderConfig.sampleRate;
+    if (rate !== config.sampleRate) return { rate, delay: 0 };
+    const planes: Float32Array[] = [];
+    decoder = new AudioDecoder({
+      output: (audio) => {
+        try {
+          if (audio.sampleRate !== config.sampleRate) failed = true;
+          const plane = new Float32Array(audio.numberOfFrames);
+          audio.copyTo(plane, { planeIndex: 0, format: "f32-planar" });
+          planes.push(plane);
+        } finally {
+          audio.close();
+        }
+      },
+      error: () => (failed = true),
+    });
+    // Safari's encoder describes its stream with a whole `ES_Descriptor`, which its own decoder
+    // refuses (mediabunny rewrites it the same way in the file).
+    const description = aacLcAudioSpecificConfig(
+      config.sampleRate,
+      config.numberOfChannels,
+    );
+    decoder.configure(
+      description === undefined
+        ? decoderConfig
+        : { ...decoderConfig, codec: AAC_CODEC_STRING, description },
+    );
+    for (const chunk of chunks) decoder.decode(chunk);
+    if ((await Promise.race([decoder.flush(), timedOut])) === "timeout")
+      return { rate, delay: 0 };
+    if (failed) return { rate, delay: 0 };
+    const decoded = new Float32Array(
+      planes.reduce((sum, plane) => sum + plane.length, 0),
+    );
+    let offset = 0;
+    for (const plane of planes) {
+      decoded.set(plane, offset);
+      offset += plane.length;
+    }
+    const lag = strongestLag(decoded, probe);
+    return {
+      rate,
+      delay: lag === null ? 0 : Math.max(0, lag - AAC_FRAME_FRAMES),
+    };
+  } catch {
+    return { delay: 0 };
+  } finally {
+    clearTimeout(timer);
+    for (const coder of [encoder, decoder]) {
+      try {
+        if (coder?.state !== "closed") coder?.close();
+      } catch {
+        // Already closed by its own failure.
+      }
+    }
+  }
+}
+
+/** The probe's burst: noise, low-passed so a lossy codec keeps most of it. */
+function aacDelayProbe(): Float32Array {
+  const probe = new Float32Array(AAC_DELAY_PROBE_FRAMES);
+  let seed = 1;
+  let smoothed = 0;
+  for (let index = 0; index < probe.length; index += 1) {
+    seed = (Math.imul(seed, 1_103_515_245) + 12_345) >>> 0;
+    smoothed += 0.5 * ((seed / 2 ** 32) * 2 - 1 - smoothed);
+    probe[index] = 0.5 * smoothed;
+  }
+  return probe;
+}
+
+/**
+ * The lag of `decoded` at which it matches `probe` best (normalized cross-correlation), up to the
+ * probe's leading frame of silence and {@link AAC_DELAY_MAX_FRAMES}; null when no lag matches it
+ * closely enough.
+ */
+function strongestLag(
+  decoded: Float32Array,
+  probe: Float32Array,
+): number | null {
+  let probeEnergy = 0;
+  for (const value of probe) probeEnergy += value * value;
+  // Sum of squares of `decoded` before each index, for each window's energy.
+  const energy = new Float64Array(decoded.length + 1);
+  for (let index = 0; index < decoded.length; index += 1)
+    energy[index + 1] = energy[index] + decoded[index] * decoded[index];
+  const lags = Math.min(
+    AAC_FRAME_FRAMES + AAC_DELAY_MAX_FRAMES,
+    decoded.length - probe.length,
+  );
+  let best: number | null = null;
+  let bestCorrelation = AAC_DELAY_MIN_CORRELATION;
+  for (let lag = 0; lag <= lags; lag += 1) {
+    const windowEnergy = energy[lag + probe.length] - energy[lag];
+    if (windowEnergy <= 0) continue;
+    let sum = 0;
+    for (let index = 0; index < probe.length; index += 1)
+      sum += decoded[lag + index] * probe[index];
+    const correlation = sum / Math.sqrt(probeEnergy * windowEnergy);
+    if (correlation > bestCorrelation) {
+      bestCorrelation = correlation;
+      best = lag;
+    }
+  }
+  return best;
 }
 
 /**
@@ -2043,6 +2303,12 @@ export class MediabunnySink
   /** When the encoder last put a frame out, or was given one while it owed none. */
   #progressAt = 0;
   readonly #audio?: AudioSampleSource;
+  readonly #audioCodec?: "aac" | "opus";
+  readonly #audioBitrate?: number;
+  /** The AAC encoder's priming, in frames at the encoder's rate: see {@link aacEncoderDelay}. */
+  #audioDelay?: Promise<number>;
+  /** Whether the AAC encoder was given its leading frame of silence: see `#encodeAudio`. */
+  #audioLeadWritten = false;
   readonly #audioRate?: number;
   readonly #audioResampler?: AudioResamplerBinding;
   #audioConverter?: EncoderRateConverter;
@@ -2139,10 +2405,15 @@ export class MediabunnySink
       if (rate !== undefined && (!Number.isSafeInteger(rate) || rate <= 0))
         throw new RangeError("audioSampleRate must be a positive integer");
       this.#audioRate = rate;
+      this.#audioCodec = options.audioCodec;
+      this.#audioBitrate = options.audioBitrate;
       this.#audioResampler = options.audioResampler;
       this.#audio = new AudioSampleSource({
         codec: options.audioCodec,
         quality: new Quality({ bitrate: options.audioBitrate }),
+        ...(options.audioCodec === "aac"
+          ? { fullCodecString: AAC_CODEC_STRING }
+          : {}),
       });
     }
     if (!this.#hasVideo && this.#audio === undefined)
@@ -2408,6 +2679,38 @@ export class MediabunnySink
 
   /** Encodes planar `channels` starting at sample `startSample` of a `sampleRate` stream. */
   async #encodeAudio(
+    channels: readonly Float32Array[],
+    startSample: number,
+    sampleRate: number,
+  ): Promise<void> {
+    if (this.#audio === undefined)
+      throw new Error("audio track is not configured");
+    // AAC's priming goes before the output's zero, where the muxer trims it (an MP4 or MOV edit
+    // list, negative Matroska block times), so the audio starts with the video; Opus states its
+    // own in its header.
+    let delay = 0;
+    if (this.#audioCodec === "aac" && this.#audioBitrate !== undefined) {
+      delay = await (this.#audioDelay ??= aacEncoderDelay({
+        sampleRate,
+        numberOfChannels: channels.length,
+        bitrate: this.#audioBitrate,
+      }));
+      // Safari's encoder drops the first frame of its input: give it a frame of silence, before
+      // zero with the priming, ahead of the audio.
+      if (!this.#audioLeadWritten) {
+        this.#audioLeadWritten = true;
+        await this.#addAudio(
+          channels.map(() => new Float32Array(AAC_FRAME_FRAMES)),
+          startSample - AAC_FRAME_FRAMES - delay,
+          sampleRate,
+        );
+      }
+    }
+    await this.#addAudio(channels, startSample - delay, sampleRate);
+  }
+
+  /** Gives the audio encoder planar `channels` at sample `startSample` of a `sampleRate` stream. */
+  async #addAudio(
     channels: readonly Float32Array[],
     startSample: number,
     sampleRate: number,

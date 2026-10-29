@@ -44,9 +44,14 @@ if (typeof AudioEncoder === "undefined" || typeof AudioDecoder === "undefined") 
     }
     input.dispose();
     const rms = Math.sqrt(sum / Math.max(1, count));
-    // The tone through a lossy codec: its level within 15 %, its length within a codec frame and
-    // its priming.
-    const ok = Math.abs(rms - AMPLITUDE / Math.SQRT2) < 0.15 * (AMPLITUDE / Math.SQRT2) && Math.abs(duration - 0.5) < 0.05;
+    // The tone through a lossy codec: its level within 15 %, its priming trimmed, and its length
+    // within 50 ms for Opus, and for AAC within two of its 1024-frame frames (the last, partly
+    // filled, and the one the encoder flushes after it; 256 ms at 8 kHz). AAC's stream is at the
+    // rate it was encoded at (Opus streams are always 48 kHz).
+    const lengthSlack = codec === "aac" ? 2048 / track.sampleRate : 0.05;
+    const ok = Math.abs(rms - AMPLITUDE / Math.SQRT2) < 0.15 * (AMPLITUDE / Math.SQRT2)
+      && Math.abs(duration - 0.5) < lengthSlack
+      && (codec !== "aac" || track.sampleRate === encoderRate);
     return { ok, fileRate: track.sampleRate, rms: Number(rms.toFixed(4)), duration: Number(duration.toFixed(4)) };
   };
   const results = {};
@@ -176,6 +181,55 @@ if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined") 
   const ran = Object.values(results).filter((value) => typeof value !== "string");
   const ok = results.webm.ok === true && ran.every((value) => value.ok) && refused !== null;
   report({ ok, results, refused });
+}
+`;
+}
+
+// AAC audio starts at the output's zero, as the video does: the browser's encoder puts its
+// priming (2112 frames on Chrome's macOS encoder, which WebCodecs does not report) before the
+// audio, and the sink places it before zero, where an MP4 or MOV edit list, or Matroska's negative
+// block times, leave it out. Chrome on Linux has no AAC encoder: the case skips there.
+export function exportAacPriming() {
+  return `
+const { aacEncoderDelay, audioEncoderSampleRate, MediabunnySink } = await import("/packages/alpha2/dist/mediabunny.js");
+const { renderOfflineAudio } = await import("/packages/alpha2/dist/audio.js");
+const mb = await import("mediabunny");
+const config = { sampleRate: 48000, numberOfChannels: 2, bitrate: 128000 };
+const rate = typeof AudioEncoder === "undefined" ? null : await audioEncoderSampleRate("aac", config);
+if (rate === null) {
+  report({ skipped: "this browser has no AAC encoder" });
+} else {
+  const delay = await aacEncoderDelay({ ...config, sampleRate: rate });
+  const results = {};
+  for (const container of ["mp4", "mov", "mkv"]) {
+    const sink = new MediabunnySink({
+      container, audioCodec: "aac", audioBitrate: 128000,
+      destination: { kind: "memory", maxBytes: 1 << 24 },
+    });
+    // Half a second of a 997 Hz tone from the first sample on.
+    await renderOfflineAudio(BigInt(rate / 2), [1024], async (start, frames) => {
+      const left = new Float32Array(frames);
+      for (let i = 0; i < frames; i += 1) left[i] = 0.25 * Math.sin((2 * Math.PI * 997 * (Number(start) + i)) / rate);
+      return { sourceId: "mix", startSample: start, generation: 0, sampleRate: rate, channels: [left, left.slice()] };
+    }, sink);
+    const input = new mb.Input({ source: new mb.BufferSource(sink.output.buffer), formats: mb.ALL_FORMATS });
+    try {
+      const track = await input.getPrimaryAudioTrack();
+      let onset = null;
+      for await (const sample of new mb.AudioSampleSink(track).samples()) {
+        const plane = new Float32Array(sample.numberOfFrames);
+        sample.copyTo(plane, { planeIndex: 0, format: "f32-planar" });
+        const at = plane.findIndex((value) => Math.abs(value) > 0.05);
+        sample.close();
+        if (at >= 0) { onset = sample.timestamp + at / track.sampleRate; break; }
+      }
+      // The tone's first loud sample, a few frames in, within a millisecond of zero.
+      results[container] = { ok: onset !== null && Math.abs(onset) < 0.001, onset };
+    } finally {
+      input.dispose();
+    }
+  }
+  report({ ok: delay > 0 && Object.values(results).every((value) => value.ok), rate, delay, results });
 }
 `;
 }

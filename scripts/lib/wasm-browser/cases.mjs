@@ -51,6 +51,7 @@ import {
   rendererWorker,
 } from "./cpu.mjs";
 import {
+  exportAacPriming,
   exportEveryContainer,
   exportEveryProjectRate,
   exportSchedule,
@@ -114,6 +115,7 @@ export const cases = {
   "fixed-audio-mix": fixedAudioMix,
   "export-every-project-rate": exportEveryProjectRate,
   "export-every-container": exportEveryContainer,
+  "export-aac-priming": exportAacPriming,
   "loudness-under-limiter": loudnessUnderLimiter,
   "text-raster-parity": textRasterParity,
   "webgl2-transparent-edges": () => transparentEdges(true),
