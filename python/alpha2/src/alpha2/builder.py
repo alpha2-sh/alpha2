@@ -31,7 +31,9 @@ if TYPE_CHECKING:
         Generator,
         Project,
         Rgb,
+        TextRun,
         TextStyle,
+        TextStylePatch,
         Vec2,
         VisualProperties,
     )
@@ -329,10 +331,12 @@ class ProjectBuilder:
         id: str | None = None,
         name: str | None = None,
         style: TextStyle | None = None,
+        styles: Mapping[str, TextStylePatch] | None = None,
     ) -> CaptionTrackBuilder:
-        """Adds a caption track in ``style`` (the defaults where absent)."""
+        """Adds a caption track in ``style`` (the defaults where absent), with named ``styles``
+        its cues take by ``style``, or by ``speaker`` when a style has the speaker's name."""
         track_id = self._claim("track", id)
-        track = CaptionTrackBuilder(track_id, name or track_id, style or {})
+        track = CaptionTrackBuilder(track_id, name or track_id, style or {}, dict(styles or {}))
         self._tracks.append(track)
         return track
 
@@ -515,10 +519,17 @@ class TrackBuilder:
 class CaptionTrackBuilder:
     """Cues of one caption track."""
 
-    def __init__(self, track_id: str, name: str, style: TextStyle) -> None:
+    def __init__(
+        self,
+        track_id: str,
+        name: str,
+        style: TextStyle,
+        styles: dict[str, TextStylePatch],
+    ) -> None:
         self._id = track_id
         self._name = name
         self._style = style
+        self._styles = styles
         self._cues: list[dict[str, Any]] = []
 
     @property
@@ -526,12 +537,29 @@ class CaptionTrackBuilder:
         """The track's id."""
         return self._id
 
-    def cue(self, text: str, *, at: Time, duration: Time) -> CaptionTrackBuilder:
-        """Shows ``text`` from ``at`` for ``duration``. Cues may be added in any order."""
+    def cue(
+        self,
+        text: str | Sequence[TextRun],
+        *,
+        at: Time,
+        duration: Time,
+        speaker: str | None = None,
+        style: str | None = None,
+    ) -> CaptionTrackBuilder:
+        """Shows ``text`` from ``at`` for ``duration``: a string, or runs whose texts joined
+        are the text (a run's ``time`` in ticks from the cue's start, for karaoke). ``speaker``
+        names who says it; ``style`` names one of the track's styles. Cues may be added in any
+        order."""
         start = to_ticks(at)
-        self._cues.append(
-            {"timeline_range": {"start": start, "end": start + to_ticks(duration)}, "text": text}
-        )
+        cue: dict[str, Any] = {
+            "timeline_range": {"start": start, "end": start + to_ticks(duration)},
+            "text": text if isinstance(text, str) else [dict(run) for run in text],
+        }
+        if speaker is not None:
+            cue["speaker"] = speaker
+        if style is not None:
+            cue["style"] = style
+        self._cues.append(cue)
         return self
 
     def _build(self) -> dict[str, Any]:
@@ -541,5 +569,9 @@ class CaptionTrackBuilder:
             "name": self._name,
             "kind": "caption",
             "clips": [],
-            "captions": {"style": self._style, "cues": cues},
+            "captions": {
+                "style": self._style,
+                **({"styles": dict(self._styles)} if self._styles else {}),
+                "cues": cues,
+            },
         }

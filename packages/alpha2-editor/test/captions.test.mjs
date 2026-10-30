@@ -257,3 +257,103 @@ test("a cue added or moved before others takes its place in time, with its id", 
   assert.equal(overlap.ok, false);
   assert.equal(overlap.error.code, "invalid_project");
 });
+
+/** A caption track holding one cue of timed words, from 1 s to 4 s, each word a second. */
+function karaokeEditor() {
+  const editor = createEditor({ document: createEmptyDocument() });
+  const second = 120000;
+  const result = editor.dispatch({
+    type: "track.add",
+    track: {
+      id: "C",
+      name: "Captions",
+      kind: "caption",
+      clips: [],
+      captions: {
+        cues: [
+          {
+            timeline_range: { start: second, end: 4 * second },
+            text: [
+              { text: "one ", time: { start: 0, end: second } },
+              { text: "two ", time: { start: second, end: 2 * second } },
+              { text: "three", time: { start: 2 * second, end: 3 * second } },
+            ],
+          },
+        ],
+      },
+    },
+  });
+  assert.equal(result.ok, true, result.error?.message);
+  return {
+    editor,
+    second,
+    id: editor.document.metadata.instanceIds["C/cues"][0],
+  };
+}
+
+test("splitting a cue rebases its runs", () => {
+  const { editor, second, id } = karaokeEditor();
+  // Cut half way through "two": it is said in both halves, cut at the split.
+  const result = editor.dispatch({
+    type: "cue.split",
+    trackId: "C",
+    instanceId: id,
+    newInstanceId: "after",
+    at: 2.5 * second,
+  });
+  assert.equal(result.ok, true, result.error?.message);
+  const [first, second_half] =
+    editor.document.project.timeline.tracks[0].captions.cues;
+  assert.deepEqual(
+    first.text.map((run) => [run.text, run.time]),
+    [
+      ["one ", { start: 0, end: second }],
+      ["two ", { start: second, end: 1.5 * second }],
+    ],
+  );
+  assert.deepEqual(second_half.timeline_range, {
+    start: 2.5 * second,
+    end: 4 * second,
+  });
+  assert.deepEqual(
+    second_half.text.map((run) => [run.text, run.time]),
+    [
+      ["two ", { start: 0, end: 0.5 * second }],
+      ["three", { start: 0.5 * second, end: 1.5 * second }],
+    ],
+  );
+  assert.deepEqual(editor.document.metadata.instanceIds["C/cues"], [
+    id,
+    "after",
+  ]);
+});
+
+test("trimming a cue start drops spoken runs", () => {
+  const { editor, second, id } = karaokeEditor();
+  const result = editor.dispatch({
+    type: "cue.trim",
+    trackId: "C",
+    instanceId: id,
+    start: 2 * second,
+    end: 4 * second,
+  });
+  assert.equal(result.ok, true, result.error?.message);
+  const [cue] = editor.document.project.timeline.tracks[0].captions.cues;
+  // "one" was said before the new start; the rest move a second earlier in the cue.
+  assert.deepEqual(
+    cue.text.map((run) => [run.text, run.time]),
+    [
+      ["two ", { start: 0, end: second }],
+      ["three", { start: second, end: 2 * second }],
+    ],
+  );
+  // A trim that leaves the cue's range is refused.
+  const refused = editor.dispatch({
+    type: "cue.trim",
+    trackId: "C",
+    instanceId: id,
+    start: 0,
+    end: 4 * second,
+  });
+  assert.equal(refused.ok, false);
+});

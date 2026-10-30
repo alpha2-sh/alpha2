@@ -337,6 +337,23 @@ pub enum ModelError {
         /// The track.
         track: TrackId,
     },
+    /// A caption cue names a style its track does not have.
+    UnknownCaptionStyle {
+        /// The track.
+        track: TrackId,
+        /// The cue's position among the track's cues.
+        cue: usize,
+        /// The style it names.
+        name: String,
+    },
+    /// A caption cue's style, its track's with the cue's patch applied, is
+    /// out of range: a font larger than a caption's, say.
+    InvalidCaptionCueStyle {
+        /// The track.
+        track: TrackId,
+        /// The cue's position among the track's cues.
+        cue: usize,
+    },
     /// A clip freezes on an instant outside its source range.
     InvalidTimeMap {
         /// The clip.
@@ -692,6 +709,14 @@ impl fmt::Display for ModelError {
             Self::InvalidCaptions { track } => {
                 write!(formatter, "track {track} has invalid captions")
             }
+            Self::UnknownCaptionStyle { track, cue, name } => write!(
+                formatter,
+                "cue {cue} of track {track} names style {name:?}, which the track does not have"
+            ),
+            Self::InvalidCaptionCueStyle { track, cue } => write!(
+                formatter,
+                "cue {cue} of track {track} has a style out of range once its patch is applied"
+            ),
             Self::InvalidTimeMap { clip } => {
                 write!(formatter, "clip {clip} freezes outside its source range")
             }

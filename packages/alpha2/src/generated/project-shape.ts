@@ -424,6 +424,8 @@ export const PROJECT_SHAPE: unknown = {
     CaptionCue: {
       additionalProperties: false,
       properties: {
+        speaker: { type: ["string", "null"] },
+        style: { type: ["string", "null"] },
         text: { $ref: "#/$defs/TextContent" },
         timeline_range: { $ref: "#/$defs/TimeRange" },
       },
@@ -451,6 +453,10 @@ export const PROJECT_SHAPE: unknown = {
             max_width: 0.9,
             position: { x: 0.5, y: 0.92 },
           },
+        },
+        styles: {
+          additionalProperties: { $ref: "#/$defs/TextStylePatch" },
+          type: "object",
         },
       },
       required: ["cues"],
@@ -2376,6 +2382,42 @@ export const PROJECT_SHAPE: unknown = {
         position: { $ref: "#/$defs/Vec2", default: { x: 0.5, y: 0.92 } },
         shadows: { items: { $ref: "#/$defs/TextShadow" }, type: "array" },
         strokes: { items: { $ref: "#/$defs/TextStroke" }, type: "array" },
+      },
+      type: "object",
+    },
+    TextStylePatch: {
+      additionalProperties: false,
+      properties: {
+        align: { anyOf: [{ $ref: "#/$defs/TextAlign" }, { type: "null" }] },
+        anchor: { anyOf: [{ $ref: "#/$defs/Vec2" }, { type: "null" }] },
+        animators: {
+          items: { $ref: "#/$defs/TextAnimator" },
+          type: ["array", "null"],
+        },
+        background: {
+          anyOf: [{ $ref: "#/$defs/TextBackground" }, { type: "null" }],
+        },
+        fill: { anyOf: [{ $ref: "#/$defs/Paint" }, { type: "null" }] },
+        font_family: { type: ["string", "null"] },
+        font_size: { format: "float", type: ["number", "null"] },
+        font_weight: {
+          format: "uint16",
+          maximum: 65535,
+          minimum: 0,
+          type: ["integer", "null"],
+        },
+        letter_spacing: { format: "float", type: ["number", "null"] },
+        line_height: { format: "float", type: ["number", "null"] },
+        max_width: { format: "float", type: ["number", "null"] },
+        position: { anyOf: [{ $ref: "#/$defs/Vec2" }, { type: "null" }] },
+        shadows: {
+          items: { $ref: "#/$defs/TextShadow" },
+          type: ["array", "null"],
+        },
+        strokes: {
+          items: { $ref: "#/$defs/TextStroke" },
+          type: ["array", "null"],
+        },
       },
       type: "object",
     },

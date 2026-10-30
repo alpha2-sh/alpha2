@@ -210,3 +210,30 @@ def test_exporting_a_compiled_spec_sends_its_assets_fonts_and_loudness(
     )
     request = json.loads(recorded.read_text(encoding="utf-8"))
     assert request["fonts"] == [] and "loudness" not in request
+
+
+def test_karaoke_captions_follow_word_times_and_speakers_get_their_look() -> None:
+    words = [
+        {"start": 0.0, "end": 0.5, "text": "Sing", "speaker": "Ann"},
+        {"start": 0.5, "end": 1.0, "text": "along", "speaker": "Ann"},
+    ]
+    video = c.Video(
+        c.Captions(
+            words=words,
+            style="karaoke",
+            highlight="#ffd040",
+            speakers={"Ann": {"color": "#ff8080", "position": {"x": 0.3, "y": 0.8}}},
+            duration=1,
+        )
+    )
+    compiled = video.compile(facts=FACTS, fonts=[FONT])
+    assert alpha2.validate_project(compiled.project) == []
+    captions = compiled.project["timeline"]["tracks"][0]["captions"]
+    assert [animator["selector"]["state"] for animator in captions["style"]["animators"]] == [
+        "spoken",
+        "active",
+    ]
+    cue = captions["cues"][0]
+    assert cue["speaker"] == "Ann"
+    assert [run["text"] for run in cue["text"]] == ["Sing ", "along"]
+    assert captions["styles"]["Ann"]["position"] == {"x": 0.3, "y": 0.8}

@@ -705,6 +705,14 @@ pub struct Captions {
     /// Text color. Default: the theme's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<Rgba>,
+    /// The color `karaoke` and `pop` give the word being said. Default: the
+    /// theme's accent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub highlight: Option<Rgba>,
+    /// Each speaker's look, by the name cues give (a WebVTT voice, or a cue's
+    /// `speaker`): their cues take it over the style.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub speakers: BTreeMap<String, SpeakerLook>,
     /// Where the text's middle lies, as a fraction of the canvas height.
     /// Default: the style's, which depends on the canvas's shape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -730,6 +738,23 @@ pub struct Cue {
     pub end: f64,
     /// The text.
     pub text: String,
+    /// Who says it: a key of the captions' `speakers` gives the cue its look.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<String>,
+}
+
+/// How one speaker's captions look.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct SpeakerLook {
+    /// Their text color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<Rgba>,
+    /// Where their text's middle lies, fractions of the canvas, `(0, 0)`
+    /// top-left.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<alpha2_model::Vec2>,
 }
 
 /// How captions look.
@@ -748,6 +773,15 @@ pub enum CaptionStyle {
     /// Larger outlined text a little below the middle, as short-form video
     /// draws it.
     BoldCenter,
+    /// White text with a black stroke and a soft shadow, near the bottom.
+    Bold,
+    /// `bold`, each word turning the highlight color as it is said and
+    /// staying so: words need their times (`words`, or WebVTT inline
+    /// timestamps), else it draws as `bold`.
+    Karaoke,
+    /// `bold`, the word being said growing a little in the highlight color.
+    /// Needs word times as `karaoke` does.
+    Pop,
 }
 
 /// A layout generator.

@@ -87,6 +87,8 @@ import {
   MAX_AUDIO_DELAY_MS,
   MAX_AUDIO_EFFECTS,
   MAX_CAPTION_FONT_SIZE,
+  MAX_CAPTION_NAME_BYTES,
+  MAX_CAPTION_STYLES,
   MAX_TEXT_GENERATOR_FONT_SIZE,
   MAX_FONT_WEIGHT,
   MAX_LETTER_SPACING,
@@ -604,9 +606,8 @@ function trackProblems(
     track.transitions,
     `track ${trackId} transitions`,
   );
-  if (!validCaptions(track, clips, transitions)) {
-    problems.push(`track ${trackId} has invalid captions`);
-  }
+  const captions = captionsProblem(track, clips, transitions, trackId);
+  if (captions !== undefined) problems.push(captions);
   const overlap = uncoveredOverlap(trackId, trackKind, clips, transitions);
   if (overlap !== undefined) problems.push(overlap);
   for (const clip of clips) {
@@ -2813,33 +2814,100 @@ function transitionProblems(
 /**
  * A caption track holds valid captions and no clips or transitions; no other track holds captions.
  */
-function validCaptions(
+/**
+ * Mirrors `validate_captions`: why a track's captions are refused, worded as the engine words it,
+ * or `undefined`.
+ */
+function captionsProblem(
   track: Record<string, unknown>,
   clips: readonly unknown[],
   transitions: readonly unknown[],
-): boolean {
-  if (track.kind !== "caption") return track.captions == null;
+  trackId: string,
+): string | undefined {
+  const invalid = `track ${trackId} has invalid captions`;
+  if (track.kind !== "caption")
+    return track.captions == null ? undefined : invalid;
   const captions = track.captions;
   if (!isRecord(captions) || clips.length > 0 || transitions.length > 0) {
-    return false;
+    return invalid;
   }
   const cues = captions.cues;
+  const styles = captions.styles ?? {};
+  const encoder = new TextEncoder();
+  const name = (value: unknown) =>
+    typeof value === "string" &&
+    value.length > 0 &&
+    encoder.encode(value).length <= MAX_CAPTION_NAME_BYTES;
   if (
     !Array.isArray(cues) ||
-    !validTextStyle(captions.style ?? {}, MAX_CAPTION_FONT_SIZE)
+    !validTextStyle(captions.style ?? {}, MAX_CAPTION_FONT_SIZE) ||
+    !isRecord(styles) ||
+    Object.keys(styles).length > MAX_CAPTION_STYLES ||
+    !Object.keys(styles).every(name)
   ) {
-    return false;
+    return invalid;
   }
-  const encoder = new TextEncoder();
   let previousEnd = 0;
-  return cues.every((cue: unknown) => {
+  const cuesValid = cues.every((cue: unknown) => {
     if (!isRecord(cue) || !validRange(cue.timeline_range)) return false;
     const range = cue.timeline_range as { start: number; end: number };
     const valid =
-      range.start >= previousEnd && validTextContent(cue.text, encoder);
+      range.start >= previousEnd &&
+      validTextContent(cue.text, encoder) &&
+      (cue.speaker == null || name(cue.speaker)) &&
+      runTimesLieIn(cue.text, range.end - range.start);
     previousEnd = range.end;
     return valid;
   });
+  if (!cuesValid) return invalid;
+  for (const [index, cue] of (cues as Record<string, unknown>[]).entries()) {
+    const own = cue.style;
+    if (typeof own === "string" && !Object.hasOwn(styles, own)) {
+      return `cue ${index} of track ${trackId} names style ${JSON.stringify(own)}, which the track does not have`;
+    }
+    const patchName =
+      typeof own === "string"
+        ? own
+        : typeof cue.speaker === "string" && Object.hasOwn(styles, cue.speaker)
+          ? cue.speaker
+          : undefined;
+    if (patchName === undefined) continue;
+    const merged = patchedStyle(captions.style ?? {}, styles[patchName]);
+    if (!validTextStyle(merged, MAX_CAPTION_FONT_SIZE)) {
+      return `cue ${index} of track ${trackId} has a style out of range once its patch is applied`;
+    }
+  }
+  return undefined;
+}
+
+/** Whether every run time of a cue's text lies from 0 to the cue's `duration`. */
+function runTimesLieIn(text: unknown, duration: number): boolean {
+  if (!Array.isArray(text)) return true;
+  return text.every((run: unknown) => {
+    if (!isRecord(run) || run.time == null) return true;
+    const time = run.time as Record<string, unknown>;
+    return (
+      finiteNumber(time.start) &&
+      finiteNumber(time.end) &&
+      time.start >= 0 &&
+      time.end <= duration
+    );
+  });
+}
+
+/**
+ * Mirrors `TextStylePatch::apply`: `base` with each field the patch sets replaced; `null` clears a
+ * family or background.
+ */
+function patchedStyle(base: unknown, patch: unknown): Record<string, unknown> {
+  const merged: Record<string, unknown> = isRecord(base) ? { ...base } : {};
+  if (!isRecord(patch)) return merged;
+  for (const [field, value] of Object.entries(patch)) {
+    if (value === undefined) continue;
+    if (value === null) delete merged[field];
+    else merged[field] = value;
+  }
+  return merged;
 }
 
 /** Mirrors `TextStyle::is_valid`: a caption track's style, or a text generator's. */
@@ -4873,7 +4941,14 @@ export type LintOwner =
   /** A generated source, whose shapes or layout tree is keyed in its picture's time. */
   | { readonly type: "source"; readonly source: string }
   /** A caption track, whose style's animators are keyed in each cue's own time. */
-  | { readonly type: "caption_track"; readonly track: string };
+  | { readonly type: "caption_track"; readonly track: string }
+  /** A timed run of a caption cue, whose times are from the cue's start. */
+  | {
+      readonly type: "cue_run";
+      readonly track: string;
+      readonly cue: number;
+      readonly run: number;
+    };
 
 /** The shapes generator a shape {@link LintIssue} is about. */
 export type ShapeLintOwner =
@@ -4939,6 +5014,12 @@ export type LintIssue =
       readonly owner: ShapeLintOwner;
       /** Such as `items[1].items[0]`. */
       readonly at: string;
+    }
+  /** A caption style no cue names and no cue's speaker matches. */
+  | {
+      readonly kind: "unused_caption_style";
+      readonly track: string;
+      readonly style: string;
     }
   /** A text animator that sets no property, which changes nothing. */
   | {

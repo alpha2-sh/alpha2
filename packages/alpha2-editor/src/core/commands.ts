@@ -3,6 +3,7 @@ import {
   resizeTransition,
   removeTransition,
 } from "./transitions.js";
+import { splitCue, trimCue } from "alpha2/captions";
 import * as edit from "alpha2/edit";
 import {
   drawnEffectResources,
@@ -420,6 +421,29 @@ export type Command =
       readonly type: "cue.remove";
       readonly trackId: string;
       readonly instanceId: string;
+    }
+  /**
+   * Cuts the cue `instanceId` names in two at timeline tick `at`, the second half under
+   * `newInstanceId`; timed runs are rebased to each half's start, a run said across the cut kept in
+   * both (`splitCue`).
+   */
+  | {
+      readonly type: "cue.split";
+      readonly trackId: string;
+      readonly instanceId: string;
+      readonly newInstanceId: string;
+      readonly at: number;
+    }
+  /**
+   * Shows the cue `instanceId` names from `start` to `end`, inside its range; runs said outside it
+   * are dropped and the rest rebased (`trimCue`).
+   */
+  | {
+      readonly type: "cue.trim";
+      readonly trackId: string;
+      readonly instanceId: string;
+      readonly start: number;
+      readonly end: number;
     }
   /**
    * Adds or replaces a bin asset, with the project source or effect resource of the same id when
@@ -1513,7 +1537,9 @@ function reduce(
       return withLayout(document, command.compositionId, command.positions);
     case "cue.add":
     case "cue.update":
-    case "cue.remove": {
+    case "cue.remove":
+    case "cue.split":
+    case "cue.trim": {
       if (!track?.captions) fail("Not a caption track", command.trackId);
       const key = `${track.id}/cues`;
       const nextIds = [...(document.metadata.instanceIds[key] ?? [])];
@@ -1533,10 +1559,18 @@ function reduce(
       } else {
         const i = nextIds.indexOf(command.instanceId);
         if (i < 0) fail("Unknown cue");
-        cues.splice(i, 1);
+        const [held] = cues.splice(i, 1);
         nextIds.splice(i, 1);
         if (command.type === "cue.update")
           place(command.instanceId, command.cue);
+        if (command.type === "cue.split") {
+          if (nextIds.includes(command.newInstanceId)) fail("Duplicate cue");
+          const [first, second] = splitCue(held, command.at);
+          place(command.instanceId, first);
+          place(command.newInstanceId, second);
+        }
+        if (command.type === "cue.trim")
+          place(command.instanceId, trimCue(held, command.start, command.end));
       }
       return ids(
         {

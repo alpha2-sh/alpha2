@@ -44,12 +44,13 @@ pub fn evaluate<'a>(
             // Cues are ordered and disjoint: the one starting last at or before `time` is the
             // only candidate.
             let candidate = cues.partition_point(|cue| cue.timeline_range.start() <= time);
-            let cue = cues[..candidate].last()?;
+            let index = candidate.checked_sub(1)?;
+            let cue = &cues[index];
             cue.timeline_range.contains(time).then(|| ActiveCaption {
                 track_id: &track.track_id,
                 text: &cue.text,
                 local_time: MediaTime(time.ticks() - cue.timeline_range.start().ticks()),
-                style: &track.captions.style,
+                style: &track.styles[track.cue_styles[index]],
                 layers_below: active
                     .iter()
                     .filter(|entry| {

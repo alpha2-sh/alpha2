@@ -55,7 +55,8 @@ pub struct ActiveCaption<'a> {
     /// The time since the cue started: what its style's animators are keyed
     /// in.
     pub local_time: alpha2_time::MediaTime,
-    /// The track's style.
+    /// The cue's style: the track's, with the patch of the style the cue
+    /// names, or of its speaker's, applied.
     pub style: &'a TextStyle,
     /// How many of the frame's [`FrameDesc::visual`] clips lie under the
     /// caption, by track order: those on tracks before the caption's,

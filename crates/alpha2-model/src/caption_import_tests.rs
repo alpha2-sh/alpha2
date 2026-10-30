@@ -1,5 +1,13 @@
 use super::*;
 
+fn run(text: &str, class: &[&str]) -> TextRun {
+    TextRun {
+        text: text.into(),
+        class: class.iter().map(|&name| name.into()).collect(),
+        time: None,
+    }
+}
+
 fn range(start_ms: i64, end_ms: i64) -> TimeRange {
     TimeRange::new(
         MediaTime::from_ticks(start_ms * 120),
@@ -19,13 +27,22 @@ fn srt_reads_multiline_cues_strips_markup_and_skips_bad_blocks() {
     assert_eq!(
         imported.cues,
         [
+            // Italics become a run's class; the override block is dropped.
             CaptionCue {
                 timeline_range: range(1_000, 2_500),
-                text: "Hello there\nGeneral Kenobi".into(),
+                text: TextContent::Runs(vec![
+                    run("Hello ", &[]),
+                    run("there", &["i"]),
+                    run("\nGeneral Kenobi", &[]),
+                ]),
+                speaker: None,
+                style: None,
             },
             CaptionCue {
                 timeline_range: range(3_723_004, 3_724_000),
                 text: "Late".into(),
+                speaker: None,
+                style: None,
             },
         ]
     );
@@ -43,13 +60,20 @@ fn webvtt_reads_cues_with_settings_references_and_identifiers() {
     assert_eq!(
         imported.cues,
         [
+            // A voice names the speaker; a class span becomes a run's class.
             CaptionCue {
                 timeline_range: range(1_000, 2_000),
-                text: "Fish & chips".into(),
+                text: TextContent::Runs(vec![run("Fish & chips", &["voice"])]),
+                speaker: Some("Roger".into()),
+                style: None,
             },
             CaptionCue {
                 timeline_range: range(3_500, 4_000),
-                text: "A <b> tag AB &bogus;".into(),
+                text: TextContent::Runs(
+                    vec![run("A <b> tag", &["loud"]), run(" AB &bogus;", &[]),]
+                ),
+                speaker: None,
+                style: None,
             },
         ]
     );
@@ -87,10 +111,14 @@ fn a_cue_later_than_a_project_holds_is_skipped() {
                 CaptionCue {
                     timeline_range: range(1_000, 2_000),
                     text: "fine".into(),
+                    speaker: None,
+                    style: None,
                 },
                 CaptionCue {
                     timeline_range: range(last - 1, last),
                     text: "last".into(),
+                    speaker: None,
+                    style: None,
                 },
             ],
             "{format}"
@@ -109,6 +137,7 @@ fn a_cue_later_than_a_project_holds_is_skipped() {
             );
             track.captions = Some(crate::Captions {
                 style: crate::TextStyle::default(),
+                styles: std::collections::BTreeMap::new(),
                 cues: row,
             });
             project.timeline.tracks.push(track);
@@ -219,6 +248,8 @@ fn overlapping_cues_spread_over_rows() {
     let cue = |start, end| CaptionCue {
         timeline_range: range(start, end),
         text: "x".into(),
+        speaker: None,
+        style: None,
     };
     let rows = caption_rows(&[cue(0, 1_000), cue(500, 1_500), cue(1_000, 2_000)]);
     assert_eq!(
@@ -235,6 +266,8 @@ fn a_row_holds_no_more_cues_than_a_caption_track() {
     let cue = |index: i64| CaptionCue {
         timeline_range: range(index * 2_000, index * 2_000 + 1_500),
         text: format!("cue {index}").into(),
+        speaker: None,
+        style: None,
     };
     let count = 2 * MAX_CLIPS_PER_TRACK + 10;
     let cues: Vec<_> = (0..i64::try_from(count).unwrap()).map(cue).collect();
@@ -253,6 +286,7 @@ fn a_row_holds_no_more_cues_than_a_caption_track() {
         );
         track.captions = Some(crate::Captions {
             style: crate::TextStyle::default(),
+            styles: std::collections::BTreeMap::new(),
             cues: row,
         });
         project.timeline.tracks.push(track);
@@ -265,6 +299,8 @@ fn cues_that_need_more_tracks_than_a_project_holds_are_refused() {
     let cue = CaptionCue {
         timeline_range: range(0, 1_000),
         text: "all at once".into(),
+        speaker: None,
+        style: None,
     };
     assert_eq!(
         caption_rows(&vec![cue.clone(); MAX_TRACKS]).map(|rows| rows.len()),
@@ -396,6 +432,8 @@ fn cues_go_to_the_first_row_with_room_in_time_n_log_n() {
         CaptionCue {
             timeline_range: range(0, 1_000),
             text: "x".into(),
+            speaker: None,
+            style: None,
         };
         MAX_CAPTION_FILE_CUES
     ];
@@ -447,9 +485,94 @@ fn cues_go_to_the_first_row_with_room_in_time_n_log_n() {
                 CaptionCue {
                     timeline_range: range(start, start + 1 + next(longest)),
                     text: format!("{index}").into(),
+                    speaker: None,
+                    style: None,
                 }
             })
             .collect::<Vec<_>>();
         assert_eq!(caption_rows(&cues), Ok(first_fit(&cues)), "{count} cues");
     }
+}
+
+#[test]
+fn webvtt_voices_become_speakers() {
+    let text = "WEBVTT\n\n00:01.000 --> 00:02.000\n<v.loud Ann>Hi</v> <v Bob>there</v>\n";
+    let imported = parse_webvtt(text).expect("a WebVTT file");
+    let cue = &imported.cues[0];
+    assert_eq!(cue.speaker.as_deref(), Some("Ann"));
+    assert_eq!(
+        cue.text,
+        TextContent::Runs(vec![
+            run("Hi", &["voice", "loud"]),
+            run(" ", &[]),
+            run("there", &["voice"]),
+        ])
+    );
+    assert_eq!(imported.notes.extra_voices, 1);
+}
+
+#[test]
+fn webvtt_classes_and_bold_become_run_classes() {
+    let text = "WEBVTT\n\n00:01.000 --> 00:02.000\n<c.a.b>one <b>two</b></c> <i>three</i> <c.bad!name.ok>four</c>\n";
+    let imported = parse_webvtt(text).expect("a WebVTT file");
+    assert_eq!(
+        imported.cues[0].text,
+        TextContent::Runs(vec![
+            // Bold adds the class `b`, which the span already gives: one run.
+            run("one two", &["a", "b"]),
+            run(" ", &[]),
+            run("three", &["i"]),
+            run(" ", &[]),
+            run("four", &["ok"]),
+        ])
+    );
+    assert_eq!(imported.notes.dropped_classes, 1);
+}
+
+#[test]
+fn webvtt_inline_timestamps_become_timed_runs() {
+    let text = "WEBVTT\n\n00:01.000 --> 00:04.000\nOne <00:00:02.000>two <00:00:03.000>three\n";
+    let imported = parse_webvtt(text).expect("a WebVTT file");
+    let ms = |ms: i64| MediaTime::from_ticks(ms * 120);
+    let timed = |text: &str, start: i64, end: i64| TextRun {
+        text: text.into(),
+        class: Vec::new(),
+        time: Some(RunTime {
+            start: ms(start),
+            end: ms(end),
+        }),
+    };
+    // Times are from the cue's start: the first run from it, the last to its end.
+    assert_eq!(
+        imported.cues[0].text,
+        TextContent::Runs(vec![
+            timed("One ", 0, 1_000),
+            timed("two ", 1_000, 2_000),
+            timed("three", 2_000, 3_000),
+        ])
+    );
+}
+
+#[test]
+fn out_of_order_timestamps_are_dropped_and_counted() {
+    let text =
+        "WEBVTT\n\n00:01.000 --> 00:04.000\nA <00:00:03.000>b <00:00:02.000>c <00:00:09.000>d\n";
+    let imported = parse_webvtt(text).expect("a WebVTT file");
+    assert_eq!(imported.notes.dropped_timestamps, 2);
+    let runs = imported.cues[0].text.runs();
+    assert_eq!(runs.len(), 2);
+    assert_eq!(runs[1].text, "b c d");
+}
+
+#[test]
+fn plain_cues_stay_plain() {
+    let imported =
+        parse_webvtt("WEBVTT\n\n00:01.000 --> 00:02.000\n<ruby>漢<rt>kan</rt></ruby> &amp; text\n")
+            .expect("a WebVTT file");
+    assert_eq!(
+        imported.cues[0].text,
+        TextContent::Plain("漢kan & text".into())
+    );
+    assert_eq!(imported.cues[0].speaker, None);
+    assert_eq!(imported.notes, ImportNotes::default());
 }

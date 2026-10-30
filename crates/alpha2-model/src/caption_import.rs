@@ -1,11 +1,17 @@
 //! SRT and WebVTT import: subtitle files to caption cues.
 //!
 //! Timestamps are milliseconds, and a millisecond is exactly 120 ticks, so
-//! import is lossless. Markup is dropped: SRT's HTML-like tags and `{\...}`
-//! override blocks, WebVTT's tags and cue settings; WebVTT's character
-//! references are decoded. A `<` in SRT text that opens no tag is text. A
-//! block that does not parse is skipped and counted; the rest of the file
-//! still imports.
+//! import is lossless. Markup that says who speaks or what a word is becomes
+//! the cue's speaker and its text's runs: a WebVTT voice (`<v Name>`) names
+//! the speaker and gives its text the class `voice` and the voice's classes,
+//! `<c.a.b>` gives classes `a` and `b`, `<b>`, `<i>` and `<u>` (in SRT too)
+//! give classes `b`, `i` and `u`, and WebVTT's inline timestamps split the
+//! text into runs timed from the cue's start. The rest is dropped: SRT's other
+//! tags and `{\...}` override blocks, WebVTT's `ruby`, `rt` and `lang` tags
+//! (their text kept) and cue settings. A cue without such markup imports as
+//! plain text. WebVTT's character references are decoded. A `<` in SRT text
+//! that opens no tag is text. A block that does not parse is skipped and
+//! counted; the rest of the file still imports.
 //!
 //! A line ends at a line feed, a carriage return, or both, as WebVTT
 //! defines; carriage returns repeated before a line feed (a file whose line
@@ -19,7 +25,9 @@ use std::cmp::Reverse;
 use std::collections::{BTreeSet, BinaryHeap};
 
 use crate::{
-    CaptionCue, MAX_CLIPS_PER_TRACK, MAX_PROJECT_JSON_BYTES, MAX_TEXT_CONTENT_BYTES, MAX_TRACKS,
+    CaptionCue, MAX_CLIPS_PER_TRACK, MAX_PROJECT_JSON_BYTES, MAX_RUN_CLASSES,
+    MAX_TEXT_CONTENT_BYTES, MAX_TEXT_RUNS, MAX_TRACKS, RunTime, TextContent, TextRun,
+    valid_class_name,
 };
 use alpha2_time::{MediaTime, TICKS_PER_SECOND, TimeRange};
 
@@ -41,6 +49,25 @@ pub struct ImportedCaptions {
     pub cues: Vec<CaptionCue>,
     /// Blocks that were not cues and could not be read as one.
     pub skipped: usize,
+    /// Markup read but not kept.
+    pub notes: ImportNotes,
+}
+
+/// What an import read but could not keep, counted.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ImportNotes {
+    /// Voices after a cue's first, whose names are not its speaker: their
+    /// text still takes the class `voice`.
+    pub extra_voices: usize,
+    /// Inline timestamps out of order or outside their cue, which WebVTT
+    /// renderers ignore.
+    pub dropped_timestamps: usize,
+    /// Class names a run cannot carry (not `A-Z a-z 0-9 _ -`, longer than 64
+    /// bytes, or past a run's [`MAX_RUN_CLASSES`]).
+    pub dropped_classes: usize,
+    /// Cues with more runs than a text holds ([`MAX_TEXT_RUNS`]), imported
+    /// as plain text.
+    pub flattened: usize,
 }
 
 /// Why a file is not a subtitle file at all.
@@ -119,8 +146,15 @@ pub fn parse_srt(text: &str) -> Result<ImportedCaptions, CaptionImportError> {
                 }
             }
         }
-        let text = lines.map(strip_srt_markup).collect::<Vec<_>>().join("\n");
-        imported.read(timing(first), &text)?;
+        let body = lines.collect::<Vec<_>>();
+        let text = body
+            .iter()
+            .map(|line| strip_srt_markup(line))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let range = timing(first);
+        let marked = range.map(|_| srt_markup(&body));
+        imported.read(range, &text, marked)?;
     }
     imported.cues.sort_by_key(|cue| cue.timeline_range.start());
     Ok(imported)
@@ -174,7 +208,9 @@ pub fn parse_webvtt(text: &str) -> Result<ImportedCaptions, CaptionImportError> 
             .map(|line| decode_references(&strip_tags(line)))
             .collect::<Vec<_>>()
             .join("\n");
-        imported.read(timing(timing_line), &text)?;
+        let range = timing(timing_line);
+        let marked = range.map(|range| vtt_markup(&body.join("\n"), range));
+        imported.read(range, &text, marked)?;
     }
     imported.cues.sort_by_key(|cue| cue.timeline_range.start());
     Ok(imported)
@@ -182,8 +218,14 @@ pub fn parse_webvtt(text: &str) -> Result<ImportedCaptions, CaptionImportError> 
 
 impl ImportedCaptions {
     /// Keeps a block's cue, or counts it skipped when its timing or text is
-    /// not a cue's.
-    fn read(&mut self, range: Option<TimeRange>, text: &str) -> Result<(), CaptionImportError> {
+    /// not a cue's. `text` is the cue's text without markup; `marked`, what
+    /// its markup says, gives the runs and speaker when it says anything.
+    fn read(
+        &mut self,
+        range: Option<TimeRange>,
+        text: &str,
+        marked: Option<Marked>,
+    ) -> Result<(), CaptionImportError> {
         match (range, cue_text(text)) {
             (Some(range), Some(text)) => {
                 if self.cues.len() == MAX_CAPTION_FILE_CUES {
@@ -191,10 +233,20 @@ impl ImportedCaptions {
                         maximum: MAX_CAPTION_FILE_CUES,
                     });
                 }
-                self.cues.push(CaptionCue {
-                    timeline_range: range,
-                    text: text.into(),
-                });
+                let mut cue = CaptionCue::new(range, text);
+                if let Some(marked) = marked {
+                    let notes = &mut self.notes;
+                    notes.extra_voices += marked.notes.extra_voices;
+                    notes.dropped_timestamps += marked.notes.dropped_timestamps;
+                    notes.dropped_classes += marked.notes.dropped_classes;
+                    cue.speaker = marked.speaker;
+                    match marked.runs {
+                        Some(runs) if runs.len() > MAX_TEXT_RUNS => notes.flattened += 1,
+                        Some(runs) => cue.text = TextContent::Runs(runs),
+                        None => {}
+                    }
+                }
+                self.cues.push(cue);
             }
             _ => self.skipped += 1,
         }
@@ -468,6 +520,265 @@ fn reference(name: &str) -> Option<char> {
             .or_else(|| name.strip_prefix('#').and_then(|dec| dec.parse().ok()))
             .and_then(char::from_u32),
     }
+}
+
+/// What a cue's markup says: its speaker, its runs when any carries a
+/// class or a time (else the plain text stands), and what was dropped.
+struct Marked {
+    speaker: Option<String>,
+    runs: Option<Vec<TextRun>>,
+    notes: ImportNotes,
+}
+
+/// Builds a cue's runs from text pieces, each with the classes open over it
+/// and its time segment.
+#[derive(Default)]
+struct Runs {
+    pieces: Vec<(String, Vec<String>, usize)>,
+    notes: ImportNotes,
+}
+
+impl Runs {
+    fn push(&mut self, text: &str, classes: &[String], segment: usize) {
+        if text.is_empty() {
+            return;
+        }
+        match self.pieces.last_mut() {
+            Some((held, open, at)) if open.as_slice() == classes && *at == segment => {
+                held.push_str(text);
+            }
+            _ => self
+                .pieces
+                .push((text.to_owned(), classes.to_vec(), segment)),
+        }
+    }
+
+    /// The runs, timed by `bounds` (each segment's start, then the end, in
+    /// ticks from the cue's start) when there are segments, with blank lines
+    /// around the text trimmed as plain cue text is; `None` when no run
+    /// carries a class or a time.
+    fn finish(mut self, bounds: &[i64]) -> (Option<Vec<TextRun>>, ImportNotes) {
+        // Trim leading and trailing line feeds across pieces, as `cue_text` trims the plain text.
+        while let Some(first) = self.pieces.first_mut() {
+            let trimmed = first.0.trim_start_matches('\n').len();
+            first.0.drain(..first.0.len() - trimmed);
+            if first.0.is_empty() {
+                self.pieces.remove(0);
+            } else {
+                break;
+            }
+        }
+        while let Some(last) = self.pieces.last_mut() {
+            let kept = last.0.trim_end_matches('\n').len();
+            last.0.truncate(kept);
+            if last.0.is_empty() {
+                self.pieces.pop();
+            } else {
+                break;
+            }
+        }
+        let timed = bounds.len() > 2;
+        if !timed && self.pieces.iter().all(|(_, classes, _)| classes.is_empty()) {
+            return (None, self.notes);
+        }
+        let runs = self
+            .pieces
+            .into_iter()
+            .map(|(text, mut class, segment)| {
+                if class.len() > MAX_RUN_CLASSES {
+                    self.notes.dropped_classes += class.len() - MAX_RUN_CLASSES;
+                    class.truncate(MAX_RUN_CLASSES);
+                }
+                TextRun {
+                    text,
+                    class,
+                    time: timed.then(|| RunTime {
+                        start: MediaTime(bounds[segment]),
+                        end: MediaTime(bounds[segment + 1]),
+                    }),
+                }
+            })
+            .collect();
+        (Some(runs), self.notes)
+    }
+}
+
+/// The classes a tag's dot-separated `names` give, the ones a run cannot
+/// carry counted and dropped.
+fn tag_classes(names: &str, notes: &mut ImportNotes) -> Vec<String> {
+    names
+        .split('.')
+        .filter(|name| !name.is_empty())
+        .filter_map(|name| {
+            if valid_class_name(name) {
+                Some(name.to_owned())
+            } else {
+                notes.dropped_classes += 1;
+                None
+            }
+        })
+        .collect()
+}
+
+/// A WebVTT cue body's markup, the cue over `range`: voices, classes, bold,
+/// italic and underline as run classes; inline timestamps splitting the runs.
+fn vtt_markup(body: &str, range: TimeRange) -> Marked {
+    let start = range.start().ticks();
+    let duration = range.duration().map_or(0, MediaTime::ticks);
+    let mut runs = Runs::default();
+    let mut speaker = None;
+    // The tags open, each with the classes it gives, innermost last.
+    let mut open: Vec<(String, Vec<String>)> = Vec::new();
+    let mut bounds = vec![0_i64];
+    let mut rest = body;
+    let classes = |open: &[(String, Vec<String>)]| {
+        open.iter()
+            .flat_map(|(_, classes)| classes.iter().cloned())
+            .fold(Vec::<String>::new(), |mut all, class| {
+                if !all.contains(&class) {
+                    all.push(class);
+                }
+                all
+            })
+    };
+    loop {
+        let Some(at) = rest.find('<') else {
+            runs.push(&decode_references(rest), &classes(&open), bounds.len() - 1);
+            break;
+        };
+        runs.push(
+            &decode_references(&rest[..at]),
+            &classes(&open),
+            bounds.len() - 1,
+        );
+        let Some(end) = rest[at..].find('>') else {
+            break;
+        };
+        let tag = &rest[at + 1..at + end];
+        rest = &rest[at + end + 1..];
+        if let Some(name) = tag.strip_prefix('/') {
+            let name = name.trim();
+            if let Some(index) = open.iter().rposition(|(open, _)| open == name) {
+                open.truncate(index);
+            }
+            continue;
+        }
+        if tag.starts_with(|character: char| character.is_ascii_digit()) {
+            // An inline timestamp: kept only in order and inside the cue.
+            match timestamp(tag.trim()) {
+                Some(time)
+                    if time.ticks() - start > *bounds.last().unwrap_or(&0)
+                        && time.ticks() - start < duration =>
+                {
+                    bounds.push(time.ticks() - start);
+                }
+                _ => runs.notes.dropped_timestamps += 1,
+            }
+            continue;
+        }
+        // `name.classes annotation`.
+        let (head, annotation) = tag
+            .split_once([' ', '\t'])
+            .map_or((tag, ""), |(head, annotation)| (head, annotation.trim()));
+        let (name, names) = head.split_once('.').unwrap_or((head, ""));
+        let given = match name {
+            "v" => {
+                if speaker.is_none() && !annotation.is_empty() {
+                    speaker = Some(annotation.to_owned());
+                } else if !annotation.is_empty() {
+                    runs.notes.extra_voices += 1;
+                }
+                let mut given = vec!["voice".to_owned()];
+                given.extend(tag_classes(names, &mut runs.notes));
+                given
+            }
+            "c" => tag_classes(names, &mut runs.notes),
+            "b" | "i" | "u" => {
+                let mut given = vec![name.to_owned()];
+                given.extend(tag_classes(names, &mut runs.notes));
+                given
+            }
+            _ => Vec::new(),
+        };
+        open.push((name.to_owned(), given));
+    }
+    bounds.push(duration);
+    let (runs, notes) = runs.finish(&bounds);
+    Marked {
+        speaker: speaker.filter(|speaker| speaker.len() <= crate::MAX_CAPTION_NAME_BYTES),
+        runs,
+        notes,
+    }
+}
+
+/// An SRT cue body's markup: `<b>`, `<i>` and `<u>` as run classes; other
+/// tags and override blocks dropped.
+fn srt_markup(body: &[&str]) -> Marked {
+    let mut runs = Runs::default();
+    let mut open: Vec<String> = Vec::new();
+    for (index, line) in body.iter().enumerate() {
+        if index > 0 {
+            runs.push("\n", &open, 0);
+        }
+        let line = strip_overrides(line);
+        let mut rest = line.as_str();
+        while let Some(start) = rest.find('<') {
+            runs.push(&rest[..start], &open, 0);
+            let tag = &rest[start + 1..];
+            let closing = tag.starts_with('/');
+            let name = tag.strip_prefix('/').unwrap_or(tag);
+            match tag.find(['<', '>']) {
+                Some(end)
+                    if tag.as_bytes()[end] == b'>'
+                        && name.starts_with(|character: char| character.is_ascii_alphabetic()) =>
+                {
+                    let tag_name = name[..name.len().min(end - usize::from(closing))]
+                        .split([' ', '\t'])
+                        .next()
+                        .unwrap_or_default()
+                        .to_ascii_lowercase();
+                    if matches!(tag_name.as_str(), "b" | "i" | "u") {
+                        if closing {
+                            if let Some(index) = open.iter().rposition(|open| *open == tag_name) {
+                                open.remove(index);
+                            }
+                        } else if !open.contains(&tag_name) {
+                            open.push(tag_name);
+                        }
+                    }
+                    rest = &tag[end + 1..];
+                }
+                _ => {
+                    runs.push("<", &open, 0);
+                    rest = tag;
+                }
+            }
+        }
+        runs.push(rest, &open, 0);
+    }
+    let (runs, notes) = runs.finish(&[0, 0]);
+    Marked {
+        speaker: None,
+        runs,
+        notes,
+    }
+}
+
+/// SRT text without its `{\...}` override blocks.
+fn strip_overrides(line: &str) -> String {
+    let mut output = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(start) = rest.find("{\\") {
+        output.push_str(&rest[..start]);
+        match rest[start..].find('}') {
+            Some(end) => rest = &rest[start + end + 1..],
+            None => {
+                rest = "";
+            }
+        }
+    }
+    output.push_str(rest);
+    output
 }
 
 #[cfg(test)]

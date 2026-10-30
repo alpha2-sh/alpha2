@@ -113,10 +113,8 @@ impl ActiveIndex {
             .iter()
             .enumerate()
             .filter_map(|(track_order, track)| {
-                track.captions.as_ref().map(|captions| IndexedCaptions {
-                    track_id: track.id.clone(),
-                    track_order,
-                    captions: captions.clone(),
+                track.captions.as_ref().map(|captions| {
+                    IndexedCaptions::new(track.id.clone(), track_order, captions.clone())
                 })
             })
             .collect();

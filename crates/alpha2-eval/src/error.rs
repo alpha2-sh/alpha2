@@ -149,4 +149,45 @@ pub(crate) struct IndexedCaptions {
     pub(crate) track_id: TrackId,
     pub(crate) track_order: usize,
     pub(crate) captions: alpha2_model::Captions,
+    /// Every style the track's cues draw in, the track's own first, each
+    /// patch applied once.
+    pub(crate) styles: Vec<alpha2_model::TextStyle>,
+    /// Each cue's style in `styles`.
+    pub(crate) cue_styles: Vec<usize>,
+}
+
+impl IndexedCaptions {
+    /// `captions` of track `track_id`, its cues' styles resolved.
+    pub(crate) fn new(
+        track_id: TrackId,
+        track_order: usize,
+        captions: alpha2_model::Captions,
+    ) -> Self {
+        let mut styles = vec![captions.style.clone()];
+        let mut by_name = std::collections::BTreeMap::<&str, usize>::new();
+        let mut cue_styles = Vec::with_capacity(captions.cues.len());
+        for cue in &captions.cues {
+            // The name a cue's patch is found by: its own style, else its speaker's.
+            let name = cue.style.as_deref().or_else(|| {
+                cue.speaker
+                    .as_deref()
+                    .filter(|speaker| captions.styles.contains_key(*speaker))
+            });
+            let index = match name.and_then(|name| captions.styles.get_key_value(name)) {
+                Some((name, patch)) => *by_name.entry(name.as_str()).or_insert_with(|| {
+                    styles.push(patch.apply(&captions.style));
+                    styles.len() - 1
+                }),
+                None => 0,
+            };
+            cue_styles.push(index);
+        }
+        Self {
+            track_id,
+            track_order,
+            captions,
+            styles,
+            cue_styles,
+        }
+    }
 }

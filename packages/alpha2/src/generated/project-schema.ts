@@ -32,6 +32,12 @@ export const MAX_CAPTION_FILE_CUES = 65536;
 /** Mirrors `alpha2_model::MAX_CAPTION_FONT_SIZE`. */
 export const MAX_CAPTION_FONT_SIZE = 0.25;
 
+/** Mirrors `alpha2_model::MAX_CAPTION_NAME_BYTES`. */
+export const MAX_CAPTION_NAME_BYTES = 64;
+
+/** Mirrors `alpha2_model::MAX_CAPTION_STYLES`. */
+export const MAX_CAPTION_STYLES = 32;
+
 /** Mirrors `alpha2_model::MAX_CHAIN_EFFECTS`. */
 export const MAX_CHAIN_EFFECTS = 16;
 
@@ -782,8 +788,19 @@ export type CacheIntent = "auto" | "pin" | "bypass";
  */
 export interface CaptionCue {
   /**
+   * Who says it, as the source names them (a WebVTT voice): at most 64
+   * bytes. A style of that name, when the track has one, styles the cue
+   * when the cue names none.
+   */
+  readonly speaker?: string | null;
+  /**
+   * The name of one of the track's `styles`, applied over its style.
+   */
+  readonly style?: string | null;
+  /**
    * The text, a string or runs; `\n` starts a line. Non-empty, at most
-   * `MAX_TEXT_CONTENT_BYTES` bytes. Run times are from the cue's start.
+   * `MAX_TEXT_CONTENT_BYTES` bytes. Run times are from the cue's start
+   * and lie within the cue.
    */
   readonly text: TextContent;
   /**
@@ -793,7 +810,7 @@ export interface CaptionCue {
 }
 
 /**
- * What a caption track shows: its cues, in one style.
+ * What a caption track shows: its cues, in its style.
  */
 export interface Captions {
   /**
@@ -802,9 +819,14 @@ export interface Captions {
    */
   readonly cues: readonly CaptionCue[];
   /**
-   * How every cue of the track looks.
+   * The style every cue starts from.
    */
   readonly style?: TextStyle;
+  /**
+   * Named changes to `style`, for cues that name one or whose speaker has
+   * one: at most `MAX_CAPTION_STYLES`, names 1 to 64 bytes.
+   */
+  readonly styles?: Readonly<Record<string, TextStylePatch>>;
 }
 
 /**
@@ -3563,6 +3585,69 @@ export interface TextStyle {
    * most `MAX_TEXT_STROKE_EXTENT`.
    */
   readonly strokes?: readonly TextStroke[];
+}
+
+/**
+ * Changes to a `TextStyle`: each field set replaces the base's whole
+ * (lists are replaced, not merged); a field left out keeps the base's.
+ */
+export interface TextStylePatch {
+  /**
+   * See `TextStyle::align`.
+   */
+  readonly align?: TextAlign | null;
+  /**
+   * See `TextStyle::anchor`.
+   */
+  readonly anchor?: Vec2 | null;
+  /**
+   * See `TextStyle::animators`.
+   */
+  readonly animators?: readonly TextAnimator[] | null;
+  /**
+   * The box behind each line; `null` removes the base's.
+   */
+  readonly background?: TextBackground | null;
+  /**
+   * See `TextStyle::fill`.
+   */
+  readonly fill?: Paint | null;
+  /**
+   * The family; `null` draws from the fallback order alone.
+   */
+  readonly font_family?: string | null;
+  /**
+   * See `TextStyle::font_size`.
+   */
+  readonly font_size?: number | null;
+  /**
+   * See `TextStyle::font_weight`.
+   */
+  readonly font_weight?: number | null;
+  /**
+   * See `TextStyle::letter_spacing`.
+   */
+  readonly letter_spacing?: number | null;
+  /**
+   * See `TextStyle::line_height`.
+   */
+  readonly line_height?: number | null;
+  /**
+   * See `TextStyle::max_width`.
+   */
+  readonly max_width?: number | null;
+  /**
+   * See `TextStyle::position`.
+   */
+  readonly position?: Vec2 | null;
+  /**
+   * See `TextStyle::shadows`.
+   */
+  readonly shadows?: readonly TextShadow[] | null;
+  /**
+   * See `TextStyle::strokes`.
+   */
+  readonly strokes?: readonly TextStroke[] | null;
 }
 
 /**

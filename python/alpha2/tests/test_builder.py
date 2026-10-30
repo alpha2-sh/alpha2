@@ -213,3 +213,29 @@ def test_validation_is_the_engines_and_names_what_it_refuses() -> None:
         assert (problems == []) == case["valid"], case["name"]
         if "error" in case:
             assert case["error"] in problems[0], (case["name"], problems)
+
+
+def test_caption_cues_take_speakers_styles_and_timed_runs() -> None:
+    builder = ProjectBuilder("Captions", width=640, height=360, frame_rate=(30, 1))
+    track = builder.caption_track(
+        style={"font_size": 0.08},
+        styles={"Ann": {"fill": "#ffd040"}, "loud": {"font_size": 0.12}},
+    )
+    second = 120_000
+    track.cue(
+        [
+            {"text": "Hello ", "time": {"start": 0, "end": second}},
+            {"text": "there", "class": ["key"], "time": {"start": second, "end": 2 * second}},
+        ],
+        at=0,
+        duration=2,
+        speaker="Ann",
+    )
+    track.cue("Loud", at=2, duration=1, style="loud")
+    project = builder.build()
+    captions = project["timeline"]["tracks"][0]["captions"]
+    assert captions["styles"]["Ann"] == {"fill": "#ffd040"}
+    assert captions["cues"][0]["speaker"] == "Ann"
+    assert captions["cues"][0]["text"][1]["class"] == ["key"]
+    assert captions["cues"][1]["style"] == "loud"
+    assert validate_project(project) == []

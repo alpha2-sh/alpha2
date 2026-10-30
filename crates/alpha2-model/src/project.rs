@@ -905,7 +905,28 @@ fn validate_captions(track: &crate::Track) -> Result<(), ModelError> {
     }
     let valid = match (&track.kind, &track.captions) {
         (TrackKind::Caption, Some(captions)) => {
-            captions.is_valid() && track.clips.is_empty() && track.transitions.is_empty()
+            if !(track.clips.is_empty() && track.transitions.is_empty()) {
+                return Err(ModelError::InvalidCaptions {
+                    track: track.id.clone(),
+                });
+            }
+            match captions.validate() {
+                Ok(()) => true,
+                Err(crate::caption::CaptionIssue::Invalid) => false,
+                Err(crate::caption::CaptionIssue::UnknownStyle { cue, name }) => {
+                    return Err(ModelError::UnknownCaptionStyle {
+                        track: track.id.clone(),
+                        cue,
+                        name,
+                    });
+                }
+                Err(crate::caption::CaptionIssue::CueStyle { cue }) => {
+                    return Err(ModelError::InvalidCaptionCueStyle {
+                        track: track.id.clone(),
+                        cue,
+                    });
+                }
+            }
         }
         (TrackKind::Caption, None) => false,
         (_, captions) => captions.is_none(),

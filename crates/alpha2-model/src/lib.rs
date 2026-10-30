@@ -44,10 +44,13 @@ pub use audio::{
     MAX_GAIN, MAX_LOOKAHEAD_MS, MIN_LEVEL_DB, MasterAudio, REVERB_DELAY_MS, TrackAudio,
 };
 pub use audio_load::AudioEffectLoad;
-pub use caption::{CaptionCue, Captions, MAX_CAPTION_FONT_SIZE};
+pub use caption::{
+    CaptionCue, Captions, MAX_CAPTION_FONT_SIZE, MAX_CAPTION_NAME_BYTES, MAX_CAPTION_STYLES,
+    TextStylePatch,
+};
 pub use caption_import::{
-    CaptionImportError, ImportedCaptions, MAX_CAPTION_FILE_BYTES, MAX_CAPTION_FILE_CUES,
-    caption_rows, parse_srt, parse_webvtt,
+    CaptionImportError, ImportNotes, ImportedCaptions, MAX_CAPTION_FILE_BYTES,
+    MAX_CAPTION_FILE_CUES, caption_rows, parse_srt, parse_webvtt,
 };
 pub use composition::{
     ClipComposition, Composition, CompositionControl, CompositionNode, CompositionReads,

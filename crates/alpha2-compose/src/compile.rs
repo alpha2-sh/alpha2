@@ -42,6 +42,8 @@ pub(crate) fn cue(start: i64, end: i64, text: String) -> CaptionCue {
     CaptionCue {
         timeline_range: range(start, end),
         text: text.into(),
+        speaker: None,
+        style: None,
     }
 }
 
@@ -1142,8 +1144,13 @@ impl<'a> Context<'a> {
             .filter_map(|cue| {
                 let start = slot.start + cue.timeline_range.start().ticks();
                 let stop = (slot.start + cue.timeline_range.end().ticks()).min(end);
-                (start < stop)
-                    .then(|| crate::compile::cue(start, stop, cue.text.text().into_owned()))
+                (start < stop).then(|| {
+                    // The cue as given, moved to its place and cut at the slot's end.
+                    let mut placed = cue.clone();
+                    placed.timeline_range = range(start, stop);
+                    crate::lower::clip_runs(&mut placed);
+                    placed
+                })
             })
             .collect::<Vec<_>>();
         if let Some((center, bar_height, color)) = captions.bar {
@@ -1179,6 +1186,7 @@ impl<'a> Context<'a> {
             let mut lane = Lane::new(TrackKind::Caption, &slot.owners);
             lane.captions = Some(Captions {
                 style: captions.style.clone(),
+                styles: captions.styles.clone(),
                 cues: row,
             });
             out.visual.push(lane);

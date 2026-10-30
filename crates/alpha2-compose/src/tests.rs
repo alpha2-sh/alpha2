@@ -327,8 +327,100 @@ fn words_group_into_cues() {
         .collect::<Vec<_>>();
     let compiled = compile(&json!({"body": {"type": "captions", "words": words}}));
     let cues = &tracks(&compiled)[0]["captions"]["cues"];
-    assert_eq!(cues[0]["text"], "Hello there.");
-    assert_eq!(cues[1]["text"], "This is a test");
+    let joined = |cue: &Value| {
+        cue["text"]
+            .as_array()
+            .expect("runs")
+            .iter()
+            .map(|run| run["text"].as_str().expect("text"))
+            .collect::<String>()
+    };
+    assert_eq!(joined(&cues[0]), "Hello there.");
+    assert_eq!(joined(&cues[1]), "This is a test");
+}
+
+#[test]
+#[allow(clippy::cast_precision_loss)]
+fn words_keep_their_times_as_runs() {
+    let words = ["One", "two", "three"]
+        .iter()
+        .enumerate()
+        .map(|(index, word)| json!({"text": word, "start": 1.0 + index as f64 * 0.5, "end": 1.4 + index as f64 * 0.5}))
+        .collect::<Vec<_>>();
+    let compiled = compile(&json!({"body": {"type": "captions", "words": words}}));
+    let cue = &tracks(&compiled)[0]["captions"]["cues"][0];
+    let runs = cue["text"].as_array().expect("runs");
+    // A run a word, the space in the run before it, timed from the cue's start.
+    assert_eq!(runs[0]["text"], "One ");
+    assert_eq!(runs[2]["text"], "three");
+    assert_eq!(runs[0]["time"], json!({"start": 0, "end": 4 * SECOND / 10}));
+    assert_eq!(
+        runs[1]["time"],
+        json!({"start": SECOND / 2, "end": 9 * SECOND / 10})
+    );
+    assert_eq!(cue["timeline_range"]["start"], SECOND);
+}
+
+#[test]
+fn karaoke_preset_highlights_the_active_word() {
+    let words = json!([
+        {"text": "Say", "start": 0.0, "end": 0.5},
+        {"text": "it", "start": 0.5, "end": 1.0},
+    ]);
+    let compiled = compile(&json!({"body": {"type": "captions", "words": words,
+        "style": "karaoke", "highlight": "#ffd040"}}));
+    let style = &tracks(&compiled)[0]["captions"]["style"];
+    // Bold: a stroke and a shadow; karaoke: said and being said words in the highlight.
+    assert_eq!(style["strokes"].as_array().expect("strokes").len(), 1);
+    assert_eq!(style["shadows"].as_array().expect("shadows").len(), 1);
+    let animators = style["animators"].as_array().expect("animators");
+    assert_eq!(animators.len(), 2);
+    assert_eq!(animators[0]["selector"]["state"], "spoken");
+    assert_eq!(animators[1]["selector"]["state"], "active");
+    assert_eq!(
+        animators[1]["properties"]["fill"]["value"],
+        json!({"red": 1.0, "green": 0.815_686_3, "blue": 0.250_980_4, "alpha": 1.0})
+    );
+    // Without word times there is nothing to follow: bold, and a warning says so.
+    let spec = json!({"body": {"type": "captions", "style": "pop",
+        "cues": [{"text": "No times", "start": 0, "end": 1}]}});
+    let crate::Compiled {
+        project, warnings, ..
+    } = crate::compile(
+        &serde_json::from_value(spec).expect("spec"),
+        &serde_json::from_value(facts()).expect("facts"),
+        &[],
+    )
+    .expect("compiles");
+    let style = &project.timeline.tracks[0]
+        .captions
+        .as_ref()
+        .expect("captions")
+        .style;
+    assert!(style.animators.is_empty() && !style.shadows.is_empty());
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains("draw as bold")),
+        "{warnings:?}"
+    );
+}
+
+#[test]
+fn speakers_compile_to_styles() {
+    let compiled = compile(&json!({"body": {"type": "captions",
+        "cues": [{"text": "Hi", "start": 0, "end": 1, "speaker": "Ann"},
+                 {"text": "Hey", "start": 1, "end": 2, "speaker": "Bob"}],
+        "speakers": {"Ann": {"color": "#ff8080", "position": {"x": 0.25, "y": 0.8}}}}}));
+    let captions = &tracks(&compiled)[0]["captions"];
+    assert_eq!(
+        captions["styles"]["Ann"]["position"],
+        json!({"x": 0.25, "y": 0.8})
+    );
+    assert_eq!(captions["styles"]["Ann"]["fill"]["type"], "solid");
+    assert_eq!(captions["cues"][0]["speaker"], "Ann");
+    assert_eq!(captions["cues"][1]["speaker"], "Bob");
+    assert!(captions["styles"].get("Bob").is_none());
 }
 
 #[test]

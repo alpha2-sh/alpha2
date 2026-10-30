@@ -326,3 +326,44 @@ fn drop_shadow_effect_is_unchanged_by_the_shared_shadow_pass() {
         }
     }
 }
+
+#[test]
+fn caption_speakers_golden() {
+    let _lock = gpu_test_lock();
+    let renderer = look_renderer();
+    // Two speakers, each with a style of their name; the second cue names its style itself.
+    let track = r##", { "id": "subs", "name": "Subtitles", "kind": "caption", "captions": {
+        "style": { "font_size": 0.16, "position": { "x": 0.5, "y": 0.9 },
+                   "strokes": [ { "color": "#000000", "width": 0.08 } ] },
+        "styles": {
+            "Ann": { "fill": "#ffd040", "position": { "x": 0.3, "y": 0.4 } },
+            "boxed": { "fill": "#40e0ff", "align": "end", "position": { "x": 0.95, "y": 0.9 },
+                       "anchor": { "x": 1, "y": 1 },
+                       "background": { "color": "#102040c0", "padding": 0.2 } } },
+        "cues": [
+            { "timeline_range": { "start": 0, "end": 120000 }, "text": "Ann", "speaker": "Ann" },
+            { "timeline_range": { "start": 120000, "end": 240000 }, "text": "Bob", "speaker": "Bob",
+              "style": "boxed" } ] } }"##;
+    let project = text_project("", "", track);
+    let frame = |ticks: i64| {
+        let mut texts = fixture_texts();
+        let size = size();
+        texts
+            .prepare_at(&renderer, &project, MediaTime(ticks), size)
+            .expect("text");
+        let frame = project.evaluate(MediaTime(ticks)).expect("frame");
+        let output = renderer
+            .render_frame(size, &frame, &CaptionFrames(&texts))
+            .expect("frame renders");
+        read_rgba8(&renderer, &output.texture.expect("complete"))
+    };
+    let (ann, bob) = (frame(60_000), frame(180_000));
+    let strip = (0..90)
+        .flat_map(|row| {
+            [&ann, &bob]
+                .into_iter()
+                .flat_map(move |pixels| pixels[row * 640..(row + 1) * 640].iter().copied())
+        })
+        .collect::<Vec<_>>();
+    alpha2_golden_support::assert_rgba8_golden("caption_speakers", (320, 90), &strip, 2);
+}

@@ -90,6 +90,13 @@ pub enum LintIssue {
         /// The paint item, like `items[1].items[0]`.
         at: String,
     },
+    /// A caption style no cue names and no cue's speaker matches.
+    UnusedCaptionStyle {
+        /// The caption track.
+        track: TrackId,
+        /// The style's name.
+        style: String,
+    },
     /// A text animator that sets no property, which changes nothing.
     EmptyTextAnimator {
         /// What holds the text.
@@ -163,6 +170,15 @@ pub enum LintOwner {
     CaptionTrack {
         /// The track.
         track: TrackId,
+    },
+    /// A timed run of a caption cue, whose times are from the cue's start.
+    CueRun {
+        /// Its caption track.
+        track: TrackId,
+        /// Its cue's position among the track's cues.
+        cue: usize,
+        /// Its position among the cue's runs.
+        run: usize,
     },
 }
 
@@ -258,18 +274,7 @@ impl Project {
                     keyframes.check(&format!("effect.params.{name}"), value);
                 }
             }
-            for (index, cue) in track
-                .captions
-                .iter()
-                .flat_map(|captions| captions.cues.iter())
-                .enumerate()
-            {
-                let owner = LintOwner::Cue {
-                    track: track.id.clone(),
-                    index,
-                };
-                grid.check(&owner, cue.timeline_range, &mut issues);
-            }
+            lint_cues(&grid, track, &mut issues);
             if let Some(captions) = &track.captions {
                 lint_caption_animators(&track.id, captions, &mut issues);
             }
@@ -962,8 +967,45 @@ fn empty_animators(
     }
 }
 
+/// Each cue's timeline range, and each timed run's, against the frame grid.
+fn lint_cues(grid: &FrameGrid, track: &crate::Track, issues: &mut Vec<LintIssue>) {
+    for (index, cue) in track
+        .captions
+        .iter()
+        .flat_map(|captions| captions.cues.iter())
+        .enumerate()
+    {
+        let owner = LintOwner::Cue {
+            track: track.id.clone(),
+            index,
+        };
+        grid.check(&owner, cue.timeline_range, issues);
+        // A karaoke switch between frames shows at the next frame: check each run's
+        // ends on the timeline.
+        for (run, timed) in cue.text.runs().iter().enumerate() {
+            let Some(time) = timed.time else {
+                continue;
+            };
+            let start = cue.timeline_range.start().ticks();
+            let Ok(range) = alpha2_time::TimeRange::new(
+                MediaTime(start.saturating_add(time.start.ticks())),
+                MediaTime(start.saturating_add(time.end.ticks())),
+            ) else {
+                continue;
+            };
+            let owner = LintOwner::CueRun {
+                track: track.id.clone(),
+                cue: index,
+                run,
+            };
+            grid.check(&owner, range, issues);
+        }
+    }
+}
+
 /// A caption track's animators: their keyframes, in cue time, against every
-/// cue's span (a keyframe some cue reaches is used), and the empty ones.
+/// cue's span (a keyframe some cue reaches is used), and the empty ones;
+/// then the styles no cue takes.
 fn lint_caption_animators(
     track: &TrackId,
     captions: &crate::Captions,
@@ -989,4 +1031,16 @@ fn lint_caption_animators(
         &mut |property, times| keyframes.check_times(property, times),
     );
     empty_animators(&owner, &captions.style.animators, "style.animators", issues);
+    for name in captions.styles.keys() {
+        let used = captions.cues.iter().any(|cue| {
+            cue.style.as_deref() == Some(name.as_str())
+                || (cue.style.is_none() && cue.speaker.as_deref() == Some(name.as_str()))
+        });
+        if !used {
+            issues.push(LintIssue::UnusedCaptionStyle {
+                track: track.clone(),
+                style: name.clone(),
+            });
+        }
+    }
 }

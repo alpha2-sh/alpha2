@@ -46,6 +46,7 @@ if TYPE_CHECKING:
         GridLength,
         LoudnessTarget,
         Node,
+        SpeakerLook,
         TextRole,
         VideoSpec,
     )
@@ -286,15 +287,20 @@ def Captions(
     max_chars: int | None = None,
     font_size: float | None = None,
     color: str | Rgba | None = None,
+    highlight: str | Rgba | None = None,
+    speakers: Mapping[str, SpeakerLook] | None = None,
     position: float | None = None,
     id: str | None = None,
     at: float | None = None,
     duration: float | None = None,
 ) -> Node:
     """Timed text: from a SubRip or WebVTT file (``source`` a path), cues (``source`` a list of
-    ``{"start", "end", "text"}``), word timestamps (``words``, grouped into cues), or SubRip or
-    WebVTT text. ``style`` is ``outline`` (default), ``boxed``, ``bar-bottom`` or
-    ``bold-center``."""
+    ``{"start", "end", "text"}``, with an optional ``speaker``), word timestamps (``words``,
+    grouped into cues that keep each word's time), or SubRip or WebVTT text. ``style`` is
+    ``outline`` (default), ``boxed``, ``bar-bottom``, ``bold-center``, ``bold``, ``karaoke`` or
+    ``pop``; the last two follow word times in the ``highlight`` color (the theme's accent by
+    default) and draw as ``bold`` without them. ``speakers`` gives each speaker's ``color`` and
+    ``position``."""
     file: PathLike | None = None
     cues: list[Cue] | None = None
     if isinstance(source, (str, os.PathLike)):
@@ -312,6 +318,8 @@ def Captions(
         max_chars=max_chars,
         font_size=font_size,
         color=color,
+        highlight=highlight,
+        speakers=dict(speakers) if speakers is not None else None,
         position=position,
         id=id,
         at=at,

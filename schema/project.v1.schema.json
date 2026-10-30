@@ -836,9 +836,23 @@
       "additionalProperties": false,
       "description": "Text shown over one timeline interval.",
       "properties": {
+        "speaker": {
+          "description": "Who says it, as the source names them (a WebVTT voice): at most 64\nbytes. A style of that name, when the track has one, styles the cue\nwhen the cue names none.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "style": {
+          "description": "The name of one of the track's `styles`, applied over its style.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "text": {
           "$ref": "#/$defs/TextContent",
-          "description": "The text, a string or runs; `\\n` starts a line. Non-empty, at most\n[`MAX_TEXT_CONTENT_BYTES`] bytes. Run times are from the cue's start."
+          "description": "The text, a string or runs; `\\n` starts a line. Non-empty, at most\n[`MAX_TEXT_CONTENT_BYTES`] bytes. Run times are from the cue's start\nand lie within the cue."
         },
         "timeline_range": {
           "$ref": "#/$defs/TimeRange",
@@ -853,7 +867,7 @@
     },
     "Captions": {
       "additionalProperties": false,
-      "description": "What a caption track shows: its cues, in one style.",
+      "description": "What a caption track shows: its cues, in its style.",
       "properties": {
         "cues": {
           "description": "Cues in timeline order, none overlapping another: a track shows one\ncue at a time. Simultaneous captions take one track each.",
@@ -890,7 +904,14 @@
               "y": 0.92
             }
           },
-          "description": "How every cue of the track looks."
+          "description": "The style every cue starts from."
+        },
+        "styles": {
+          "additionalProperties": {
+            "$ref": "#/$defs/TextStylePatch"
+          },
+          "description": "Named changes to `style`, for cues that name one or whose speaker has\none: at most [`MAX_CAPTION_STYLES`], names 1 to 64 bytes.",
+          "type": "object"
         }
       },
       "required": [
@@ -5789,6 +5810,147 @@
             "$ref": "#/$defs/TextStroke"
           },
           "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "TextStylePatch": {
+      "additionalProperties": false,
+      "description": "Changes to a [`TextStyle`]: each field set replaces the base's whole\n(lists are replaced, not merged); a field left out keeps the base's.",
+      "properties": {
+        "align": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextAlign"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "See [`TextStyle::align`]."
+        },
+        "anchor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Vec2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "See [`TextStyle::anchor`]."
+        },
+        "animators": {
+          "description": "See [`TextStyle::animators`].",
+          "items": {
+            "$ref": "#/$defs/TextAnimator"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "background": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TextBackground"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The box behind each line; `null` removes the base's."
+        },
+        "fill": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Paint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "See [`TextStyle::fill`]."
+        },
+        "font_family": {
+          "description": "The family; `null` draws from the fallback order alone.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "font_size": {
+          "description": "See [`TextStyle::font_size`].",
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "font_weight": {
+          "description": "See [`TextStyle::font_weight`].",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "letter_spacing": {
+          "description": "See [`TextStyle::letter_spacing`].",
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "line_height": {
+          "description": "See [`TextStyle::line_height`].",
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "max_width": {
+          "description": "See [`TextStyle::max_width`].",
+          "format": "float",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "position": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Vec2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "See [`TextStyle::position`]."
+        },
+        "shadows": {
+          "description": "See [`TextStyle::shadows`].",
+          "items": {
+            "$ref": "#/$defs/TextShadow"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "strokes": {
+          "description": "See [`TextStyle::strokes`].",
+          "items": {
+            "$ref": "#/$defs/TextStroke"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         }
       },
       "type": "object"

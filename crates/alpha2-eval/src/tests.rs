@@ -838,14 +838,19 @@ fn each_caption_track_shows_its_cue_over_the_tracks_before_it() {
     let mut captions = Track::new(id(TrackId::new, "c1"), "captions", TrackKind::Caption);
     captions.captions = Some(Captions {
         style: alpha2_model::TextStyle::default(),
+        styles: std::collections::BTreeMap::new(),
         cues: vec![
             CaptionCue {
                 timeline_range: range(100, 150),
                 text: "first".into(),
+                speaker: None,
+                style: None,
             },
             CaptionCue {
                 timeline_range: range(150, 180),
                 text: "second".into(),
+                speaker: None,
+                style: None,
             },
         ],
     });
@@ -1210,4 +1215,75 @@ fn a_matte_clip_is_needed_only_while_a_clip_it_mattes_is_active() {
     };
     assert!(reads_matte(150), "the clip it mattes is active");
     assert!(!reads_matte(300), "nothing it mattes is active");
+}
+
+#[test]
+fn a_speaker_style_applies_to_each_of_their_cues() {
+    use alpha2_model::{CaptionCue, Captions, Paint, Rgba, TextStylePatch};
+
+    let red = Paint::Solid {
+        color: Rgba::new(1.0, 0.0, 0.0, 1.0),
+    };
+    let cue = |start, end, speaker: Option<&str>| CaptionCue {
+        speaker: speaker.map(Into::into),
+        ..CaptionCue::new(range(start, end), "words")
+    };
+    let mut project = project();
+    let mut track = Track::new(id(TrackId::new, "c1"), "captions", TrackKind::Caption);
+    track.captions = Some(Captions {
+        style: alpha2_model::TextStyle::default(),
+        styles: [(
+            "Ann".to_owned(),
+            TextStylePatch {
+                fill: Some(red.clone()),
+                ..TextStylePatch::default()
+            },
+        )]
+        .into(),
+        cues: vec![
+            cue(0, 10, Some("Ann")),
+            cue(10, 20, Some("Bob")),
+            cue(20, 30, Some("Ann")),
+        ],
+    });
+    project.timeline.tracks.insert(1, track);
+    let index = ActiveIndex::build(&project).expect("valid project");
+    let fill = |time| {
+        evaluate(&project, &index, MediaTime(time))
+            .expect("frame")
+            .captions[0]
+            .style
+            .fill
+            .clone()
+    };
+    assert_eq!(fill(5), red);
+    assert_eq!(fill(15), alpha2_model::TextStyle::default().fill);
+    assert_eq!(fill(25), red);
+}
+
+#[test]
+fn animator_time_restarts_at_each_cue() {
+    use alpha2_model::{CaptionCue, Captions};
+
+    let mut project = project();
+    let mut track = Track::new(id(TrackId::new, "c1"), "captions", TrackKind::Caption);
+    track.captions = Some(Captions {
+        style: alpha2_model::TextStyle::default(),
+        styles: std::collections::BTreeMap::new(),
+        cues: vec![
+            CaptionCue::new(range(100, 150), "first"),
+            CaptionCue::new(range(150, 180), "second"),
+        ],
+    });
+    project.timeline.tracks.insert(1, track);
+    let index = ActiveIndex::build(&project).expect("valid project");
+    let local = |time| {
+        evaluate(&project, &index, MediaTime(time))
+            .expect("frame")
+            .captions[0]
+            .local_time
+    };
+    assert_eq!(local(120), MediaTime(20));
+    assert_eq!(local(150), MediaTime(0));
+    assert_eq!(local(179), MediaTime(29));
 }

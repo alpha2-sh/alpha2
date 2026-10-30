@@ -107,6 +107,7 @@ from .types import (
     TextShadow,
     TextStroke,
     TextStyle,
+    TextStylePatch,
     TextUnit,
     TimeMap,
     TimeRange,
@@ -129,7 +130,7 @@ T = TypeVar("T")
 ALIGN_VALUES: tuple[Align, ...] = ("center", "top", "bottom", "left", "right", "top-left", "top-right", "bottom-left", "bottom-right")
 """Every `Align`, in the model's order."""
 
-CAPTION_STYLE_VALUES: tuple[CaptionStyle, ...] = ("outline", "boxed", "bar-bottom", "bold-center")
+CAPTION_STYLE_VALUES: tuple[CaptionStyle, ...] = ("outline", "boxed", "bar-bottom", "bold-center", "bold", "karaoke", "pop")
 """Every `CaptionStyle`, in the model's order."""
 
 FILE_KIND_VALUES: tuple[FileKind, ...] = ("video", "image", "audio")
@@ -193,7 +194,7 @@ Canvas: TypeAlias = "str | CustomCanvas"
 """The canvas: a preset name, or its parts."""
 
 
-CaptionStyle: TypeAlias = Literal["outline", "boxed", "bar-bottom", "bold-center"]
+CaptionStyle: TypeAlias = Literal["outline", "boxed", "bar-bottom", "bold-center", "bold", "karaoke", "pop"]
 """How captions look."""
 
 
@@ -216,6 +217,10 @@ class CaptionsNode(TypedDict):
     """A SubRip (`.srt`) or WebVTT (`.vtt`) file, read by the binding."""
     font_size: NotRequired[float | None]
     """Font size in pixels. Default: the theme's caption size."""
+    highlight: NotRequired[Rgba | None]
+    """The color `karaoke` and `pop` give the word being said. Default: the
+    theme's accent.
+    """
     id: NotRequired[str | None]
     """The node's name, for other nodes to refer to."""
     max_chars: NotRequired[int | None]
@@ -225,6 +230,10 @@ class CaptionsNode(TypedDict):
     position: NotRequired[float | None]
     """Where the text's middle lies, as a fraction of the canvas height.
     Default: the style's, which depends on the canvas's shape.
+    """
+    speakers: NotRequired[dict[str, SpeakerLook]]
+    """Each speaker's look, by the name cues give (a WebVTT voice, or a cue's
+    `speaker`): their cues take it over the style.
     """
     srt: NotRequired[str | None]
     """SubRip text."""
@@ -246,6 +255,8 @@ class Cue(TypedDict):
 
     end: float
     """End in seconds."""
+    speaker: NotRequired[str | None]
+    """Who says it: a key of the captions' `speakers` gives the cue its look."""
     start: float
     """Start in seconds."""
     text: str
@@ -543,6 +554,10 @@ class NodeCaptions(TypedDict):
     """A SubRip (`.srt`) or WebVTT (`.vtt`) file, read by the binding."""
     font_size: NotRequired[float | None]
     """Font size in pixels. Default: the theme's caption size."""
+    highlight: NotRequired[Rgba | None]
+    """The color `karaoke` and `pop` give the word being said. Default: the
+    theme's accent.
+    """
     id: NotRequired[str | None]
     """The node's name, for other nodes to refer to."""
     max_chars: NotRequired[int | None]
@@ -552,6 +567,10 @@ class NodeCaptions(TypedDict):
     position: NotRequired[float | None]
     """Where the text's middle lies, as a fraction of the canvas height.
     Default: the style's, which depends on the canvas's shape.
+    """
+    speakers: NotRequired[dict[str, SpeakerLook]]
+    """Each speaker's look, by the name cues give (a WebVTT voice, or a cue's
+    `speaker`): their cues take it over the style.
     """
     srt: NotRequired[str | None]
     """SubRip text."""
@@ -915,6 +934,17 @@ class NodeMusicBed(TypedDict):
 
 Node: TypeAlias = "NodeSequence | NodeStack | NodeGrid | NodeMedia | NodeText | NodeColor | NodeCaptions | NodeLayout | NodeAudio | NodeRaw | NodeSlideshow | NodeCaptionedVideo | NodeTitle | NodeTitleCard | NodeLowerThird | NodeEndCard | NodeComparisonGrid | NodeReframe | NodeLogo | NodeMusicBed"
 """One part of a video."""
+
+
+class SpeakerLook(TypedDict):
+    """How one speaker's captions look."""
+
+    color: NotRequired[Rgba | None]
+    """Their text color."""
+    position: NotRequired[Vec2 | None]
+    """Where their text's middle lies, fractions of the canvas, `(0, 0)`
+    top-left.
+    """
 
 
 TextRole: TypeAlias = Literal["title", "subtitle", "body", "label"]

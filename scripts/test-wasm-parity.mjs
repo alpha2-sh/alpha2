@@ -186,12 +186,24 @@ const imported = parseCaptions(
   "1\n00:00:01,000 --> 00:00:03,000\n<i>One</i>\n\n2\n00:00:02,000 --> 00:00:04,500\nTwo\n\nbroken\n",
   "srt",
 );
+// Italics become a run's class, as natively.
 assert.deepEqual(imported, {
   rows: [
-    [{ timeline_range: { start: 120_000, end: 360_000 }, text: "One" }],
+    [
+      {
+        timeline_range: { start: 120_000, end: 360_000 },
+        text: [{ text: "One", class: ["i"] }],
+      },
+    ],
     [{ timeline_range: { start: 240_000, end: 540_000 }, text: "Two" }],
   ],
   skipped: 1,
+  notes: {
+    extraVoices: 0,
+    droppedTimestamps: 0,
+    droppedClasses: 0,
+    flattened: 0,
+  },
 });
 assert.throws(() => parseCaptions(wasm, "no header", "webvtt"), /WEBVTT/);
 assert.equal(captionTrack("subs", "Subs", imported.rows[0]).kind, "caption");

@@ -40,6 +40,12 @@ MAX_CAPTION_FILE_CUES = 65536
 MAX_CAPTION_FONT_SIZE = 0.25
 """Mirrors `alpha2_model::MAX_CAPTION_FONT_SIZE`."""
 
+MAX_CAPTION_NAME_BYTES = 64
+"""Mirrors `alpha2_model::MAX_CAPTION_NAME_BYTES`."""
+
+MAX_CAPTION_STYLES = 32
+"""Mirrors `alpha2_model::MAX_CAPTION_STYLES`."""
+
 MAX_CHAIN_EFFECTS = 16
 """Mirrors `alpha2_model::MAX_CHAIN_EFFECTS`."""
 
@@ -592,23 +598,35 @@ CacheIntent: TypeAlias = Literal["auto", "pin", "bypass"]
 class CaptionCue(TypedDict):
     """Text shown over one timeline interval."""
 
+    speaker: NotRequired[str | None]
+    """Who says it, as the source names them (a WebVTT voice): at most 64
+    bytes. A style of that name, when the track has one, styles the cue
+    when the cue names none.
+    """
+    style: NotRequired[str | None]
+    """The name of one of the track's `styles`, applied over its style."""
     text: TextContent
     """The text, a string or runs; `\\n` starts a line. Non-empty, at most
-    `MAX_TEXT_CONTENT_BYTES` bytes. Run times are from the cue's start.
+    `MAX_TEXT_CONTENT_BYTES` bytes. Run times are from the cue's start
+    and lie within the cue.
     """
     timeline_range: TimeRange
     """When the cue shows. Non-empty and not before zero."""
 
 
 class Captions(TypedDict):
-    """What a caption track shows: its cues, in one style."""
+    """What a caption track shows: its cues, in its style."""
 
     cues: list[CaptionCue]
     """Cues in timeline order, none overlapping another: a track shows one
     cue at a time. Simultaneous captions take one track each.
     """
     style: NotRequired[TextStyle]
-    """How every cue of the track looks."""
+    """The style every cue starts from."""
+    styles: NotRequired[dict[str, TextStylePatch]]
+    """Named changes to `style`, for cues that name one or whose speaker has
+    one: at most `MAX_CAPTION_STYLES`, names 1 to 64 bytes.
+    """
 
 
 class Clip(TypedDict):
@@ -2795,6 +2813,41 @@ class TextStyle(TypedDict):
     before it. At most `MAX_TEXT_STROKES`, their widths summing to at
     most `MAX_TEXT_STROKE_EXTENT`.
     """
+
+
+class TextStylePatch(TypedDict):
+    """Changes to a `TextStyle`: each field set replaces the base's whole
+    (lists are replaced, not merged); a field left out keeps the base's.
+    """
+
+    align: NotRequired[TextAlign | None]
+    """See `TextStyle::align`."""
+    anchor: NotRequired[Vec2 | None]
+    """See `TextStyle::anchor`."""
+    animators: NotRequired[list[TextAnimator] | None]
+    """See `TextStyle::animators`."""
+    background: NotRequired[TextBackground | None]
+    """The box behind each line; `null` removes the base's."""
+    fill: NotRequired[Paint | None]
+    """See `TextStyle::fill`."""
+    font_family: NotRequired[str | None]
+    """The family; `null` draws from the fallback order alone."""
+    font_size: NotRequired[float | None]
+    """See `TextStyle::font_size`."""
+    font_weight: NotRequired[int | None]
+    """See `TextStyle::font_weight`."""
+    letter_spacing: NotRequired[float | None]
+    """See `TextStyle::letter_spacing`."""
+    line_height: NotRequired[float | None]
+    """See `TextStyle::line_height`."""
+    max_width: NotRequired[float | None]
+    """See `TextStyle::max_width`."""
+    position: NotRequired[Vec2 | None]
+    """See `TextStyle::position`."""
+    shadows: NotRequired[list[TextShadow] | None]
+    """See `TextStyle::shadows`."""
+    strokes: NotRequired[list[TextStroke] | None]
+    """See `TextStyle::strokes`."""
 
 
 TextUnit: TypeAlias = Literal["characters", "characters_excluding_spaces", "words", "lines"]

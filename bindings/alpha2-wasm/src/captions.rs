@@ -8,12 +8,14 @@ use wasm_bindgen::prelude::*;
 use crate::web::{internal_error, invalid_input, typed_error};
 
 /// Reads a subtitle file (`format` is `srt` or `webvtt`) into caption cues,
-/// returned as JSON `{ rows, skipped }`.
+/// returned as JSON `{ rows, skipped, notes }`.
 ///
 /// `rows` holds one caption track's cues per row, each a project document
-/// `CaptionCue`, split so no cue overlaps another in its row and no row holds
-/// more cues than a caption track allows. `skipped` counts blocks that were
-/// not cues.
+/// `CaptionCue` (with its speaker and runs when its markup gives them), split
+/// so no cue overlaps another in its row and no row holds more cues than a
+/// caption track allows. `skipped` counts blocks that were not cues; `notes`
+/// counts markup read but not kept (`extraVoices`, `droppedTimestamps`,
+/// `droppedClasses`, `flattened`).
 ///
 /// # Errors
 /// Rejects an unknown format, a WebVTT file without its header, and cues that
@@ -30,9 +32,16 @@ pub fn parse_captions(text: &str, format: &str) -> Result<String, JsValue> {
         }
     };
     let rows = caption_rows(&imported.cues).map_err(invalid_input)?;
+    let notes = imported.notes;
     serde_json::to_string(&serde_json::json!({
         "rows": rows,
         "skipped": imported.skipped,
+        "notes": {
+            "extraVoices": notes.extra_voices,
+            "droppedTimestamps": notes.dropped_timestamps,
+            "droppedClasses": notes.dropped_classes,
+            "flattened": notes.flattened,
+        },
     }))
     .map_err(internal_error)
 }

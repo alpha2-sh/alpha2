@@ -11,7 +11,10 @@
  */
 
 import type {
+  CaptionCue,
+  TextContent,
   TextStyle,
+  TextStylePatch,
   Clip,
   ClipEffect,
   ClipTransition,
@@ -128,7 +131,15 @@ export interface ClipOptions {
 export interface CueOptions {
   readonly at: Time;
   readonly duration: Time;
-  readonly text: string;
+  /**
+   * A string, or runs whose texts joined are the text; a run's `time` is in ticks from the cue's
+   * start, for Timing selectors (karaoke).
+   */
+  readonly text: TextContent;
+  /** Who says it; a track style of that name styles the cue when it names none. */
+  readonly speaker?: string;
+  /** The name of one of the track's styles, applied over its style. */
+  readonly style?: string;
 }
 
 /**
@@ -237,12 +248,16 @@ export class ProjectBuilder {
     return this.#track("audio", options);
   }
 
-  /** Adds a caption track in `style` (the defaults where absent). */
+  /**
+   * Adds a caption track in `style` (the defaults where absent), with named `styles` its cues take
+   * by `style`, or by `speaker` when a style has the speaker's name.
+   */
   captionTrack(
     options: {
       readonly id?: string;
       readonly name?: string;
       readonly style?: TextStyle;
+      readonly styles?: Readonly<Record<string, TextStylePatch>>;
     } = {},
   ): CaptionTrackBuilder {
     const id = this.#claim("track", options.id);
@@ -250,6 +265,7 @@ export class ProjectBuilder {
       id,
       options.name ?? id,
       options.style ?? {},
+      options.styles ?? {},
     );
     this.#tracks.push(track);
     return track;
@@ -452,16 +468,20 @@ export class CaptionTrackBuilder {
   readonly #id: string;
   readonly #name: string;
   readonly #style: TextStyle;
-  readonly #cues: {
-    timeline_range: { start: number; end: number };
-    text: string;
-  }[] = [];
+  readonly #styles: Readonly<Record<string, TextStylePatch>>;
+  readonly #cues: CaptionCue[] = [];
 
   /** @internal */
-  constructor(id: string, name: string, style: TextStyle) {
+  constructor(
+    id: string,
+    name: string,
+    style: TextStyle,
+    styles: Readonly<Record<string, TextStylePatch>>,
+  ) {
     this.#id = id;
     this.#name = name;
     this.#style = style;
+    this.#styles = styles;
   }
 
   /** The track's id. */
@@ -475,6 +495,8 @@ export class CaptionTrackBuilder {
     this.#cues.push({
       timeline_range: { start, end: start + toTicks(options.duration) },
       text: options.text,
+      ...(options.speaker === undefined ? {} : { speaker: options.speaker }),
+      ...(options.style === undefined ? {} : { style: options.style }),
     });
     return this;
   }
@@ -489,7 +511,13 @@ export class CaptionTrackBuilder {
       name: this.#name,
       kind: "caption",
       clips: [],
-      captions: { style: this.#style, cues },
+      captions: {
+        style: this.#style,
+        ...(Object.keys(this.#styles).length > 0
+          ? { styles: { ...this.#styles } }
+          : {}),
+        cues,
+      },
     };
   }
 }
