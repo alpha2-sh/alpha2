@@ -12,6 +12,7 @@ import { createServer } from "node:http";
 import { join, resolve } from "node:path";
 
 import { browserForRun, runBrowserPage } from "./lib/browser-page.mjs";
+import { probeRun } from "./lib/browser-probe.mjs";
 import {
   reportSkippedBrowser,
   skippedCasesSummary,
@@ -20,6 +21,7 @@ import {
 } from "./lib/chrome-cdp.mjs";
 import { cases, videoImportCases } from "./lib/wasm-browser/cases.mjs";
 import { page } from "./lib/wasm-browser/page.mjs";
+import { runCases } from "./lib/wasm-browser/run-cases.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const args = process.argv.slice(2);
@@ -105,19 +107,22 @@ try {
   const address = server.address();
   if (typeof address !== "object" || address === null)
     throw new Error("missing server address");
-  for (const name of Object.keys(cases)) {
-    if (only !== null && name !== only) continue;
-    let result;
-    try {
-      const encoded = await runBrowserPage(
-        browser,
-        `http://127.0.0.1:${address.port}/${name}${process.env.ALPHA2_CASE_QUERY ?? ""}`,
-        { timeoutMs: Number(process.env.ALPHA2_CASE_TIMEOUT_MS ?? 60_000) },
-      );
-      result = JSON.parse(decodeURIComponent(encoded));
-    } catch (error) {
-      result = { error: error.message };
-    }
+  // The run's first launch: a browser that cannot start ends the run here.
+  await probeRun("wasm-browser", browser, {
+    engineModule: "/packages/alpha2/wasm/alpha2_wasm.js",
+  });
+  const names = Object.keys(cases).filter(
+    (name) => only === null || name === only,
+  );
+  const runPage = async (name) => {
+    const encoded = await runBrowserPage(
+      browser,
+      `http://127.0.0.1:${address.port}/${name}${process.env.ALPHA2_CASE_QUERY ?? ""}`,
+      { timeoutMs: Number(process.env.ALPHA2_CASE_TIMEOUT_MS ?? 60_000) },
+    );
+    return JSON.parse(decodeURIComponent(encoded));
+  };
+  const report = (name, result) => {
     if (result.skipped && noSkips) {
       failures += 1;
       process.stdout.write(
@@ -137,7 +142,10 @@ try {
         `ok ${name}${Object.keys(details).length ? ` ${JSON.stringify(details)}` : ""}\n`,
       );
     }
-  }
+  };
+  const stopped = await runCases(names, runPage, report);
+  for (const line of stopped) process.stdout.write(`${line}\n`);
+  if (stopped.length > 0) failures += 1;
 } finally {
   await new Promise((resolveClose) => server.close(resolveClose));
 }

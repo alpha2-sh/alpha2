@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use crate::audio::audio_block_bytes;
 #[cfg(test)]
 use crate::heartbeat::InjectedStall;
-use crate::heartbeat::{CommandProgress, STALL_POLL, WorkerHeartbeat};
+use crate::heartbeat::{CommandProgress, STALL_POLL, WorkerExit, WorkerHeartbeat};
 use crate::metrics::{ExportMetrics, frames_per_second};
 use crate::protocol::HostError;
 use alpha2_media::{CancelToken, EncodeEvent, EncodeSink};
@@ -682,6 +682,12 @@ pub struct EncodeWorker {
     /// [`WorkerHeartbeat`].
     pub heartbeat: Arc<WorkerHeartbeat>,
     pub progress: Arc<CommandProgress>,
+    /// Set for a depth-0 channel: [`Self::send`] returns only once the worker
+    /// has taken the command, so nothing waits queued behind the encoder.
+    pub rendezvous: bool,
+    /// How long one wait on the worker lasts before it checks for a stall;
+    /// [`STALL_POLL`] outside tests.
+    pub poll: Duration,
     /// See [`crate::config::configured_stall_timeout`].
     pub stall_timeout: Duration,
     /// Set once the worker was found stuck: its thread will never return, so
@@ -790,6 +796,32 @@ pub(crate) fn span_send_time(call: EncodeStageTimings) -> Duration {
     call.video_send_frame
 }
 
+/// The encode command channel for `depth` queued commands. A depth-0
+/// (rendezvous) channel still holds one command: [`EncodeWorker::send`] then
+/// waits until the worker has taken it, which a zero-capacity channel could
+/// only offer through a blocking send or a retry poll.
+pub(crate) fn command_channel(
+    depth: usize,
+) -> (SyncSender<EncodeCommand>, Receiver<EncodeCommand>) {
+    mpsc::sync_channel(depth.max(1))
+}
+
+/// Waits for the next command and records its take; `None` once the channel
+/// is closed.
+pub(crate) fn take_command(
+    commands: &Receiver<EncodeCommand>,
+    depth: &EncodeChannelDepth,
+    progress: &CommandProgress,
+) -> Option<EncodeCommand> {
+    progress.set_waiting(true);
+    let received = commands.recv();
+    progress.set_waiting(false);
+    let command = received.ok()?;
+    depth.taken();
+    progress.took_one();
+    Some(command)
+}
+
 /// Encodes commands until the channel closes, a `Finish` arrives, or a write
 /// fails. A failure cancels the export and aborts the partial output.
 ///
@@ -800,11 +832,9 @@ pub(crate) fn span_send_time(call: EncodeStageTimings) -> Duration {
 fn run_encode_worker(state: &mut EncodeWorkerState) {
     loop {
         let idle_started = Instant::now();
-        let received = state.commands.recv();
+        let received = take_command(&state.commands, &state.depth, &state.progress);
         state.idle.record(idle_started.elapsed());
-        let Ok(command) = received else { break };
-        state.depth.taken();
-        state.progress.took_one();
+        let Some(command) = received else { break };
         match command {
             EncodeCommand::Event { event, video_index } => {
                 let _work = state.heartbeat.begin_work();
@@ -944,7 +974,7 @@ impl EncodeWorker {
         if sink.is_hardware() {
             heartbeat.opened_hardware();
         }
-        let (command_sender, command_receiver) = mpsc::sync_channel(channel_depth);
+        let (command_sender, command_receiver) = command_channel(channel_depth);
         let (result_sender, result_receiver) = mpsc::channel();
         let worker_cancel = cancel.clone();
         let worker_failure = failure.clone();
@@ -956,6 +986,7 @@ impl EncodeWorker {
         let worker_progress = Arc::clone(&progress);
         let worker_heartbeat = Arc::clone(&heartbeat);
         let run = move || {
+            let _exit = WorkerExit(Arc::clone(&worker_progress));
             let beat = Arc::clone(&worker_heartbeat);
             let _watch = alpha2_native::watch_encode_calls(move || beat.beat());
             let mut state = EncodeWorkerState {
@@ -1002,14 +1033,48 @@ impl EncodeWorker {
             failure,
             heartbeat,
             progress,
+            rendezvous: channel_depth == 0,
+            poll: STALL_POLL,
             stall_timeout,
             stalled: AtomicBool::new(false),
             finishing: AtomicBool::new(false),
         })
     }
 
+    /// A worker handle built as [`Self::spawn`] builds it, without the thread:
+    /// tests take commands from the returned receiver themselves and put their
+    /// thread's handle in [`Self::join`].
+    #[cfg(test)]
+    pub(crate) fn detached(channel_depth: usize) -> (Self, Receiver<EncodeCommand>) {
+        let (command_sender, command_receiver) = command_channel(channel_depth);
+        let (_result_sender, result_receiver) = mpsc::channel();
+        let worker = Self {
+            commands: Some(command_sender),
+            results: result_receiver,
+            join: None,
+            cancel: CancelToken::default(),
+            idle: Arc::default(),
+            depth: EncodeChannelDepth::new(channel_depth),
+            failure: PipelineFailure::default(),
+            heartbeat: Arc::default(),
+            progress: Arc::default(),
+            rendezvous: channel_depth == 0,
+            poll: STALL_POLL,
+            stall_timeout: Duration::from_secs(60),
+            stalled: AtomicBool::new(false),
+            finishing: AtomicBool::new(false),
+        };
+        (worker, command_receiver)
+    }
+
     /// Hands one command to the encode worker, waiting while the channel is
-    /// full. Returns whether it had to wait.
+    /// full. Returns whether the hand-off had to wait for a busy encoder: on a
+    /// queued channel, the channel was full; on a rendezvous channel, the
+    /// worker was not waiting for a command when this one was ready.
+    ///
+    /// On a rendezvous channel the call returns once the worker has taken the
+    /// command, so each previous command was taken before its own call
+    /// returned and the first take after this one's is its own.
     ///
     /// The wait ends when the worker takes a command, not on a fixed
     /// interval: polling the saturated thread on an interval rounds every
@@ -1031,7 +1096,12 @@ impl EncodeWorker {
         loop {
             // Read before trying, so a command the worker takes in between still ends the wait.
             let seen = self.progress.current();
+            let worker_waiting = self.progress.waiting();
             match self.depth.try_send(sender, pending) {
+                Ok(()) if self.rendezvous => {
+                    self.await_take(seen)?;
+                    return Ok(waited || !worker_waiting);
+                }
                 Ok(()) => return Ok(waited),
                 Err(TrySendError::Full(command)) => pending = command,
                 Err(TrySendError::Disconnected(_)) => {
@@ -1041,9 +1111,30 @@ impl EncodeWorker {
                 }
             }
             waited = true;
-            self.progress.wait_past(seen, STALL_POLL);
+            self.progress.wait_past(seen, self.poll);
             self.check_stall()?;
         }
+    }
+
+    /// Waits until the worker has taken a command since `seen`, checking for a
+    /// stall as it goes. A worker that has stopped never will, so its exit
+    /// ends the wait with the export's failure.
+    fn await_take(&self, seen: u64) -> Result<(), String> {
+        while self.progress.current() == seen {
+            if self.progress.is_stopped() || self.join.as_ref().is_none_or(JoinHandle::is_finished)
+            {
+                // The take may have landed between the count and the exit.
+                if self.progress.current() != seen {
+                    break;
+                }
+                return Err(self
+                    .failure
+                    .cause_or(encode_error("encode worker stopped before accepting media")));
+            }
+            self.progress.wait_past(seen, self.poll);
+            self.check_stall()?;
+        }
+        Ok(())
     }
 
     /// The worker's next event, if one is waiting. A failure it sent is

@@ -83,6 +83,14 @@ export function budgetChecks(harness, { gpu, projectPath, assets, baseline }) {
         `a rendezvous channel allocated ${performance.encoderFramesAllocated} surfaces, over its ceiling`,
       );
     }
+    // A rendezvous hand-off waits for the encoder's take, not for a stall-check interval.
+    const waits = performance.encodeBackpressureCount;
+    if (waits > 0 && performance.encodeQueueWaitMs / waits >= 125) {
+      throw new Error(
+        `a rendezvous hand-off waited ${(performance.encodeQueueWaitMs / waits).toFixed(1)} ms on average ` +
+          `(encodeQueueWaitMs ${performance.encodeQueueWaitMs.toFixed(1)} over ${waits} busy hand-offs)`,
+      );
+    }
   });
 
   check(

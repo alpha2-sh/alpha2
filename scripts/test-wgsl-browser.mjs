@@ -13,6 +13,7 @@ import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { resolve } from "node:path";
 
+import { probeRun } from "./lib/browser-probe.mjs";
 import {
   browserForCheck,
   reportSkippedBrowser,
@@ -31,6 +32,11 @@ if (chrome === null) {
   reportSkippedBrowser("the WGSL compile check");
   process.exit(0);
 }
+await probeRun("wgsl-browser", {
+  kind: "chrome",
+  name: "chrome",
+  command: chrome,
+});
 
 const listed = spawnSync(
   "cargo",

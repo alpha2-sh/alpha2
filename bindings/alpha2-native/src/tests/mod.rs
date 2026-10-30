@@ -26,6 +26,22 @@ use crate::convert::{
 use crate::decode::{effective_media_duration, normalize_audio_frame_layout};
 use alpha2_ffmpeg_bridge::DisplayRotation;
 
+/// Held around every child process a lib test spawns, and for the whole of
+/// every test that releases a file lock and expects it free again.
+///
+/// A child holds copies of the parent's descriptors between fork and exec. On
+/// macOS a partial output's lock is `flock` on the open file description, so a
+/// sibling test's spawn in that window keeps a just-released lock taken and
+/// the next claim reads it as another export's.
+pub(crate) static CHILD_PROCESS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Takes [`CHILD_PROCESS`], whatever a panicking holder left it as.
+pub(crate) fn child_process_lock() -> std::sync::MutexGuard<'static, ()> {
+    CHILD_PROCESS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 mod audio_io;
 mod containers;
 mod copies;

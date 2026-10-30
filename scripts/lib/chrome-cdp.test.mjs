@@ -4,12 +4,14 @@ import test from "node:test";
 
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { posix, win32 } from "node:path";
+import { tmpdir } from "node:os";
+import { join, posix, win32 } from "node:path";
 
+import { BrowserStartError } from "./browser-errors.mjs";
 import {
   browserForCheck,
   chromeExecutable,
-  chromeGpuFlags,
+  chromeGpuMode,
   fromThisMachine,
   runChromePage,
   servedFile,
@@ -71,34 +73,103 @@ test("Chrome or Chromium is found where each platform installs it", () => {
   );
 });
 
-test("Chrome runs on SwiftShader by default, on Metal on macOS, and on what the run names", () => {
-  const swiftShader = [
-    "--enable-unsafe-swiftshader",
-    "--use-angle=swiftshader",
-  ];
-  for (const platform of ["linux", "win32"])
-    assert.deepEqual(chromeGpuFlags({ env: {}, platform }), swiftShader);
-  // macOS Chrome's SwiftShader WebGPU fails the video cases outright; its Metal imports frames.
-  assert.deepEqual(chromeGpuFlags({ env: {}, platform: "darwin" }), [
-    "--use-angle=metal",
-  ]);
+test("chrome picks the machine GPU on macOS and Windows and SwiftShader on Linux unless the run names a mode", () => {
+  const swiftShader = {
+    mode: "swiftshader",
+    flags: ["--enable-unsafe-swiftshader", "--use-angle=swiftshader"],
+  };
+  assert.deepEqual(chromeGpuMode({ env: {}, platform: "linux" }), swiftShader);
+  assert.deepEqual(chromeGpuMode({ env: {}, platform: "darwin" }), {
+    mode: "machine",
+    flags: ["--use-angle=metal"],
+  });
+  // Chrome's own D3D11 ANGLE and Dawn's D3D12: no flag.
+  assert.deepEqual(chromeGpuMode({ env: {}, platform: "win32" }), {
+    mode: "machine",
+    flags: [],
+  });
   for (const platform of ["linux", "darwin", "win32"]) {
     assert.deepEqual(
-      chromeGpuFlags({
+      chromeGpuMode({ env: { ALPHA2_CHROME_GPU: "swiftshader" }, platform }),
+      swiftShader,
+    );
+    assert.deepEqual(
+      chromeGpuMode({ env: { ALPHA2_CHROME_GPU: "none" }, platform }),
+      {
+        mode: "none",
+        flags: ["--disable-gpu", "--disable-software-rasterizer"],
+      },
+    );
+    assert.deepEqual(
+      chromeGpuMode({
         env: {
+          ALPHA2_CHROME_GPU: "none",
           ALPHA2_CHROME_GPU_FLAGS:
             " --use-angle=vulkan  --enable-features=Vulkan ",
         },
         platform,
       }),
-      ["--use-angle=vulkan", "--enable-features=Vulkan"],
+      {
+        mode: "custom",
+        flags: ["--use-angle=vulkan", "--enable-features=Vulkan"],
+      },
     );
     // An empty value passes no GPU flag at all: Chrome's own default.
     assert.deepEqual(
-      chromeGpuFlags({ env: { ALPHA2_CHROME_GPU_FLAGS: "" }, platform }),
-      [],
+      chromeGpuMode({ env: { ALPHA2_CHROME_GPU_FLAGS: "" }, platform }),
+      { mode: "custom", flags: [] },
+    );
+    assert.deepEqual(
+      chromeGpuMode({ env: { ALPHA2_BROWSER_SETTINGS: "stock" }, platform }),
+      { mode: "stock", flags: [] },
+    );
+    assert.throws(
+      () => chromeGpuMode({ env: { ALPHA2_CHROME_GPU: "hardware" }, platform }),
+      /unknown ALPHA2_CHROME_GPU "hardware": expected machine, swiftshader, none/,
     );
   }
+  assert.deepEqual(
+    chromeGpuMode({
+      env: { ALPHA2_CHROME_GPU: "machine", ALPHA2_CHROME_HEADED: "1" },
+      platform: "linux",
+    }),
+    {
+      mode: "machine",
+      flags: [
+        "--use-angle=vulkan",
+        "--enable-features=Vulkan",
+        "--ignore-gpu-blocklist",
+      ],
+    },
+  );
+  assert.throws(
+    () =>
+      chromeGpuMode({
+        env: { ALPHA2_CHROME_GPU: "machine" },
+        platform: "linux",
+      }),
+    (error) =>
+      error instanceof BrowserStartError && /DRI3 display/.test(error.message),
+  );
+});
+
+test("a Chrome that exits before its endpoint fails with a start error", async () => {
+  // Node stands in for Chrome: it refuses Chrome's flags and exits 9 without the DevTools line.
+  await assert.rejects(
+    runChromePage(process.execPath, "about:blank", { timeoutMs: 5_000 }),
+    (error) =>
+      error instanceof BrowserStartError &&
+      /Chrome exited 9/.test(error.message),
+  );
+  // A command Node cannot spawn at all fails the same way.
+  await assert.rejects(
+    runChromePage(join(tmpdir(), "alpha2-no-such-chrome"), "about:blank", {
+      timeoutMs: 5_000,
+    }),
+    (error) =>
+      error instanceof BrowserStartError &&
+      /could not start/.test(error.message),
+  );
 });
 
 test("without Chrome a check skips its browser half unless the run requires it", () => {

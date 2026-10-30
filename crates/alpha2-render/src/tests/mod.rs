@@ -58,6 +58,7 @@ mod stalls;
 mod texture_pool;
 mod threads;
 mod transition_quality;
+mod upload_reuse;
 mod vector;
 mod view_cache;
 mod yuv_conversion;

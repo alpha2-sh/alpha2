@@ -807,9 +807,18 @@ pub fn configured_frame_depth() -> usize {
 ///
 /// By default, the in-flight byte budget determines depth: each slot holds
 /// one packed frame, so smaller outputs can use deeper channels. A
-/// single-core machine always gets `Some(0)`, a rendezvous channel.
+/// single-core machine always gets `Some(0)`, a rendezvous channel. Rust
+/// divides a cgroup CPU quota with integer division, so a quota below two
+/// CPUs counts as one; the host says so once per process.
 pub fn configured_encode_channel_depth() -> Option<usize> {
     if std::thread::available_parallelism().is_ok_and(|cores| cores.get() == 1) {
+        static NOTED: std::sync::Once = std::sync::Once::new();
+        NOTED.call_once(|| {
+            alpha2_os::diagnostic!(
+                "alpha2-host: one CPU is available to this process; the encode channel is a \
+                 rendezvous (depth 0)"
+            );
+        });
         return Some(0);
     }
     env::var("ALPHA2_ENCODE_QUEUE_DEPTH")

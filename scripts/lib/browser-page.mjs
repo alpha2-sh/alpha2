@@ -63,13 +63,17 @@ function requestedBrowser(argv, env) {
  * Opens `url` in `browser` and waits for the page to report; resolves to the URI-encoded JSON title
  * it set. `timeoutMs` is how long the page has.
  *
+ * `onBrowser` receives the browser's version record: Chrome's `Browser.getVersion`, or the
+ * WebDriver session's capabilities. Rejects with a `BrowserStartError` when the browser cannot
+ * start.
+ *
  * @param {NonNullable<ReturnType<typeof browserForRun>>} browser
  * @param {string} url
- * @param {{ timeoutMs?: number }} [options]
+ * @param {{ timeoutMs?: number, onBrowser?: (version: object) => void }} [options]
  * @returns {Promise<string>}
  */
-export function runBrowserPage(browser, url, { timeoutMs } = {}) {
+export function runBrowserPage(browser, url, { timeoutMs, onBrowser } = {}) {
   return browser.kind === "chrome"
-    ? runChromePage(browser.command, url, { timeoutMs })
-    : runWebDriverPage(browser.webdriver, url, { timeoutMs });
+    ? runChromePage(browser.command, url, { timeoutMs, onBrowser })
+    : runWebDriverPage(browser.webdriver, url, { timeoutMs, onBrowser });
 }

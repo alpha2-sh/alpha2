@@ -616,6 +616,7 @@ fn decoded_planes_hold_no_byte_the_decoder_never_wrote() {
         ("av1-10bit-padded.mp4", "0"),
         ("h264-padded.mp4", "1"),
     ] {
+        let spawning = child_process_lock();
         let child = std::process::Command::new(std::env::current_exe().expect("test binary"))
             .args([
                 "--exact",
@@ -630,6 +631,7 @@ fn decoded_planes_hold_no_byte_the_decoder_never_wrote() {
             .env("MALLOC_PERTURB_", "90")
             .output()
             .expect("child");
+        drop(spawning);
         let stdout = String::from_utf8_lossy(&child.stdout);
         let stderr = String::from_utf8_lossy(&child.stderr);
         assert!(

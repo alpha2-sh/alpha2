@@ -518,6 +518,8 @@ mod tests {
 
     #[test]
     fn a_partial_its_holder_removes_while_it_is_claimed_is_claimed_new() {
+        // The holder's lock is released and taken again below.
+        let _child = crate::tests::child_process_lock();
         // The holder removes its partial and unlocks between this claim's open and lock. On a Linux
         // CIFS mount the removed file keeps its name until our handle closes, so the claim must not
         // take it.

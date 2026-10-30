@@ -51,10 +51,6 @@ const IID IID_ID3D12Fence = {4};
 static long live[MOCK_KINDS];
 /* `CreateCommittedResource` calls that made a resource: the pool's targets. */
 static long committed;
-/* The next resource with the not-zeroed heap flag fails with E_INVALIDARG, as before Windows 10
-   2004; `not_zeroed_refusals` counts those refusals. */
-static int refuse_not_zeroed;
-static long not_zeroed_refusals;
 static int failures;
 /* Calls the encode copier's checks count, and the faults a check sets up for it: a queue that
    holds its signals (a fence that never completes), and the next close, wait or nth signal
@@ -135,10 +131,7 @@ HRESULT mock_create_committed_resource(
     CHECK(heap->Type == D3D12_HEAP_TYPE_DEFAULT, "a target outside the default heap");
     CHECK(state == D3D12_RESOURCE_STATE_COMMON, "a target made in state %d", (int)state);
     CHECK(iid == &IID_ID3D12Resource, "a resource asked for another interface");
-    if ((flags & D3D12_HEAP_FLAG_CREATE_NOT_ZEROED) && refuse_not_zeroed) {
-        not_zeroed_refusals++;
-        return E_INVALIDARG;
-    }
+    CHECK(!(flags & D3D12_HEAP_FLAG_CREATE_NOT_ZEROED), "a target made in not-zeroed memory");
     MockObject *object = mock_new(MOCK_RESOURCE);
     object->descriptor = *descriptor;
     committed++;
@@ -424,15 +417,14 @@ static void a_trim_frees_the_idle_targets_alone(void) {
     give_back(out);
 }
 
-/* A device that refuses the not-zeroed heap flag makes its targets without it, and is not asked
-   again. */
-static void a_device_without_not_zeroed_heaps_is_asked_once(void) {
+/* Targets are made in zeroed memory, whatever their size: a copy that skips all-zero blocks then
+   leaves zeros, never an earlier frame. */
+static void targets_are_made_in_zeroed_memory(void) {
     void *pool = alpha2_native_gpu_d3d12_pool_create(device);
-    refuse_not_zeroed = 1;
+    long before = committed;
     give_back(copy(pool, DXGI_FORMAT_NV12, 64, 32));
     give_back(copy(pool, DXGI_FORMAT_NV12, 128, 64));
-    refuse_not_zeroed = 0;
-    CHECK(not_zeroed_refusals == 1, "the flag was refused %ld times", not_zeroed_refusals);
+    CHECK(committed - before == 2, "made %ld targets", committed - before);
     CHECK(counts(pool).made == 2, "made %u", counts(pool).made);
     alpha2_native_gpu_d3d12_pool_destroy(pool);
 }
@@ -627,7 +619,7 @@ int main(void) {
     a_full_pool_makes_room_for_the_size_shown_now();
     sizes_shown_in_turn_keep_their_targets();
     a_trim_frees_the_idle_targets_alone();
-    a_device_without_not_zeroed_heaps_is_asked_once();
+    targets_are_made_in_zeroed_memory();
     encode_slots_rotate_and_reset_only_after_their_fence();
     an_encode_copier_with_a_pending_slot_is_not_freed();
     an_encode_copy_failure_leaves_the_copier_as_its_step_says();

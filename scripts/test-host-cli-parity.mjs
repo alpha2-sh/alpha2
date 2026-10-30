@@ -8,6 +8,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { probeRun } from "./lib/browser-probe.mjs";
 import { browserForCheck, reportSkippedBrowser } from "./lib/chrome-cdp.mjs";
 import { browserChecks } from "./lib/host-cli-parity/browser-checks.mjs";
 import { projectPath } from "./lib/host-cli-parity/fixtures.mjs";
@@ -18,6 +19,12 @@ import { pythonClientCheck } from "./lib/host-cli-parity/python-client.mjs";
 async function main() {
   // Decided first, so a run requiring the browser fails before the native checks.
   const chrome = browserForCheck();
+  if (chrome !== null)
+    await probeRun(
+      "host-parity",
+      { kind: "chrome", name: "chrome", command: chrome },
+      { engineModule: "/packages/alpha2/wasm/alpha2_wasm.js" },
+    );
   const scratch = await mkdtemp(join(tmpdir(), "alpha2-host-parity-"));
   const project = JSON.parse(await readFile(projectPath, "utf8"));
   let pythonChecked;

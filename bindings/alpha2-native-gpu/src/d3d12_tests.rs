@@ -98,6 +98,23 @@ fn seeded_surface(
     height: i32,
     seed: usize,
 ) -> AVFrame {
+    surface_with(
+        device,
+        software_format,
+        width,
+        height,
+        |plane, channel, x, y| seeded_code(seed, plane, channel, x, y),
+    )
+}
+
+/// A D3D12VA surface like [`surface`], holding `code(plane, channel, x, y)` in each sample.
+fn surface_with(
+    device: &AVHWDeviceContext,
+    software_format: i32,
+    width: i32,
+    height: i32,
+    code: impl Fn(usize, usize, usize, usize) -> u16,
+) -> AVFrame {
     let mut frames = device.hwframe_ctx_alloc();
     {
         let data = frames.data();
@@ -133,7 +150,7 @@ fn seeded_surface(
                 .chunks_mut(sample)
                 .enumerate()
             {
-                let value = seeded_code(seed, plane, index % channels, index / channels, y);
+                let value = code(plane, index % channels, index / channels, y);
                 if ten_bit {
                     slot.copy_from_slice(&((value * 4) << 6).to_le_bytes());
                 } else {
@@ -463,6 +480,85 @@ fn a_stream_of_copies_reuses_its_targets_and_command_lists_and_shows_each_surfac
     let imported = copy(64, 32, 0);
     drop(context);
     drop(imported);
+}
+
+#[test]
+fn zero_blocks_of_a_decoded_frame_read_as_zero_in_fresh_and_reused_targets() {
+    let Some(context) = shared_context() else {
+        return;
+    };
+    let device = context.ffmpeg_device();
+    let (width, height) = (64_usize, 32_usize);
+    let mut formats = vec![(ffi::AV_PIX_FMT_NV12, NativePlaneLayout::Nv12)];
+    if context.supports_ten_bit() {
+        formats.push((ffi::AV_PIX_FMT_P010LE, NativePlaneLayout::P010));
+    }
+    // Luma is zero in alternating 8x8 blocks (64-byte rows at 8 bits) and seeded elsewhere;
+    // chroma is 128, full-range black.
+    let zero_block = |x: usize, y: usize| (x / 8 + y / 8).is_multiple_of(2);
+    let blocks = |plane: usize, channel: usize, x: usize, y: usize| match plane {
+        0 if zero_block(x, y) => 0,
+        0 => seeded_code(7, plane, channel, x, y),
+        _ => 128,
+    };
+    for (format, layout) in formats {
+        let full = if layout == NativePlaneLayout::P010 {
+            65535.0 / 256.0
+        } else {
+            255.0
+        };
+        let check = |frame: AVFrame, what: &str| {
+            let imported = context
+                .copy_surface(Arc::new(D3D12FrameLease::new(frame)))
+                .unwrap_or_else(|error| panic!("{layout:?} {what}: {error}"));
+            for (plane, view, size, channels) in [
+                (0, &imported.y, (width, height), 1),
+                (1, &imported.uv, (width / 2, height / 2), 2),
+            ] {
+                let size32 = (
+                    u32::try_from(size.0).expect("width"),
+                    u32::try_from(size.1).expect("height"),
+                );
+                let texels = sample(&context, &imported, view, size32);
+                for (index, texel) in texels.iter().enumerate() {
+                    let (x, y) = (index % size.0, index / size.0);
+                    for (channel, sampled) in texel.iter().take(channels).enumerate() {
+                        let expected = f32::from(blocks(plane, channel, x, y));
+                        let seen = sampled * full;
+                        let close = if expected == 0.0 {
+                            seen == 0.0
+                        } else {
+                            (seen - expected).abs() < 0.05
+                        };
+                        assert!(
+                            close,
+                            "{layout:?} {what}: plane {plane} ({x}, {y}) channel {channel}: \
+                             sampled {seen}, wrote {expected}"
+                        );
+                    }
+                }
+            }
+        };
+        validated(&context, || {
+            // A bright surface first, then its target freed, so the next target can land on
+            // memory that holds its samples.
+            let bright = surface_with(&device, format, 64, 32, |_, _, _, _| 235);
+            drop(
+                context
+                    .copy_surface(Arc::new(D3D12FrameLease::new(bright)))
+                    .expect("bright copy"),
+            );
+            context.release_idle_copies();
+            check(
+                surface_with(&device, format, 64, 32, blocks),
+                "fresh target",
+            );
+            check(
+                surface_with(&device, format, 64, 32, blocks),
+                "reused target",
+            );
+        });
+    }
 }
 
 #[test]

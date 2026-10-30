@@ -7,6 +7,7 @@ import { existsSync } from "node:fs";
 import { createServer } from "node:net";
 import { posix, win32 } from "node:path";
 
+import { BrowserStartError } from "./browser-errors.mjs";
 import { stopChrome } from "./chrome-cdp.mjs";
 
 /** How long one WebDriver request may wait for its answer unless the page has less time left. */
@@ -119,12 +120,15 @@ function onPath(file, { env, platform, exists }) {
  * @param {number} [options.timeoutMs] How long the page has to report, 30 s by default.
  * @param {number} [options.sessionTimeoutMs] How long the session has to start its browser, 180 s
  *   by default.
- * @returns {Promise<string>} The URI-encoded JSON title the page set.
+ * @param {(capabilities: object) => void} [options.onBrowser] Called with the session's
+ *   capabilities (`browserName`, `browserVersion`) once the session started.
+ * @returns {Promise<string>} The URI-encoded JSON title the page set. Rejects with a
+ *   `BrowserStartError` when the driver or the session cannot start.
  */
 export async function runWebDriverPage(
   browser,
   url,
-  { timeoutMs = 30_000, sessionTimeoutMs = SESSION_TIMEOUT_MS } = {},
+  { timeoutMs = 30_000, sessionTimeoutMs = SESSION_TIMEOUT_MS, onBrowser } = {},
 ) {
   const target = new URL(url);
   if (target.hostname === "127.0.0.1") target.hostname = "localhost";
@@ -146,8 +150,14 @@ export async function runWebDriverPage(
   const driver = new Driver(`http://127.0.0.1:${port}`, child, () => output);
   let session = null;
   try {
-    await driver.ready(START_TIMEOUT_MS);
-    session = await driver.newSession(browser, sessionTimeoutMs);
+    try {
+      await driver.ready(START_TIMEOUT_MS);
+      const started = await driver.newSession(browser, sessionTimeoutMs);
+      session = started.id;
+      onBrowser?.(started.capabilities);
+    } catch (error) {
+      throw new BrowserStartError(error.message, { cause: error });
+    }
     const deadline = Date.now() + timeoutMs;
     const remaining = () => Math.max(1, deadline - Date.now());
     // Safari cancels a waited navigation when its page-load timeout runs out, and these pages may load
@@ -268,7 +278,7 @@ class Driver {
     );
   }
 
-  /** Opens a session of `browser` and returns its id. */
+  /** Opens a session of `browser` and returns its id and capabilities. */
   async newSession(browser, timeoutMs) {
     try {
       const value = await this.command(
@@ -279,7 +289,7 @@ class Driver {
       );
       if (typeof value?.sessionId !== "string")
         throw new Error(`no session id in ${JSON.stringify(value)}`);
-      return value.sessionId;
+      return { id: value.sessionId, capabilities: value.capabilities ?? {} };
     } catch (error) {
       throw new Error(
         `${browser.name} did not start a WebDriver session (${error.message}${this.#said()}); ${browser.sessionHint}`,

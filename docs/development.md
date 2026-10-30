@@ -105,7 +105,8 @@ npm run test:node-e2e      # @alpha2-sh/node driving a debug alpha2-host
 npm run test:package       # the npm tarballs' contents and exports
 ```
 
-- Chrome runs headless on SwiftShader by default. `ALPHA2_CHROME_GPU_FLAGS` replaces the GPU flags (for example `"--use-angle=vulkan --enable-features=Vulkan"`), and `ALPHA2_CHROME_HEADED=1` runs a window, for a virtual display.
+- `ALPHA2_CHROME_GPU` picks Chrome's GPU stack: `machine` (the machine's GPU; the default on macOS and Windows), `swiftshader` (the default on Linux) or `none` (no GPU process: `auto` renders on the CPU). On Linux, `machine` needs a headed Chrome on a DRI3 display. `ALPHA2_CHROME_GPU_FLAGS` replaces the GPU flags altogether (for example `"--use-angle=vulkan --enable-features=Vulkan"`), and `ALPHA2_CHROME_HEADED=1` runs a window.
+- Every browser run starts with one probe page and prints a `browser-run:` line naming the browser, its version, the GPU mode, the flags and the WebGPU adapter; the full report goes to `target/browser-reports/`. A browser that cannot start ends the run before its first case.
 - `ALPHA2_REQUIRE_WASM=1` and `ALPHA2_REQUIRE_BROWSER=1` turn a skip for a missing wasm build or browser into a failure.
 
 ## Lint and format

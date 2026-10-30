@@ -365,6 +365,8 @@ fn a_replacing_write_keeps_the_old_file_until_it_finishes() {
 
 #[test]
 fn removing_a_stale_partial_leaves_a_running_exports_partial() {
+    // The running export's lock is released and taken again below.
+    let _child = child_process_lock();
     let path = output_path("remove-stale-partial");
     let _ = fs::remove_file(&path);
     let partial = partial_beside(&path);
@@ -550,6 +552,7 @@ fn a_write_past_the_file_size_limit_fails_the_export_and_leaves_no_partial() {
             let _ = fs::remove_file(partial_beside(&output));
             // An ignored SIGXFSZ stays ignored across exec, so the write past the limit fails with
             // EFBIG rather than killing the process.
+            let spawning = child_process_lock();
             let child = std::process::Command::new("sh")
                 .args(["-c", "trap '' XFSZ; exec prlimit --fsize=\"$0\" \"$@\""])
                 .arg(limit.to_string())
@@ -565,6 +568,7 @@ fn a_write_past_the_file_size_limit_fails_the_export_and_leaves_no_partial() {
                 .env("ALPHA2_FSIZE_SINK", sink)
                 .output()
                 .expect("child");
+            drop(spawning);
             let stdout = String::from_utf8_lossy(&child.stdout);
             let stderr = String::from_utf8_lossy(&child.stderr);
             let _ = fs::remove_file(&output);

@@ -680,27 +680,12 @@ fn an_export_error_is_not_classified_by_tags_its_paths_spell() {
 fn a_stopped_encode_worker_reports_the_original_pipeline_failure() {
     // A worker that has given up shows as a channel disconnect; the reported error must still be
     // what actually failed.
-    let (command_sender, command_receiver) = mpsc::sync_channel(1);
-    let (_result_sender, result_receiver) = mpsc::channel();
-    let cancel = CancelToken::default();
-    let failure = PipelineFailure::default();
-    failure.record("native encode failed: VideoToolbox rejected the frame");
-    cancel.cancel();
+    let (worker, command_receiver) = EncodeWorker::detached(1);
+    worker
+        .failure
+        .record("native encode failed: VideoToolbox rejected the frame");
+    worker.cancel.cancel();
     drop(command_receiver);
-    let worker = EncodeWorker {
-        commands: Some(command_sender),
-        results: result_receiver,
-        join: None,
-        cancel,
-        idle: std::sync::Arc::default(),
-        depth: EncodeChannelDepth::new(1),
-        failure,
-        heartbeat: std::sync::Arc::default(),
-        progress: std::sync::Arc::default(),
-        stall_timeout: Duration::from_secs(60),
-        stalled: std::sync::atomic::AtomicBool::new(false),
-        finishing: std::sync::atomic::AtomicBool::new(false),
-    };
 
     assert_eq!(
         worker.send(EncodeCommand::Finish),
@@ -754,22 +739,7 @@ fn the_encode_channel_depth_counts_a_command_before_the_worker_can_take_it() {
 fn a_full_encode_channel_blocks_until_the_worker_drains_it() {
     // An empty channel takes the command without reporting backpressure. A full one must block on
     // the worker rather than fail, and release as soon as the worker takes one command.
-    let (command_sender, command_receiver) = mpsc::sync_channel(1);
-    let (_result_sender, result_receiver) = mpsc::channel();
-    let worker = EncodeWorker {
-        commands: Some(command_sender),
-        results: result_receiver,
-        join: None,
-        cancel: CancelToken::default(),
-        idle: std::sync::Arc::default(),
-        depth: EncodeChannelDepth::new(1),
-        failure: PipelineFailure::default(),
-        heartbeat: std::sync::Arc::default(),
-        progress: std::sync::Arc::default(),
-        stall_timeout: Duration::from_secs(60),
-        stalled: std::sync::atomic::AtomicBool::new(false),
-        finishing: std::sync::atomic::AtomicBool::new(false),
-    };
+    let (worker, command_receiver) = EncodeWorker::detached(1);
 
     assert_eq!(worker.send(EncodeCommand::Finish), Ok(false));
     let drain = std::thread::spawn(move || {
@@ -778,6 +748,90 @@ fn a_full_encode_channel_blocks_until_the_worker_drains_it() {
     });
     assert!(worker.send(EncodeCommand::Finish).is_ok());
     let _receiver = drain.join().expect("drain thread");
+}
+
+/// A fake encode worker on `worker`'s channel: takes `commands` commands, each after `delay`, the
+/// way the real worker records its takes. Its handle goes in `worker.join`.
+fn fake_encode_worker(
+    worker: &mut EncodeWorker,
+    receiver: mpsc::Receiver<EncodeCommand>,
+    commands: usize,
+    delay: Duration,
+) {
+    let depth = std::sync::Arc::clone(&worker.depth);
+    let progress = std::sync::Arc::clone(&worker.progress);
+    worker.join = Some(std::thread::spawn(move || {
+        let _exit = crate::heartbeat::WorkerExit(std::sync::Arc::clone(&progress));
+        for _ in 0..commands {
+            std::thread::sleep(delay);
+            if crate::encode::take_command(&receiver, &depth, &progress).is_none() {
+                return;
+            }
+        }
+    }));
+}
+
+#[test]
+fn a_rendezvous_send_returns_when_the_worker_takes_the_command() {
+    // With a poll of 10 s, a send that waited for its poll instead of the take could not finish
+    // in the 5 s each send is given.
+    let (mut worker, receiver) = EncodeWorker::detached(0);
+    worker.poll = Duration::from_secs(10);
+    assert!(worker.rendezvous);
+    fake_encode_worker(&mut worker, receiver, 20, Duration::from_millis(20));
+    for command in 0..20 {
+        let started = std::time::Instant::now();
+        assert_eq!(
+            worker.send(EncodeCommand::Finish),
+            Ok(true),
+            "command {command}: the worker was busy, so the hand-off waited"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "command {command} took {:?}",
+            started.elapsed()
+        );
+    }
+    assert_eq!(worker.progress.current(), 20);
+}
+
+#[test]
+fn a_rendezvous_send_to_an_idle_worker_reports_no_backpressure() {
+    let (mut worker, receiver) = EncodeWorker::detached(0);
+    worker.poll = Duration::from_secs(10);
+    fake_encode_worker(&mut worker, receiver, 1, Duration::ZERO);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !worker.progress.waiting() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the fake worker never waited"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(worker.send(EncodeCommand::Finish), Ok(false));
+    assert_eq!(worker.progress.current(), 1);
+}
+
+#[test]
+fn a_rendezvous_send_to_a_stopped_worker_reports_its_failure() {
+    let (mut worker, receiver) = EncodeWorker::detached(0);
+    worker.poll = Duration::from_secs(10);
+    let failure = worker.failure.clone();
+    let progress = std::sync::Arc::clone(&worker.progress);
+    worker.join = Some(std::thread::spawn(move || {
+        let _exit = crate::heartbeat::WorkerExit(progress);
+        // Stops a moment after the send, which then waits for a take that never comes; a send
+        // that finds the channel already closed must report the same failure.
+        std::thread::sleep(Duration::from_millis(50));
+        failure.record("native encode failed: the muxer refused the header");
+        drop(receiver);
+    }));
+    let started = std::time::Instant::now();
+    assert_eq!(
+        worker.send(EncodeCommand::Finish),
+        Err("native encode failed: the muxer refused the header".to_owned())
+    );
+    assert!(started.elapsed() < Duration::from_secs(5));
 }
 
 #[test]
@@ -872,7 +926,7 @@ fn a_worker_that_failed_after_the_first_failure_reports_the_first_one() {
     assert_eq!(worker.finish(), Err(first.to_owned()));
 
     let encode_worker = |failure: PipelineFailure| {
-        let (command_sender, command_receiver) = mpsc::sync_channel(1);
+        let (mut worker, command_receiver) = EncodeWorker::detached(1);
         let (result_sender, result_receiver) = mpsc::channel();
         result_sender
             .send(crate::encode::EncodeWorkerEvent::Failed(tag_phase(
@@ -881,24 +935,9 @@ fn a_worker_that_failed_after_the_first_failure_reports_the_first_one() {
                 "native encode was cancelled".to_owned(),
             )))
             .expect("event");
-        (
-            EncodeWorker {
-                commands: Some(command_sender),
-                results: result_receiver,
-                join: None,
-                cancel: CancelToken::default(),
-                idle: Arc::default(),
-                depth: EncodeChannelDepth::new(1),
-                failure,
-                heartbeat: Arc::default(),
-                progress: Arc::default(),
-                stall_timeout: Duration::from_secs(60),
-                stalled: std::sync::atomic::AtomicBool::new(false),
-                finishing: std::sync::atomic::AtomicBool::new(false),
-            },
-            command_receiver,
-            result_sender,
-        )
+        worker.results = result_receiver;
+        worker.failure = failure;
+        (worker, command_receiver, result_sender)
     };
     let decode_first = &tag_phase(
         ExportPhase::Decode,

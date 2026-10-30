@@ -8,6 +8,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path, { join, win32 } from "node:path";
 
+import { BrowserStartError } from "./browser-errors.mjs";
+
 /**
  * The Chrome to run: ALPHA2_PARITY_CHROME, else the first usual install of Chrome or Chromium on
  * this platform that exists, else null. The options stand in for the process's own, for tests.
@@ -56,20 +58,66 @@ function chromeCandidates(platform, env) {
   ];
 }
 
+/** The GPU modes `ALPHA2_CHROME_GPU` takes. */
+export const CHROME_GPU_MODES = Object.freeze([
+  "machine",
+  "swiftshader",
+  "none",
+]);
+
 /**
- * The flags that pick Chrome's GPU stack: ALPHA2_CHROME_GPU_FLAGS when set (split on whitespace),
- * e.g. "--use-angle=vulkan --enable-features=Vulkan". Otherwise SwiftShader, except on macOS,
- * where SwiftShader WebGPU fails video cases outright, so the default is the machine's GPU.
- * @returns {string[]}
+ * The GPU stack a Chrome launch uses, by name, and the flags that pick it.
+ *
+ * - `stock` when `ALPHA2_BROWSER_SETTINGS=stock`: no GPU flag at all.
+ * - `custom` when `ALPHA2_CHROME_GPU_FLAGS` is set (even empty): those flags, split on whitespace.
+ * - otherwise `ALPHA2_CHROME_GPU` (`machine`, `swiftshader` or `none`), by default `machine` on
+ *   macOS and Windows and `swiftshader` on Linux, where headless Chrome lands on SwiftShader anyway
+ *   and the machine's GPU needs a headed browser on a DRI3 display.
+ *
+ * Throws on an unknown mode, and a `BrowserStartError` for `machine` on Linux without a headed
+ * browser (`ALPHA2_CHROME_HEADED=1`).
+ *
+ * @returns {{ mode: "machine" | "swiftshader" | "none" | "custom" | "stock", flags: string[] }}
  */
-export function chromeGpuFlags({
+export function chromeGpuMode({
   env = process.env,
   platform = process.platform,
 } = {}) {
+  if (env.ALPHA2_BROWSER_SETTINGS === "stock")
+    return { mode: "stock", flags: [] };
   const configured = env.ALPHA2_CHROME_GPU_FLAGS;
-  if (configured !== undefined) return configured.split(/\s+/).filter(Boolean);
-  if (platform === "darwin") return ["--use-angle=metal"];
-  return ["--enable-unsafe-swiftshader", "--use-angle=swiftshader"];
+  if (configured !== undefined)
+    return { mode: "custom", flags: configured.split(/\s+/).filter(Boolean) };
+  const mode =
+    env.ALPHA2_CHROME_GPU ||
+    (platform === "darwin" || platform === "win32" ? "machine" : "swiftshader");
+  if (!CHROME_GPU_MODES.includes(mode))
+    throw new Error(
+      `unknown ALPHA2_CHROME_GPU ${JSON.stringify(mode)}: expected ${CHROME_GPU_MODES.join(", ")}`,
+    );
+  if (mode === "swiftshader")
+    return {
+      mode,
+      flags: ["--enable-unsafe-swiftshader", "--use-angle=swiftshader"],
+    };
+  // No GPU process at all: the browser's `auto` renderer falls back to the CPU.
+  if (mode === "none")
+    return { mode, flags: ["--disable-gpu", "--disable-software-rasterizer"] };
+  if (platform === "darwin") return { mode, flags: ["--use-angle=metal"] };
+  // Chrome's own D3D11 ANGLE and Dawn's D3D12.
+  if (platform === "win32") return { mode, flags: [] };
+  if (env.ALPHA2_CHROME_HEADED !== "1")
+    throw new BrowserStartError(
+      "gpu=machine on Linux needs a headed browser on a DRI3 display; run under scripts/run-with-gpu-display.sh or set ALPHA2_CHROME_GPU=swiftshader",
+    );
+  return {
+    mode,
+    flags: [
+      "--use-angle=vulkan",
+      "--enable-features=Vulkan",
+      "--ignore-gpu-blocklist",
+    ],
+  };
 }
 
 /**
@@ -127,44 +175,57 @@ export function skippedCasesSummary(skipped) {
  *   navigation starts, within the same deadline.
  * @param {object} [options.viewport] `Emulation.setDeviceMetricsOverride` width and height.
  * @param {string} [options.initScript] Evaluated in every new document before its own scripts.
- * @returns {Promise<string>} The URI-encoded JSON title the page set.
+ * @param {(version: { product: string, userAgent: string }) => void} [options.onBrowser] Called
+ *   with `Browser.getVersion` once the DevTools connection is open.
+ * @returns {Promise<string>} The URI-encoded JSON title the page set. Rejects with a
+ *   `BrowserStartError` when Chrome cannot be started or connected to.
  */
 export async function runChromePage(
   command,
   url,
-  { timeoutMs = 30_000, onPage, viewport, initScript } = {},
+  { timeoutMs = 30_000, onPage, viewport, initScript, onBrowser } = {},
 ) {
+  const { flags: gpuFlags } = chromeGpuMode();
   const profile = await mkdtemp(join(tmpdir(), "alpha2-chrome-"));
-  const child = spawn(
-    command,
-    [
-      // ALPHA2_CHROME_HEADED=1 runs a windowed Chrome, for a virtual display (xvfb-run): headless
-      // Chrome cannot import a VideoFrame into WebGPU.
-      ...(process.env.ALPHA2_CHROME_HEADED === "1" ? [] : ["--headless=new"]),
-      "--no-sandbox",
-      // A windowed Chrome otherwise stops at its first-run dialog, or on a desktop keyring prompt,
-      // before it opens the DevTools endpoint.
-      "--no-first-run",
-      "--password-store=basic",
-      "--disable-gpu-sandbox",
-      "--enable-unsafe-webgpu",
-      // SwiftShader on a small runner loses its device often, and Chrome then refuses WebGL to the
-      // page, which would fail the recovery cases on Chrome's policy instead of on the engine.
-      "--disable-domain-blocking-for-3d-apis",
-      // An AudioContext would otherwise wait for a user gesture.
-      "--autoplay-policy=no-user-gesture-required",
-      ...chromeGpuFlags(),
-      "--remote-debugging-port=0",
-      `--user-data-dir=${profile}`,
-      "about:blank",
-    ],
-    { stdio: ["ignore", "ignore", "pipe"] },
-  );
+  let child;
+  try {
+    child = spawn(
+      command,
+      [
+        // ALPHA2_CHROME_HEADED=1 runs a windowed Chrome, for a virtual display (xvfb-run): headless
+        // Chrome cannot import a VideoFrame into WebGPU.
+        ...(process.env.ALPHA2_CHROME_HEADED === "1" ? [] : ["--headless=new"]),
+        "--no-sandbox",
+        // A windowed Chrome otherwise stops at its first-run dialog, or on a desktop keyring prompt,
+        // before it opens the DevTools endpoint.
+        "--no-first-run",
+        "--password-store=basic",
+        "--disable-gpu-sandbox",
+        "--enable-unsafe-webgpu",
+        // SwiftShader on a small runner loses its device often, and Chrome then refuses WebGL to the
+        // page, which would fail the recovery cases on Chrome's policy instead of on the engine.
+        "--disable-domain-blocking-for-3d-apis",
+        // An AudioContext would otherwise wait for a user gesture.
+        "--autoplay-policy=no-user-gesture-required",
+        ...gpuFlags,
+        "--remote-debugging-port=0",
+        `--user-data-dir=${profile}`,
+        "about:blank",
+      ],
+      { stdio: ["ignore", "ignore", "pipe"] },
+    );
+  } catch (error) {
+    // Node refuses some commands at once (a `.cmd` without a shell on Windows) instead of
+    // reporting them on the child.
+    await rm(profile, { recursive: true, force: true });
+    throw new BrowserStartError(`Chrome could not start: ${error.message}`);
+  }
   try {
     const webSocketUrl = await new Promise((resolveUrl, reject) => {
       // Allow for slow first-time Chrome startup on hosted runners.
       const timeout = setTimeout(
-        () => reject(new Error("Chrome DevTools endpoint timed out")),
+        () =>
+          reject(new BrowserStartError("Chrome DevTools endpoint timed out")),
         60_000,
       );
       child.stderr.setEncoding("utf8");
@@ -175,11 +236,25 @@ export async function runChromePage(
           resolveUrl(match[1]);
         }
       });
-      child.once("error", reject);
-      child.once("exit", (code) => reject(new Error(`Chrome exited ${code}`)));
+      child.once("error", (error) =>
+        reject(
+          new BrowserStartError(`Chrome could not start: ${error.message}`),
+        ),
+      );
+      child.once("exit", (code) =>
+        reject(new BrowserStartError(`Chrome exited ${code}`)),
+      );
     });
-    const cdp = await Cdp.open(webSocketUrl);
+    let cdp;
     try {
+      cdp = await Cdp.open(webSocketUrl);
+    } catch (error) {
+      throw new BrowserStartError(
+        `the DevTools connection failed: ${error?.message ?? error}`,
+      );
+    }
+    try {
+      if (onBrowser) onBrowser(await cdp.send("Browser.getVersion"));
       const { targetId } = await cdp.send("Target.createTarget", {
         url: "about:blank",
       });

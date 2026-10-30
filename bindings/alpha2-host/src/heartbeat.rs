@@ -322,9 +322,26 @@ impl WorkerHeartbeat {
 pub struct CommandProgress {
     taken: Mutex<u64>,
     changed: Condvar,
+    /// Set while the worker waits for its next command, so a hand-off can
+    /// tell an idle worker from a busy one.
+    waiting: AtomicBool,
+    /// Set, under `taken`'s lock, once the worker has left its loop: it takes
+    /// nothing more, and waiters wake at once instead of at their timeout.
+    stopped: AtomicBool,
 }
 
 impl CommandProgress {
+    /// Called by the worker right before and right after it waits for a
+    /// command.
+    pub fn set_waiting(&self, waiting: bool) {
+        self.waiting.store(waiting, Ordering::Release);
+    }
+
+    /// Whether the worker is waiting for its next command.
+    pub fn waiting(&self) -> bool {
+        self.waiting.load(Ordering::Acquire)
+    }
+
     /// The count so far, to pass to [`Self::wait_past`] as `seen`.
     pub fn current(&self) -> u64 {
         *self
@@ -343,7 +360,23 @@ impl CommandProgress {
         self.changed.notify_all();
     }
 
-    /// Waits until the worker has taken a command since `seen`, or `timeout`.
+    /// Called once the worker takes no more commands; wakes every waiter.
+    pub fn mark_stopped(&self) {
+        let _taken = self
+            .taken
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.stopped.store(true, Ordering::Release);
+        self.changed.notify_all();
+    }
+
+    /// Whether the worker has left its loop.
+    pub fn is_stopped(&self) -> bool {
+        self.stopped.load(Ordering::Acquire)
+    }
+
+    /// Waits until the worker has taken a command since `seen`, has stopped,
+    /// or `timeout`.
     pub fn wait_past(&self, seen: u64, timeout: Duration) {
         let taken = self
             .taken
@@ -351,9 +384,21 @@ impl CommandProgress {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         drop(
             self.changed
-                .wait_timeout_while(taken, timeout, |taken| *taken == seen)
+                .wait_timeout_while(taken, timeout, |taken| {
+                    *taken == seen && !self.stopped.load(Ordering::Acquire)
+                })
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
         );
+    }
+}
+
+/// Marks a worker's [`CommandProgress`] stopped when the worker's thread ends,
+/// however it ends.
+pub struct WorkerExit(pub Arc<CommandProgress>);
+
+impl Drop for WorkerExit {
+    fn drop(&mut self) {
+        self.0.mark_stopped();
     }
 }
 

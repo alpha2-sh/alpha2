@@ -444,3 +444,65 @@ fn a_commands_send_time_is_its_own_threads() {
         Duration::from_micros(100)
     );
 }
+
+/// At the least budget an export runs with, the encode channel is a rendezvous, and a hand-off to
+/// a busy encoder waits for the encoder's take, not for the stall-check interval.
+#[test]
+fn a_rendezvous_export_waits_only_for_the_encoder() {
+    let _gpu = gpu_test_lock();
+    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let directory = scratch_directory("rendezvous-export");
+    let size = RenderSize::new(640, 360).expect("size");
+    let least = crate::frames::estimated_staging_bytes(size, wgpu::TextureFormat::Rgba16Float)
+        + crate::frames::packed_yuv420_bytes(size)
+            * u64::try_from(crate::metrics::readback_encode_frame_bound(0)).expect("bound");
+    let end = 2 * alpha2_time::TICKS_PER_SECOND;
+    // The encoder is the bottleneck, so most hand-offs find it busy.
+    crate::encode::INJECT_SLOW_ENCODE.with(|slow| slow.set(Some(Duration::from_millis(15))));
+    let request = json!({
+        "protocolVersion": 1, "operation": "export", "requestId": "rendezvous",
+        "project": {
+            "schema_version": 1, "id": "rendezvous", "name": "Rendezvous",
+            "settings": {"width": 640, "height": 360, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
+            "sources": [{"id": "video", "locator": "fixture://video", "kind": "video"}],
+            "timeline": {"tracks": [{"id": "v", "name": "V", "kind": "video", "clips": [{
+                "id": "clip", "source_id": "video",
+                "timeline_range": {"start": 0, "end": end},
+                "source_range": {"start": 0, "end": end}
+            }]}]}
+        },
+        "assets": {"video": corpus("h264-long-gop.mp4")},
+        "startTicks": 0, "endTicks": end,
+        "frameRate": {"num": 30, "den": 1},
+        "includeAudio": false,
+        "videoCodec": "mpeg4-part2",
+        "inputPolicy": "cpu-readback",
+        "memory": {"inFlightBytes": least},
+        "output": directory.join("rendezvous.mp4")
+    });
+    let result = host
+        .handle(
+            parse_request(&request.to_string()).expect("request"),
+            &mut |_| Ok(()),
+        )
+        .expect("export");
+    let performance = &result["performance"];
+    assert_eq!(performance["encodeChannelDepth"], 0, "{performance}");
+    let waits = performance["encodeBackpressureCount"]
+        .as_u64()
+        .expect("backpressure count");
+    assert!(
+        waits > 0,
+        "the slow encoder never made a hand-off wait: {performance}"
+    );
+    let waited = performance["encodeQueueWaitMs"]
+        .as_f64()
+        .expect("queue wait");
+    #[allow(clippy::cast_precision_loss)]
+    let average = waited / waits as f64;
+    assert!(
+        average < 125.0,
+        "a hand-off waited {average:.1} ms on average ({waited:.1} ms over {waits})"
+    );
+    std::fs::remove_dir_all(&directory).ok();
+}

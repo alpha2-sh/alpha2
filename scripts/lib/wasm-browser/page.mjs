@@ -15,10 +15,8 @@ const report = (value) => {
   document.body.append(result);
 };
 // Headless Chrome, and SwiftShader's WebGPU in any Chrome, lose the GPU
-// instance when a VideoFrame is imported. That is the machine, not the case:
-// run these under a virtual display with the real GPU, e.g.
-//   ALPHA2_CHROME_HEADED=1 ALPHA2_CHROME_GPU_FLAGS="--use-angle=vulkan
-//   --enable-features=Vulkan --ignore-gpu-blocklist" xvfb-run -a npm run test:wasm-browser
+// instance when a VideoFrame is imported. That is the machine, not the case.
+// gpu=machine on Linux: see scripts/run-with-gpu-display.sh.
 // Only there is a lost device a skip: anywhere else it is the engine's, and fails the case, as does
 // a loss the case saw before it imported anything.
 // Chrome's stack starts with the message; Firefox's and Safari's are the frames alone.

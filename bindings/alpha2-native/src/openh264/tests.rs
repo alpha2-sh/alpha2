@@ -285,12 +285,15 @@ fn fake_library(dir: &std::path::Path, name: &str, source: &str) -> Option<PathB
     let c = dir.join(format!("{name}.c"));
     std::fs::write(&c, source).unwrap();
     let library = dir.join(format!("{name}.so"));
-    let built = std::process::Command::new(std::env::var("CC").unwrap_or_else(|_| "cc".into()))
-        .args(["-shared", "-fPIC", "-o"])
-        .arg(&library)
-        .arg(&c)
-        .status()
-        .ok()?;
+    let built = {
+        let _child = crate::tests::child_process_lock();
+        std::process::Command::new(std::env::var("CC").unwrap_or_else(|_| "cc".into()))
+            .args(["-shared", "-fPIC", "-o"])
+            .arg(&library)
+            .arg(&c)
+            .status()
+            .ok()?
+    };
     built.success().then_some(library)
 }
 

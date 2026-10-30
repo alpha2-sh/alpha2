@@ -75,6 +75,9 @@ pub struct ExportMetrics {
     pub readback_map_latency: Duration,
     pub readback_wait: Duration,
     pub readback_pack: Duration,
+    /// Total time the coordinator spent handing commands to the encode
+    /// worker (`encodeQueueWaitMs`): waiting on a full channel, or on a
+    /// rendezvous channel until the worker took the command.
     pub encode_queue: Duration,
     pub video_encode: Duration,
     /// Where the encode sink's own time went, split out of `video_encode`.
@@ -94,6 +97,10 @@ pub struct ExportMetrics {
     pub max_pending_media: usize,
     pub max_in_flight_readbacks: usize,
     pub max_encode_queue: usize,
+    /// Hand-offs that could not complete at once because the encoder was busy
+    /// (`encodeBackpressureCount`): on a queued channel the channel was full;
+    /// on a rendezvous channel (depth 0) the worker was not waiting for a
+    /// command when the frame was ready.
     pub encode_backpressure: u64,
     pub pending_depth_total: u64,
     pub pending_depth_samples: u64,
@@ -344,14 +351,15 @@ impl GpuEncodeBudget {
 
 /// The GPU-resident path's encode channel depth when none is pinned.
 ///
-/// Measured, not inherited from the readback path's derivation. On the RTX
-/// 4090 (`h264_vulkan`, 1080p and 4K testsrc2, and the host-parity complex
-/// composition at 4K 240 fps) depths 0, 1, 2, 4 and 8 ran within the run-to-run
-/// noise of each other (the worker was busy 88-99% of every run and the
-/// coordinator's only wait was the full channel), while each step reserved
-/// another surface: 142 MiB at depth 2 against 214 MiB at 8 for 4K. Two keeps
-/// a frame queued behind the one being encoded, so the encoder never waits on
-/// the coordinator's next submission, for the least memory that does.
+/// Depth 0 hands each frame over when the worker takes it, so the coordinator
+/// waits for the encoder and never for a polling interval. Two is kept as the
+/// default for throughput when the encoder is not the bottleneck: it keeps a
+/// frame queued behind the one being encoded, so the encoder never waits on
+/// the coordinator's next submission, while each further step reserves another
+/// surface (142 MiB at depth 2 against 214 MiB at 8 for 4K). On the RTX 4090
+/// (`h264_vulkan`, the host-parity complex composition at 4K, 150 frames) one
+/// CPU at depth 0 ran at 135.5 fps against 137 fps for two CPUs at depth 2; the
+/// readback path with `mpeg4` ran at 31.6 against 33.1 fps.
 #[cfg(feature = "hwencode")]
 pub const GPU_DEFAULT_ENCODE_CHANNEL_DEPTH: usize = 2;
 
@@ -650,6 +658,7 @@ pub fn export_metrics_json(
         "readbackMapLatencyMs": metrics.readback_map_latency.as_secs_f64() * 1_000.0,
         "readbackWaitMs": metrics.readback_wait.as_secs_f64() * 1_000.0,
         "readbackPackMs": metrics.readback_pack.as_secs_f64() * 1_000.0,
+        // Time inside the encode hand-off; see `ExportMetrics::encode_queue`.
         "encodeQueueWaitMs": metrics.encode_queue.as_secs_f64() * 1_000.0,
         "videoEncodeMs": metrics.video_encode.as_secs_f64() * 1_000.0,
         "muxFinishMs": metrics.mux_finish.as_secs_f64() * 1_000.0,
@@ -671,6 +680,7 @@ pub fn export_metrics_json(
         },
         "maxInFlightReadbacks": metrics.max_in_flight_readbacks,
         "maxEncodeQueueEvents": metrics.max_encode_queue,
+        // Busy-encoder hand-offs; see `ExportMetrics::encode_backpressure`.
         "encodeBackpressureCount": metrics.encode_backpressure,
         "decodeBackpressureCount": metrics.decode_backpressure,
         "maxDecodeQueueFrames": metrics.max_decode_queue,

@@ -43,8 +43,6 @@ typedef struct Alpha2D3D12Pool {
     uint32_t idle_targets;
     Alpha2D3D12Slot *slots;
     uint32_t idle_slots;
-    /* 0 once the device refused D3D12_HEAP_FLAG_CREATE_NOT_ZEROED (before Windows 10 2004). */
-    int not_zeroed;
     uint32_t targets_made;
     uint32_t slots_made;
 } Alpha2D3D12Pool;
@@ -117,7 +115,6 @@ void *alpha2_native_gpu_d3d12_pool_create(void *raw_device) {
     pool->references = 1;
     pool->device = raw_device;
     ID3D12Device_AddRef(pool->device);
-    pool->not_zeroed = 1;
     return pool;
 }
 
@@ -190,7 +187,6 @@ static Alpha2D3D12Target *alpha2_d3d12_take_target(
             return target;
         }
     }
-    int not_zeroed = pool->not_zeroed;
     ReleaseSRWLockExclusive(&pool->lock);
     Alpha2D3D12Target *target = calloc(1, sizeof(*target));
     if (target == NULL) {
@@ -207,24 +203,11 @@ static Alpha2D3D12Target *alpha2_d3d12_take_target(
     };
     D3D12_RESOURCE_DESC wanted = *descriptor;
     wanted.Flags = D3D12_RESOURCE_FLAG_NONE;
-    /* Each copy overwrites the whole target, so the zero fill a committed resource gets by
-       default would be wasted. */
+    /* A pooled target is zero filled once when made; drivers that skip all-zero blocks of a copy
+       into not-zeroed memory then show zeros, not an earlier frame. */
     *result = ID3D12Device_CreateCommittedResource(
-        pool->device, &heap,
-        not_zeroed ? D3D12_HEAP_FLAG_CREATE_NOT_ZEROED : D3D12_HEAP_FLAG_NONE,
-        &wanted, D3D12_RESOURCE_STATE_COMMON, NULL,
+        pool->device, &heap, D3D12_HEAP_FLAG_NONE, &wanted, D3D12_RESOURCE_STATE_COMMON, NULL,
         &IID_ID3D12Resource, (void **)&target->resource);
-    if (*result == E_INVALIDARG && not_zeroed) {
-        /* A runtime before Windows 10 2004 does not know the flag. */
-        *result = ID3D12Device_CreateCommittedResource(
-            pool->device, &heap, D3D12_HEAP_FLAG_NONE, &wanted, D3D12_RESOURCE_STATE_COMMON,
-            NULL, &IID_ID3D12Resource, (void **)&target->resource);
-        if (SUCCEEDED(*result)) {
-            AcquireSRWLockExclusive(&pool->lock);
-            pool->not_zeroed = 0;
-            ReleaseSRWLockExclusive(&pool->lock);
-        }
-    }
     if (FAILED(*result)) {
         alpha2_d3d12_target_free(target);
         return NULL;

@@ -206,6 +206,7 @@ jobs:
           uv pip install --no-deps -e .
       - run: npm run test:host-parity
         env:
+          ALPHA2_CHROME_GPU: swiftshader
           ALPHA2_REQUIRE_BROWSER: "1"
           ALPHA2_REQUIRE_PYTHON: "1"
       - name: A Vulkan device without Vulkan Video falls back to software
@@ -731,6 +732,7 @@ jobs:
     needs: release-wasm
     runs-on: ubuntu-latest
     env:
+      ALPHA2_CHROME_GPU: swiftshader
       ALPHA2_REQUIRE_BROWSER: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

@@ -17,6 +17,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { resolve, join, extname } from "node:path";
 import { browserForRun, runBrowserPage } from "./lib/browser-page.mjs";
+import { probeRun } from "./lib/browser-probe.mjs";
 import {
   animatedGif,
   largeLottie,
@@ -27,6 +28,7 @@ const pageBrowser = browserForRun({
   argv: process.argv.slice(2),
   required: true,
 });
+await probeRun("editor-package", pageBrowser);
 const dir = await mkdtemp(join(tmpdir(), "alpha2-editor-packed-"));
 const run = (file, args, options = {}) =>
   execFileSync(file, args, {
