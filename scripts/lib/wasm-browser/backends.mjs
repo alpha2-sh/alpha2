@@ -970,7 +970,7 @@ const constant = (value) => ({ mode: "constant", value });
 // Content 140 by 70 px: columns 10..75 and 85..150, rows 10..40 and 50..80.
 const root = {
   display: "grid", grid_template_columns: "1fr 1fr", grid_template_rows: "repeat(2, 1fr)",
-  gap: constant("10px"), padding: constant("10px"), font_size: constant("27px"), color: "#ffffff",
+  gap: constant("10px"), padding: constant("10px"), font_size: constant("27px"), fill: "#ffffff",
   children: [
     { background: constant("#fff") },
     { text: constant("Hi"), justify_self: "center" },
