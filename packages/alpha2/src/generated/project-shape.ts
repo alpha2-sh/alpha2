@@ -386,6 +386,7 @@ export const PROJECT_SHAPE: unknown = {
           $ref: "#/$defs/Animated_float",
           default: { mode: "constant", value: 0 },
         },
+        preserve_pitch: { type: "boolean" },
       },
       type: "object",
     },

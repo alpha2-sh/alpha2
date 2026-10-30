@@ -818,6 +818,10 @@
             "value": 0.0
           },
           "description": "Animated stereo position from `-1` (left) to `1` (right)."
+        },
+        "preserve_pitch": {
+          "description": "Keeps the clip's pitch when its speed is not 1: the source is\ntime-stretched instead of resampled. No effect at speed 1, on loops and\non freezes.",
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -4309,6 +4313,13 @@
             "path": {
               "description": "The file. It becomes the source's locator and the export's asset.",
               "type": "string"
+            },
+            "preserve_pitch": {
+              "description": "Keeps a video's sound at its pitch when `speed` is not 1: it is\ntime-stretched instead of resampled. Default true.",
+              "type": [
+                "boolean",
+                "null"
+              ]
             },
             "speed": {
               "description": "Playback speed of a video: 2 plays it twice as fast. Default 1.",

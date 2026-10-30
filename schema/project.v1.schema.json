@@ -768,6 +768,10 @@
             "value": 0.0
           },
           "description": "Animated stereo position from `-1` (left) to `1` (right)."
+        },
+        "preserve_pitch": {
+          "description": "Keeps the clip's pitch when its speed is not 1: the source is\ntime-stretched instead of resampled. No effect at speed 1, on loops and\non freezes.",
+          "type": "boolean"
         }
       },
       "type": "object"

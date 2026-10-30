@@ -445,6 +445,10 @@ class NodeMedia(TypedDict):
     """Opacity, 0..=1. Default 1."""
     path: str
     """The file. It becomes the source's locator and the export's asset."""
+    preserve_pitch: NotRequired[bool | None]
+    """Keeps a video's sound at its pitch when `speed` is not 1: it is
+    time-stretched instead of resampled. Default true.
+    """
     speed: NotRequired[float | None]
     """Playback speed of a video: 2 plays it twice as fast. Default 1."""
     trim_end: NotRequired[float | None]

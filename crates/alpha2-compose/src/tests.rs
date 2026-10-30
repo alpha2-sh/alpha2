@@ -501,3 +501,34 @@ fn parse_errors_name_where_inside_nodes() {
         "{error}"
     );
 }
+
+#[test]
+fn a_faster_video_keeps_its_pitch_unless_told_not_to() {
+    let audio = |media: Value| {
+        let project = compile(&json!({ "body": media }));
+        tracks(&project)
+            .iter()
+            .flat_map(|track| track["clips"].as_array().into_iter().flatten())
+            // A held last frame is a freeze, silent at any speed.
+            .filter(|clip| clip["time_map"]["type"] != "freeze")
+            .map(|clip| clip["audio"]["preserve_pitch"].as_bool().unwrap_or(false))
+            .collect::<Vec<_>>()
+    };
+    let path = "talk.mp4";
+    assert!(
+        audio(json!({"type": "media", "path": path, "speed": 1.5}))
+            .iter()
+            .all(|kept| *kept)
+    );
+    // At speed 1 the clip reads as before, so the document says nothing.
+    assert!(
+        !audio(json!({"type": "media", "path": path}))
+            .iter()
+            .any(|kept| *kept)
+    );
+    assert!(
+        !audio(json!({"type": "media", "path": path, "speed": 1.5, "preserve_pitch": false}))
+            .iter()
+            .any(|kept| *kept)
+    );
+}

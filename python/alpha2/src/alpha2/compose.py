@@ -176,6 +176,7 @@ def Media(
     trim_start: float | None = None,
     trim_end: float | None = None,
     speed: float | None = None,
+    preserve_pitch: bool | None = None,
     loop: bool | None = None,
     volume: float | None = None,
     muted: bool | None = None,
@@ -193,7 +194,8 @@ def Media(
     duration: float | None = None,
 ) -> Node:
     """A video or still file. ``fit`` is ``contain`` (default), ``cover``, ``fill`` or ``none``;
-    ``zoom`` is ``(from, to)`` over its time; ``label`` names its cell in a comparison grid."""
+    ``zoom`` is ``(from, to)`` over its time; ``label`` names its cell in a comparison grid. At a
+    ``speed`` other than 1 its sound keeps its pitch unless ``preserve_pitch`` is false."""
     return _node(
         "media",
         **_rename_loop(
@@ -203,6 +205,7 @@ def Media(
                 "trim_start": trim_start,
                 "trim_end": trim_end,
                 "speed": speed,
+                "preserve_pitch": preserve_pitch,
                 "loop_": loop,
                 "volume": volume,
                 "muted": muted,

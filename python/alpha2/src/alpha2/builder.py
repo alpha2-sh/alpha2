@@ -432,13 +432,16 @@ class TrackBuilder:
         source_duration: Time | None = None,
         id: str | None = None,
         effects: Sequence[ClipEffect] | None = None,
+        preserve_pitch: bool | None = None,
         **fields: Any,
     ) -> str:
         """Places a clip of ``source``; returns its id.
 
         ``source_duration`` defaults to ``duration`` (untouched speed); twice ``duration`` plays
-        twice as fast. With ``effects`` (:func:`alpha2.effect`), a composition chaining them is
-        added to the project and the clip shows it. ``fields`` are any other clip fields:
+        twice as fast; ``preserve_pitch`` keeps the sound's pitch then (``audio.preserve_pitch``:
+        time-stretched instead of resampled). With ``effects`` (:func:`alpha2.effect`), a
+        composition chaining them is added to the project and the clip shows it. ``fields`` are any
+        other clip fields:
         ``visual`` (:func:`alpha2.visual`), ``composition``, ``blend_mode``, ``masks``, and so on.
 
         Keyframes are keyed in three time bases (the README's "Time bases"): a clip's ``visual``
@@ -462,6 +465,8 @@ class TrackBuilder:
         clip: dict[str, Any] = dict(fields)
         if effects:
             clip["composition"] = {"id": self._project._effect_chain(effects)}
+        if preserve_pitch is not None:
+            clip["audio"] = {**clip.get("audio", {}), "preserve_pitch": preserve_pitch}
         clip.update(
             {
                 "id": clip_id,

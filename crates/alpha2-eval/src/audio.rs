@@ -42,8 +42,8 @@ impl ActiveAudioClip<'_> {
     /// zero for a frozen clip.
     ///
     /// One means untouched playback. Two consumes source twice as fast, which
-    /// raises pitch by an octave because the mixer resamples rather than
-    /// time-stretches.
+    /// raises pitch by an octave because the mixer resamples, unless the clip
+    /// keeps its pitch (`preserve_pitch`), when it time-stretches instead.
     #[must_use]
     pub fn speed(&self) -> f64 {
         match self.time_map {

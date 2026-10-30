@@ -113,6 +113,11 @@ export interface ClipOptions {
    * Source duration (default `duration`: untouched speed). Twice `duration` plays twice as fast.
    */
   readonly sourceDuration?: Time;
+  /**
+   * Keeps the sound's pitch at a speed other than 1: it is time-stretched instead of resampled
+   * (sets `audio.preserve_pitch`).
+   */
+  readonly preservePitch?: boolean;
   /** An explicit id instead of a generated one. */
   readonly id?: string;
   /**
@@ -407,6 +412,14 @@ export class TrackBuilder {
     const id = this.#clipId(options.id);
     this.#clips.push({
       ...options.with,
+      ...(options.preservePitch === undefined
+        ? {}
+        : {
+            audio: {
+              ...options.with?.audio,
+              preserve_pitch: options.preservePitch,
+            },
+          }),
       ...(effects.length === 0
         ? {}
         : { composition: { id: this.#chain(effects) } }),

@@ -285,6 +285,11 @@ pub struct AudioProperties {
     /// [`MAX_CHAIN_EFFECTS`].
     #[serde(default)]
     pub effects: Vec<AudioEffect>,
+    /// Keeps the clip's pitch when its speed is not 1: the source is
+    /// time-stretched instead of resampled. No effect at speed 1, on loops and
+    /// on freezes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub preserve_pitch: bool,
 }
 
 impl Default for AudioProperties {
@@ -297,6 +302,7 @@ impl Default for AudioProperties {
             fade_shape: FadeShape::Linear,
             muted: false,
             effects: Vec::new(),
+            preserve_pitch: false,
         }
     }
 }

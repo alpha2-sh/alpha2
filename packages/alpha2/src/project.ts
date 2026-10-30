@@ -2637,6 +2637,28 @@ interface AudioLoadEdge {
 }
 
 /**
+ * Whether `clip`'s audio is time-stretched to keep its pitch (`Clip::stretches_audio`): it asks to,
+ * plays forward or reversed, and at a speed other than 1.
+ */
+function stretchesAudio(clip: Record<string, unknown>): boolean {
+  if (!isRecord(clip.audio) || clip.audio.preserve_pitch !== true) return false;
+  const map = clip.time_map;
+  if (
+    map !== undefined &&
+    !(isRecord(map) && (map.type === "forward" || map.type === "reverse"))
+  )
+    return false;
+  const timeline = clip.timeline_range;
+  const source = clip.source_range;
+  if (!validRange(timeline) || !validRange(source)) return false;
+  const length = (range: unknown) => {
+    const { start, end } = range as { start: number; end: number };
+    return end - start;
+  };
+  return length(timeline) !== length(source);
+}
+
+/**
  * The load of `track` for {@link audioEffectProblems}; `undefined` for one that is not an object.
  */
 function trackAudioLoad(track: unknown): TrackAudioLoad | undefined {
@@ -2650,7 +2672,12 @@ function trackAudioLoad(track: unknown): TrackAudioLoad | undefined {
     for (const clip of track.clips) {
       if (!isRecord(clip) || !isRecord(clip.audio)) continue;
       if (!validRange(clip.timeline_range)) continue;
-      const own = chainLoad(clip.audio.effects);
+      // A stretched read holds state like one effect, without delay.
+      const chain = chainLoad(clip.audio.effects);
+      const own = {
+        ...chain,
+        count: chain.count + Number(stretchesAudio(clip)),
+      };
       if (own.count === 0) continue;
       const lead = bus.lookahead + own.lookahead + margin;
       const { start, end } = clip.timeline_range as {

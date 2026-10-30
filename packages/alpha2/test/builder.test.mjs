@@ -309,3 +309,28 @@ test("effects and a composition given in `with` together are refused", () => {
   });
   assert.deepEqual(validateProject(builder.build()), []);
 });
+
+test("a faster clip can keep its pitch", () => {
+  const builder = new ProjectBuilder({
+    name: "Speed",
+    width: 640,
+    height: 360,
+    frameRate: { num: 30, den: 1 },
+  });
+  const music = builder.source("audio", "asset://music.m4a");
+  builder.audioTrack().clip({
+    source: music,
+    at: 0,
+    duration: 2,
+    sourceDuration: 3,
+    preservePitch: true,
+    with: { audio: { muted: false } },
+  });
+  const project = builder.build();
+  // The flag joins the clip's other audio fields.
+  assert.deepEqual(project.timeline.tracks[0].clips[0].audio, {
+    muted: false,
+    preserve_pitch: true,
+  });
+  assert.deepEqual(validateProject(project), []);
+});

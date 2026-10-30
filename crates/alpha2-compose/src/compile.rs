@@ -889,6 +889,10 @@ impl<'a> Context<'a> {
                     clip.composition = composition.clone().map(ClipComposition::new);
                     clip.audio.gain = constant(video.volume);
                     clip.audio.muted = video.muted;
+                    // Only a clip at another speed reads differently; one at speed 1 keeps the
+                    // document unchanged.
+                    clip.audio.preserve_pitch = video.preserve_pitch;
+                    clip.audio.preserve_pitch = clip.stretches_audio();
                 }
                 lane.clips = clips;
             }

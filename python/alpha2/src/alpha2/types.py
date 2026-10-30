@@ -570,6 +570,11 @@ class AudioProperties(TypedDict):
 
     Default: `{"mode":"constant","value":0}`.
     """
+    preserve_pitch: NotRequired[bool]
+    """Keeps the clip's pitch when its speed is not 1: the source is
+    time-stretched instead of resampled. No effect at speed 1, on loops and
+    on freezes.
+    """
 
 
 class AudioStreamShape(TypedDict):

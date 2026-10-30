@@ -20,6 +20,7 @@ mod needs;
 mod normalization;
 mod retiming;
 mod source_blocks;
+mod stretched;
 
 /// Returns the sample index containing a tick position.
 fn sample_floor(ticks: i64, sample_rate: u32) -> i64 {

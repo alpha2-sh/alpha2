@@ -752,6 +752,12 @@ export interface AudioProperties {
    * @defaultValue `{"mode":"constant","value":0}`
    */
   readonly pan?: Animated<number>;
+  /**
+   * Keeps the clip's pitch when its speed is not 1: the source is
+   * time-stretched instead of resampled. No effect at speed 1, on loops and
+   * on freezes.
+   */
+  readonly preserve_pitch?: boolean;
 }
 
 /**

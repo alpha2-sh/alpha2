@@ -239,3 +239,16 @@ def test_caption_cues_take_speakers_styles_and_timed_runs() -> None:
     assert captions["cues"][0]["text"][1]["class"] == ["key"]
     assert captions["cues"][1]["style"] == "loud"
     assert validate_project(project) == []
+
+
+def test_a_faster_clip_can_keep_its_pitch() -> None:
+    builder = ProjectBuilder("Speed", width=640, height=360, frame_rate=(30, 1))
+    music = builder.source("audio", "music.m4a")
+    clip_id = builder.audio_track().clip(
+        music, at=0, duration=2, source_duration=3, preserve_pitch=True
+    )
+    project = builder.build()
+    clip = project["timeline"]["tracks"][0]["clips"][0]
+    assert clip["id"] == clip_id
+    assert clip["audio"] == {"preserve_pitch": True}
+    assert validate_project(project) == []

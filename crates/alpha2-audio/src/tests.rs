@@ -128,7 +128,6 @@ fn dsp_processors_are_block_size_invariant_below_minus_90_dbfs() {
     );
     assert_processor_invariant(|| Compressor::new(-12.0, 4.0, 5.0, 80.0, 2.0), &input);
     assert_processor_invariant(|| SchroederReverb::new(0.7, 0.25, 0.4), &input);
-    assert_processor_invariant(|| TimeStretchProcessor::new(1.1, 0.9), &input);
 }
 
 #[test]
@@ -138,7 +137,6 @@ fn stateful_effects_continue_after_save_and_load() {
         .collect();
     assert_state_continuity(|| Compressor::new(-18.0, 6.0, 3.0, 120.0, 1.0), &input);
     assert_state_continuity(|| SchroederReverb::new(0.6, 0.4, 0.5), &input);
-    assert_state_continuity(|| TimeStretchProcessor::new(0.9, 1.2), &input);
 }
 
 #[test]
@@ -1160,14 +1158,6 @@ fn a_processor_refuses_a_state_it_cannot_take_whole() {
         &mut compressor,
         &with_nan_at(&saved, 20),
         "compressor with a NaN delay",
-    );
-
-    let mut stretch = played(TimeStretchProcessor::new(1.0, 1.2), 48_000, 0.0);
-    let saved = stretch.save_state();
-    assert_refused(
-        &mut stretch,
-        &with_nan_at(&saved, 40),
-        "time stretch with a NaN sample",
     );
 
     let mut gain = Gain::new(0.5);

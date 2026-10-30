@@ -197,6 +197,15 @@ impl CacheIntent {
 }
 
 impl Clip {
+    /// Whether the clip's audio is time-stretched to keep its pitch: it asks
+    /// to, plays forward or reversed, and at a speed other than 1.
+    #[must_use]
+    pub fn stretches_audio(&self) -> bool {
+        self.audio.preserve_pitch
+            && matches!(self.time_map, TimeMap::Forward | TimeMap::Reverse)
+            && self.timeline_range.duration() != self.source_range.duration()
+    }
+
     /// Creates a clip with default visual, blend, and audio controls and no
     /// composition.
     #[must_use]

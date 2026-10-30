@@ -22,6 +22,7 @@ const [
   nativeResample,
   nativeMono,
   nativeRateAndBlocks,
+  nativeStretch,
 ] = cargo(["run", "--quiet", "--release", "-p", "alpha2-audio-determinism"])
   .trim()
   .split("\n");
@@ -133,4 +134,15 @@ assert.equal(
 );
 console.log(
   `verified the 44.1 kHz mix in uneven blocks hashes to ${nativeRateAndBlocks} natively and as wasm`,
+);
+const wasmStretch = BigInt.asUintN(64, instance.exports.alpha2_stretch_hash())
+  .toString(16)
+  .padStart(16, "0");
+assert.equal(
+  wasmStretch,
+  nativeStretch,
+  `wasm stretched mix ${wasmStretch} != native ${nativeStretch}`,
+);
+console.log(
+  `verified the stretched mix hashes to ${nativeStretch} natively and as wasm`,
 );

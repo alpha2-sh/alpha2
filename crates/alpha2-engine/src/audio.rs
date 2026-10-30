@@ -21,7 +21,7 @@ use std::collections::HashMap;
 
 use alpha2_audio::{
     Biquad, BiquadKind, ChannelLayout, Compressor, Ducker, Interpolator, LoudnessMeter,
-    LoudnessReport, PeakLimiter, ProcessCtx, Processor, ProcessorChain, SchroederReverb,
+    LoudnessReport, PeakLimiter, ProcessCtx, Processor, ProcessorChain, SchroederReverb, Stretch,
     TransportState,
 };
 use alpha2_eval::{ActiveAudioClip, AudioSpanScratch, sample_scalar};
@@ -34,6 +34,10 @@ use alpha2_time::{MediaTime, TICKS_PER_SECOND, TimeRange};
 
 use crate::downmix::{ChannelMix, Downmix};
 use crate::{EngineError, EngineProject};
+
+mod stretch_read;
+
+use stretch_read::{StretchSlot, stretched_request, stretches};
 
 /// The most interpolation weights a retimed read keeps for the fractions
 /// its positions repeat (256 KiB).
@@ -280,6 +284,10 @@ pub struct AudioRenderer {
     weights: Vec<f64>,
     /// Scratch for one fraction's weights while `weights` holds them all.
     phase_weights: Vec<f64>,
+    /// The grid of clips that keep their pitch, and their readers, kept while
+    /// a block reads them.
+    stretch: Stretch,
+    stretch_slots: HashMap<ClipId, StretchSlot>,
     /// The most clip effects, and their delay in ticks, built at once.
     #[cfg(test)]
     most_held: (usize, u64),
@@ -389,6 +397,8 @@ impl AudioRenderer {
             blocks_mixed: 0,
             weights: Vec::new(),
             phase_weights: Vec::new(),
+            stretch: Stretch::new(sample_rate),
+            stretch_slots: HashMap::new(),
             #[cfg(test)]
             most_held: (0, 0),
             #[cfg(test)]
@@ -520,18 +530,25 @@ impl AudioRenderer {
             let Some(read) = self.clip_read(&clip, master_input, frames, stages) else {
                 continue;
             };
-            source_requests(&clip, read.first, read.window.content, rate, |from, to| {
-                let (Some(start), Some(end)) =
-                    (checked_ticks_at(from, rate), ticks_at_or_after(to, rate))
-                else {
-                    return;
-                };
-                if let Ok(range) =
-                    TimeRange::new(MediaTime::from_ticks(start), MediaTime::from_ticks(end))
-                {
-                    merge_need(needs, clip.source_id, range);
-                }
-            });
+            source_requests(
+                &self.stretch,
+                &clip,
+                read.first,
+                read.window.content,
+                rate,
+                |from, to| {
+                    let (Some(start), Some(end)) =
+                        (checked_ticks_at(from, rate), ticks_at_or_after(to, rate))
+                    else {
+                        return;
+                    };
+                    if let Ok(range) =
+                        TimeRange::new(MediaTime::from_ticks(start), MediaTime::from_ticks(end))
+                    {
+                        merge_need(needs, clip.source_id, range);
+                    }
+                },
+            );
         }
         Ok(())
     }
@@ -929,6 +946,9 @@ impl AudioRenderer {
             );
         }
         self.span_scratch = scratch;
+        // A reader the block did not read is dropped, as idle clip chains are.
+        let block = self.blocks_mixed;
+        self.stretch_slots.retain(|_, slot| slot.used_in == block);
 
         self.process_buses(master_input, transport, frames, stages);
         self.apply_ducking(&self.ctx(master_input, transport), frames, stages);
@@ -1255,6 +1275,9 @@ impl AudioRenderer {
         match clip.time_map {
             // A frozen clip is silent.
             TimeMap::Freeze { .. } => true,
+            TimeMap::Forward | TimeMap::Reverse if stretches(clip) => {
+                self.read_stretched(clip, first_sample, count, provider, fill)
+            }
             TimeMap::Forward | TimeMap::Reverse => {
                 let reversed = clip.time_map == TimeMap::Reverse;
                 SourceMap::stretched(clip, reversed, rate).is_some_and(|map| {
@@ -2290,6 +2313,7 @@ fn merge_need(needs: &mut Vec<AudioNeed>, source_id: &SourceId, mut source_range
 /// read [`AudioRenderer::fill_clip`] makes of `count` project samples of a
 /// clip from `first_sample`: the same maps, cut at the same loop wraps.
 fn source_requests(
+    stretch: &Stretch,
     clip: &ActiveAudioClip,
     first_sample: i64,
     count: usize,
@@ -2301,6 +2325,11 @@ fn source_requests(
     }
     match clip.time_map {
         TimeMap::Freeze { .. } => {}
+        TimeMap::Forward | TimeMap::Reverse if stretches(clip) => {
+            if let Some((from, to)) = stretched_request(stretch, clip, first_sample, count, rate) {
+                request(from, to);
+            }
+        }
         TimeMap::Forward | TimeMap::Reverse => {
             let reversed = clip.time_map == TimeMap::Reverse;
             if let Some((from, to)) = SourceMap::stretched(clip, reversed, rate)

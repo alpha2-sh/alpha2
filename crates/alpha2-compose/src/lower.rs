@@ -86,6 +86,7 @@ pub(crate) enum Content {
 }
 
 #[derive(Clone, Debug)]
+#[allow(clippy::struct_excessive_bools)]
 pub(crate) struct VideoContent {
     pub file: String,
     pub size: (u32, u32),
@@ -93,6 +94,7 @@ pub(crate) struct VideoContent {
     pub trim_end: i64,
     /// Source ticks per timeline tick.
     pub speed: f64,
+    pub preserve_pitch: bool,
     pub looped: bool,
     pub volume: f32,
     pub muted: bool,
@@ -578,6 +580,7 @@ impl Context<'_> {
                     trim_start,
                     trim_end,
                     speed,
+                    preserve_pitch: media.preserve_pitch.unwrap_or(true),
                     looped: media.r#loop,
                     volume: media
                         .volume

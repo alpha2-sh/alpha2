@@ -477,6 +477,10 @@ pub struct Media {
     /// Playback speed of a video: 2 plays it twice as fast. Default 1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speed: Option<f64>,
+    /// Keeps a video's sound at its pitch when `speed` is not 1: it is
+    /// time-stretched instead of resampled. Default true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preserve_pitch: Option<bool>,
     /// Plays a video again from its start while the node lasts.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub r#loop: bool,
@@ -537,6 +541,7 @@ impl Media {
             trim_start: None,
             trim_end: None,
             speed: None,
+            preserve_pitch: None,
             r#loop: false,
             volume: None,
             muted: false,

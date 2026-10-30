@@ -15,7 +15,8 @@ use crate::{AUDIO_EFFECT_STATE_MARGIN_MS, AudioEffect, Project};
 /// hold state from [`crate::AUDIO_EFFECT_STATE_MARGIN_MS`] and the lookahead
 /// of its track's and its own effects before its start (never before timeline
 /// zero) to its end, both ends included: a clip ending where another starts
-/// holds state with it.
+/// holds state with it. A clip whose audio is stretched to keep its pitch
+/// ([`crate::Clip::stretches_audio`]) counts one effect more.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AudioEffectLoad {
     /// The most effects holding state at once.
@@ -77,10 +78,13 @@ impl Project {
             delay += held;
             let track_lookahead = lookahead(&track.audio.effects);
             for clip in &track.clips {
-                if clip.audio.effects.is_empty() {
+                // A stretched read holds state like one effect, without delay.
+                let stretch = usize::from(clip.stretches_audio());
+                if clip.audio.effects.is_empty() && stretch == 0 {
                     continue;
                 }
                 let (count, held) = chain(&clip.audio.effects);
+                let count = count + stretch;
                 let lead = track_lookahead + lookahead(&clip.audio.effects) + margin;
                 let lead = i64::try_from(lead).unwrap_or(i64::MAX);
                 let range = clip.timeline_range;

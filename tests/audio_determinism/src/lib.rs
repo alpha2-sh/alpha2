@@ -2,9 +2,9 @@
 //!
 //! Integer-generated input covers the resampler that brings a source to the
 //! project rate, effects, fades, pan, retime, ducking, cubic-Bezier
-//! automation, the fold of a 5.1 source into stereo and of every source into
-//! mono, loudness normalization, the replay a seek runs, and limiting, at the
-//! source rate and at 44.1 kHz in uneven blocks. Mixing uses `libm` without
+//! automation, pitch-keeping stretch, the fold of a 5.1 source into stereo and
+//! of every source into mono, loudness normalization, the replay a seek runs,
+//! and limiting, at the source rate and at 44.1 kHz in uneven blocks. Mixing uses `libm` without
 //! fused multiply-add to keep output independent of platform math libraries.
 //! `src/main.rs` prints native hashes; `scripts/test-audio-determinism.mjs`
 //! compares them with the wasm exports, and `scripts/test-wasm-browser.mjs`
@@ -150,6 +150,23 @@ fn mix_hash(
         }
     }
     hash
+}
+
+/// The same hash for two clips that keep their pitch, one 1.5x forward and
+/// one at three quarters speed reversed, played in [`UNEVEN_BLOCKS`] with a
+/// seek forward and one back: the stretch's search and overlap-add.
+///
+/// # Panics
+/// Panics if the engine refuses the fixed project, which is a bug here.
+#[must_use]
+pub fn stretch_hash() -> u64 {
+    mix_hash(
+        stretch_project(),
+        2,
+        &[(0, 48_000), (72_000, 96_000), (24_000, 60_000)],
+        0.0,
+        &UNEVEN_BLOCKS,
+    )
 }
 
 /// What `scripts/test-wasm-browser.mjs` needs to play [`render_hash`]'s mix
@@ -382,6 +399,14 @@ pub fn resample_hash() -> u64 {
     hash
 }
 
+/// The wasm entry point for [`stretch_hash`].
+#[cfg(target_arch = "wasm32")]
+#[allow(unsafe_code)]
+#[unsafe(no_mangle)]
+pub extern "C" fn alpha2_stretch_hash() -> u64 {
+    stretch_hash()
+}
+
 /// The wasm entry point for [`resample_hash`].
 #[cfg(target_arch = "wasm32")]
 #[allow(unsafe_code)]
@@ -583,6 +608,41 @@ fn project_at(rate: u32) -> Project {
 
 /// The triangle reversed at three quarters speed, the noise repeated every
 /// 0.3 s, and the triangle ping-ponging every quarter second, on one track.
+fn stretch_project() -> Project {
+    let mut project = project();
+    let clip = |name: &str, source: &str, timeline, source_range, time_map| {
+        let mut clip = Clip::new(
+            id(ClipId::new, name),
+            id(SourceId::new, source),
+            timeline,
+            source_range,
+        );
+        clip.time_map = time_map;
+        clip.audio.preserve_pitch = true;
+        clip
+    };
+    let mut fast = Track::new(id(TrackId::new, "fast"), "Fast", TrackKind::Audio);
+    fast.clips = vec![clip(
+        "faster",
+        "noise",
+        range(0, 10),
+        range(0, 15),
+        TimeMap::Forward,
+    )];
+    let mut slow = Track::new(id(TrackId::new, "slow"), "Slow", TrackKind::Audio);
+    slow.clips = vec![clip(
+        "slower-reversed",
+        "triangle",
+        range(4, 20),
+        range(0, 12),
+        TimeMap::Reverse,
+    )];
+    project.timeline = Timeline {
+        tracks: vec![fast, slow],
+    };
+    project
+}
+
 fn time_map_project() -> Project {
     let mut project = project();
     let mut track = Track::new(id(TrackId::new, "mapped"), "Mapped", TrackKind::Audio);
@@ -758,6 +818,19 @@ mod tests {
 
     /// The loudness report of the fixed mix, likewise.
     const EXPECTED_LOUDNESS: u64 = 0x078b_c676_bc76_f77c;
+
+    /// The hash of the stretched mix.
+    const EXPECTED_STRETCH: u64 = 0xcd19_90c6_1b59_d71f;
+
+    #[test]
+    fn the_stretched_mix_hashes_to_the_same_value_everywhere() {
+        assert_eq!(
+            super::stretch_hash(),
+            EXPECTED_STRETCH,
+            "{:016x}",
+            super::stretch_hash()
+        );
+    }
 
     /// The hash of the time-mapped mix.
     const EXPECTED_TIME_MAPS: u64 = 0x0be4_6a89_9877_69ef;
