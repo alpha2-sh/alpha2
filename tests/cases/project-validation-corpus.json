@@ -4352,7 +4352,7 @@
     "name": "unknown-blend-mode",
     "valid": false,
     "rejected_by": "schema",
-    "problems": ["project.timeline.tracks[0].clips[0].blend_mode must be one of \"normal\", \"multiply\", \"screen\", \"overlay\", \"darken\", \"lighten\", \"color_dodge\", \"color_burn\", \"hard_light\", \"soft_light\", \"difference\", \"exclusion\", \"hue\", \"saturation\", \"color\", \"luminosity\""],
+    "problems": ["project.timeline.tracks[0].clips[0].blend_mode must be one of \"normal\", \"multiply\", \"screen\", \"overlay\", \"darken\", \"lighten\", \"color_dodge\", \"color_burn\", \"hard_light\", \"soft_light\", \"difference\", \"exclusion\", \"hue\", \"saturation\", \"color\", \"luminosity\", \"plus_lighter\""],
     "project": {
       "schema_version": 1,
       "id": "p1",
@@ -29680,6 +29680,41 @@
                   "start": 0,
                   "end": 120000
                 }
+              }
+            ],
+            "transitions": []
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "blend-plus-lighter",
+    "valid": true,
+    "project": {
+      "schema_version": 1,
+      "id": "p1",
+      "name": "P",
+      "settings": {
+        "width": 1920,
+        "height": 1080,
+        "frame_rate": { "num": 30, "den": 1 },
+        "sample_rate": 48000
+      },
+      "sources": [{ "id": "v1", "kind": "video", "locator": "a.mp4" }],
+      "timeline": {
+        "tracks": [
+          {
+            "id": "t1",
+            "name": "T1",
+            "kind": "video",
+            "clips": [
+              {
+                "id": "c1",
+                "source_id": "v1",
+                "timeline_range": { "start": 0, "end": 120000 },
+                "source_range": { "start": 0, "end": 120000 },
+                "blend_mode": "plus_lighter"
               }
             ],
             "transitions": []

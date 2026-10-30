@@ -217,12 +217,33 @@ fn blend_rgb(backdrop: vec3f, source: vec3f, mode: f32) -> vec3f {
     }
 }
 
+// Compositing Level 2 `plus-lighter`: premultiplied color and alpha added and
+// each clamped to 1, in the blend space. Color stays at or below alpha because
+// each input's does.
+fn plus_lighter(
+    backdrop: vec3f,
+    backdrop_alpha: f32,
+    source: vec3f,
+    source_alpha: f32,
+    linear_light: bool,
+) -> vec4f {
+    let output_alpha = min(1.0, source_alpha + backdrop_alpha);
+    if output_alpha <= 0.000001 { return vec4f(0.0); }
+    let premultiplied = min(vec3f(1.0), source * source_alpha + backdrop * backdrop_alpha);
+    var output_color = clamp(premultiplied / output_alpha, vec3f(0.0), vec3f(1.0));
+    if linear_light { output_color = linear_to_srgb(output_color); }
+    return vec4f(output_color * output_alpha, output_alpha);
+}
+
 fn composite(backdrop_encoded: vec4f, source_encoded: vec4f, mode: f32) -> vec4f {
     let linear_light = batch.controls.x < 0.5;
     let source_alpha = source_encoded.a;
     let backdrop_alpha = backdrop_encoded.a;
     let source = straight(source_encoded, linear_light);
     let backdrop = straight(backdrop_encoded, linear_light);
+    if mode > 15.5 {
+        return plus_lighter(backdrop, backdrop_alpha, source, source_alpha, linear_light);
+    }
     let blended = blend_rgb(backdrop, source, mode);
     let output_alpha = source_alpha + backdrop_alpha * (1.0 - source_alpha);
     let premultiplied = source_alpha * (1.0 - backdrop_alpha) * source

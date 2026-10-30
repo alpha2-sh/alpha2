@@ -1720,6 +1720,7 @@ const fn blend_mode(mode: ClipBlendMode) -> BlendMode {
         ClipBlendMode::Saturation => BlendMode::Saturation,
         ClipBlendMode::Color => BlendMode::Color,
         ClipBlendMode::Luminosity => BlendMode::Luminosity,
+        ClipBlendMode::PlusLighter => BlendMode::PlusLighter,
     }
 }
 

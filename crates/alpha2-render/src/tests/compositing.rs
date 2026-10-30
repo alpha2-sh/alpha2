@@ -442,7 +442,8 @@ fn artistic_blend_modes_match_srgb_reference() {
     let renderer = Renderer::new(gpu()).with_blend_space(BlendSpace::SrgbEncoded);
     let backdrop = [128, 64, 32, 255];
     let source = [64, 128, 192, 255];
-    let modes = &BlendMode::ALL[1..];
+    // The Level 1 modes only: `PlusLighter` has a golden of its own, so this one stays as it was.
+    let modes = &BlendMode::ALL[1..16];
     let pixels = modes
         .iter()
         .flat_map(|mode| composite_pixel(&renderer, backdrop, source, 1.0, *mode))
@@ -497,8 +498,19 @@ fn every_blend_mode_matches_the_w3c_reference_on_the_gpu() {
                         opacity,
                         mode,
                     );
-                    // Half opacity mixes the blend result with the backdrop in the blend space.
-                    let expected = if opacity < 1.0 {
+                    // Half opacity mixes the blend result with the backdrop in the blend space;
+                    // `PlusLighter` adds the half-transparent source instead.
+                    let expected = if mode == BlendMode::PlusLighter {
+                        let o = f64::from(opacity);
+                        let s = unit(source);
+                        let added = super::blend_reference::composite(
+                            mode,
+                            space,
+                            [unit(backdrop)[0], unit(backdrop)[1], unit(backdrop)[2], 1.0],
+                            [s[0] * o, s[1] * o, s[2] * o, o],
+                        );
+                        [added[0], added[1], added[2]]
+                    } else if opacity < 1.0 {
                         let mix =
                             composite_opaque(BlendMode::Normal, space, unit(backdrop), blended);
                         mixed_half(space, unit(backdrop), mix)
@@ -760,4 +772,89 @@ fn alpha_bounds(size: RenderSize, pixels: &[u8]) -> (u32, u32) {
     }
     assert!(found, "rotated layer must cover output pixels");
     (maximum.0 - minimum.0 + 1, maximum.1 - minimum.1 + 1)
+}
+
+/// A white radial glow added with `PlusLighter` over a gradient (left half)
+/// and over transparency (right half), linear light on the top row and
+/// encoded on the bottom: light adds, saturates to white, and over nothing
+/// leaves the glow itself.
+#[test]
+fn plus_lighter_adds_a_glow_over_a_gradient_and_over_transparency() {
+    let _lock = gpu_test_lock();
+    let size = RenderSize::new(32, 16).expect("non-zero size");
+    let backdrop = (0..16_u32)
+        .flat_map(|_| {
+            (0..32_u32).map(|x| {
+                if x < 16 {
+                    let red = u8::try_from(40 + x * 12).expect("a code");
+                    [red, 60, u8::try_from(220 - x * 10).expect("a code"), 255]
+                } else {
+                    [0; 4]
+                }
+            })
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+    // Premultiplied white whose alpha falls off with the distance from each half's centre.
+    let glow = (0..16_u32)
+        .flat_map(|y| {
+            (0..32_u32).map(move |x| {
+                let dx = f64::from(x % 16) + 0.5 - 8.0;
+                let dy = f64::from(y) + 0.5 - 8.0;
+                let alpha = (1.0 - (dx * dx + dy * dy).sqrt() / 8.0).clamp(0.0, 1.0);
+                // Clamped to 0..=1 above, so the code is in 0..=255.
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let code = (alpha * 255.0).round() as u8;
+                [code; 4]
+            })
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+    let mut pixels = Vec::new();
+    for space in [BlendSpace::LinearLight, BlendSpace::SrgbEncoded] {
+        let renderer = Renderer::new(gpu()).with_blend_space(space);
+        let backdrop = rgba_image_texture(&renderer, size, &backdrop);
+        let glow = rgba_image_texture(&renderer, size, &glow);
+        let backdrop_view = backdrop.create_view(&wgpu::TextureViewDescriptor::default());
+        let glow_view = glow.create_view(&wgpu::TextureViewDescriptor::default());
+        let target = renderer
+            .render_layers(
+                size,
+                &[
+                    CompositeLayer {
+                        texture: &backdrop_view,
+                        visual: visual([1.0, 1.0], 1.0),
+                        blend_mode: BlendMode::Normal,
+                    },
+                    CompositeLayer {
+                        texture: &glow_view,
+                        visual: visual([1.0, 1.0], 1.0),
+                        blend_mode: BlendMode::PlusLighter,
+                    },
+                ],
+            )
+            .expect("valid layers render");
+        let rgba = read_rgba8(&renderer, &target);
+        // Near the glow's centre (alpha 0.91) the gradient adds up to white in red and blue,
+        // nearly in green; over transparency the glow is its own premultiplied white.
+        let at = |x: usize, y: usize| &rgba[(y * 32 + x) * 4..(y * 32 + x) * 4 + 4];
+        assert!(
+            at(8, 8).iter().all(|&c| c >= 240),
+            "{space:?}: {:?}",
+            at(8, 8)
+        );
+        assert_eq!(at(8, 8)[3], 255, "{space:?}");
+        assert!(
+            at(24, 8)[3] >= 220 && at(24, 8)[0] == at(24, 8)[3],
+            "{space:?}"
+        );
+        assert_eq!(at(31, 0), [0, 0, 0, 0], "{space:?}");
+        pixels.extend_from_slice(&rgba);
+    }
+    assert_rgba8_golden(
+        "blend_plus_lighter",
+        RenderSize::new(32, 32).expect("non-zero size"),
+        &pixels,
+        1,
+    );
 }

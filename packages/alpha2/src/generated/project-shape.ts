@@ -496,6 +496,7 @@ export const PROJECT_SHAPE: unknown = {
         { const: "saturation", type: "string" },
         { const: "color", type: "string" },
         { const: "luminosity", type: "string" },
+        { const: "plus_lighter", type: "string" },
       ],
     },
     ClipComposition: {

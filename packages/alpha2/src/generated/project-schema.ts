@@ -265,6 +265,7 @@ export const CLIP_BLEND_MODE_VALUES: readonly ClipBlendMode[] = [
   "saturation",
   "color",
   "luminosity",
+  "plus_lighter",
 ];
 
 /** Every {@link ColorMatrix}, in the model's order. */
@@ -816,7 +817,8 @@ export interface Clip {
  * Artistic blend operation stored independently from a renderer implementation.
  *
  * The modes are those of W3C Compositing and Blending Level 1 (the CSS
- * `mix-blend-mode` values), with the specification's formulas.
+ * `mix-blend-mode` values), with the specification's formulas, and
+ * `plus-lighter` of Level 2.
  */
 export type ClipBlendMode =
   | "normal"
@@ -834,7 +836,8 @@ export type ClipBlendMode =
   | "hue"
   | "saturation"
   | "color"
-  | "luminosity";
+  | "luminosity"
+  | "plus_lighter";
 
 /**
  * A clip's use of a `Composition`, and how its time maps onto it.

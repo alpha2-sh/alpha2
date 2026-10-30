@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 /// Artistic blend operation stored independently from a renderer implementation.
 ///
 /// The modes are those of W3C Compositing and Blending Level 1 (the CSS
-/// `mix-blend-mode` values), with the specification's formulas.
+/// `mix-blend-mode` values), with the specification's formulas, and
+/// `plus-lighter` of Level 2.
 #[derive(Copy, Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
@@ -45,6 +46,11 @@ pub enum ClipBlendMode {
     Color,
     /// The source's luminosity with the backdrop's hue and saturation.
     Luminosity,
+    /// Source and backdrop added, premultiplied color and alpha each clamped
+    /// to 1: the `plus-lighter` operator of Compositing Level 2 (Add, Linear
+    /// Dodge in design tools). It replaces source-over instead of blending
+    /// inside it, so it never hides the backdrop.
+    PlusLighter,
 }
 
 /// Serializable value supplied to one runtime effect parameter.

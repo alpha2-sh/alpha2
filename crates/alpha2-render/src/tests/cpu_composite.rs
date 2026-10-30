@@ -115,6 +115,7 @@ fn every_blend_mode_matches_in_both_spaces() {
         BlendMode::Saturation,
         BlendMode::Color,
         BlendMode::Luminosity,
+        BlendMode::PlusLighter,
     ];
     for mode in modes {
         for space in [BlendSpace::LinearLight, BlendSpace::SrgbEncoded] {

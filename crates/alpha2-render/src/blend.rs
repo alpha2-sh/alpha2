@@ -22,7 +22,8 @@ impl BlendSpace {
 /// The modes and their formulas are those of W3C Compositing and Blending
 /// Level 1, evaluated in the renderer's [`BlendSpace`]. The first twelve are
 /// separable (each channel on its own); `Hue`, `Saturation`, `Color`, and
-/// `Luminosity` are not.
+/// `Luminosity` are not. `PlusLighter` is the Level 2 operator, which adds
+/// instead of compositing source-over.
 #[derive(Copy, Clone, Debug, Default, Eq, Hash, PartialEq)]
 pub enum BlendMode {
     /// Preserve the source color.
@@ -58,11 +59,14 @@ pub enum BlendMode {
     Color,
     /// The source's luminosity with the backdrop's hue and saturation.
     Luminosity,
+    /// Premultiplied source plus backdrop, color and alpha clamped to 1.
+    PlusLighter,
 }
 
 impl BlendMode {
-    /// Every mode, in the order of W3C Compositing and Blending Level 1.
-    pub const ALL: [Self; 16] = [
+    /// Every mode: the Level 1 modes in the specification's order, then
+    /// `PlusLighter`.
+    pub const ALL: [Self; 17] = [
         Self::Normal,
         Self::Multiply,
         Self::Screen,
@@ -79,6 +83,7 @@ impl BlendMode {
         Self::Saturation,
         Self::Color,
         Self::Luminosity,
+        Self::PlusLighter,
     ];
 
     /// The index `composite.wesl` switches on.
@@ -100,6 +105,7 @@ impl BlendMode {
             Self::Saturation => 13.0,
             Self::Color => 14.0,
             Self::Luminosity => 15.0,
+            Self::PlusLighter => 16.0,
         }
     }
 }

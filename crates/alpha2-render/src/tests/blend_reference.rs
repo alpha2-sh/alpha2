@@ -1,4 +1,5 @@
-//! CPU reference for the W3C Compositing and Blending Level 1 blend modes.
+//! CPU reference for the W3C Compositing and Blending Level 1 blend modes,
+//! and the Level 2 `plus-lighter` operator.
 //!
 //! The formulas follow the specification's pseudocode section by section
 //! (<https://www.w3.org/TR/compositing-1/#blending>), in `f64`. Tests check
@@ -9,7 +10,8 @@
 
 use crate::BlendMode;
 
-/// `B(Cb, Cs)` for straight colors in `0..=1`.
+/// `B(Cb, Cs)` for straight colors in `0..=1`. `PlusLighter` is not a blend
+/// function; for it this is the result of two opaque inputs, their clamped sum.
 pub(crate) fn blend(mode: BlendMode, backdrop: [f64; 3], source: [f64; 3]) -> [f64; 3] {
     let separable = |function: fn(f64, f64) -> f64| {
         [0, 1, 2].map(|channel| function(backdrop[channel], source[channel]))
@@ -31,6 +33,7 @@ pub(crate) fn blend(mode: BlendMode, backdrop: [f64; 3], source: [f64; 3]) -> [f
         BlendMode::Saturation => set_lum(set_sat(backdrop, sat(source)), lum(backdrop)),
         BlendMode::Color => set_lum(source, lum(backdrop)),
         BlendMode::Luminosity => set_lum(backdrop, lum(source)),
+        BlendMode::PlusLighter => separable(|cb, cs| (cb + cs).min(1.0)),
     }
 }
 
@@ -83,6 +86,9 @@ pub(crate) fn composite(
     };
     let (source_alpha, backdrop_alpha) = (source[3], backdrop[3]);
     let (cs, cb) = (straight(source), straight(backdrop));
+    if mode == BlendMode::PlusLighter {
+        return plus_lighter(linear, backdrop_alpha, cb, source_alpha, cs);
+    }
     let blended = blend(mode, cb, cs);
     let output_alpha = source_alpha + backdrop_alpha * (1.0 - source_alpha);
     if output_alpha <= 0.0 {
@@ -92,6 +98,28 @@ pub(crate) fn composite(
         let premultiplied = source_alpha * (1.0 - backdrop_alpha) * cs[channel]
             + source_alpha * backdrop_alpha * blended[channel]
             + (1.0 - source_alpha) * backdrop_alpha * cb[channel];
+        let color = (premultiplied / output_alpha).clamp(0.0, 1.0);
+        if linear { linear_to_srgb(color) } else { color }
+    });
+    [
+        color[0] * output_alpha,
+        color[1] * output_alpha,
+        color[2] * output_alpha,
+        output_alpha,
+    ]
+}
+
+/// Compositing Level 2 `plus-lighter`
+/// (<https://www.w3.org/TR/compositing-2/#porterduffcompositingoperators_plus_lighter>):
+/// `co = min(1, as * Cs + ab * Cb)`, `ao = min(1, as + ab)`, with the colors
+/// straight in the blend space.
+fn plus_lighter(linear: bool, ab: f64, cb: [f64; 3], source_alpha: f64, cs: [f64; 3]) -> [f64; 4] {
+    let output_alpha = (source_alpha + ab).min(1.0);
+    if output_alpha <= 0.0 {
+        return [0.0; 4];
+    }
+    let color = [0, 1, 2].map(|channel| {
+        let premultiplied = (source_alpha * cs[channel] + ab * cb[channel]).min(1.0);
         let color = (premultiplied / output_alpha).clamp(0.0, 1.0);
         if linear { linear_to_srgb(color) } else { color }
     });
@@ -222,9 +250,10 @@ mod tests {
 
     /// `B(Cb, Cs)` for each mode and each of `PAIRS`, computed independently
     /// of this module (Python, `fractions.Fraction`, from the specification's
-    /// text) and rounded to 12 decimals.
+    /// text) and rounded to 12 decimals. `PlusLighter`'s row is the clamped
+    /// sum, worked by hand.
     #[allow(clippy::unreadable_literal)]
-    const EXPECTED: [(BlendMode, [[f64; 3]; 3]); 16] = include!("blend_reference_expected.in");
+    const EXPECTED: [(BlendMode, [[f64; 3]; 3]); 17] = include!("blend_reference_expected.in");
 
     #[test]
     fn the_reference_matches_independently_computed_values() {
@@ -337,5 +366,37 @@ mod tests {
                 [0.3, 0.2, 0.1, 0.6],
             );
         }
+    }
+
+    #[test]
+    fn plus_lighter_is_commutative_and_clamps() {
+        let close = |got: [f64; 4], want: [f64; 4]| {
+            assert!(
+                got.iter()
+                    .zip(want)
+                    .all(|(got, want)| (got - want).abs() < 1e-12),
+                "{got:?} != {want:?}"
+            );
+        };
+        let a = [0.3, 0.1, 0.2, 0.6];
+        let b = [0.4, 0.35, 0.05, 0.7];
+        for space in [BlendSpace::SrgbEncoded, BlendSpace::LinearLight] {
+            close(
+                composite(BlendMode::PlusLighter, space, a, b),
+                composite(BlendMode::PlusLighter, space, b, a),
+            );
+            // White plus white is white, and nothing added to a color leaves it.
+            close(
+                composite(BlendMode::PlusLighter, space, [1.0; 4], [1.0; 4]),
+                [1.0; 4],
+            );
+            close(composite(BlendMode::PlusLighter, space, [0.0; 4], a), a);
+        }
+        // In the encoded space the stored premultiplied values add: alpha 0.6 + 0.7 clamps
+        // to 1, red 0.3 + 0.4 stays under it.
+        close(
+            composite(BlendMode::PlusLighter, BlendSpace::SrgbEncoded, a, b),
+            [0.7, 0.45, 0.25, 1.0],
+        );
     }
 }

@@ -46,15 +46,12 @@ fn the_project_blend_space_decides_how_a_frame_blends() {
         plan: None,
         source_composition: None,
     };
-    let render = |blend_space| {
+    let render_with = |blend_space, mode| {
         let frame = FrameDesc {
             time: MediaTime::ZERO,
             background: alpha2_model::Rgb::BLACK,
             blend_space,
-            visual: vec![
-                clip(0, ClipBlendMode::Normal),
-                clip(1, ClipBlendMode::Overlay),
-            ],
+            visual: vec![clip(0, ClipBlendMode::Normal), clip(1, mode)],
             audio: Vec::new(),
             transitions: Vec::new(),
             captions: Vec::new(),
@@ -66,6 +63,7 @@ fn the_project_blend_space_decides_how_a_frame_blends() {
             .expect("complete frame");
         read_rgba8(&renderer, &output)
     };
+    let render = |blend_space| render_with(blend_space, ClipBlendMode::Overlay);
     // The renderer's own default is linear light; the project decides.
     let linear = render(alpha2_model::BlendSpace::LinearLight);
     let encoded = render(alpha2_model::BlendSpace::SrgbEncoded);
@@ -73,6 +71,18 @@ fn the_project_blend_space_decides_how_a_frame_blends() {
     // holds the same pixel.
     assert_rgba8_near(&encoded, &[65, 64, 48, 255], 1);
     assert_ne!(linear, encoded);
+    // A `plus_lighter` clip adds the encoded values in `srgb_encoded`: (192, 192, 224). In
+    // linear light it adds light, which encodes as (141, 141, 194).
+    let added = render_with(
+        alpha2_model::BlendSpace::SrgbEncoded,
+        ClipBlendMode::PlusLighter,
+    );
+    assert_rgba8_near(&added, &[192, 192, 224, 255], 1);
+    let added_linear = render_with(
+        alpha2_model::BlendSpace::LinearLight,
+        ClipBlendMode::PlusLighter,
+    );
+    assert_rgba8_near(&added_linear, &[141, 141, 194, 255], 2);
 }
 
 #[test]

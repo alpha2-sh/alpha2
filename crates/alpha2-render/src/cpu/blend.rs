@@ -127,7 +127,8 @@ fn blend_rgb(backdrop: Rgb, source: Rgb, mode: BlendMode) -> Rgb {
         ]
     };
     match mode {
-        BlendMode::Normal => source,
+        // `composite` adds instead of blending for `PlusLighter`, so it never reaches here.
+        BlendMode::Normal | BlendMode::PlusLighter => source,
         BlendMode::Multiply => separable(|b, s| b * s),
         BlendMode::Screen => separable(screen),
         BlendMode::Overlay => separable(|b, s| hard_light(s, b)),
@@ -159,6 +160,9 @@ pub(crate) fn composite(
     let backdrop_alpha = backdrop[3];
     let s = straight(source, linear_light);
     let b = straight(backdrop, linear_light);
+    if mode == BlendMode::PlusLighter {
+        return plus_lighter(b, backdrop_alpha, s, source_alpha, linear_light);
+    }
     let blended = blend_rgb(b, s, mode);
     let output_alpha = source_alpha + backdrop_alpha * (1.0 - source_alpha);
     if output_alpha <= 0.000_001 {
@@ -172,6 +176,33 @@ pub(crate) fn composite(
         let premultiplied = source_weight * s[channel]
             + backdrop_weight * b[channel]
             + blend_weight * blended[channel];
+        let mut color = (premultiplied / output_alpha).clamp(0.0, 1.0);
+        if linear_light {
+            color = linear_to_srgb(color);
+        }
+        out[channel] = color * output_alpha;
+    }
+    out[3] = output_alpha;
+    out
+}
+
+/// composite.wesl's `plus_lighter`: premultiplied color and alpha added in
+/// the blend space, each clamped to 1.
+fn plus_lighter(
+    backdrop: Rgb,
+    backdrop_alpha: f32,
+    source: Rgb,
+    source_alpha: f32,
+    linear_light: bool,
+) -> [f32; 4] {
+    let output_alpha = (source_alpha + backdrop_alpha).min(1.0);
+    if output_alpha <= 0.000_001 {
+        return [0.0; 4];
+    }
+    let mut out = [0.0; 4];
+    for channel in 0..3 {
+        let premultiplied =
+            (source[channel] * source_alpha + backdrop[channel] * backdrop_alpha).min(1.0);
         let mut color = (premultiplied / output_alpha).clamp(0.0, 1.0);
         if linear_light {
             color = linear_to_srgb(color);

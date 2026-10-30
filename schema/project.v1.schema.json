@@ -979,7 +979,7 @@
       "type": "object"
     },
     "ClipBlendMode": {
-      "description": "Artistic blend operation stored independently from a renderer implementation.\n\nThe modes are those of W3C Compositing and Blending Level 1 (the CSS\n`mix-blend-mode` values), with the specification's formulas.",
+      "description": "Artistic blend operation stored independently from a renderer implementation.\n\nThe modes are those of W3C Compositing and Blending Level 1 (the CSS\n`mix-blend-mode` values), with the specification's formulas, and\n`plus-lighter` of Level 2.",
       "oneOf": [
         {
           "const": "normal",
@@ -1059,6 +1059,11 @@
         {
           "const": "luminosity",
           "description": "The source's luminosity with the backdrop's hue and saturation.",
+          "type": "string"
+        },
+        {
+          "const": "plus_lighter",
+          "description": "Source and backdrop added, premultiplied color and alpha each clamped\nto 1: the `plus-lighter` operator of Compositing Level 2 (Add, Linear\nDodge in design tools). It replaces source-over instead of blending\ninside it, so it never hides the backdrop.",
           "type": "string"
         }
       ]

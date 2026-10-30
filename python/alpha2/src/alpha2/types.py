@@ -236,7 +236,7 @@ BLEND_SPACE_VALUES: tuple[BlendSpace, ...] = ("linear_light", "srgb_encoded")
 CACHE_INTENT_VALUES: tuple[CacheIntent, ...] = ("auto", "pin", "bypass")
 """Every `CacheIntent`, in the model's order."""
 
-CLIP_BLEND_MODE_VALUES: tuple[ClipBlendMode, ...] = ("normal", "multiply", "screen", "overlay", "darken", "lighten", "color_dodge", "color_burn", "hard_light", "soft_light", "difference", "exclusion", "hue", "saturation", "color", "luminosity")
+CLIP_BLEND_MODE_VALUES: tuple[ClipBlendMode, ...] = ("normal", "multiply", "screen", "overlay", "darken", "lighten", "color_dodge", "color_burn", "hard_light", "soft_light", "difference", "exclusion", "hue", "saturation", "color", "luminosity", "plus_lighter")
 """Every `ClipBlendMode`, in the model's order."""
 
 COLOR_MATRIX_VALUES: tuple[ColorMatrix, ...] = ("bt601", "bt709", "bt2020_ncl", "rgb")
@@ -614,11 +614,12 @@ class Clip(TypedDict):
     """Resolution-independent visual presentation controls."""
 
 
-ClipBlendMode: TypeAlias = Literal["normal", "multiply", "screen", "overlay", "darken", "lighten", "color_dodge", "color_burn", "hard_light", "soft_light", "difference", "exclusion", "hue", "saturation", "color", "luminosity"]
+ClipBlendMode: TypeAlias = Literal["normal", "multiply", "screen", "overlay", "darken", "lighten", "color_dodge", "color_burn", "hard_light", "soft_light", "difference", "exclusion", "hue", "saturation", "color", "luminosity", "plus_lighter"]
 """Artistic blend operation stored independently from a renderer implementation.
 
 The modes are those of W3C Compositing and Blending Level 1 (the CSS
-`mix-blend-mode` values), with the specification's formulas.
+`mix-blend-mode` values), with the specification's formulas, and
+`plus-lighter` of Level 2.
 """
 
 
