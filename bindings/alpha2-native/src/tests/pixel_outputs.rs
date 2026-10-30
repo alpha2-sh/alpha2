@@ -232,7 +232,8 @@ fn prores_4444_keeps_alpha_and_422_hq_has_none() {
 fn ten_bit_outputs_keep_more_luma_codes_than_eight_bits_have() {
     crate::require_pinned_ffmpeg_for_tests();
     let pixels = layout(Chroma::Yuv420, BitDepth::Ten, false);
-    // A luma ramp over every 10-bit limited-range code: 8 bits have 220 of them at most.
+    // A luma ramp over every 10-bit limited-range code: 8 bits have 220 of them at most. 128 rows,
+    // the fewest `av1_nvenc` takes.
     let ramp = |plane: usize, x: usize, _: usize| {
         if plane == 0 {
             u16::try_from(64 + x * 876 / 1023).expect("a code")
@@ -240,28 +241,32 @@ fn ten_bit_outputs_keep_more_luma_codes_than_eight_bits_have() {
             512
         }
     };
+    // Each codec this runtime lists an encoder of 10-bit pictures for: HEVC only where NVENC is,
+    // AV1 not where the valgrind run hides `libsvtav1`. A listed encoder must open.
+    let capabilities = crate::codec_capabilities();
     let mut ran = Vec::new();
     for (codec, container, label) in [
         (NativeVideoCodec::Vp9, Container::Webm, "vp9-ten"),
         (NativeVideoCodec::Av1, Container::Mkv, "av1-ten"),
         (NativeVideoCodec::Hevc, Container::Mp4, "hevc-ten"),
     ] {
+        if !crate::encodes_pixels(&capabilities, codec, pixels) {
+            eprintln!("skipped {label}: this runtime lists no encoder of 10-bit pictures");
+            continue;
+        }
         let path = output_path(label).with_extension(container.extensions()[0]);
         let _ = fs::remove_file(&path);
-        // HEVC has no software encoder in the pinned runtime: it runs on NVENC where there is one.
-        let Ok(mut sink) = NativeVideoEncodeSink::create_with_encoder_threads(
+        let mut sink = NativeVideoEncodeSink::create_with_encoder_threads(
             &path,
-            config(codec, container, pixels, 1024, 64),
+            config(codec, container, pixels, 1024, 128),
             None,
             &|| 2,
-        ) else {
-            assert_eq!(codec, NativeVideoCodec::Hevc, "{label} has an encoder");
-            continue;
-        };
+        )
+        .unwrap_or_else(|error| panic!("{label}: {error}"));
         let selection = sink.selection().clone();
-        let mut frame = crate::packed_frame(1024, 64, selection.pixels).expect("frame");
+        let mut frame = crate::packed_frame(1024, 128, selection.pixels).expect("frame");
         for index in 0..3 {
-            fill(&mut frame, selection.pixels, 1024, 64, ramp);
+            fill(&mut frame, selection.pixels, 1024, 128, ramp);
             sink.write_prepared_video(&mut frame, MediaTime::from_ticks(index * 4_000))
                 .expect("encoded frame");
         }
@@ -281,7 +286,8 @@ fn ten_bit_outputs_keep_more_luma_codes_than_eight_bits_have() {
             selection.pixels.ffmpeg_name(),
         ));
     }
-    assert!(ran.len() >= 2, "{ran:?}");
+    // `libvpx-vp9` is in every pinned runtime.
+    assert!(ran.iter().any(|(label, ..)| *label == "vp9-ten"), "{ran:?}");
 }
 
 #[test]
