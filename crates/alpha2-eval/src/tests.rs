@@ -857,7 +857,7 @@ fn each_caption_track_shows_its_cue_over_the_tracks_before_it() {
             .expect("frame")
             .captions
             .iter()
-            .map(|caption| (caption.text.to_owned(), caption.layers_below))
+            .map(|caption| (caption.text.text().into_owned(), caption.layers_below))
             .collect::<Vec<_>>()
     };
     assert_eq!(shown(99), []);

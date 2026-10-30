@@ -297,6 +297,7 @@ dependencies = [
  "alpha2-model",
  "alpha2-text",
  "alpha2-time",
+ "libm",
  "serde_json",
  "taffy",
 ]

@@ -18,9 +18,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use alpha2_eval::{FrameDesc, GeneratorPlan, LayoutPlan, StepOp};
 use alpha2_layout::{
-    PictureSize, ShadowPixels, TextBounds, TextDraw, shaped_key, text_draw, text_key,
+    PictureSize, ShadowPixels, TextAnimation, TextBounds, TextDraw, animated_text_key, shaped_key,
+    text_draw,
 };
-use alpha2_model::{Generator, TextStyle};
+use alpha2_model::{Generator, TextContent, TextStyle};
 use alpha2_render::{
     CpuImage, CpuRenderer, CpuSource, RenderCacheKey, RenderError, RenderSize, Renderer,
     SourceView, UploadTexture,
@@ -164,9 +165,14 @@ impl fmt::Display for TextError {
 impl std::error::Error for TextError {}
 
 struct TextEntry {
-    texture: TextPixels,
-    background: Option<TextPixels>,
+    texture: Arc<TextPixels>,
+    background: Option<Arc<TextPixels>>,
     shadows: Vec<ShadowPixels>,
+    /// What its pixels are: the entry's own key for a still text, and its
+    /// static key mixed with its animators' state hash for an animated one,
+    /// so the moments of an animation that draw alike share pixels and
+    /// result-cache entries.
+    content: u64,
     width: u32,
     height: u32,
     margin: [u32; 2],
@@ -287,13 +293,20 @@ impl TextTextures {
     ) -> Result<(), TextError> {
         self.frame += 1;
         let picture = picture(size);
-        for (text, style) in frame_texts(frame) {
-            let key = text_key(text, style, picture);
+        for text in frame_texts(frame) {
+            let key = animated_text_key(text.content, text.style, picture, text.time);
             if let Some(entry) = self.entries.get_mut(&key) {
                 entry.last_used = self.frame;
                 continue;
             }
-            let draw = text_draw(text, style, picture, key);
+            let mut draw = text_draw(&text.content.text(), text.style, picture, key);
+            if !text.style.animators.is_empty() {
+                draw.animation = Some(TextAnimation {
+                    animators: alpha2_eval::sample_text_animators(&text.style.animators, text.time),
+                    runs: text.content.runs().to_vec(),
+                    time: text.time,
+                });
+            }
             self.rasterize(renderer, key, &draw)?;
         }
         for (plan, time) in frame_layouts(frame) {
@@ -334,10 +347,44 @@ impl TextTextures {
         draw: &TextDraw,
     ) -> Result<(), TextError> {
         let request = &draw.request;
-        let raster = self
-            .rasterizer
-            .rasterize(request)
-            .map_err(TextError::Raster)?;
+        let states = draw.states(&self.rasterizer).map_err(TextError::Raster)?;
+        let content = match &states {
+            // A moment of an animation that draws as another already held shares its pixels: one
+            // whose states are all identity draws as the text would without animators.
+            Some((_, hash)) => {
+                let content = match *hash {
+                    0 => text_key_of(request),
+                    hash => mix_key(text_key_of(request), hash),
+                };
+                if let Some(held) = self.entries.values().find(|entry| entry.content == content) {
+                    let shared = TextEntry {
+                        texture: Arc::clone(&held.texture),
+                        background: held.background.clone(),
+                        shadows: draw.shadows.clone(),
+                        content,
+                        width: held.width,
+                        height: held.height,
+                        margin: held.margin,
+                        corner: held.corner,
+                        last_used: self.frame,
+                    };
+                    self.entries.insert(key, shared);
+                    return Ok(());
+                }
+                content
+            }
+            None => key,
+        };
+        let raster = match &states {
+            Some((states, hash)) if *hash != 0 => self
+                .rasterizer
+                .rasterize_animated(request, states)
+                .map_err(TextError::Raster)?,
+            _ => self
+                .rasterizer
+                .rasterize(request)
+                .map_err(TextError::Raster)?,
+        };
         // Each text is rasterized once per key; keep no copy.
         self.rasterizer.invalidate(key);
         let texture_size = &raster.descriptor.texture;
@@ -358,12 +405,17 @@ impl TextTextures {
             .map(|rgba8| renderer.upload_text(size, rgba8))
             .transpose()
             .map_err(TextError::Render)?;
+        // Shared between the moments of an animation that draw alike. The pixels are `Send` on
+        // native targets, where hosts move the store between threads; wasm is one thread.
+        #[cfg_attr(target_arch = "wasm32", allow(clippy::arc_with_non_send_sync))]
+        let (texture, background) = (Arc::new(texture), background.map(Arc::new));
         self.entries.insert(
             key,
             TextEntry {
                 texture,
                 background,
                 shadows: draw.shadows.clone(),
+                content,
                 width: texture_size.width,
                 height: texture_size.height,
                 margin,
@@ -547,11 +599,13 @@ impl TextTextures {
             width: entry.width,
             height: entry.height,
             margin: entry.margin,
-            cache_key: Some(self.cache_key(key)),
-            background: entry
-                .background
-                .as_ref()
-                .map(|background| (background.view(), Some(self.background_cache_key(key)))),
+            cache_key: Some(self.cache_key(entry.content)),
+            background: entry.background.as_ref().map(|background| {
+                (
+                    background.view(),
+                    Some(self.background_cache_key(entry.content)),
+                )
+            }),
             shadows: &entry.shadows,
         })
     }
@@ -574,37 +628,92 @@ impl TextTextures {
     }
 }
 
-/// Every text `frame` may draw, with its style: each caption, then each text
-/// generator of a clip it draws, the clip's own source or a step of its
-/// compositions. A text drawn twice is named twice.
-pub(crate) fn frame_texts<'f>(
-    frame: &'f FrameDesc<'_>,
-) -> impl Iterator<Item = (&'f str, &'f TextStyle)> {
-    let captions = frame
-        .captions
-        .iter()
-        .map(|caption| (caption.text, caption.style));
+/// A text a frame may draw: its content, style, and the time its animators
+/// are keyed in (a caption's since its cue started, a text generator's
+/// picture time).
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct FrameText<'f> {
+    pub(crate) content: &'f TextContent,
+    pub(crate) style: &'f TextStyle,
+    pub(crate) time: alpha2_time::MediaTime,
+}
+
+/// Every text `frame` may draw: each caption, then each text generator of a
+/// clip it draws, the clip's own source or a step of its compositions. A text
+/// drawn twice is named twice.
+pub(crate) fn frame_texts<'f>(frame: &'f FrameDesc<'_>) -> impl Iterator<Item = FrameText<'f>> {
+    let captions = frame.captions.iter().map(|caption| FrameText {
+        content: caption.text,
+        style: caption.style,
+        time: caption.local_time,
+    });
     let generators = frame
         .visual
         .iter()
         .filter(|clip| frame.draws(clip))
         .flat_map(|clip| {
+            let own = clip
+                .generator
+                .map(|generator| (generator, clip.source_time));
             let steps = clip
                 .composition
                 .iter()
                 .chain(&clip.source_composition)
-                .flat_map(|composition| &composition.plan().steps)
-                .filter_map(|step| match &step.op {
-                    StepOp::Generator { generator, .. } => Some(generator),
-                    _ => None,
+                .flat_map(|composition| {
+                    let time = composition.time();
+                    composition
+                        .plan()
+                        .steps
+                        .iter()
+                        .filter_map(move |step| match &step.op {
+                            StepOp::Generator {
+                                generator, start, ..
+                            } => Some((generator, generator_time(step.time(time), *start))),
+                            _ => None,
+                        })
                 });
-            clip.generator.into_iter().chain(steps)
+            own.into_iter().chain(steps)
         })
-        .filter_map(|generator| match generator {
-            Generator::Text { text, style } => Some((text.as_str(), style)),
+        .filter_map(|(generator, time)| match generator {
+            Generator::Text { text, style } => Some(FrameText {
+                content: text,
+                style,
+                time,
+            }),
             _ => None,
         });
     captions.chain(generators)
+}
+
+/// A composition generator step's picture time: the step's time plus its
+/// start.
+pub(crate) const fn generator_time(
+    step: alpha2_time::MediaTime,
+    start: alpha2_time::MediaTime,
+) -> alpha2_time::MediaTime {
+    alpha2_time::MediaTime(step.ticks().saturating_add(start.ticks()))
+}
+
+/// `key` mixed with an animation's state `hash`: FNV-1a, never zero.
+fn mix_key(key: u64, hash: u64) -> u64 {
+    let mut mixed = key;
+    for byte in hash.to_le_bytes() {
+        mixed = (mixed ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    mixed.max(1)
+}
+
+/// A key for what `request` draws without animators, from every field of the
+/// request but its content version.
+fn text_key_of(request: &TextRasterRequest) -> u64 {
+    alpha2_layout::layout_text_key(
+        &TextRasterRequest {
+            content_version: 1,
+            ..request.clone()
+        },
+        &[],
+        &[],
+    )
 }
 
 /// A host's frame provider together with its text store: frames come from

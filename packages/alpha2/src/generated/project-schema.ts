@@ -8,6 +8,9 @@ export const AUDIO_EFFECT_STATE_MARGIN_MS = 1100;
 /** Mirrors `alpha2_model::CURRENT_SCHEMA_VERSION`. */
 export const CURRENT_SCHEMA_VERSION = 1;
 
+/** Mirrors `alpha2_model::MAX_ANIMATOR_SCALE`. */
+export const MAX_ANIMATOR_SCALE = 10;
+
 /** Mirrors `alpha2_model::MAX_AUDIO_DELAY_MS`. */
 export const MAX_AUDIO_DELAY_MS = 120000;
 
@@ -31,6 +34,9 @@ export const MAX_CAPTION_FONT_SIZE = 0.25;
 
 /** Mirrors `alpha2_model::MAX_CHAIN_EFFECTS`. */
 export const MAX_CHAIN_EFFECTS = 16;
+
+/** Mirrors `alpha2_model::MAX_CLASS_NAME_BYTES`. */
+export const MAX_CLASS_NAME_BYTES = 64;
 
 /** Mirrors `alpha2_model::MAX_CLIPS`. */
 export const MAX_CLIPS = 100000;
@@ -149,6 +155,15 @@ export const MAX_PROJECT_JSON_BYTES = 67108864;
 /** Mirrors `alpha2_model::MAX_PROVIDER_DOCUMENT_BYTES`. */
 export const MAX_PROVIDER_DOCUMENT_BYTES = 268435456;
 
+/** Mirrors `alpha2_model::MAX_RANGE_INDEX`. */
+export const MAX_RANGE_INDEX = 4096;
+
+/** Mirrors `alpha2_model::MAX_RANGE_PERCENT`. */
+export const MAX_RANGE_PERCENT = 200;
+
+/** Mirrors `alpha2_model::MAX_RUN_CLASSES`. */
+export const MAX_RUN_CLASSES = 8;
+
 /** Mirrors `alpha2_model::MAX_SAMPLE_RATE`. */
 export const MAX_SAMPLE_RATE = 96000;
 
@@ -164,6 +179,9 @@ export const MAX_SHAPE_ITEMS = 1024;
 /** Mirrors `alpha2_model::MAX_SVG_DOCUMENT_BYTES`. */
 export const MAX_SVG_DOCUMENT_BYTES = 33554432;
 
+/** Mirrors `alpha2_model::MAX_TEXT_ANIMATORS`. */
+export const MAX_TEXT_ANIMATORS = 8;
+
 /** Mirrors `alpha2_model::MAX_TEXT_CONTENT_BYTES`. */
 export const MAX_TEXT_CONTENT_BYTES = 4096;
 
@@ -172,6 +190,9 @@ export const MAX_TEXT_GENERATOR_FONT_SIZE = 1;
 
 /** Mirrors `alpha2_model::MAX_TEXT_PADDING`. */
 export const MAX_TEXT_PADDING = 2;
+
+/** Mirrors `alpha2_model::MAX_TEXT_RUNS`. */
+export const MAX_TEXT_RUNS = 512;
 
 /** Mirrors `alpha2_model::MAX_TEXT_SHADOWS`. */
 export const MAX_TEXT_SHADOWS = 4;
@@ -217,6 +238,9 @@ export const MIN_LINE_HEIGHT = 0.5;
 
 /** Mirrors `alpha2_model::MIN_POLYSTAR_POINTS`. */
 export const MIN_POLYSTAR_POINTS = 3;
+
+/** Mirrors `alpha2_model::MIN_RANGE_PERCENT`. */
+export const MIN_RANGE_PERCENT = -100;
 
 /** Mirrors `alpha2_model::MIN_SAMPLE_RATE`. */
 export const MIN_SAMPLE_RATE = 8000;
@@ -422,6 +446,26 @@ export const POLYSTAR_KIND_VALUES: readonly PolystarKind[] = [
 /** Every {@link Position}, in the model's order. */
 export const POSITION_VALUES: readonly Position[] = ["relative", "absolute"];
 
+/** Every {@link RangeShape}, in the model's order. */
+export const RANGE_SHAPE_VALUES: readonly RangeShape[] = [
+  "square",
+  "ramp_up",
+  "ramp_down",
+  "triangle",
+  "round",
+  "smooth",
+];
+
+/** Every {@link RangeUnits}, in the model's order. */
+export const RANGE_UNITS_VALUES: readonly RangeUnits[] = ["percent", "index"];
+
+/** Every {@link RunState}, in the model's order. */
+export const RUN_STATE_VALUES: readonly RunState[] = [
+  "upcoming",
+  "active",
+  "spoken",
+];
+
 /** Every {@link Spread}, in the model's order. */
 export const SPREAD_VALUES: readonly Spread[] = ["pad", "repeat", "reflect"];
 
@@ -430,6 +474,14 @@ export const TEXT_ALIGN_VALUES: readonly TextAlign[] = [
   "start",
   "center",
   "end",
+];
+
+/** Every {@link TextUnit}, in the model's order. */
+export const TEXT_UNIT_VALUES: readonly TextUnit[] = [
+  "characters",
+  "characters_excluding_spaces",
+  "words",
+  "lines",
 ];
 
 /** Every {@link TrackKind}, in the model's order. */
@@ -730,10 +782,10 @@ export type CacheIntent = "auto" | "pin" | "bypass";
  */
 export interface CaptionCue {
   /**
-   * The text; `\n` starts a line. Non-empty, at most
-   * `MAX_TEXT_CONTENT_BYTES` bytes.
+   * The text, a string or runs; `\n` starts a line. Non-empty, at most
+   * `MAX_TEXT_CONTENT_BYTES` bytes. Run times are from the cue's start.
    */
-  readonly text: string;
+  readonly text: TextContent;
   /**
    * When the cue shows. Non-empty and not before zero.
    */
@@ -1335,8 +1387,9 @@ export interface FrameRate {
  * fills the frame at scale 1. Positions are in its normalized space, `(0, 0)`
  * top-left to `(1, 1)` bottom-right; lengths (radii, stroke widths) are
  * fractions of its shorter side, so the picture is the same at any render
- * resolution. A fill or text does not change over time (a clip animates it
- * with its transform, effects, and masks); shapes and layouts may.
+ * resolution. A fill does not change over time (a clip animates it with
+ * its transform, effects, and masks); text changes only through its style's
+ * animators, and shapes and layouts may change.
  */
 export type Generator =
   | {
@@ -1369,10 +1422,10 @@ export type Generator =
        */
       readonly style?: TextStyle;
       /**
-       * The text; `\n` starts a line. Non-empty, at most
-       * `MAX_TEXT_CONTENT_BYTES` bytes.
+       * The text, a string or runs; `\n` starts a line. Non-empty, at
+       * most `MAX_TEXT_CONTENT_BYTES` bytes. Run times are picture time.
        */
-      readonly text: string;
+      readonly text: TextContent;
       /**
        * Text on a transparent picture, laid out and placed by its style as a
        * caption track's cues are: its size and wrapping width fractions of
@@ -1812,6 +1865,13 @@ export interface LayoutNode {
    * `start`.
    */
   readonly text_align?: TextAlign | null;
+  /**
+   * Per-character motion of the box's own text, Range selectors only (a
+   * layout's text is one string, without runs): at most
+   * `MAX_TEXT_ANIMATORS`, keyed in the layout's picture time. Not
+   * inherited; never changes layout.
+   */
+  readonly text_animators?: readonly TextAnimator[];
   /**
    * Offset of the box and everything in it, after layout: the object, or
    * one or two lengths as CSS `translate` writes them.
@@ -2598,6 +2658,17 @@ export type ProviderSource =
     };
 
 /**
+ * How selection rises and falls across a Range selector's range.
+ */
+export type RangeShape =
+  "square" | "ramp_up" | "ramp_down" | "triangle" | "round" | "smooth";
+
+/**
+ * What a Range selector's start, end and offset count in.
+ */
+export type RangeUnits = "percent" | "index";
+
+/**
  * An opaque color as a color picker shows it: straight, sRGB-encoded
  * components in the inclusive unit interval.
  */
@@ -2644,6 +2715,25 @@ export type Rgba =
       readonly red: number;
     }
   | string;
+
+/**
+ * Which runs a Timing selector selects.
+ */
+export type RunState = "upcoming" | "active" | "spoken";
+
+/**
+ * A run's time span.
+ */
+export interface RunTime {
+  /**
+   * When it ends; after `start`.
+   */
+  readonly end: MediaTime;
+  /**
+   * When it starts.
+   */
+  readonly start: MediaTime;
+}
 
 /**
  * A geometry alone, as a mask's outline is.
@@ -3123,6 +3213,60 @@ export interface Subpath {
 export type TextAlign = "start" | "center" | "end";
 
 /**
+ * One animator: what it selects, and what it does to what it selects.
+ */
+export interface TextAnimator {
+  /**
+   * Applied to each character in proportion to its selection.
+   *
+   * @defaultValue `{}`
+   */
+  readonly properties?: TextAnimatorProperties;
+  /**
+   * Gives each character its selection, in `[0, 1]`.
+   */
+  readonly selector: TextSelector;
+}
+
+/**
+ * What an animator does to each character, in proportion to its selection.
+ * A property left out does nothing.
+ */
+export interface TextAnimatorProperties {
+  /**
+   * The fill color a fully selected character takes; a gradient fill is
+   * mixed toward it.
+   */
+  readonly fill?: Animated<Rgba> | null;
+  /**
+   * Moves the character, in font sizes, +y down.
+   */
+  readonly offset?: Animated<Vec2> | null;
+  /**
+   * The opacity a fully selected character takes, in `[0, 1]`.
+   */
+  readonly opacity?: Animated<number> | null;
+  /**
+   * Turns the character about its centre, clockwise degrees.
+   */
+  readonly rotation_degrees?: Animated<number> | null;
+  /**
+   * Scales the character about its centre; 1 is none. Each axis in
+   * `[0, 10]`.
+   */
+  readonly scale?: Animated<Vec2> | null;
+  /**
+   * The color every stroke of a fully selected character takes.
+   */
+  readonly stroke?: Animated<Rgba> | null;
+  /**
+   * Space added after the character, in font sizes, in `[-0.5, 1]`, as
+   * letter spacing adds it; lines are not broken again.
+   */
+  readonly tracking?: Animated<number> | null;
+}
+
+/**
  * A box behind each line of text.
  */
 export interface TextBackground {
@@ -3138,6 +3282,125 @@ export interface TextBackground {
    */
   readonly padding?: number;
 }
+
+/**
+ * A text: one string, or runs whose texts joined are the text.
+ *
+ * Written as `"Hello"` or `[{ "text": "Hel" }, { "text": "lo", "class": ["key"] }]`.
+ */
+export type TextContent = string | readonly TextRun[];
+
+/**
+ * A piece of a text that animators' Class and Timing selectors can pick.
+ */
+export interface TextRun {
+  /**
+   * Names Class selectors match: each 1 to 64 bytes of `A-Z`, `a-z`,
+   * `0-9`, `_` and `-`; at most `MAX_RUN_CLASSES`.
+   */
+  readonly class?: readonly string[];
+  /**
+   * Non-empty; `\n` starts a line as in plain text. A grapheme cluster
+   * that spans two runs belongs to the run holding its first byte.
+   */
+  readonly text: string;
+  /**
+   * When the run is said, from the start of what holds it: a caption
+   * cue's start, or a text generator's picture time zero.
+   */
+  readonly time?: RunTime | null;
+}
+
+/**
+ * How an animator selects characters.
+ */
+export type TextSelector =
+  | {
+      /**
+       * The selection's scale, in `[0, 1]`. Default 1.
+       *
+       * @defaultValue `{"mode":"constant","value":1}`
+       */
+      readonly amount?: Animated<number>;
+      /**
+       * What the range counts: characters (the default), characters that
+       * are not spaces, words, or lines.
+       *
+       * @defaultValue `"characters"`
+       */
+      readonly based_on?: TextUnit;
+      /**
+       * Where it ends, in the same range. Default 100.
+       *
+       * @defaultValue `{"mode":"constant","value":100}`
+       */
+      readonly end?: Animated<number>;
+      /**
+       * Added to start and end, in the same range. Default 0.
+       *
+       * @defaultValue `{"mode":"constant","value":0}`
+       */
+      readonly offset?: Animated<number>;
+      /**
+       * How selection rises and falls across the range.
+       *
+       * @defaultValue `"square"`
+       */
+      readonly shape?: RangeShape;
+      /**
+       * Where the range starts: in `[-100, 200]` percent, or `[-N, 2N]`
+       * units for `N` of `MAX_RANGE_INDEX`. Default 0.
+       *
+       * @defaultValue `{"mode":"constant","value":0}`
+       */
+      readonly start?: Animated<number>;
+      /**
+       * A range over the text's units, shaped at its ends: After Effects'
+       * range selector.
+       */
+      readonly type: "range";
+      /**
+       * Whether start, end and offset are percents of the units (the
+       * default) or unit indices.
+       *
+       * @defaultValue `"percent"`
+       */
+      readonly units?: RangeUnits;
+    }
+  | {
+      /**
+       * How long the state takes to fade in and out; zero switches.
+       *
+       * @defaultValue `0`
+       */
+      readonly ramp?: MediaTime;
+      /**
+       * Which runs it selects: those not yet said, being said, or said.
+       */
+      readonly state: RunState;
+      /**
+       * Splits each run's span over its characters in order, so the run
+       * is swept character by character.
+       *
+       * @defaultValue `false`
+       */
+      readonly sweep?: boolean;
+      /**
+       * Characters of timed runs, by where the run's time lies against the
+       * current time.
+       */
+      readonly type: "timing";
+    }
+  | {
+      /**
+       * The class name.
+       */
+      readonly class: string;
+      /**
+       * Characters of runs that carry a class.
+       */
+      readonly type: "class";
+    };
 
 /**
  * A shadow of a text's glyphs and strokes, behind them.
@@ -3209,6 +3472,14 @@ export interface TextStyle {
    * @defaultValue `{"x":0.5,"y":1}`
    */
   readonly anchor?: Vec2;
+  /**
+   * Per-character motion and color, applied in order: at most
+   * `MAX_TEXT_ANIMATORS`. Their keyframes are in the time of what
+   * holds the text: since a caption cue's start, or a text generator's
+   * picture time. They never change layout: lines are those of the text
+   * without them.
+   */
+  readonly animators?: readonly TextAnimator[];
   /**
    * A box behind each line.
    *
@@ -3293,6 +3564,12 @@ export interface TextStyle {
    */
   readonly strokes?: readonly TextStroke[];
 }
+
+/**
+ * The units a Range selector counts.
+ */
+export type TextUnit =
+  "characters" | "characters_excluding_spaces" | "words" | "lines";
 
 /**
  * How a clip plays its source range over its timeline range.

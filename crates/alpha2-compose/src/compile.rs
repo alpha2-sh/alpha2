@@ -41,7 +41,7 @@ fn range(start: i64, end: i64) -> TimeRange {
 pub(crate) fn cue(start: i64, end: i64, text: String) -> CaptionCue {
     CaptionCue {
         timeline_range: range(start, end),
-        text,
+        text: text.into(),
     }
 }
 
@@ -993,7 +993,7 @@ impl<'a> Context<'a> {
                     ..TextStyle::default()
                 };
                 let source = self.generated_source(Generator::Text {
-                    text: text.text.clone(),
+                    text: text.text.clone().into(),
                     style,
                 });
                 let mut clip = Clip::new(
@@ -1142,7 +1142,8 @@ impl<'a> Context<'a> {
             .filter_map(|cue| {
                 let start = slot.start + cue.timeline_range.start().ticks();
                 let stop = (slot.start + cue.timeline_range.end().ticks()).min(end);
-                (start < stop).then(|| crate::compile::cue(start, stop, cue.text.clone()))
+                (start < stop)
+                    .then(|| crate::compile::cue(start, stop, cue.text.text().into_owned()))
             })
             .collect::<Vec<_>>();
         if let Some((center, bar_height, color)) = captions.bar {

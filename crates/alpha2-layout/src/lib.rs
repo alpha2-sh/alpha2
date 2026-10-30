@@ -11,6 +11,7 @@
 pub mod json;
 pub mod layout;
 mod text;
+pub mod text_animation;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -23,9 +24,9 @@ pub use layout::{
     measure_layout, resolve, shape_texts,
 };
 pub use text::{
-    MAX_FONT_PIXELS, MAX_PADDING_PIXELS, MAX_STROKE_PIXELS, ShadowPixels, TextBounds, TextDraw,
-    font_pixels, layout_text_key, measure_text, rgba8, shadow_pixels, shaped_key, stroke_pixels,
-    text_draw, text_fill, text_key, text_request,
+    MAX_FONT_PIXELS, MAX_PADDING_PIXELS, MAX_STROKE_PIXELS, ShadowPixels, TextAnimation,
+    TextBounds, TextDraw, animated_text_key, font_pixels, layout_text_key, measure_text, rgba8,
+    shadow_pixels, shaped_key, stroke_pixels, text_draw, text_fill, text_key, text_request,
 };
 
 /// The size, in pixels, of a picture text and layouts are placed on: never

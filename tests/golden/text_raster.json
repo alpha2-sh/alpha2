@@ -730,6 +730,110 @@
         ],
         "text": "Split boxes\nand glyphs"
       }
+    },
+    {
+      "contentVersion": 44,
+      "expected": {
+        "ascent": 28.80000114440918,
+        "descent": 7.200000286102295,
+        "firstBaseline": 32.400001525878906,
+        "height": 99,
+        "layoutHeight": 86.4000015258789,
+        "layoutWidth": 260.0,
+        "layoutX": 4.0,
+        "layoutY": 6.0,
+        "lineCount": 2,
+        "pixelsFnv1a": "a4e888795220bb5f",
+        "width": 268
+      },
+      "name": "animated-scale-rotate",
+      "request": {
+        "align": "center",
+        "clusterState": {
+          "offset": [
+            0,
+            -3
+          ],
+          "rotation": 0.2,
+          "scale": [
+            1.3,
+            1.1
+          ]
+        },
+        "fill": [
+          255,
+          240,
+          200,
+          255
+        ],
+        "fontSize": 36,
+        "lineHeight": 1.2,
+        "maxWidth": 260,
+        "strokes": [
+          {
+            "color": [
+              0,
+              0,
+              0,
+              255
+            ],
+            "width": 2
+          },
+          {
+            "color": [
+              40,
+              90,
+              200,
+              255
+            ],
+            "width": 1.5
+          }
+        ],
+        "text": "Scaled and\nturned"
+      }
+    },
+    {
+      "contentVersion": 45,
+      "expected": {
+        "ascent": 25.600000381469727,
+        "descent": 6.400000095367432,
+        "firstBaseline": 28.80000114440918,
+        "height": 116,
+        "layoutHeight": 115.20000457763672,
+        "layoutWidth": 120.0,
+        "layoutX": 0.0,
+        "layoutY": 0.0,
+        "lineCount": 3,
+        "pixelsFnv1a": "c13331a5f8551cca",
+        "width": 120
+      },
+      "name": "animated-tracking-rtl",
+      "request": {
+        "align": "start",
+        "clusterState": {
+          "fill": {
+            "add": [
+              0.6,
+              0.05,
+              0.0,
+              0.6
+            ],
+            "keep": 0.4
+          },
+          "opacity": 0.6,
+          "tracking": 5
+        },
+        "fill": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "fontSize": 32.0,
+        "lineHeight": 1.2,
+        "maxWidth": 120.0,
+        "text": "שלום עולם 123"
+      }
     }
   ],
   "fonts": [

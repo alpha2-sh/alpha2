@@ -147,7 +147,7 @@ impl PreparedGradient<'_> {
     }
 
     /// The premultiplied linear-light color at `point`.
-    fn linear_at(&self, point: [f32; 2]) -> [f32; 4] {
+    pub(crate) fn linear_at(&self, point: [f32; 2]) -> [f32; 4] {
         let gradient = self.gradient;
         let t = spread(self.kind, gradient.spread, position(self.kind, point));
         let stops = &gradient.stops;
@@ -216,7 +216,7 @@ fn dot(left: [f32; 2], right: [f32; 2]) -> f32 {
 }
 
 /// Straight sRGB to premultiplied linear light; 1 stays exactly 1.
-fn premultiplied_linear(color: [f32; 4]) -> [f32; 4] {
+pub(crate) fn premultiplied_linear(color: [f32; 4]) -> [f32; 4] {
     let alpha = color[3].clamp(0.0, 1.0);
     let linear = |value: f32| {
         let value = value.clamp(0.0, 1.0);
@@ -239,7 +239,7 @@ fn premultiplied_linear(color: [f32; 4]) -> [f32; 4] {
 /// Premultiplied linear light as straight sRGB-encoded bytes, rounded to
 /// the nearest code; 1 stays exactly 1.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-fn stored_rgba8(color: [f32; 4]) -> [u8; 4] {
+pub(crate) fn stored_rgba8(color: [f32; 4]) -> [u8; 4] {
     let alpha = color[3].clamp(0.0, 1.0);
     if alpha <= 0.0 {
         return [0; 4];

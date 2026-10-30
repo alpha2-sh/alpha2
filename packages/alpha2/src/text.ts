@@ -182,6 +182,34 @@ export interface WasmTextRequest {
    * the glyphs, for a page that draws a shadow between them. The rasterizer draws no shadows.
    */
   readonly splitBackground?: boolean;
+  /**
+   * Draws the text animated: one state every cluster takes. The rasterizer lays the text out as
+   * it would without states; tracking moves clusters along their line, never re-wraps.
+   */
+  readonly clusterState?: WasmClusterState;
+  /** Draws the text animated, a state for each cluster in logical order. */
+  readonly clusterStates?: readonly WasmClusterState[];
+}
+
+/**
+ * What an animator does to one cluster; every field left out is its identity. Offset and tracking
+ * are pixels, rotation clockwise radians, opacity `0..=1` applied to the cluster's fill and strokes
+ * together. A color mix turns a color into `color * keep + add`, premultiplied linear light.
+ */
+export interface WasmClusterState {
+  readonly offset?: readonly [number, number];
+  readonly scale?: readonly [number, number];
+  readonly rotation?: number;
+  readonly opacity?: number;
+  readonly fill?: WasmColorMix;
+  readonly stroke?: WasmColorMix;
+  readonly tracking?: number;
+}
+
+/** See {@link WasmClusterState}. */
+export interface WasmColorMix {
+  readonly keep: number;
+  readonly add: readonly [number, number, number, number];
 }
 
 /** Straight (not premultiplied), sRGB-encoded RGBA, each in `0..=255`. */

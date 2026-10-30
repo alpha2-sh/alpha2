@@ -794,9 +794,14 @@ fn attach_texts<'t>(
         let layout = frames.layout(crate::layout_key(plan.evaluate(time).key, size))?;
         LaidOut::attach(layout, frames)
     };
-    let lookup = |generator: &Generator| match generator {
+    let lookup = |generator: &Generator, time: MediaTime| match generator {
         Generator::Text { text, style } => frames
-            .text(crate::text_key(text, style, crate::text::picture(size)))
+            .text(alpha2_layout::animated_text_key(
+                text,
+                style,
+                crate::text::picture(size),
+                time,
+            ))
             .map(|texture| PlacedText {
                 texture,
                 visual: text_placement(texture, style, size),
@@ -804,7 +809,9 @@ fn attach_texts<'t>(
         _ => None,
     };
     for (clip, textures) in available {
-        textures.text = clip.generator.and_then(lookup);
+        textures.text = clip
+            .generator
+            .and_then(|generator| lookup(generator, clip.source_time));
         textures.layout = laid_out(clip.plan, clip.source_time);
         for (composition, media) in [
             (clip.composition, &mut textures.media),
@@ -827,8 +834,12 @@ fn attach_texts<'t>(
                         );
                         *slot = laid_out(plan.as_deref(), time).map(StepFrame::Layout);
                     }
-                    StepOp::Generator { generator, .. } => {
-                        *slot = lookup(generator).map(StepFrame::Text);
+                    StepOp::Generator {
+                        generator, start, ..
+                    } => {
+                        let time =
+                            crate::text::generator_time(step.time(composition.time()), *start);
+                        *slot = lookup(generator, time).map(StepFrame::Text);
                     }
                     _ => {}
                 }
@@ -888,10 +899,11 @@ fn caption_layers<'a>(
         .iter()
         .map(|caption| {
             let texture = frames
-                .text(crate::text_key(
+                .text(alpha2_layout::animated_text_key(
                     caption.text,
                     caption.style,
                     crate::text::picture(size),
+                    caption.local_time,
                 ))
                 .ok_or(RenderError::MissingText)?;
             Ok(CaptionLayer {

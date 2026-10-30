@@ -288,6 +288,12 @@ pub struct LayoutNode {
     /// has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shadows: Option<Vec<TextShadow>>,
+    /// Per-character motion of the box's own text, Range selectors only (a
+    /// layout's text is one string, without runs): at most
+    /// [`crate::MAX_TEXT_ANIMATORS`], keyed in the layout's picture time. Not
+    /// inherited; never changes layout.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub text_animators: Vec<crate::TextAnimator>,
 
     /// Opacity of the box and everything in it, as one group, in `0..=1`.
     /// Drawn after layout; it never moves a box.
@@ -1021,6 +1027,9 @@ fn validate_style(node: &LayoutNode, at: &str, shorter_side: Option<f32>) -> Lay
     {
         return out_of_range("shadows");
     }
+    if !crate::text_animation::valid_animators(&node.text_animators, true) {
+        return out_of_range("text_animators");
+    }
     Ok(())
 }
 
@@ -1219,6 +1228,7 @@ impl LayoutNode {
             || keyed_option(self.rotation_degrees.as_ref())
             || keyed_option(self.text.as_ref())
             || shape
+            || crate::text_animation::animators_have_keyframes(&self.text_animators)
             || self.children.iter().any(Self::is_animated)
     }
 
@@ -1249,6 +1259,11 @@ impl LayoutNode {
         if let Some(shape) = &self.shape {
             crate::shapes::for_each_keyed_item(&shape.items, &field("shape.items"), visit);
         }
+        crate::text_animation::for_each_keyed_animator(
+            &self.text_animators,
+            &field("text_animators"),
+            visit,
+        );
         for (name, value) in [
             ("gap", &self.gap),
             ("row_gap", &self.row_gap),

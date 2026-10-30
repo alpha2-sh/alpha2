@@ -82,45 +82,53 @@ fn fixture_requests_match_the_pinned_rasters() {
             let channels = value.as_array().expect("color");
             std::array::from_fn(|index| channels[index].as_u64().expect("u8") as u8)
         };
-        let result = rasterizer
-            .rasterize(&TextRasterRequest {
-                text: request["text"].as_str().expect("text").into(),
-                font_size: number("fontSize", 0.0),
-                max_width: number("maxWidth", 0.0),
-                line_height: number("lineHeight", 1.2),
-                align: match request["align"].as_str().unwrap_or("start") {
-                    "center" => TextAlign::Center,
-                    "end" => TextAlign::End,
-                    _ => TextAlign::Start,
-                },
-                fill: fill(&request["fill"]),
-                emoji_policy: match request["emojiPolicy"].as_str() {
-                    Some("replace") => EmojiPolicy::Replace,
-                    Some("monochrome") => EmojiPolicy::Monochrome,
-                    _ => EmojiPolicy::Color,
-                },
-                content_version: case["contentVersion"].as_u64().expect("version"),
-                strokes: request.get("strokes").map_or_else(Vec::new, |strokes| {
-                    strokes
-                        .as_array()
-                        .expect("strokes")
-                        .iter()
-                        .map(|stroke| TextStroke {
-                            color: rgba(&stroke["color"]),
-                            width: stroke["width"].as_f64().expect("width") as f32,
-                        })
-                        .collect()
-                }),
-                split_background: request["splitBackground"].as_bool().unwrap_or(false),
-                background: request.get("background").map(|background| TextBackground {
-                    color: rgba(&background["color"]),
-                    padding: background["padding"].as_f64().expect("padding") as f32,
-                }),
-                font_family: request["fontFamily"].as_str().map(Into::into),
-                letter_spacing: 0.0,
-                font_weight: 400,
-            })
-            .expect("fixture rasterizes");
+        let pinned = TextRasterRequest {
+            text: request["text"].as_str().expect("text").into(),
+            font_size: number("fontSize", 0.0),
+            max_width: number("maxWidth", 0.0),
+            line_height: number("lineHeight", 1.2),
+            align: match request["align"].as_str().unwrap_or("start") {
+                "center" => TextAlign::Center,
+                "end" => TextAlign::End,
+                _ => TextAlign::Start,
+            },
+            fill: fill(&request["fill"]),
+            emoji_policy: match request["emojiPolicy"].as_str() {
+                Some("replace") => EmojiPolicy::Replace,
+                Some("monochrome") => EmojiPolicy::Monochrome,
+                _ => EmojiPolicy::Color,
+            },
+            content_version: case["contentVersion"].as_u64().expect("version"),
+            strokes: request.get("strokes").map_or_else(Vec::new, |strokes| {
+                strokes
+                    .as_array()
+                    .expect("strokes")
+                    .iter()
+                    .map(|stroke| TextStroke {
+                        color: rgba(&stroke["color"]),
+                        width: stroke["width"].as_f64().expect("width") as f32,
+                    })
+                    .collect()
+            }),
+            split_background: request["splitBackground"].as_bool().unwrap_or(false),
+            background: request.get("background").map(|background| TextBackground {
+                color: rgba(&background["color"]),
+                padding: background["padding"].as_f64().expect("padding") as f32,
+            }),
+            font_family: request["fontFamily"].as_str().map(Into::into),
+            letter_spacing: request["letterSpacing"].as_f64().unwrap_or(0.0) as f32,
+            font_weight: 400,
+        };
+        // A pinned animated raster names one state every cluster takes, as `WasmTextRasterizer`
+        // reads it.
+        let result = match request.get("clusterState") {
+            Some(state) => {
+                let clusters = rasterizer.layout(&pinned).expect("lays out").clusters.len();
+                rasterizer.rasterize_animated(&pinned, &vec![cluster_state(state); clusters])
+            }
+            None => rasterizer.rasterize(&pinned),
+        }
+        .expect("fixture rasterizes");
         let descriptor = &result.descriptor;
         let mut actual = serde_json::json!({
             "width": descriptor.texture.width,
@@ -1604,8 +1612,9 @@ fn the_background_is_every_line_box_byte_for_byte() {
                 None,
                 width,
                 [margin, margin],
-                [90.0, advance * 5.0],
-                &line_boxes
+                &line_boxes,
+                &[],
+                &RequestLook::of(&request, [90.0, advance * 5.0]),
             )
             .0,
             background_box_by_box(&request, pixels, width, [margin, margin], &line_boxes),
@@ -2689,4 +2698,328 @@ fn a_split_background_and_glyph_plane_over_each_other_equal_the_joined_raster() 
         })
         .expect("draws");
     assert!(bare.background.is_none());
+}
+
+/// Every cluster of `request` in its identity state.
+fn identity_states(rasterizer: &TextRasterizer, request: &TextRasterRequest) -> Vec<ClusterState> {
+    let layout = rasterizer.layout(request).expect("lays out");
+    vec![ClusterState::IDENTITY; layout.clusters.len()]
+}
+
+/// The ink's horizontal extent of a raster's row `y` of the layout box, in box pixels.
+fn ink_span(result: &TextRasterResult, y: i64) -> Option<(i64, i64)> {
+    #[allow(clippy::cast_possible_truncation)]
+    let left = -(result.descriptor.layout_x as i64);
+    let width = i64::from(result.descriptor.texture.width);
+    let inked = (left..left + width)
+        .filter(|&x| pixel_at(result, x, y)[3] > 0)
+        .collect::<Vec<_>>();
+    Some((*inked.first()?, *inked.last()?))
+}
+
+#[test]
+fn a_layout_names_each_cluster_its_word_and_line() {
+    let rasterizer = fixture();
+    let layout = rasterizer
+        .layout(&TextRasterRequest {
+            max_width: 140.0,
+            ..request("one two, three\nfour", 20.0)
+        })
+        .expect("lays out");
+    let text = "one two, three\nfour";
+    let cluster = |byte: usize| {
+        layout
+            .clusters
+            .iter()
+            .find(|cluster| cluster.bytes.start == byte)
+            .expect("a cluster")
+    };
+    assert_eq!(&text[cluster(4).bytes.clone()], "t");
+    assert_eq!(cluster(0).word, Some(0));
+    assert_eq!(cluster(4).word, Some(1));
+    // The comma and the space between words are in none.
+    assert_eq!(cluster(7).word, None);
+    assert!(cluster(3).is_space && !cluster(4).is_space);
+    assert_eq!(cluster(9).word, Some(2));
+    assert_eq!(cluster(15).word, Some(3));
+    assert_eq!(
+        cluster(15).line,
+        u32::try_from(layout.lines.len() - 1).expect("lines")
+    );
+    assert!(layout.lines.len() >= 2);
+    // Clusters advance left to right along a line.
+    assert!(cluster(1).x > cluster(0).x && cluster(1).advance > 0.0);
+}
+
+#[test]
+fn identity_states_raster_the_static_bytes() {
+    let mut rasterizer = fixture();
+    let looked = TextRasterRequest {
+        strokes: vec![
+            TextStroke {
+                color: [0, 0, 0, 255],
+                width: 2.0,
+            },
+            TextStroke {
+                color: [200, 40, 40, 255],
+                width: 1.5,
+            },
+        ],
+        background: Some(TextBackground {
+            color: [20, 40, 60, 160],
+            padding: 4.0,
+        }),
+        ..request("Static\nbytes", 28.0)
+    };
+    let plain = rasterizer.rasterize(&looked).expect("draws");
+    rasterizer.clear();
+    let states = identity_states(&rasterizer, &looked);
+    let animated = rasterizer
+        .rasterize_animated(&looked, &states)
+        .expect("draws");
+    assert_eq!(animated.pixels.rgba8, plain.pixels.rgba8);
+    assert_eq!(animated.descriptor, plain.descriptor);
+    // A state per cluster, no more and no fewer.
+    assert_eq!(
+        rasterizer.rasterize_animated(&looked, &states[1..]),
+        Err(TextRasterError::InvalidRequest)
+    );
+}
+
+#[test]
+fn tracking_shifts_later_clusters_without_rewrapping() {
+    let mut rasterizer = fixture();
+    let start = request("IIII", 40.0);
+    let mut states = identity_states(&rasterizer, &start);
+    let plain = rasterizer.rasterize(&start).expect("draws");
+    for state in &mut states {
+        state.tracking = 10.0;
+    }
+    let tracked = rasterizer
+        .rasterize_animated(
+            &TextRasterRequest {
+                content_version: 2,
+                ..start.clone()
+            },
+            &states,
+        )
+        .expect("draws");
+    // Three gaps of 10 pixels: the last stem moves 30 pixels right; the line and box stay one.
+    let (plain_left, plain_right) = ink_span(&plain, 20).expect("ink");
+    let (left, right) = ink_span(&tracked, 20).expect("ink");
+    assert_eq!(left, plain_left);
+    assert_eq!(right, plain_right + 30);
+    assert_eq!(tracked.descriptor.line_count, 1);
+    assert_eq!(
+        tracked.descriptor.layout_width,
+        plain.descriptor.layout_width
+    );
+}
+
+#[test]
+fn a_centred_line_recentres_as_it_tracks() {
+    let mut rasterizer = fixture();
+    let centred = TextRasterRequest {
+        max_width: 300.0,
+        align: TextAlign::Center,
+        ..request("IIII", 40.0)
+    };
+    let mut states = identity_states(&rasterizer, &centred);
+    let plain = rasterizer.rasterize(&centred).expect("draws");
+    for state in &mut states {
+        state.tracking = 10.0;
+    }
+    let tracked = rasterizer
+        .rasterize_animated(
+            &TextRasterRequest {
+                content_version: 2,
+                ..centred.clone()
+            },
+            &states,
+        )
+        .expect("draws");
+    // Thirty pixels wider, the line starts fifteen further left.
+    let (plain_left, plain_right) = ink_span(&plain, 20).expect("ink");
+    let (left, right) = ink_span(&tracked, 20).expect("ink");
+    assert_eq!(left, plain_left - 15);
+    assert_eq!(right, plain_right + 15);
+}
+
+#[test]
+fn a_scaled_cluster_grows_about_its_pivot() {
+    let mut rasterizer = fixture();
+    let one = TextRasterRequest {
+        line_height: 1.0,
+        ..request("I", 60.0)
+    };
+    let plain = rasterizer.rasterize(&one).expect("draws");
+    let mut states = identity_states(&rasterizer, &one);
+    states[0].scale = [2.0, 2.0];
+    let scaled = rasterizer
+        .rasterize_animated(
+            &TextRasterRequest {
+                content_version: 2,
+                ..one.clone()
+            },
+            &states,
+        )
+        .expect("draws");
+    // The stem doubles in width about the advance's middle; the em box's middle row holds still.
+    let (plain_left, plain_right) = ink_span(&plain, 30).expect("ink");
+    let (left, right) = ink_span(&scaled, 30).expect("ink");
+    let (plain_width, width) = (plain_right - plain_left, right - left);
+    assert!(
+        (width - 2 * plain_width).abs() <= 2,
+        "{plain_width} -> {width}"
+    );
+    let plain_centre = plain_left + plain_right;
+    let centre = left + right;
+    assert!(
+        (centre - plain_centre).abs() <= 2,
+        "{plain_centre} -> {centre}"
+    );
+    // The texture grew to hold the larger ink; the box did not move.
+    assert!(scaled.descriptor.texture.height > plain.descriptor.texture.height);
+    assert_eq!(
+        scaled.descriptor.layout_width,
+        plain.descriptor.layout_width
+    );
+}
+
+#[test]
+fn rotation_is_clockwise() {
+    let mut rasterizer = fixture();
+    let one = TextRasterRequest {
+        line_height: 1.0,
+        ..request("I", 80.0)
+    };
+    let mut states = identity_states(&rasterizer, &one);
+    states[0].rotation = std::f32::consts::FRAC_PI_8;
+    let turned = rasterizer.rasterize_animated(&one, &states).expect("draws");
+    // Turned clockwise on screen, the stem's top leans right of its bottom.
+    #[allow(clippy::cast_possible_truncation)]
+    let top_row = -(turned.descriptor.layout_y as i64);
+    let rows = (top_row..top_row + i64::from(turned.descriptor.texture.height))
+        .filter_map(|y| ink_span(&turned, y).map(|span| (y, span)))
+        .collect::<Vec<_>>();
+    let (top, bottom) = (rows.first().expect("ink"), rows.last().expect("ink"));
+    assert!(
+        top.1.0 + top.1.1 > bottom.1.0 + bottom.1.1 + 10,
+        "top {top:?}, bottom {bottom:?}"
+    );
+}
+
+#[test]
+fn opacity_scales_a_cluster_and_its_strokes() {
+    let mut rasterizer = fixture();
+    let stroked = TextRasterRequest {
+        strokes: vec![TextStroke {
+            color: [0, 0, 255, 255],
+            width: 3.0,
+        }],
+        line_height: 1.0,
+        ..request("II", 60.0)
+    };
+    let mut states = identity_states(&rasterizer, &stroked);
+    let plain = rasterizer.rasterize(&stroked).expect("draws");
+    states[1].opacity = 0.5;
+    let faded = rasterizer
+        .rasterize_animated(
+            &TextRasterRequest {
+                content_version: 2,
+                ..stroked.clone()
+            },
+            &states,
+        )
+        .expect("draws");
+    // The first stem keeps its pixels; the second, fill and band together, is half as opaque:
+    // its band does not show through its fill.
+    let row = 30;
+    let stems = (0..120)
+        .filter(|&x| pixel_at(&plain, x, row) == [255, 255, 255, 255])
+        .collect::<Vec<_>>();
+    let (first, second) = (stems[0], stems[stems.len() - 1]);
+    assert_eq!(pixel_at(&faded, first, row), [255, 255, 255, 255]);
+    let half = pixel_at(&faded, second, row);
+    assert!(half[3].abs_diff(128) <= 1 && half[0] == half[2], "{half:?}");
+    let band = (second - 6..second)
+        .find(|&x| pixel_at(&plain, x, row) == [0, 0, 255, 255])
+        .expect("the band");
+    assert!(pixel_at(&faded, band, row)[3].abs_diff(128) <= 1);
+}
+
+#[test]
+fn overlapping_clusters_take_the_larger_coverage() {
+    let mut rasterizer = fixture();
+    let two = TextRasterRequest {
+        line_height: 1.0,
+        ..request("II", 60.0)
+    };
+    let mut states = identity_states(&rasterizer, &two);
+    let layout = rasterizer.layout(&two).expect("lays out");
+    // The second stem moved onto the first, recolored red: where they meet, the later cluster
+    // wins ties, so the overlap is red; nothing is added up past full coverage.
+    states[1].offset = [layout.clusters[0].x - layout.clusters[1].x, 0.0];
+    states[1].fill = Some(ColorMix {
+        keep: 0.0,
+        add: [1.0, 0.0, 0.0, 1.0],
+    });
+    let merged = rasterizer.rasterize_animated(&two, &states).expect("draws");
+    let stems = (0..120)
+        .filter(|&x| pixel_at(&merged, x, 30)[3] == 255)
+        .collect::<Vec<_>>();
+    assert_ne!(stems, Vec::<i64>::new());
+    for x in stems {
+        assert_eq!(pixel_at(&merged, x, 30), [255, 0, 0, 255], "at {x}");
+    }
+}
+
+#[test]
+fn words_follow_uax29_in_hangul_and_cjk() {
+    // Each ideograph is a word of its own; Hangul syllables join into a word until a space.
+    let rasterizer = fixture();
+    let text = "漢字 한국어 문장 ok";
+    let layout = rasterizer.layout(&request(text, 20.0)).expect("lays out");
+    let word_at = |needle: &str| {
+        let byte = text.find(needle).expect("in the text");
+        layout
+            .clusters
+            .iter()
+            .find(|cluster| cluster.bytes.start == byte)
+            .expect("a cluster")
+            .word
+    };
+    assert_eq!(word_at("漢"), Some(0));
+    assert_eq!(word_at("字"), Some(1));
+    assert_eq!(word_at("한"), Some(2));
+    assert_eq!(word_at("어"), Some(2));
+    assert_eq!(word_at("문"), Some(3));
+    assert_eq!(word_at("ok"), Some(4));
+    assert_eq!(word_at(" 한"), None);
+}
+
+/// A pinned `clusterState`: identity in every field left out.
+#[allow(clippy::cast_possible_truncation)]
+fn cluster_state(value: &serde_json::Value) -> ClusterState {
+    let number = |key: &str, default: f32| value[key].as_f64().map_or(default, |v| v as f32);
+    let pair = |key: &str, default: [f32; 2]| {
+        value[key].as_array().map_or(default, |pair| {
+            [0, 1].map(|index| pair[index].as_f64().expect("number") as f32)
+        })
+    };
+    let mix = |key: &str| {
+        value.get(key).map(|mix| ColorMix {
+            keep: mix["keep"].as_f64().expect("keep") as f32,
+            add: std::array::from_fn(|index| mix["add"][index].as_f64().expect("add") as f32),
+        })
+    };
+    ClusterState {
+        offset: pair("offset", [0.0, 0.0]),
+        scale: pair("scale", [1.0, 1.0]),
+        rotation: number("rotation", 0.0),
+        opacity: number("opacity", 1.0),
+        fill: mix("fill"),
+        stroke: mix("stroke"),
+        tracking: number("tracking", 0.0),
+    }
 }

@@ -90,6 +90,14 @@ pub enum LintIssue {
         /// The paint item, like `items[1].items[0]`.
         at: String,
     },
+    /// A text animator that sets no property, which changes nothing.
+    EmptyTextAnimator {
+        /// What holds the text.
+        owner: LintOwner,
+        /// The animator, like `style.animators[0]`, or in a layout
+        /// `root.children[1].text_animators[0]`.
+        at: String,
+    },
 }
 
 /// The shapes or layout generator a shape [`LintIssue`] is about.
@@ -149,6 +157,12 @@ pub enum LintOwner {
     Source {
         /// The source.
         source: SourceId,
+    },
+    /// A caption track, whose style's animators are keyed in each cue's
+    /// own time, from its start.
+    CaptionTrack {
+        /// The track.
+        track: TrackId,
     },
 }
 
@@ -256,9 +270,59 @@ impl Project {
                 };
                 grid.check(&owner, cue.timeline_range, &mut issues);
             }
+            if let Some(captions) = &track.captions {
+                lint_caption_animators(&track.id, captions, &mut issues);
+            }
         }
         self.lint_keyframes_in_other_times(&mut issues);
+        self.lint_text_animators(&mut issues);
         issues
+    }
+
+    /// Every text animator that sets nothing: of text generators (sources'
+    /// and composition nodes') and of layout text nodes.
+    fn lint_text_animators(&self, issues: &mut Vec<LintIssue>) {
+        let lint =
+            |owner: &LintOwner, generator: &Generator, at: &str, issues: &mut Vec<LintIssue>| {
+                match generator {
+                    Generator::Text { style, .. } => {
+                        empty_animators(
+                            owner,
+                            &style.animators,
+                            &format!("{at}style.animators"),
+                            issues,
+                        );
+                    }
+                    Generator::Layout { root } => root.walk(|path, node| {
+                        empty_animators(
+                            owner,
+                            &node.text_animators,
+                            &format!("{at}{path}.text_animators"),
+                            issues,
+                        );
+                    }),
+                    Generator::Fill { .. } | Generator::Shapes { .. } => {}
+                }
+            };
+        for source in &self.sources {
+            if let Some(generator) = &source.generator {
+                let owner = LintOwner::Source {
+                    source: source.id.clone(),
+                };
+                lint(&owner, generator, "", issues);
+            }
+        }
+        for composition in &self.compositions {
+            for node in &composition.nodes {
+                if let crate::NodeOp::Generator { generator } = &node.op {
+                    let owner = LintOwner::CompositionNode {
+                        composition: composition.id.clone(),
+                        node: node.id.clone(),
+                    };
+                    lint(&owner, generator, "generator.", issues);
+                }
+            }
+        }
     }
 
     /// Keyframes no shown time reaches in the two other time bases:
@@ -307,6 +371,13 @@ impl Project {
                     crate::shapes::for_each_keyed_item(items, "items", &mut check);
                 }
                 Some(Generator::Layout { root }) => root.for_each_keyed("root", &mut check),
+                Some(Generator::Text { style, .. }) => {
+                    crate::text_animation::for_each_keyed_animator(
+                        &style.animators,
+                        "style.animators",
+                        &mut check,
+                    );
+                }
                 _ => {}
             }
         }
@@ -807,7 +878,12 @@ fn node_keyed(op: &crate::NodeOp, visit: &mut impl FnMut(&str, &[MediaTime])) {
                 crate::shapes::for_each_keyed_item(items, "generator.items", visit);
             }
             Generator::Layout { root } => root.for_each_keyed("generator.root", visit),
-            Generator::Fill { .. } | Generator::Text { .. } => {}
+            Generator::Text { style, .. } => crate::text_animation::for_each_keyed_animator(
+                &style.animators,
+                "generator.style.animators",
+                visit,
+            ),
+            Generator::Fill { .. } => {}
         },
         crate::NodeOp::Clip {}
         | crate::NodeOp::Media { .. }
@@ -867,4 +943,50 @@ fn lint_shape_items(
         }
     }
     geometry
+}
+
+/// Each of `animators` that sets nothing, under `at`.
+fn empty_animators(
+    owner: &LintOwner,
+    animators: &[crate::TextAnimator],
+    at: &str,
+    issues: &mut Vec<LintIssue>,
+) {
+    for (index, animator) in animators.iter().enumerate() {
+        if animator.properties.is_empty() {
+            issues.push(LintIssue::EmptyTextAnimator {
+                owner: owner.clone(),
+                at: format!("{at}[{index}]"),
+            });
+        }
+    }
+}
+
+/// A caption track's animators: their keyframes, in cue time, against every
+/// cue's span (a keyframe some cue reaches is used), and the empty ones.
+fn lint_caption_animators(
+    track: &TrackId,
+    captions: &crate::Captions,
+    issues: &mut Vec<LintIssue>,
+) {
+    let owner = LintOwner::CaptionTrack {
+        track: track.clone(),
+    };
+    let spans = captions
+        .cues
+        .iter()
+        .filter_map(|cue| cue.timeline_range.duration())
+        .map(|duration| (0, duration.ticks().saturating_sub(1)))
+        .collect::<Vec<_>>();
+    let mut keyframes = Keyframes {
+        owner: &owner,
+        shown: &spans,
+        issues,
+    };
+    crate::text_animation::for_each_keyed_animator(
+        &captions.style.animators,
+        "style.animators",
+        &mut |property, times| keyframes.check_times(property, times),
+    );
+    empty_animators(&owner, &captions.style.animators, "style.animators", issues);
 }

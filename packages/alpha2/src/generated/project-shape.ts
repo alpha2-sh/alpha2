@@ -223,6 +223,31 @@ export const PROJECT_SHAPE: unknown = {
         },
       ],
     },
+    Animated_Rgba: {
+      oneOf: [
+        {
+          additionalProperties: false,
+          properties: {
+            mode: { const: "constant", type: "string" },
+            value: { $ref: "#/$defs/Rgba" },
+          },
+          required: ["mode", "value"],
+          type: "object",
+        },
+        {
+          additionalProperties: false,
+          properties: {
+            keyframes: {
+              items: { $ref: "#/$defs/Keyframe_Rgba" },
+              type: "array",
+            },
+            mode: { const: "keyframes", type: "string" },
+          },
+          required: ["mode", "keyframes"],
+          type: "object",
+        },
+      ],
+    },
     Animated_Vec2: {
       oneOf: [
         {
@@ -399,7 +424,7 @@ export const PROJECT_SHAPE: unknown = {
     CaptionCue: {
       additionalProperties: false,
       properties: {
-        text: { type: "string" },
+        text: { $ref: "#/$defs/TextContent" },
         timeline_range: { $ref: "#/$defs/TimeRange" },
       },
       required: ["timeline_range", "text"],
@@ -896,7 +921,7 @@ export const PROJECT_SHAPE: unknown = {
                 position: { x: 0.5, y: 0.92 },
               },
             },
-            text: { type: "string" },
+            text: { $ref: "#/$defs/TextContent" },
             type: { const: "text", type: "string" },
           },
           required: ["type", "text"],
@@ -1066,6 +1091,16 @@ export const PROJECT_SHAPE: unknown = {
         interpolation: { $ref: "#/$defs/Interpolation" },
         time: { $ref: "#/$defs/MediaTime" },
         value: { $ref: "#/$defs/Path" },
+      },
+      required: ["time", "value", "interpolation"],
+      type: "object",
+    },
+    Keyframe_Rgba: {
+      additionalProperties: false,
+      properties: {
+        interpolation: { $ref: "#/$defs/Interpolation" },
+        time: { $ref: "#/$defs/MediaTime" },
+        value: { $ref: "#/$defs/Rgba" },
       },
       required: ["time", "value", "interpolation"],
       type: "object",
@@ -1265,6 +1300,10 @@ export const PROJECT_SHAPE: unknown = {
         },
         text_align: {
           anyOf: [{ $ref: "#/$defs/TextAlign" }, { type: "null" }],
+        },
+        text_animators: {
+          items: { $ref: "#/$defs/TextAnimator" },
+          type: "array",
         },
         translate: {
           anyOf: [{ $ref: "#/$defs/Animated_LayoutOffset" }, { type: "null" }],
@@ -1824,6 +1863,22 @@ export const PROJECT_SHAPE: unknown = {
         },
       ],
     },
+    RangeShape: {
+      oneOf: [
+        { const: "square", type: "string" },
+        { const: "ramp_up", type: "string" },
+        { const: "ramp_down", type: "string" },
+        { const: "triangle", type: "string" },
+        { const: "round", type: "string" },
+        { const: "smooth", type: "string" },
+      ],
+    },
+    RangeUnits: {
+      oneOf: [
+        { const: "percent", type: "string" },
+        { const: "index", type: "string" },
+      ],
+    },
     Rgb: {
       additionalProperties: false,
       properties: {
@@ -1853,6 +1908,22 @@ export const PROJECT_SHAPE: unknown = {
           type: "string",
         },
       ],
+    },
+    RunState: {
+      oneOf: [
+        { const: "upcoming", type: "string" },
+        { const: "active", type: "string" },
+        { const: "spoken", type: "string" },
+      ],
+    },
+    RunTime: {
+      additionalProperties: false,
+      properties: {
+        end: { $ref: "#/$defs/MediaTime" },
+        start: { $ref: "#/$defs/MediaTime" },
+      },
+      required: ["start", "end"],
+      type: "object",
     },
     ShapeGeometry: {
       oneOf: [
@@ -2146,6 +2217,38 @@ export const PROJECT_SHAPE: unknown = {
         { const: "end", type: "string" },
       ],
     },
+    TextAnimator: {
+      additionalProperties: false,
+      properties: {
+        properties: { $ref: "#/$defs/TextAnimatorProperties", default: {} },
+        selector: { $ref: "#/$defs/TextSelector" },
+      },
+      required: ["selector"],
+      type: "object",
+    },
+    TextAnimatorProperties: {
+      additionalProperties: false,
+      properties: {
+        fill: { anyOf: [{ $ref: "#/$defs/Animated_Rgba" }, { type: "null" }] },
+        offset: {
+          anyOf: [{ $ref: "#/$defs/Animated_Vec2" }, { type: "null" }],
+        },
+        opacity: {
+          anyOf: [{ $ref: "#/$defs/Animated_float" }, { type: "null" }],
+        },
+        rotation_degrees: {
+          anyOf: [{ $ref: "#/$defs/Animated_float" }, { type: "null" }],
+        },
+        scale: { anyOf: [{ $ref: "#/$defs/Animated_Vec2" }, { type: "null" }] },
+        stroke: {
+          anyOf: [{ $ref: "#/$defs/Animated_Rgba" }, { type: "null" }],
+        },
+        tracking: {
+          anyOf: [{ $ref: "#/$defs/Animated_float" }, { type: "null" }],
+        },
+      },
+      type: "object",
+    },
     TextBackground: {
       additionalProperties: false,
       properties: {
@@ -2154,6 +2257,73 @@ export const PROJECT_SHAPE: unknown = {
       },
       required: ["color"],
       type: "object",
+    },
+    TextContent: {
+      anyOf: [
+        { type: "string" },
+        { items: { $ref: "#/$defs/TextRun" }, type: "array" },
+      ],
+    },
+    TextRun: {
+      additionalProperties: false,
+      properties: {
+        class: { items: { type: "string" }, type: "array" },
+        text: { type: "string" },
+        time: { anyOf: [{ $ref: "#/$defs/RunTime" }, { type: "null" }] },
+      },
+      required: ["text"],
+      type: "object",
+    },
+    TextSelector: {
+      oneOf: [
+        {
+          additionalProperties: false,
+          properties: {
+            amount: {
+              $ref: "#/$defs/Animated_float",
+              default: { mode: "constant", value: 1 },
+            },
+            based_on: { $ref: "#/$defs/TextUnit", default: "characters" },
+            end: {
+              $ref: "#/$defs/Animated_float",
+              default: { mode: "constant", value: 100 },
+            },
+            offset: {
+              $ref: "#/$defs/Animated_float",
+              default: { mode: "constant", value: 0 },
+            },
+            shape: { $ref: "#/$defs/RangeShape", default: "square" },
+            start: {
+              $ref: "#/$defs/Animated_float",
+              default: { mode: "constant", value: 0 },
+            },
+            type: { const: "range", type: "string" },
+            units: { $ref: "#/$defs/RangeUnits", default: "percent" },
+          },
+          required: ["type"],
+          type: "object",
+        },
+        {
+          additionalProperties: false,
+          properties: {
+            ramp: { $ref: "#/$defs/MediaTime", default: 0 },
+            state: { $ref: "#/$defs/RunState" },
+            sweep: { default: false, type: "boolean" },
+            type: { const: "timing", type: "string" },
+          },
+          required: ["type", "state"],
+          type: "object",
+        },
+        {
+          additionalProperties: false,
+          properties: {
+            class: { type: "string" },
+            type: { const: "class", type: "string" },
+          },
+          required: ["type", "class"],
+          type: "object",
+        },
+      ],
     },
     TextShadow: {
       additionalProperties: false,
@@ -2179,6 +2349,7 @@ export const PROJECT_SHAPE: unknown = {
       properties: {
         align: { $ref: "#/$defs/TextAlign", default: "center" },
         anchor: { $ref: "#/$defs/Vec2", default: { x: 0.5, y: 1 } },
+        animators: { items: { $ref: "#/$defs/TextAnimator" }, type: "array" },
         background: {
           anyOf: [{ $ref: "#/$defs/TextBackground" }, { type: "null" }],
           default: null,
@@ -2207,6 +2378,14 @@ export const PROJECT_SHAPE: unknown = {
         strokes: { items: { $ref: "#/$defs/TextStroke" }, type: "array" },
       },
       type: "object",
+    },
+    TextUnit: {
+      oneOf: [
+        { const: "characters", type: "string" },
+        { const: "characters_excluding_spaces", type: "string" },
+        { const: "words", type: "string" },
+        { const: "lines", type: "string" },
+      ],
     },
     TimeMap: {
       oneOf: [

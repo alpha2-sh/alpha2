@@ -207,10 +207,22 @@ pub fn layout_texts(
             .map_or(0.0, |rects| rects.text_width);
         let mut request = text_request(text, unit, wrap(width), 1);
         let shadows = crate::text::shadow_pixels(&text.shadows, request.font_size);
-        let key = layout_text_key(&request, &shadows);
+        let key = layout_text_key(&request, &shadows, &text.animators);
         request.content_version = key;
         if !requests.iter().any(|(held, _)| *held == key) {
-            requests.push((key, TextDraw { request, shadows }));
+            let animation = (!text.animators.is_empty()).then(|| crate::TextAnimation {
+                animators: text.animators.clone(),
+                runs: Vec::new(),
+                time: layout.time,
+            });
+            requests.push((
+                key,
+                TextDraw {
+                    request,
+                    shadows,
+                    animation,
+                },
+            ));
         }
         keys.push(Some(key));
     }

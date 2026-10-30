@@ -24,9 +24,9 @@ pub struct Captions {
 pub struct CaptionCue {
     /// When the cue shows. Non-empty and not before zero.
     pub timeline_range: TimeRange,
-    /// The text; `\n` starts a line. Non-empty, at most
-    /// [`MAX_TEXT_CONTENT_BYTES`] bytes.
-    pub text: String,
+    /// The text, a string or runs; `\n` starts a line. Non-empty, at most
+    /// [`MAX_TEXT_CONTENT_BYTES`] bytes. Run times are from the cue's start.
+    pub text: crate::TextContent,
 }
 
 /// Largest caption font size, as a fraction of the frame's shorter side.
@@ -38,8 +38,7 @@ impl Captions {
             && self.cues.iter().all(|cue| {
                 !cue.timeline_range.is_empty()
                     && cue.timeline_range.start().ticks() >= 0
-                    && !cue.text.is_empty()
-                    && cue.text.len() <= MAX_TEXT_CONTENT_BYTES
+                    && cue.text.is_valid(MAX_TEXT_CONTENT_BYTES)
             })
             && self
                 .cues

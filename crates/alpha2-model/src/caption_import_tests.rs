@@ -126,7 +126,11 @@ fn a_cue_later_than_a_project_holds_is_skipped() {
 fn a_webvtt_cue_right_under_the_header_is_read() {
     let texts = |text: &str| {
         let imported = parse_webvtt(text).expect("a WebVTT file");
-        let texts: Vec<String> = imported.cues.into_iter().map(|cue| cue.text).collect();
+        let texts: Vec<String> = imported
+            .cues
+            .into_iter()
+            .map(|cue| cue.text.text().into_owned())
+            .collect();
         (texts, imported.skipped)
     };
     // As the WebVTT parser does, the header ends at the first timing line.
@@ -144,7 +148,11 @@ fn a_webvtt_cue_right_under_the_header_is_read() {
 fn every_line_terminator_ends_a_line() {
     let cues = |text: &str| {
         let imported = parse_webvtt(text).expect("a WebVTT file");
-        let texts: Vec<String> = imported.cues.into_iter().map(|cue| cue.text).collect();
+        let texts: Vec<String> = imported
+            .cues
+            .into_iter()
+            .map(|cue| cue.text.text().into_owned())
+            .collect();
         (texts, imported.skipped)
     };
     let lines = [
@@ -171,7 +179,11 @@ fn every_line_terminator_ends_a_line() {
     let srt = [&srt[..], &["00:00:03,000 --> 00:00:04,000", "Again", ""]].concat();
     for terminator in ["\n", "\r\n", "\r", "\r\r\n"] {
         let imported = parse_srt(&srt.join(terminator)).expect("an SRT file");
-        let texts: Vec<String> = imported.cues.into_iter().map(|cue| cue.text).collect();
+        let texts: Vec<String> = imported
+            .cues
+            .into_iter()
+            .map(|cue| cue.text.text().into_owned())
+            .collect();
         assert_eq!(
             (texts, imported.skipped),
             (vec!["Hello".to_owned(), "Again".to_owned()], 0),
@@ -222,7 +234,7 @@ fn overlapping_cues_spread_over_rows() {
 fn a_row_holds_no_more_cues_than_a_caption_track() {
     let cue = |index: i64| CaptionCue {
         timeline_range: range(index * 2_000, index * 2_000 + 1_500),
-        text: format!("cue {index}"),
+        text: format!("cue {index}").into(),
     };
     let count = 2 * MAX_CLIPS_PER_TRACK + 10;
     let cues: Vec<_> = (0..i64::try_from(count).unwrap()).map(cue).collect();
@@ -434,7 +446,7 @@ fn cues_go_to_the_first_row_with_room_in_time_n_log_n() {
                 let start = next(span);
                 CaptionCue {
                     timeline_range: range(start, start + 1 + next(longest)),
-                    text: format!("{index}"),
+                    text: format!("{index}").into(),
                 }
             })
             .collect::<Vec<_>>();

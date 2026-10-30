@@ -38,7 +38,7 @@ function authoredProject() {
         generator: {
           type: "layout",
           root: {
-            color: "#ff0000",
+            fill: "#ff0000",
             padding: { mode: "constant", value: "4px 0.02" },
             background: { mode: "constant", value: red },
             children: [{ text: { mode: "constant", value: "Hi" } }],
@@ -53,7 +53,7 @@ function authoredProject() {
 function assertCanonical(project) {
   assert.deepEqual(project.sources[0].generator.paint, solidRed);
   const root = project.sources[1].generator.root;
-  assert.deepEqual(root.color, red);
+  assert.deepEqual(root.fill, solidRed);
   assert.deepEqual(root.background.value, solidRed);
   assert.deepEqual(root.padding.value, {
     top: "4px",

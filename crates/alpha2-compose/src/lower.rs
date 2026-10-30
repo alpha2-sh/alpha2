@@ -828,7 +828,7 @@ impl Context<'_> {
                 word.timeline_range.start().ticks(),
                 word.timeline_range.end().ticks(),
             );
-            let text = word.text.trim().to_owned();
+            let text = word.text.text().trim().to_owned();
             if let Some((cue_start, cue_end, cue_text)) = &mut current {
                 let length = cue_text.chars().count() + 1 + text.chars().count();
                 let sentence_end = cue_text.ends_with(['.', '?', '!', '\u{3002}']);

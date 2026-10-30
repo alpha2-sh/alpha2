@@ -116,8 +116,9 @@ impl Serialize for Rgba {
 /// fills the frame at scale 1. Positions are in its normalized space, `(0, 0)`
 /// top-left to `(1, 1)` bottom-right; lengths (radii, stroke widths) are
 /// fractions of its shorter side, so the picture is the same at any render
-/// resolution. A fill or text does not change over time (a clip animates it
-/// with its transform, effects, and masks); shapes and layouts may.
+/// resolution. A fill does not change over time (a clip animates it with
+/// its transform, effects, and masks); text changes only through its style's
+/// animators, and shapes and layouts may change.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -140,9 +141,9 @@ pub enum Generator {
     /// the canvas, its anchor at `style.position`. The engine draws it with
     /// the fonts its host registered.
     Text {
-        /// The text; `\n` starts a line. Non-empty, at most
-        /// [`MAX_TEXT_CONTENT_BYTES`] bytes.
-        text: String,
+        /// The text, a string or runs; `\n` starts a line. Non-empty, at
+        /// most [`MAX_TEXT_CONTENT_BYTES`] bytes. Run times are picture time.
+        text: crate::TextContent,
         /// How it looks and where it lies. The font size is at most
         /// [`MAX_TEXT_GENERATOR_FONT_SIZE`].
         #[serde(default)]
@@ -303,8 +304,7 @@ impl Generator {
             }
             Self::Layout { root } => return crate::layout::validate_layout(root, canvas),
             Self::Text { text, style } => {
-                !text.is_empty()
-                    && text.len() <= MAX_TEXT_CONTENT_BYTES
+                text.is_valid(MAX_TEXT_CONTENT_BYTES)
                     && style.is_valid(MAX_TEXT_GENERATOR_FONT_SIZE)
             }
         };

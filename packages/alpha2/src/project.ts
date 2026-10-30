@@ -32,6 +32,7 @@ import type {
   Paint,
   Project,
   Rgba,
+  TextContent,
   Track,
   Vec2,
   VisualProperties,
@@ -91,6 +92,14 @@ import {
   MAX_LETTER_SPACING,
   MAX_LINE_HEIGHT,
   MAX_TEXT_PADDING,
+  MAX_ANIMATOR_SCALE,
+  MAX_CLASS_NAME_BYTES,
+  MAX_RANGE_INDEX,
+  MAX_RANGE_PERCENT,
+  MAX_RUN_CLASSES,
+  MAX_TEXT_ANIMATORS,
+  MAX_TEXT_RUNS,
+  MIN_RANGE_PERCENT,
   MAX_TEXT_SHADOW_BLUR,
   MAX_TEXT_SHADOW_OFFSET,
   MAX_TEXT_SHADOWS,
@@ -1483,6 +1492,16 @@ function shortestFloat32(value: number): number {
 }
 
 /**
+ * A caption cue's or text generator's whole text: the string, or its runs' texts joined. Runs
+ * never change layout, so this is the text the engine shapes and breaks into lines.
+ */
+export function textOf(content: TextContent | Canonical<TextContent>): string {
+  return typeof content === "string"
+    ? content
+    : content.map((run: { readonly text: string }) => run.text).join("");
+}
+
+/**
  * `color` as the engine writes it: a CSS hex string becomes the components object, each
  * component the 32-bit value the engine reads, spelled shortest.
  *
@@ -2816,12 +2835,8 @@ function validCaptions(
   return cues.every((cue: unknown) => {
     if (!isRecord(cue) || !validRange(cue.timeline_range)) return false;
     const range = cue.timeline_range as { start: number; end: number };
-    const cueText = cue.text;
     const valid =
-      range.start >= previousEnd &&
-      typeof cueText === "string" &&
-      cueText.length > 0 &&
-      encoder.encode(cueText).length <= MAX_TEXT_CONTENT_BYTES;
+      range.start >= previousEnd && validTextContent(cue.text, encoder);
     previousEnd = range.end;
     return valid;
   });
@@ -2850,10 +2865,139 @@ function validTextStyle(style: unknown, maxFontSize: number): boolean {
     (style.anchor === undefined || validVec2(style.anchor)) &&
     (style.strokes === undefined || validTextStrokes(style.strokes)) &&
     (style.shadows === undefined || validTextShadows(style.shadows)) &&
+    (style.animators === undefined ||
+      validTextAnimators(style.animators, false)) &&
     (background == null ||
       (isRecord(background) &&
         validRgba(background.color) &&
         within(background.padding ?? 0, 0, MAX_TEXT_PADDING)))
+  );
+}
+
+/**
+ * Mirrors `TextContent::is_valid`: a non-empty string, or at most `MAX_TEXT_RUNS` valid runs, the
+ * whole text at most `MAX_TEXT_CONTENT_BYTES` as UTF-8.
+ */
+function validTextContent(text: unknown, encoder: TextEncoder): boolean {
+  if (typeof text === "string") {
+    return (
+      text.length > 0 && encoder.encode(text).length <= MAX_TEXT_CONTENT_BYTES
+    );
+  }
+  if (!Array.isArray(text) || text.length > MAX_TEXT_RUNS) return false;
+  let bytes = 0;
+  for (const run of text) {
+    if (!isRecord(run) || typeof run.text !== "string" || run.text.length === 0)
+      return false;
+    bytes += encoder.encode(run.text).length;
+    const classes = run.class ?? [];
+    if (
+      !Array.isArray(classes) ||
+      classes.length > MAX_RUN_CLASSES ||
+      !classes.every(validClassName)
+    ) {
+      return false;
+    }
+    const time = run.time;
+    if (
+      time != null &&
+      !(
+        isRecord(time) &&
+        safeInteger(time.start) &&
+        safeInteger(time.end) &&
+        time.start >= 0 &&
+        time.start < time.end
+      )
+    ) {
+      return false;
+    }
+  }
+  return bytes > 0 && bytes <= MAX_TEXT_CONTENT_BYTES;
+}
+
+/** Mirrors `valid_class_name`: 1 to `MAX_CLASS_NAME_BYTES` of `A-Z a-z 0-9 _ -`. */
+function validClassName(name: unknown): boolean {
+  return (
+    typeof name === "string" &&
+    name.length > 0 &&
+    name.length <= MAX_CLASS_NAME_BYTES &&
+    /^[A-Za-z0-9_-]+$/.test(name)
+  );
+}
+
+/**
+ * Mirrors `valid_animators`: at most `MAX_TEXT_ANIMATORS` animators whose selectors and properties
+ * are in range; with `rangeOnly`, Range selectors alone (a layout node's).
+ */
+function validTextAnimators(animators: unknown, rangeOnly: boolean): boolean {
+  if (!Array.isArray(animators) || animators.length > MAX_TEXT_ANIMATORS)
+    return false;
+  return animators.every((animator: unknown) => {
+    if (!isRecord(animator) || !isRecord(animator.selector)) return false;
+    const selector = animator.selector;
+    if (rangeOnly && selector.type !== "range") return false;
+    let selected: boolean;
+    switch (selector.type) {
+      case "range": {
+        const [low, high] =
+          selector.units === "index"
+            ? [-MAX_RANGE_INDEX, 2 * MAX_RANGE_INDEX]
+            : [MIN_RANGE_PERCENT, MAX_RANGE_PERCENT];
+        selected =
+          [selector.start, selector.end, selector.offset].every((value) =>
+            validScalarAnimation(value, low, high),
+          ) && validScalarAnimation(selector.amount, 0, 1);
+        break;
+      }
+      case "timing":
+        selected =
+          selector.ramp === undefined ||
+          (safeInteger(selector.ramp) && selector.ramp >= 0);
+        break;
+      case "class":
+        selected = validClassName(selector.class);
+        break;
+      default:
+        selected = false;
+    }
+    return selected && validAnimatorProperties(animator.properties ?? {});
+  });
+}
+
+/** Mirrors `TextAnimatorProperties::is_valid`. */
+function validAnimatorProperties(properties: unknown): boolean {
+  if (!isRecord(properties)) return false;
+  const vec2 = (animation: unknown, low: number, high: number) => {
+    if (animation === undefined) return true;
+    const values = animationValues<unknown>(animation);
+    return (
+      values !== undefined &&
+      values.every(
+        (value) =>
+          isRecord(value) &&
+          [value.x, value.y].every(
+            (axis) => finiteNumber(axis) && axis >= low && axis <= high,
+          ),
+      )
+    );
+  };
+  const color = (animation: unknown) => {
+    if (animation === undefined) return true;
+    const values = animationValues<unknown>(animation);
+    return values !== undefined && values.every(validRgba);
+  };
+  return (
+    vec2(properties.offset, -Infinity, Infinity) &&
+    vec2(properties.scale, 0, MAX_ANIMATOR_SCALE) &&
+    validScalarAnimation(properties.rotation_degrees) &&
+    validScalarAnimation(properties.opacity, 0, 1) &&
+    color(properties.fill) &&
+    color(properties.stroke) &&
+    validScalarAnimation(
+      properties.tracking,
+      MIN_LETTER_SPACING,
+      MAX_LETTER_SPACING,
+    )
   );
 }
 
@@ -3004,10 +3148,7 @@ function validGenerator(generator: unknown): boolean {
     return layoutIssue(generator.root) === undefined;
   if (generator.type === "text")
     return (
-      typeof generator.text === "string" &&
-      generator.text.length > 0 &&
-      new TextEncoder().encode(generator.text).length <=
-        MAX_TEXT_CONTENT_BYTES &&
+      validTextContent(generator.text, new TextEncoder()) &&
       validTextStyle(generator.style ?? {}, MAX_TEXT_GENERATOR_FONT_SIZE)
     );
   return false;
@@ -3678,6 +3819,12 @@ function layoutStyleIssue(
   }
   if (present(node.shadows) && !validTextShadows(node.shadows)) {
     return outOfRange("shadows");
+  }
+  if (
+    present(node.text_animators) &&
+    !validTextAnimators(node.text_animators, true)
+  ) {
+    return outOfRange("text_animators");
   }
   return undefined;
 }
@@ -4724,7 +4871,9 @@ export type LintOwner =
       readonly node: string;
     }
   /** A generated source, whose shapes or layout tree is keyed in its picture's time. */
-  | { readonly type: "source"; readonly source: string };
+  | { readonly type: "source"; readonly source: string }
+  /** A caption track, whose style's animators are keyed in each cue's own time. */
+  | { readonly type: "caption_track"; readonly track: string };
 
 /** The shapes generator a shape {@link LintIssue} is about. */
 export type ShapeLintOwner =
@@ -4789,6 +4938,13 @@ export type LintIssue =
       readonly kind: "paint_without_geometry";
       readonly owner: ShapeLintOwner;
       /** Such as `items[1].items[0]`. */
+      readonly at: string;
+    }
+  /** A text animator that sets no property, which changes nothing. */
+  | {
+      readonly kind: "empty_text_animator";
+      readonly owner: LintOwner;
+      /** Such as `style.animators[0]`, or `root.children[1].text_animators[0]` in a layout. */
       readonly at: string;
     };
 

@@ -34,12 +34,75 @@ pub(crate) struct TextRequestWire {
     background: Option<BackgroundWire>,
     #[serde(default)]
     split_background: bool,
+    /// One state every cluster takes, for an animated raster.
+    #[serde(default)]
+    cluster_state: Option<StateWire>,
+    /// A state for each cluster, in logical order, for an animated raster.
+    #[serde(default)]
+    cluster_states: Option<Vec<StateWire>>,
     #[serde(default)]
     font_family: Option<String>,
     #[serde(default)]
     letter_spacing: f32,
     #[serde(default = "default_font_weight")]
     font_weight: u16,
+}
+
+/// A cluster's state, each field its identity value when left out: offset
+/// and tracking in pixels, rotation in clockwise radians, color mixes as
+/// `keep` and premultiplied linear-light `add`.
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct StateWire {
+    #[serde(default)]
+    offset: [f32; 2],
+    #[serde(default = "unit_scale")]
+    scale: [f32; 2],
+    #[serde(default)]
+    rotation: f32,
+    #[serde(default = "full")]
+    opacity: f32,
+    #[serde(default)]
+    fill: Option<MixWire>,
+    #[serde(default)]
+    stroke: Option<MixWire>,
+    #[serde(default)]
+    tracking: f32,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MixWire {
+    keep: f32,
+    add: [f32; 4],
+}
+
+const fn unit_scale() -> [f32; 2] {
+    [1.0, 1.0]
+}
+
+const fn full() -> f32 {
+    1.0
+}
+
+impl StateWire {
+    fn state(self) -> alpha2_text::ClusterState {
+        let mix = |mix: Option<MixWire>| {
+            mix.map(|mix| alpha2_text::ColorMix {
+                keep: mix.keep,
+                add: mix.add,
+            })
+        };
+        alpha2_text::ClusterState {
+            offset: self.offset,
+            scale: self.scale,
+            rotation: self.rotation,
+            opacity: self.opacity,
+            fill: mix(self.fill),
+            stroke: mix(self.stroke),
+            tracking: self.tracking,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -185,6 +248,11 @@ enum EmojiWire {
 }
 
 impl TextRequestWire {
+    /// Whether the request asks for an animated raster.
+    pub(crate) const fn is_animated(&self) -> bool {
+        self.cluster_state.is_some() || self.cluster_states.is_some()
+    }
+
     pub(crate) fn into_request(self, content_version: u64) -> TextRasterRequest {
         TextRasterRequest {
             text: self.text,
@@ -223,6 +291,29 @@ impl TextRequestWire {
             font_weight: self.font_weight,
         }
     }
+}
+
+/// An animated request and its states: the list the wire gives, or its one
+/// state for every cluster of the request's layout.
+pub(crate) fn animated_request(
+    wire: TextRequestWire,
+    content_version: u64,
+    rasterizer: &alpha2_text::TextRasterizer,
+) -> Result<(TextRasterRequest, Vec<alpha2_text::ClusterState>), alpha2_text::TextRasterError> {
+    let (one, list) = (wire.cluster_state, wire.cluster_states.clone());
+    let request = TextRequestWire {
+        cluster_state: None,
+        cluster_states: None,
+        ..wire
+    }
+    .into_request(content_version);
+    let states = if let Some(list) = list {
+        list.into_iter().map(StateWire::state).collect()
+    } else {
+        let clusters = rasterizer.layout(&request)?.clusters.len();
+        vec![one.map_or(alpha2_text::ClusterState::IDENTITY, StateWire::state); clusters]
+    };
+    Ok((request, states))
 }
 
 /// The layout facts of a result as the JSON the TypeScript wrapper reads.
@@ -412,8 +503,17 @@ mod web {
         ) -> Result<RasterizedText, JsValue> {
             let wire: TextRequestWire = serde_json::from_str(request_json)
                 .map_err(|error| invalid_input(format!("invalid text request: {error}")))?;
+            if !wire.is_animated() {
+                return self
+                    .inner
+                    .rasterize(&wire.into_request(content_version))
+                    .map(RasterizedText::from)
+                    .map_err(|error| typed_error(&error));
+            }
+            let (request, states) = super::animated_request(wire, content_version, &self.inner)
+                .map_err(|error| typed_error(&error))?;
             self.inner
-                .rasterize(&wire.into_request(content_version))
+                .rasterize_animated(&request, &states)
                 .map(RasterizedText::from)
                 .map_err(|error| typed_error(&error))
         }

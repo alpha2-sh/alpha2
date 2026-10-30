@@ -45,11 +45,15 @@ pub struct TextBounds {
     pub baselines: Baselines,
 }
 
-/// A layout text's raster request and shadows as a text store key: FNV-1a
-/// over a domain byte, every field of the request, and the shadows. Never
-/// zero.
+/// A layout text's raster request, shadows and animators as a text store
+/// key: FNV-1a over a domain byte, every field of the request, the shadows
+/// and the sampled animators. Never zero.
 #[must_use]
-pub fn layout_text_key(request: &TextRasterRequest, shadows: &[ShadowPixels]) -> u64 {
+pub fn layout_text_key(
+    request: &TextRasterRequest,
+    shadows: &[ShadowPixels],
+    animators: &[alpha2_eval::SampledAnimator],
+) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
     let mut feed = |bytes: &[u8]| {
         for byte in bytes {
@@ -70,6 +74,12 @@ pub fn layout_text_key(request: &TextRasterRequest, shadows: &[ShadowPixels]) ->
                 feed(&value.to_bits().to_le_bytes());
             }
         }
+    }
+    if !animators.is_empty() {
+        let mut stable = alpha2_geometry::StableHash::new();
+        alpha2_eval::hash_sampled_animators(&mut stable, animators);
+        feed(&[0xfa]);
+        feed(&stable.finish().to_le_bytes());
     }
     hash.max(1)
 }
@@ -458,6 +468,82 @@ pub struct TextDraw {
     pub request: TextRasterRequest,
     /// The shadows, first on top.
     pub shadows: Vec<ShadowPixels>,
+    /// The text's animators at its time, for a text that has them.
+    pub animation: Option<TextAnimation>,
+}
+
+/// A text's animators sampled at one time, with what they select from.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextAnimation {
+    /// The animators, in order.
+    pub animators: Vec<alpha2_eval::SampledAnimator>,
+    /// The text's runs, none for a plain string.
+    pub runs: Vec<alpha2_model::TextRun>,
+    /// The time Timing selectors compare run times with.
+    pub time: alpha2_time::MediaTime,
+}
+
+impl TextDraw {
+    /// Each cluster's state and the states' hash
+    /// ([`crate::text_animation::cluster_states`]), `None` without
+    /// animators.
+    ///
+    /// # Errors
+    /// Returns the text host's refusal to lay the text out.
+    pub fn states(
+        &self,
+        rasterizer: &TextRasterizer,
+    ) -> Result<Option<(Vec<alpha2_text::ClusterState>, u64)>, TextRasterError> {
+        let Some(animation) = &self.animation else {
+            return Ok(None);
+        };
+        let layout = rasterizer.layout(&self.request)?;
+        Ok(Some(crate::text_animation::cluster_states(
+            &layout,
+            &animation.runs,
+            &animation.animators,
+            animation.time,
+            self.request.font_size,
+        )))
+    }
+}
+
+/// [`text_key`] for `content` in `style` shown `time` after what holds it
+/// started: the static key when the style has no animators, and otherwise
+/// that key mixed with the runs and the time, so each moment of an animation
+/// is a text of its own. Never zero.
+#[must_use]
+pub fn animated_text_key(
+    content: &alpha2_model::TextContent,
+    style: &TextStyle,
+    size: PictureSize,
+    time: alpha2_time::MediaTime,
+) -> u64 {
+    let key = text_key(&content.text(), style, size);
+    if style.animators.is_empty() {
+        return key;
+    }
+    let mut hash = key;
+    let mut feed = |bytes: &[u8]| {
+        for byte in bytes {
+            hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    };
+    feed(&[0xfa]);
+    for run in content.runs() {
+        feed(&run.text.len().to_le_bytes());
+        for class in &run.class {
+            feed(class.as_bytes());
+            feed(&[0xff]);
+        }
+        if let Some(span) = run.time {
+            feed(&span.start.ticks().to_le_bytes());
+            feed(&span.end.ticks().to_le_bytes());
+        }
+        feed(&[0xfe]);
+    }
+    feed(&time.ticks().to_le_bytes());
+    hash.max(1)
 }
 
 /// The [`TextDraw`] of `text` in `style` on a picture of `size`, its content
@@ -466,7 +552,11 @@ pub struct TextDraw {
 pub fn text_draw(text: &str, style: &TextStyle, size: PictureSize, key: u64) -> TextDraw {
     let request = text_request(text, style, size, key);
     let shadows = shadow_pixels(&style.shadows, request.font_size);
-    TextDraw { request, shadows }
+    TextDraw {
+        request,
+        shadows,
+        animation: None,
+    }
 }
 
 /// A text shadow in pixels of the picture its text is placed on.

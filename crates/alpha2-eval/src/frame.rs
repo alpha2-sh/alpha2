@@ -51,7 +51,10 @@ pub struct ActiveCaption<'a> {
     /// The caption track.
     pub track_id: &'a TrackId,
     /// The cue's text.
-    pub text: &'a str,
+    pub text: &'a alpha2_model::TextContent,
+    /// The time since the cue started: what its style's animators are keyed
+    /// in.
+    pub local_time: alpha2_time::MediaTime,
     /// The track's style.
     pub style: &'a TextStyle,
     /// How many of the frame's [`FrameDesc::visual`] clips lie under the

@@ -30,10 +30,12 @@ use unicode_linebreak::BreakOpportunity;
 use unicode_script::{Script, UnicodeScript};
 use unicode_segmentation::UnicodeSegmentation;
 
+mod animated;
 mod color;
 mod gradient;
 mod unicode_tables;
 
+pub use animated::{ClusterInfo, ClusterState, ColorMix, LineInfo, TextLayout};
 pub use gradient::{TextGradient, TextGradientKind, TextGradientStop, TextSpread};
 
 const MAX_TEXT_BYTES: usize = 64 * 1024;
@@ -512,6 +514,8 @@ const CACHE_ENTRY_OVERHEAD: usize = 256;
 pub struct TextRasterizer {
     fonts: Vec<LoadedFont>,
     cache: ResultCache,
+    /// Animated clusters drawn before, for [`Self::rasterize_animated`].
+    tiles: animated::TileCache,
 }
 
 /// Rasterized results by content version, within a byte budget, evicting the
@@ -616,6 +620,7 @@ impl TextRasterizer {
         Self {
             fonts: Vec::new(),
             cache: ResultCache::new(DEFAULT_TEXT_CACHE_BYTES),
+            tiles: animated::TileCache::default(),
         }
     }
 
@@ -634,6 +639,7 @@ impl TextRasterizer {
         Ok(Self {
             fonts: loaded,
             cache: ResultCache::new(DEFAULT_TEXT_CACHE_BYTES),
+            tiles: animated::TileCache::default(),
         })
     }
 
@@ -647,6 +653,7 @@ impl TextRasterizer {
     pub fn add_font(&mut self, source: TextFont) -> Result<(), TextRasterError> {
         self.fonts.push(LoadedFont::parse(source)?);
         self.cache.clear();
+        self.tiles.clear();
         Ok(())
     }
 
@@ -699,6 +706,7 @@ impl TextRasterizer {
     /// Drops every rasterized result while retaining parsed fonts.
     pub fn clear(&mut self) {
         self.cache.clear();
+        self.tiles.clear();
     }
 
     /// Number of versioned raster results currently retained.
@@ -838,7 +846,10 @@ impl TextRasterizer {
         // Lines up to the last with glyphs stay, however little ink they have; blank lines after it
         // take no room.
         let mut kept = 1;
+        let mut clusters = Vec::new();
+        let mut paragraph_start = 0;
         for paragraph in normalize(&request.text, request.emoji_policy).split('\n') {
+            let first = clusters.len();
             for line in layout_paragraph(
                 faces,
                 paragraph,
@@ -847,12 +858,18 @@ impl TextRasterizer {
                 &order,
                 request.emoji_policy,
                 request.letter_spacing,
+                (first, lines.len()),
+                &mut clusters,
             ) {
                 lines.push(line);
                 if lines.last().is_some_and(|line| line.has_glyphs) {
                     kept = lines.len();
                 }
             }
+            for span in &mut clusters[first..] {
+                span.bytes = span.bytes.start + paragraph_start..span.bytes.end + paragraph_start;
+            }
+            paragraph_start += paragraph.len() + 1;
         }
         lines.truncate(kept);
         let line_count = u32::try_from(lines.len()).map_err(|_| TextRasterError::TooLarge)?;
@@ -867,6 +884,7 @@ impl TextRasterizer {
             box_width: checked_dimension(width)?,
             box_height: checked_dimension(height)?,
             lines,
+            clusters,
             line_count,
             line_advance,
             half_leading: half_leading(request.font_size, request.line_height),
@@ -984,14 +1002,16 @@ impl TextRasterizer {
                 ),
             }
         }
+        let bands = stroke_bands(request, &coverage, colors.as_deref(), width);
         let (rgba8, background) = compose(
             request,
             &coverage,
             colors.as_deref(),
             width,
             [margin_x, margin_y],
-            [layout.width, layout.height],
             &line_boxes,
+            &bands,
+            &RequestLook::of(request, [layout.width, layout.height]),
         );
         let texture = HostTexture {
             content_version: request.content_version,
@@ -1130,8 +1150,16 @@ impl<'a> Faces<'a> {
 /// U+2028 LINE SEPARATOR, which UAX #9 does not count as a paragraph end,
 /// ends one here too, so every line break is one path.
 fn normalize(text: &str, policy: EmojiPolicy) -> String {
+    normalize_mapped(text, policy, None)
+}
+
+/// [`normalize`], and with `map`, the byte of `text` each byte of the
+/// result came from (the start of its grapheme for a replaced or joined
+/// one), one more entry holding `text`'s length.
+fn normalize_mapped(text: &str, policy: EmojiPolicy, mut map: Option<&mut Vec<usize>>) -> String {
     let mut normalized = String::with_capacity(text.len());
-    for grapheme in text.graphemes(true) {
+    for (start, grapheme) in text.grapheme_indices(true) {
+        let before = normalized.len();
         if policy == EmojiPolicy::Replace && is_emoji(grapheme) {
             normalized.push('\u{fffd}');
         } else if grapheme == "\r\n" {
@@ -1149,6 +1177,19 @@ fn normalize(text: &str, policy: EmojiPolicy) -> String {
                 other => other,
             }));
         }
+        if let Some(map) = map.as_deref_mut() {
+            // Characters kept as they are map byte for byte; a grapheme that changed length maps
+            // to its start.
+            let written = normalized.len() - before;
+            if written == grapheme.len() {
+                map.extend(start..start + written);
+            } else {
+                map.extend(std::iter::repeat_n(start, written));
+            }
+        }
+    }
+    if let Some(map) = map {
+        map.push(text.len());
     }
     normalized
 }
@@ -1235,6 +1276,8 @@ fn is_hangul(character: char) -> bool {
 /// top-left corner, y down.
 struct Layout {
     lines: Vec<LaidLine>,
+    /// Every cluster, in logical order, with its bytes in the normalized text.
+    clusters: Vec<ClusterSpan>,
     line_count: u32,
     /// Baseline to baseline.
     line_advance: f32,
@@ -1309,6 +1352,14 @@ fn grown([left, top, right, bottom]: [f32; 4], by: f32) -> [f32; 4] {
     [left - by, top - by, right + by, bottom + by]
 }
 
+/// One cluster's place in the text: its bytes (in its paragraph while the
+/// paragraph is laid out, then in the normalized text) and its line.
+#[derive(Clone, Debug)]
+struct ClusterSpan {
+    bytes: Range<usize>,
+    line: usize,
+}
+
 /// One line of a paragraph, laid out.
 struct LaidLine {
     /// Glyphs left to right, pens from the line's start.
@@ -1324,6 +1375,10 @@ struct LaidLine {
 /// Lays out one paragraph: shaped run by run in logical order, broken into
 /// lines no wider than `max_width` (none when it is not positive), and each
 /// line put in visual order.
+///
+/// Each glyph's cluster is numbered from `cluster_base`; each cluster's
+/// bytes in the paragraph and its line, counted from `line_base`, are
+/// appended to `spans`.
 #[allow(clippy::too_many_arguments)]
 fn layout_paragraph(
     faces: &Faces<'_>,
@@ -1333,6 +1388,8 @@ fn layout_paragraph(
     order: &[usize],
     policy: EmojiPolicy,
     letter_spacing: f32,
+    (cluster_base, line_base): (usize, usize),
+    spans: &mut Vec<ClusterSpan>,
 ) -> Vec<LaidLine> {
     let bidi = ParagraphBidiInfo::new(paragraph, None);
     let rtl = bidi.paragraph_level.is_rtl();
@@ -1346,7 +1403,19 @@ fn layout_paragraph(
         letter_spacing,
     );
     let clusters = clusters(&glyphs, paragraph, letter_spacing);
-    break_lines(&clusters, max_width)
+    let lines = break_lines(&clusters, max_width);
+    for (line, range) in lines.iter().enumerate() {
+        for index in range.clone() {
+            let end = clusters
+                .get(index + 1)
+                .map_or(paragraph.len(), |next| next.start);
+            spans.push(ClusterSpan {
+                bytes: clusters[index].start..end.max(clusters[index].start),
+                line: line_base + line,
+            });
+        }
+    }
+    lines
         .into_iter()
         .map(|range| {
             let has_glyphs = !range.is_empty();
@@ -1390,6 +1459,8 @@ fn layout_paragraph(
                 line.glyphs.push(PositionedGlyph {
                     font: glyph.font,
                     glyph_index: glyph.glyph_index,
+                    cluster: cluster_base + cluster,
+                    advance: glyph.advance,
                     x,
                     x_offset: glyph.x_offset,
                     y_offset: glyph.y_offset,
@@ -1744,6 +1815,10 @@ fn break_lines(clusters: &[Cluster], max_width: f32) -> Vec<Range<usize>> {
 struct PositionedGlyph {
     font: usize,
     glyph_index: u16,
+    /// Its cluster's index among the text's clusters, in logical order.
+    cluster: usize,
+    /// Its pen advance, its cluster's letter spacing not included.
+    advance: f32,
     /// Pen position from the line's start.
     x: f32,
     /// The shaper's placement of the glyph off its pen position, in pixels, y up.
@@ -2203,19 +2278,97 @@ fn over(source: [u32; 4], destination: [u32; 4]) -> [u32; 4] {
     std::array::from_fn(|channel| source[channel] + (destination[channel] * keep + 127) / 255)
 }
 
+/// The colors a raster's fill and strokes take at each pixel.
+trait PixelLook {
+    /// The straight sRGB fill color at pixel `index`, `point` its centre in
+    /// the layout box.
+    fn fill(&self, index: usize, point: [f32; 2]) -> [u8; 4];
+    /// The straight sRGB color of stroke `stroke` at pixel `index`.
+    fn band(&self, stroke: usize, index: usize) -> [u8; 4];
+    /// The 8-bit opacity the glyph layers at pixel `index` take together,
+    /// over the background boxes; `None` for full.
+    fn fade(&self, _index: usize) -> Option<u32> {
+        None
+    }
+}
+
+/// A request's own look: one fill paint and one color a stroke.
+struct RequestLook<'a> {
+    foreground: [u8; 4],
+    gradient: Option<gradient::PreparedGradient<'a>>,
+    strokes: &'a [TextStroke],
+}
+
+impl<'a> RequestLook<'a> {
+    fn of(request: &'a TextRasterRequest, layout_size: [f32; 2]) -> Self {
+        Self {
+            foreground: request.fill.foreground(),
+            gradient: match &request.fill {
+                TextFill::Solid(_) => None,
+                TextFill::Gradient(gradient) => Some(gradient.prepared(layout_size)),
+            },
+            strokes: &request.strokes,
+        }
+    }
+}
+
+impl PixelLook for RequestLook<'_> {
+    #[inline]
+    fn fill(&self, _: usize, point: [f32; 2]) -> [u8; 4] {
+        self.gradient
+            .as_ref()
+            .map_or(self.foreground, |gradient| gradient.rgba8_at(point))
+    }
+
+    #[inline]
+    fn band(&self, stroke: usize, _: usize) -> [u8; 4] {
+        self.strokes[stroke].color
+    }
+}
+
+/// Each of the request's strokes as a band: the coverage, with the color
+/// glyphs' alpha, dilated at the radius the widths up to it sum to.
+fn stroke_bands(
+    request: &TextRasterRequest,
+    coverage: &[u8],
+    colors: Option<&[u8]>,
+    width: u32,
+) -> Vec<Vec<u8>> {
+    if request.strokes.is_empty() {
+        return Vec::new();
+    }
+    let height = u32::try_from(coverage.len() / width.max(1) as usize).unwrap_or(0);
+    let ink = colors.map(|colors| {
+        coverage
+            .iter()
+            .zip(colors.as_chunks::<4>().0)
+            .map(|(&text, color)| text.max(color[3]))
+            .collect::<Vec<_>>()
+    });
+    let ink = ink.as_deref().unwrap_or(coverage);
+    let mut radius = 0.0;
+    request
+        .strokes
+        .iter()
+        .map(|stroke| {
+            radius += stroke.width;
+            dilate(ink, width, height, radius)
+        })
+        .collect()
+}
+
 /// The text over its strokes over its line boxes, premultiplied RGBA8, all
 /// in integers but a gradient's colors, so every target gives the same
 /// bytes. Undecorated text is its coverage in its fill alone, with the color
 /// glyphs (`colors`, premultiplied RGBA8) over it at the foreground's alpha.
-/// The strokes surround both: each band dilates the coverage and the color
-/// glyphs' alpha, the outermost drawn first. With a split background the
-/// boxes are returned as their own plane and the glyph plane starts
-/// transparent.
+/// `bands` are the strokes' coverage, innermost first, drawn outermost first
+/// in the colors `look` gives. With a split background the boxes are
+/// returned as their own plane and the glyph plane starts transparent.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     clippy::cast_precision_loss,
-    clippy::too_many_lines
+    clippy::too_many_arguments
 )]
 fn compose(
     request: &TextRasterRequest,
@@ -2223,31 +2376,10 @@ fn compose(
     colors: Option<&[u8]>,
     width: u32,
     margin: [u32; 2],
-    layout_size: [f32; 2],
     line_boxes: &[(f32, f32, f32)],
+    bands: &[Vec<u8>],
+    look: &impl PixelLook,
 ) -> (Vec<u8>, Option<Vec<u8>>) {
-    let height = u32::try_from(coverage.len() / width.max(1) as usize).unwrap_or(0);
-    let bands = if request.strokes.is_empty() {
-        Vec::new()
-    } else {
-        let ink = colors.map(|colors| {
-            coverage
-                .iter()
-                .zip(colors.as_chunks::<4>().0)
-                .map(|(&text, color)| text.max(color[3]))
-                .collect::<Vec<_>>()
-        });
-        let ink = ink.as_deref().unwrap_or(coverage);
-        let mut radius = 0.0;
-        request
-            .strokes
-            .iter()
-            .map(|stroke| {
-                radius += stroke.width;
-                (stroke.color, dilate(ink, width, height, radius))
-            })
-            .collect::<Vec<_>>()
-    };
     let background = request.background.map(|background| {
         let [margin_x, margin_y] = margin.map(|margin| margin as f32);
         let padding = background.padding;
@@ -2266,10 +2398,6 @@ fn compose(
     });
     let split = request.split_background && background.is_some();
     let mut split_plane = split.then(|| vec![0_u8; coverage.len() * 4]);
-    let gradient = match &request.fill {
-        TextFill::Solid(_) => None,
-        TextFill::Gradient(gradient) => Some(gradient.prepared(layout_size)),
-    };
     let foreground = request.fill.foreground();
     let [margin_x, margin_y] = margin.map(|margin| margin as f32);
     let mut rgba8 = vec![0_u8; coverage.len() * 4];
@@ -2308,14 +2436,21 @@ fn compose(
                 None => pixel = boxed,
             }
         }
-        for (color, band) in bands.iter().rev() {
-            pixel = over(premultiplied(*color, band[index]), pixel);
+        // A faded character's layers are drawn together, then faded, so its strokes never show
+        // through its fill; unfaded text is drawn layer by layer over the boxes.
+        let fade = look.fade(index);
+        let boxes = pixel;
+        if fade.is_some() {
+            pixel = [0; 4];
+        }
+        for (stroke, band) in bands.iter().enumerate().rev() {
+            if band[index] > 0 {
+                pixel = over(premultiplied(look.band(stroke, index), band[index]), pixel);
+            }
         }
         if text > 0 {
-            // The gradient is sampled at the pixel's centre in the layout box.
-            let fill = gradient.as_ref().map_or(foreground, |gradient| {
-                gradient.rgba8_at([x + 0.5 - margin_x, y + 0.5 - margin_y])
-            });
+            // A gradient is sampled at the pixel's centre in the layout box.
+            let fill = look.fill(index, [x + 0.5 - margin_x, y + 0.5 - margin_y]);
             pixel = over(premultiplied(fill, text), pixel);
         }
         if let Some(colors) = colors {
@@ -2327,6 +2462,9 @@ fn compose(
                     pixel,
                 );
             }
+        }
+        if let Some(fade) = fade {
+            pixel = over(pixel.map(|value| (value * fade + 127) / 255), boxes);
         }
         for (channel, value) in pixel.iter().enumerate() {
             rgba8[index * 4 + channel] = (*value).min(255) as u8;

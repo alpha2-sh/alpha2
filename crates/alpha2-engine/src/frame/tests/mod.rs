@@ -30,6 +30,7 @@ mod missing_sources;
 mod player;
 mod shapes;
 mod submissions;
+mod text_animators;
 mod text_look;
 mod timing;
 mod transition_quality;

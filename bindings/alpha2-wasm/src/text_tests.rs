@@ -1,4 +1,4 @@
-use super::{TextRequestWire, descriptor_json, file_faces, font};
+use super::{TextRequestWire, animated_request, descriptor_json, file_faces, font};
 use alpha2_text::TextRasterizer;
 
 #[test]
@@ -49,4 +49,43 @@ fn a_font_file_gives_every_face_it_holds() {
     );
     assert!(std::sync::Arc::ptr_eq(&faces[0].bytes, &faces[1].bytes));
     assert!(file_faces("Not a font", b"wOF2....".to_vec()).is_err());
+}
+
+#[test]
+fn an_animated_request_gives_each_cluster_its_state() {
+    let bytes = std::fs::read("../../tests/fonts/Alpha2Fixture.ttf").expect("fixture font");
+    let mut rasterizer = TextRasterizer::empty();
+    rasterizer
+        .add_font(font("Alpha2 Fixture".into(), bytes, 0))
+        .expect("valid font");
+    let wire: TextRequestWire = serde_json::from_str(
+        r#"{"text":"Move","fontSize":30,"fill":[255,255,255,255],
+            "clusterState":{"scale":[1.2,1.2],"rotation":0.1,"opacity":0.8,
+                            "fill":{"keep":0.5,"add":[0.5,0,0,0.5]},"tracking":2}}"#,
+    )
+    .expect("request JSON");
+    assert!(wire.is_animated());
+    let (request, states) = animated_request(wire, 5, &rasterizer).expect("states");
+    assert_eq!(states.len(), 4);
+    assert!(states.iter().all(
+        |state| state.scale.map(f32::to_bits) == [1.2_f32.to_bits(); 2] && state.fill.is_some()
+    ));
+    let animated = rasterizer
+        .rasterize_animated(&request, &states)
+        .expect("raster");
+    // A list of states is taken as it is, one a cluster.
+    let wire: TextRequestWire = serde_json::from_str(
+        r#"{"text":"Mo","fontSize":30,"fill":[255,255,255,255],
+            "clusterStates":[{"offset":[0,-4]},{"stroke":{"keep":1,"add":[0,0,0,0]}}]}"#,
+    )
+    .expect("request JSON");
+    let (_, listed) = animated_request(wire, 6, &rasterizer).expect("states");
+    assert_eq!(
+        listed[0].offset.map(f32::to_bits),
+        [0.0, -4.0_f32].map(f32::to_bits)
+    );
+    assert!(listed[1].stroke.is_some());
+    rasterizer.clear();
+    let still = rasterizer.rasterize(&request).expect("raster");
+    assert_ne!(animated.pixels.rgba8, still.pixels.rgba8);
 }

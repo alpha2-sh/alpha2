@@ -39,9 +39,10 @@ fn imported_cues_whose_last_line_is_blank_after_markup_are_drawn() {
         },
     ] {
         for cue in &cues {
-            let key = text_key(&cue.text, &style, size);
+            let text = cue.text.text();
+            let key = text_key(&text, &style, size);
             let raster = rasterizer
-                .rasterize(&text_request(&cue.text, &style, size, key))
+                .rasterize(&text_request(&text, &style, size, key))
                 .unwrap_or_else(|error| panic!("{:?}: {error}", cue.text));
             assert_eq!(raster.descriptor.line_count, 2, "{:?}", cue.text);
         }

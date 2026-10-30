@@ -48,6 +48,7 @@ pub fn evaluate<'a>(
             cue.timeline_range.contains(time).then(|| ActiveCaption {
                 track_id: &track.track_id,
                 text: &cue.text,
+                local_time: MediaTime(time.ticks() - cue.timeline_range.start().ticks()),
                 style: &track.captions.style,
                 layers_below: active
                     .iter()

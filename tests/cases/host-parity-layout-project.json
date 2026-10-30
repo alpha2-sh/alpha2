@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "id": "host-parity-layout",
-  "name": "Host parity: layout generators, animated groups, clipped text, shape nodes, a layout generator node, and a grid (the still is uploaded, not drawn)",
+  "name": "Host parity: layout generators, animated groups, clipped text, shape nodes, a layout generator node, a grid, and animated text (karaoke runs and a rising title) (the still is uploaded, not drawn)",
   "settings": {
     "width": 192,
     "height": 108,
@@ -212,7 +212,51 @@
                       "font_size": {
                         "mode": "constant",
                         "value": 0.09
-                      }
+                      },
+                      "text_animators": [
+                        {
+                          "selector": {
+                            "type": "range",
+                            "shape": "ramp_up",
+                            "offset": {
+                              "mode": "keyframes",
+                              "keyframes": [
+                                {
+                                  "time": 0,
+                                  "value": -100,
+                                  "interpolation": {
+                                    "type": "linear"
+                                  }
+                                },
+                                {
+                                  "time": 90000,
+                                  "value": 100,
+                                  "interpolation": {
+                                    "type": "hold"
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          "properties": {
+                            "offset": {
+                              "mode": "constant",
+                              "value": {
+                                "x": 0,
+                                "y": 0.5
+                              }
+                            },
+                            "opacity": {
+                              "mode": "constant",
+                              "value": 0
+                            },
+                            "rotation_degrees": {
+                              "mode": "constant",
+                              "value": 12
+                            }
+                          }
+                        }
+                      ]
                     },
                     {
                       "text": {
@@ -761,6 +805,107 @@
             }
           }
         ]
+      },
+      {
+        "id": "subs",
+        "name": "Subtitles",
+        "kind": "caption",
+        "captions": {
+          "style": {
+            "font_size": 0.12,
+            "position": {
+              "x": 0.5,
+              "y": 0.95
+            },
+            "strokes": [
+              {
+                "color": "#000000",
+                "width": 0.08
+              }
+            ],
+            "shadows": [
+              {
+                "color": "#00000099",
+                "offset": {
+                  "x": 0,
+                  "y": 0.08
+                },
+                "blur": 0.2
+              }
+            ],
+            "animators": [
+              {
+                "selector": {
+                  "type": "timing",
+                  "state": "active",
+                  "ramp": 3000
+                },
+                "properties": {
+                  "fill": {
+                    "mode": "constant",
+                    "value": "#ffd040"
+                  },
+                  "scale": {
+                    "mode": "constant",
+                    "value": {
+                      "x": 1.15,
+                      "y": 1.15
+                    }
+                  }
+                }
+              },
+              {
+                "selector": {
+                  "type": "class",
+                  "class": "key"
+                },
+                "properties": {
+                  "offset": {
+                    "mode": "constant",
+                    "value": {
+                      "x": 0,
+                      "y": -0.1
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "cues": [
+            {
+              "timeline_range": {
+                "start": 0,
+                "end": 180000
+              },
+              "text": [
+                {
+                  "text": "Karaoke ",
+                  "time": {
+                    "start": 0,
+                    "end": 60000
+                  }
+                },
+                {
+                  "text": "by ",
+                  "class": [
+                    "key"
+                  ],
+                  "time": {
+                    "start": 60000,
+                    "end": 120000
+                  }
+                },
+                {
+                  "text": "runs",
+                  "time": {
+                    "start": 120000,
+                    "end": 180000
+                  }
+                }
+              ]
+            }
+          ]
+        }
       }
     ]
   }

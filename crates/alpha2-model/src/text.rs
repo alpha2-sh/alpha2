@@ -1,6 +1,6 @@
 //! Styled text: what caption tracks and text generators draw.
 
-use crate::{Paint, Rgba, Vec2};
+use crate::{Paint, Rgba, TextAnimator, Vec2};
 use serde::{Deserialize, Serialize};
 
 /// Most bytes of text in one caption cue or text generator.
@@ -124,6 +124,13 @@ pub struct TextStyle {
     /// A box behind each line.
     #[serde(default)]
     pub background: Option<TextBackground>,
+    /// Per-character motion and color, applied in order: at most
+    /// [`crate::MAX_TEXT_ANIMATORS`]. Their keyframes are in the time of what
+    /// holds the text: since a caption cue's start, or a text generator's
+    /// picture time. They never change layout: lines are those of the text
+    /// without them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub animators: Vec<TextAnimator>,
 }
 
 impl Default for TextStyle {
@@ -142,6 +149,7 @@ impl Default for TextStyle {
             strokes: Vec::new(),
             shadows: Vec::new(),
             background: None,
+            animators: Vec::new(),
         }
     }
 }
@@ -254,6 +262,7 @@ impl TextStyle {
             && finite(self.anchor)
             && valid_strokes(&self.strokes)
             && valid_shadows(&self.shadows)
+            && crate::text_animation::valid_animators(&self.animators, false)
             && self.background.is_none_or(|background| {
                 background.color.is_valid()
                     && (0.0..=MAX_TEXT_PADDING).contains(&background.padding)

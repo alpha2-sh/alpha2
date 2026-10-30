@@ -276,6 +276,8 @@ pub struct EvaluatedText {
     pub strokes: Vec<TextStroke>,
     /// Shadows of the glyphs and strokes, the first on top.
     pub shadows: Vec<TextShadow>,
+    /// The node's text animators at the layout's picture time.
+    pub animators: Vec<crate::SampledAnimator>,
 }
 
 fn non_negative(animation: Option<&Animated<f32>>, time: MediaTime, default: f32) -> f32 {
@@ -437,6 +439,7 @@ fn evaluate_node<'a>(
             text_align: style.text_align,
             strokes: style.strokes.clone(),
             shadows: style.shadows.clone(),
+            animators: crate::sample_text_animators(&node.text_animators, time),
         })
     } else if node.shape.is_some() {
         let (plan, _) = shapes.next().expect("one plan per shape node");
@@ -682,6 +685,10 @@ fn hash_node_in(
                 hash.f32(shadow.offset.x);
                 hash.f32(shadow.offset.y);
                 hash.f32(shadow.blur);
+            }
+            // Nothing for a text without animators, so a static layout keeps its key.
+            if !text.animators.is_empty() {
+                crate::hash_sampled_animators(hash, &text.animators);
             }
         }
         NodeContent::Shape(_) => {

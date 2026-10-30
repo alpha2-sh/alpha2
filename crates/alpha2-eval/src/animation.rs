@@ -395,6 +395,31 @@ fn interpolate_value(start: EffectValue, end: EffectValue, amount: f64) -> Optio
     }
 }
 
+/// Samples an animated color with the project's keyframe semantics,
+/// interpolated premultiplied as a paint's stops are.
+#[must_use]
+pub fn sample_rgba(
+    animation: &Animated<alpha2_model::Rgba>,
+    time: MediaTime,
+) -> alpha2_model::Rgba {
+    match animation {
+        Animated::Constant { value } => *value,
+        Animated::Keyframes { keyframes } => match segment(keyframes, time) {
+            Segment::At(keyframe) => keyframe.value,
+            Segment::Empty => alpha2_model::Rgba::new(0.0, 0.0, 0.0, 0.0),
+            Segment::Between(left, right, amount) => {
+                let (a, b) = (left.value, right.value);
+                let [red, green, blue, alpha] = interpolate_color(
+                    [a.red, a.green, a.blue, a.alpha],
+                    [b.red, b.green, b.blue, b.alpha],
+                    amount,
+                );
+                alpha2_model::Rgba::new(red, green, blue, alpha)
+            }
+        },
+    }
+}
+
 /// Interpolates two straight colors premultiplied and returns the result
 /// straight, clamped to `0..=1`.
 #[allow(clippy::cast_possible_truncation)]

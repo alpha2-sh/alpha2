@@ -13,10 +13,11 @@ mod retime;
 mod shapes;
 #[cfg(test)]
 mod tests;
+mod text_animation;
 
 pub use animation::{
     EffectParamValue, sample_effect_param, sample_hold, sample_insets, sample_length, sample_paint,
-    sample_path, sample_point, sample_scalar, sample_vec2, sample_visual,
+    sample_path, sample_point, sample_rgba, sample_scalar, sample_vec2, sample_visual,
 };
 pub use audio::{
     ActiveAudioClip, AudioSpan, AudioSpanDesc, AudioSpanScratch, evaluate_audio, evaluate_audio_in,
@@ -45,3 +46,6 @@ pub use layout::{
 pub use retime::picture_source_time;
 pub(crate) use retime::{Mirror, map_source_time};
 pub use shapes::{ShapesPlan, evaluate_geometry, evaluate_item, evaluate_items};
+pub use text_animation::{
+    SampledAnimator, SampledSelector, hash_sampled_animators, sample_text_animators,
+};

@@ -85,7 +85,7 @@ fn caption_tracks_hold_ordered_cues_and_nothing_else() {
         TrackKind::Caption
     )));
     let mut empty = cue(0, 10);
-    empty.text.clear();
+    empty.text = crate::TextContent::default();
     assert!(invalid(&with_captions(
         captions(vec![empty]),
         TrackKind::Caption

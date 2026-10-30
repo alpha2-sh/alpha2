@@ -483,6 +483,52 @@
         }
       ]
     },
+    "Animated_Rgba": {
+      "description": "A value that is either constant or controlled by sorted keyframes.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A value without animation.",
+          "properties": {
+            "mode": {
+              "const": "constant",
+              "type": "string"
+            },
+            "value": {
+              "$ref": "#/$defs/Rgba",
+              "description": "Value used at every timestamp."
+            }
+          },
+          "required": [
+            "mode",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Values evaluated from their keyframe sequence.",
+          "properties": {
+            "keyframes": {
+              "description": "Strictly ascending keyframes. The evaluator clamps outside the sequence.",
+              "items": {
+                "$ref": "#/$defs/Keyframe_Rgba"
+              },
+              "type": "array"
+            },
+            "mode": {
+              "const": "keyframes",
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "keyframes"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "Animated_Vec2": {
       "description": "A value that is either constant or controlled by sorted keyframes.",
       "oneOf": [
@@ -839,8 +885,8 @@
       "description": "Text shown over one timeline interval.",
       "properties": {
         "text": {
-          "description": "The text; `\\n` starts a line. Non-empty, at most\n[`MAX_TEXT_CONTENT_BYTES`] bytes.",
-          "type": "string"
+          "$ref": "#/$defs/TextContent",
+          "description": "The text, a string or runs; `\\n` starts a line. Non-empty, at most\n[`MAX_TEXT_CONTENT_BYTES`] bytes. Run times are from the cue's start."
         },
         "timeline_range": {
           "$ref": "#/$defs/TimeRange",
@@ -2128,7 +2174,7 @@
       "description": "A frame rate, as a number or exactly."
     },
     "Generator": {
-      "description": "The picture of a generated source.\n\nA generated picture has the canvas's size and aspect, like a source that\nfills the frame at scale 1. Positions are in its normalized space, `(0, 0)`\ntop-left to `(1, 1)` bottom-right; lengths (radii, stroke widths) are\nfractions of its shorter side, so the picture is the same at any render\nresolution. A fill or text does not change over time (a clip animates it\nwith its transform, effects, and masks); shapes and layouts may.",
+      "description": "The picture of a generated source.\n\nA generated picture has the canvas's size and aspect, like a source that\nfills the frame at scale 1. Positions are in its normalized space, `(0, 0)`\ntop-left to `(1, 1)` bottom-right; lengths (radii, stroke widths) are\nfractions of its shorter side, so the picture is the same at any render\nresolution. A fill does not change over time (a clip animates it with\nits transform, effects, and masks); text changes only through its style's\nanimators, and shapes and layouts may change.",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -2206,8 +2252,8 @@
               "description": "How it looks and where it lies. The font size is at most\n[`MAX_TEXT_GENERATOR_FONT_SIZE`]."
             },
             "text": {
-              "description": "The text; `\\n` starts a line. Non-empty, at most\n[`MAX_TEXT_CONTENT_BYTES`] bytes.",
-              "type": "string"
+              "$ref": "#/$defs/TextContent",
+              "description": "The text, a string or runs; `\\n` starts a line. Non-empty, at\nmost [`MAX_TEXT_CONTENT_BYTES`] bytes. Run times are picture time."
             },
             "type": {
               "const": "text",
@@ -2634,6 +2680,30 @@
         },
         "value": {
           "$ref": "#/$defs/Path",
+          "description": "Value at `time`."
+        }
+      },
+      "required": [
+        "time",
+        "value",
+        "interpolation"
+      ],
+      "type": "object"
+    },
+    "Keyframe_Rgba": {
+      "additionalProperties": false,
+      "description": "One timestamped control value.",
+      "properties": {
+        "interpolation": {
+          "$ref": "#/$defs/Interpolation",
+          "description": "Interpolation from this keyframe to its successor."
+        },
+        "time": {
+          "$ref": "#/$defs/MediaTime",
+          "description": "Timestamp of this value: timeline time, except in a composition\nnode's settings, which are keyed in composition time, and in a\nshapes or layout generator's tree, which is keyed in its picture's\ntime."
+        },
+        "value": {
+          "$ref": "#/$defs/Rgba",
           "description": "Value at `time`."
         }
       },
@@ -3344,6 +3414,13 @@
             }
           ],
           "description": "How lines align within the content width. Inherited; the root's is\n`start`."
+        },
+        "text_animators": {
+          "description": "Per-character motion of the box's own text, Range selectors only (a\nlayout's text is one string, without runs): at most\n[`crate::MAX_TEXT_ANIMATORS`], keyed in the layout's picture time. Not\ninherited; never changes layout.",
+          "items": {
+            "$ref": "#/$defs/TextAnimator"
+          },
+          "type": "array"
         },
         "translate": {
           "anyOf": [
@@ -6231,6 +6308,56 @@
         }
       ]
     },
+    "RangeShape": {
+      "description": "How selection rises and falls across a Range selector's range.",
+      "oneOf": [
+        {
+          "const": "square",
+          "description": "Fully selected inside the range, partly at fractional ends.",
+          "type": "string"
+        },
+        {
+          "const": "ramp_up",
+          "description": "Rising from the start to the end.",
+          "type": "string"
+        },
+        {
+          "const": "ramp_down",
+          "description": "Falling from the start to the end.",
+          "type": "string"
+        },
+        {
+          "const": "triangle",
+          "description": "Rising to the middle, falling after it.",
+          "type": "string"
+        },
+        {
+          "const": "round",
+          "description": "A half circle over the range.",
+          "type": "string"
+        },
+        {
+          "const": "smooth",
+          "description": "The triangle eased by smoothstep.",
+          "type": "string"
+        }
+      ]
+    },
+    "RangeUnits": {
+      "description": "What a Range selector's start, end and offset count in.",
+      "oneOf": [
+        {
+          "const": "percent",
+          "description": "Percents of the units.",
+          "type": "string"
+        },
+        {
+          "const": "index",
+          "description": "Unit indices.",
+          "type": "string"
+        }
+      ]
+    },
     "Rgba": {
       "anyOf": [
         {
@@ -6271,6 +6398,45 @@
         }
       ],
       "description": "A straight (not premultiplied), sRGB-encoded color with alpha, each\ncomponent in `0..=1`.\n\nWritten as the object, or as CSS hex: `\"#rgb\"`, `\"#rgba\"`, `\"#rrggbb\"` or\n`\"#rrggbbaa\"`, any case, each digit pair a component times 255. It is\nwritten back as the object: a component need not be a multiple of 1/255."
+    },
+    "RunState": {
+      "description": "Which runs a Timing selector selects.",
+      "oneOf": [
+        {
+          "const": "upcoming",
+          "description": "Runs whose time has not started.",
+          "type": "string"
+        },
+        {
+          "const": "active",
+          "description": "Runs whose time holds the current time.",
+          "type": "string"
+        },
+        {
+          "const": "spoken",
+          "description": "Runs whose time has ended.",
+          "type": "string"
+        }
+      ]
+    },
+    "RunTime": {
+      "additionalProperties": false,
+      "description": "A run's time span.",
+      "properties": {
+        "end": {
+          "$ref": "#/$defs/MediaTime",
+          "description": "When it ends; after `start`."
+        },
+        "start": {
+          "$ref": "#/$defs/MediaTime",
+          "description": "When it starts."
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "type": "object"
     },
     "ShapeGeometry": {
       "description": "A geometry alone, as a mask's outline is.",
@@ -6971,6 +7137,109 @@
         }
       ]
     },
+    "TextAnimator": {
+      "additionalProperties": false,
+      "description": "One animator: what it selects, and what it does to what it selects.",
+      "properties": {
+        "properties": {
+          "$ref": "#/$defs/TextAnimatorProperties",
+          "default": {},
+          "description": "Applied to each character in proportion to its selection."
+        },
+        "selector": {
+          "$ref": "#/$defs/TextSelector",
+          "description": "Gives each character its selection, in `[0, 1]`."
+        }
+      },
+      "required": [
+        "selector"
+      ],
+      "type": "object"
+    },
+    "TextAnimatorProperties": {
+      "additionalProperties": false,
+      "description": "What an animator does to each character, in proportion to its selection.\nA property left out does nothing.",
+      "properties": {
+        "fill": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_Rgba"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The fill color a fully selected character takes; a gradient fill is\nmixed toward it."
+        },
+        "offset": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_Vec2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Moves the character, in font sizes, +y down."
+        },
+        "opacity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_float"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The opacity a fully selected character takes, in `[0, 1]`."
+        },
+        "rotation_degrees": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_float"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Turns the character about its centre, clockwise degrees."
+        },
+        "scale": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_Vec2"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Scales the character about its centre; 1 is none. Each axis in\n`[0, 10]`."
+        },
+        "stroke": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_Rgba"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The color every stroke of a fully selected character takes."
+        },
+        "tracking": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Animated_float"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Space added after the character, in font sizes, in `[-0.5, 1]`, as\nletter spacing adds it; lines are not broken again."
+        }
+      },
+      "type": "object"
+    },
     "TextBackground": {
       "additionalProperties": false,
       "description": "A box behind each line of text.",
@@ -6990,6 +7259,22 @@
         "color"
       ],
       "type": "object"
+    },
+    "TextContent": {
+      "anyOf": [
+        {
+          "description": "One string; `\\n` starts a line.",
+          "type": "string"
+        },
+        {
+          "description": "Runs in order; their texts joined are the text.",
+          "items": {
+            "$ref": "#/$defs/TextRun"
+          },
+          "type": "array"
+        }
+      ],
+      "description": "A text: one string, or runs whose texts joined are the text.\n\nWritten as `\"Hello\"` or `[{ \"text\": \"Hel\" }, { \"text\": \"lo\", \"class\": [\"key\"] }]`."
     },
     "TextRole": {
       "description": "A theme text style.",
@@ -7013,6 +7298,152 @@
           "const": "label",
           "description": "A cell's label.",
           "type": "string"
+        }
+      ]
+    },
+    "TextRun": {
+      "additionalProperties": false,
+      "description": "A piece of a text that animators' Class and Timing selectors can pick.",
+      "properties": {
+        "class": {
+          "description": "Names Class selectors match: each 1 to 64 bytes of `A-Z`, `a-z`,\n`0-9`, `_` and `-`; at most [`MAX_RUN_CLASSES`].",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "text": {
+          "description": "Non-empty; `\\n` starts a line as in plain text. A grapheme cluster\nthat spans two runs belongs to the run holding its first byte.",
+          "type": "string"
+        },
+        "time": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunTime"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "When the run is said, from the start of what holds it: a caption\ncue's start, or a text generator's picture time zero."
+        }
+      },
+      "required": [
+        "text"
+      ],
+      "type": "object"
+    },
+    "TextSelector": {
+      "description": "How an animator selects characters.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A range over the text's units, shaped at its ends: After Effects'\nrange selector.",
+          "properties": {
+            "amount": {
+              "$ref": "#/$defs/Animated_float",
+              "default": {
+                "mode": "constant",
+                "value": 1.0
+              },
+              "description": "The selection's scale, in `[0, 1]`. Default 1."
+            },
+            "based_on": {
+              "$ref": "#/$defs/TextUnit",
+              "default": "characters",
+              "description": "What the range counts: characters (the default), characters that\nare not spaces, words, or lines."
+            },
+            "end": {
+              "$ref": "#/$defs/Animated_float",
+              "default": {
+                "mode": "constant",
+                "value": 100.0
+              },
+              "description": "Where it ends, in the same range. Default 100."
+            },
+            "offset": {
+              "$ref": "#/$defs/Animated_float",
+              "default": {
+                "mode": "constant",
+                "value": 0.0
+              },
+              "description": "Added to start and end, in the same range. Default 0."
+            },
+            "shape": {
+              "$ref": "#/$defs/RangeShape",
+              "default": "square",
+              "description": "How selection rises and falls across the range."
+            },
+            "start": {
+              "$ref": "#/$defs/Animated_float",
+              "default": {
+                "mode": "constant",
+                "value": 0.0
+              },
+              "description": "Where the range starts: in `[-100, 200]` percent, or `[-N, 2N]`\nunits for `N` of [`MAX_RANGE_INDEX`]. Default 0."
+            },
+            "type": {
+              "const": "range",
+              "type": "string"
+            },
+            "units": {
+              "$ref": "#/$defs/RangeUnits",
+              "default": "percent",
+              "description": "Whether start, end and offset are percents of the units (the\ndefault) or unit indices."
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Characters of timed runs, by where the run's time lies against the\ncurrent time.",
+          "properties": {
+            "ramp": {
+              "$ref": "#/$defs/MediaTime",
+              "default": 0,
+              "description": "How long the state takes to fade in and out; zero switches."
+            },
+            "state": {
+              "$ref": "#/$defs/RunState",
+              "description": "Which runs it selects: those not yet said, being said, or said."
+            },
+            "sweep": {
+              "default": false,
+              "description": "Splits each run's span over its characters in order, so the run\nis swept character by character.",
+              "type": "boolean"
+            },
+            "type": {
+              "const": "timing",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Characters of runs that carry a class.",
+          "properties": {
+            "class": {
+              "description": "The class name.",
+              "type": "string"
+            },
+            "type": {
+              "const": "class",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "class"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -7080,6 +7511,13 @@
             "y": 1.0
           },
           "description": "The point of the text, background included, placed at\n`position`: `(0.5, 1)` is its bottom centre."
+        },
+        "animators": {
+          "description": "Per-character motion and color, applied in order: at most\n[`crate::MAX_TEXT_ANIMATORS`]. Their keyframes are in the time of what\nholds the text: since a caption cue's start, or a text generator's\npicture time. They never change layout: lines are those of the text\nwithout them.",
+          "items": {
+            "$ref": "#/$defs/TextAnimator"
+          },
+          "type": "array"
         },
         "background": {
           "anyOf": [
@@ -7169,6 +7607,31 @@
         }
       },
       "type": "object"
+    },
+    "TextUnit": {
+      "description": "The units a Range selector counts.",
+      "oneOf": [
+        {
+          "const": "characters",
+          "description": "Grapheme clusters, spaces included.",
+          "type": "string"
+        },
+        {
+          "const": "characters_excluding_spaces",
+          "description": "Grapheme clusters that are not white space.",
+          "type": "string"
+        },
+        {
+          "const": "words",
+          "description": "UAX #29 words that hold a letter or digit; a CJK ideograph is a word.",
+          "type": "string"
+        },
+        {
+          "const": "lines",
+          "description": "Laid-out lines.",
+          "type": "string"
+        }
+      ]
     },
     "Theme": {
       "additionalProperties": false,

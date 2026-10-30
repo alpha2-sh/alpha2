@@ -193,7 +193,7 @@ impl ImportedCaptions {
                 }
                 self.cues.push(CaptionCue {
                     timeline_range: range,
-                    text,
+                    text: text.into(),
                 });
             }
             _ => self.skipped += 1,

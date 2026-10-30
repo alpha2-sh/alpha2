@@ -30,6 +30,7 @@ mod source;
 #[cfg(test)]
 pub(crate) mod tests;
 mod text;
+mod text_animation;
 mod time_map;
 mod timeline;
 
@@ -99,6 +100,12 @@ pub use text::{
     MAX_TEXT_CONTENT_BYTES, MAX_TEXT_GENERATOR_FONT_SIZE, MAX_TEXT_PADDING, MAX_TEXT_SHADOW_BLUR,
     MAX_TEXT_SHADOW_OFFSET, MAX_TEXT_SHADOWS, MAX_TEXT_STROKE_EXTENT, MAX_TEXT_STROKES, TextAlign,
     TextBackground, TextShadow, TextStroke, TextStyle,
+};
+pub use text_animation::{
+    ANIMATOR_SCALE_RANGE, MAX_CLASS_NAME_BYTES, MAX_RANGE_INDEX, MAX_RUN_CLASSES,
+    MAX_TEXT_ANIMATORS, MAX_TEXT_RUNS, RANGE_PERCENT, RangeShape, RangeUnits, RunState, RunTime,
+    TextAnimator, TextAnimatorProperties, TextContent, TextRun, TextSelector, TextUnit,
+    valid_class_name,
 };
 pub use time_map::{LOOP_FADE_SECONDS, LoopMode, TimeMap};
 pub use timeline::{CacheIntent, Clip, ClipTransition, Timeline, Track, TrackKind};

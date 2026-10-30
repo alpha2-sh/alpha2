@@ -16,6 +16,9 @@ AUDIO_EFFECT_STATE_MARGIN_MS = 1100
 CURRENT_SCHEMA_VERSION = 1
 """Mirrors `alpha2_model::CURRENT_SCHEMA_VERSION`."""
 
+MAX_ANIMATOR_SCALE = 10
+"""Mirrors `alpha2_model::MAX_ANIMATOR_SCALE`."""
+
 MAX_AUDIO_DELAY_MS = 120000
 """Mirrors `alpha2_model::MAX_AUDIO_DELAY_MS`."""
 
@@ -39,6 +42,9 @@ MAX_CAPTION_FONT_SIZE = 0.25
 
 MAX_CHAIN_EFFECTS = 16
 """Mirrors `alpha2_model::MAX_CHAIN_EFFECTS`."""
+
+MAX_CLASS_NAME_BYTES = 64
+"""Mirrors `alpha2_model::MAX_CLASS_NAME_BYTES`."""
 
 MAX_CLIPS = 100000
 """Mirrors `alpha2_model::MAX_CLIPS`."""
@@ -157,6 +163,15 @@ MAX_PROJECT_JSON_BYTES = 67108864
 MAX_PROVIDER_DOCUMENT_BYTES = 268435456
 """Mirrors `alpha2_model::MAX_PROVIDER_DOCUMENT_BYTES`."""
 
+MAX_RANGE_INDEX = 4096
+"""Mirrors `alpha2_model::MAX_RANGE_INDEX`."""
+
+MAX_RANGE_PERCENT = 200
+"""Mirrors `alpha2_model::MAX_RANGE_PERCENT`."""
+
+MAX_RUN_CLASSES = 8
+"""Mirrors `alpha2_model::MAX_RUN_CLASSES`."""
+
 MAX_SAMPLE_RATE = 96000
 """Mirrors `alpha2_model::MAX_SAMPLE_RATE`."""
 
@@ -172,6 +187,9 @@ MAX_SHAPE_ITEMS = 1024
 MAX_SVG_DOCUMENT_BYTES = 33554432
 """Mirrors `alpha2_model::MAX_SVG_DOCUMENT_BYTES`."""
 
+MAX_TEXT_ANIMATORS = 8
+"""Mirrors `alpha2_model::MAX_TEXT_ANIMATORS`."""
+
 MAX_TEXT_CONTENT_BYTES = 4096
 """Mirrors `alpha2_model::MAX_TEXT_CONTENT_BYTES`."""
 
@@ -180,6 +198,9 @@ MAX_TEXT_GENERATOR_FONT_SIZE = 1
 
 MAX_TEXT_PADDING = 2
 """Mirrors `alpha2_model::MAX_TEXT_PADDING`."""
+
+MAX_TEXT_RUNS = 512
+"""Mirrors `alpha2_model::MAX_TEXT_RUNS`."""
 
 MAX_TEXT_SHADOWS = 4
 """Mirrors `alpha2_model::MAX_TEXT_SHADOWS`."""
@@ -225,6 +246,9 @@ MIN_LINE_HEIGHT = 0.5
 
 MIN_POLYSTAR_POINTS = 3
 """Mirrors `alpha2_model::MIN_POLYSTAR_POINTS`."""
+
+MIN_RANGE_PERCENT = -100
+"""Mirrors `alpha2_model::MIN_RANGE_PERCENT`."""
 
 MIN_SAMPLE_RATE = 8000
 """Mirrors `alpha2_model::MIN_SAMPLE_RATE`."""
@@ -326,11 +350,23 @@ POLYSTAR_KIND_VALUES: tuple[PolystarKind, ...] = ("star", "polygon")
 POSITION_VALUES: tuple[Position, ...] = ("relative", "absolute")
 """Every `Position`, in the model's order."""
 
+RANGE_SHAPE_VALUES: tuple[RangeShape, ...] = ("square", "ramp_up", "ramp_down", "triangle", "round", "smooth")
+"""Every `RangeShape`, in the model's order."""
+
+RANGE_UNITS_VALUES: tuple[RangeUnits, ...] = ("percent", "index")
+"""Every `RangeUnits`, in the model's order."""
+
+RUN_STATE_VALUES: tuple[RunState, ...] = ("upcoming", "active", "spoken")
+"""Every `RunState`, in the model's order."""
+
 SPREAD_VALUES: tuple[Spread, ...] = ("pad", "repeat", "reflect")
 """Every `Spread`, in the model's order."""
 
 TEXT_ALIGN_VALUES: tuple[TextAlign, ...] = ("start", "center", "end")
 """Every `TextAlign`, in the model's order."""
+
+TEXT_UNIT_VALUES: tuple[TextUnit, ...] = ("characters", "characters_excluding_spaces", "words", "lines")
+"""Every `TextUnit`, in the model's order."""
 
 TRACK_KIND_VALUES: tuple[TrackKind, ...] = ("video", "audio", "caption")
 """Every `TrackKind`, in the model's order."""
@@ -556,9 +592,9 @@ CacheIntent: TypeAlias = Literal["auto", "pin", "bypass"]
 class CaptionCue(TypedDict):
     """Text shown over one timeline interval."""
 
-    text: str
-    """The text; `\\n` starts a line. Non-empty, at most
-    `MAX_TEXT_CONTENT_BYTES` bytes.
+    text: TextContent
+    """The text, a string or runs; `\\n` starts a line. Non-empty, at most
+    `MAX_TEXT_CONTENT_BYTES` bytes. Run times are from the cue's start.
     """
     timeline_range: TimeRange
     """When the cue shows. Non-empty and not before zero."""
@@ -1038,9 +1074,9 @@ class GeneratorText(TypedDict):
     """How it looks and where it lies. The font size is at most
     `MAX_TEXT_GENERATOR_FONT_SIZE`.
     """
-    text: str
-    """The text; `\\n` starts a line. Non-empty, at most
-    `MAX_TEXT_CONTENT_BYTES` bytes.
+    text: TextContent
+    """The text, a string or runs; `\\n` starts a line. Non-empty, at
+    most `MAX_TEXT_CONTENT_BYTES` bytes. Run times are picture time.
     """
     type: Literal["text"]
 
@@ -1064,8 +1100,9 @@ A generated picture has the canvas's size and aspect, like a source that
 fills the frame at scale 1. Positions are in its normalized space, `(0, 0)`
 top-left to `(1, 1)` bottom-right; lengths (radii, stroke widths) are
 fractions of its shorter side, so the picture is the same at any render
-resolution. A fill or text does not change over time (a clip animates it
-with its transform, effects, and masks); shapes and layouts may.
+resolution. A fill does not change over time (a clip animates it with
+its transform, effects, and masks); text changes only through its style's
+animators, and shapes and layouts may change.
 """
 
 
@@ -1371,6 +1408,12 @@ class LayoutNode(TypedDict):
     text_align: NotRequired[TextAlign | None]
     """How lines align within the content width. Inherited; the root's is
     `start`.
+    """
+    text_animators: NotRequired[list[TextAnimator]]
+    """Per-character motion of the box's own text, Range selectors only (a
+    layout's text is one string, without runs): at most
+    `MAX_TEXT_ANIMATORS`, keyed in the layout's picture time. Not
+    inherited; never changes layout.
     """
     translate: NotRequired[Animated[LayoutOffset] | None]
     """Offset of the box and everything in it, after layout: the object, or
@@ -2015,6 +2058,14 @@ provider source needs frames like any video or image source.
 """
 
 
+RangeShape: TypeAlias = Literal["square", "ramp_up", "ramp_down", "triangle", "round", "smooth"]
+"""How selection rises and falls across a Range selector's range."""
+
+
+RangeUnits: TypeAlias = Literal["percent", "index"]
+"""What a Range selector's start, end and offset count in."""
+
+
 class Rgb(TypedDict):
     """An opaque color as a color picker shows it: straight, sRGB-encoded
     components in the inclusive unit interval.
@@ -2047,6 +2098,19 @@ Written as the object, or as CSS hex: `"#rgb"`, `"#rgba"`, `"#rrggbb"` or
 `"#rrggbbaa"`, any case, each digit pair a component times 255. It is
 written back as the object: a component need not be a multiple of 1/255.
 """
+
+
+RunState: TypeAlias = Literal["upcoming", "active", "spoken"]
+"""Which runs a Timing selector selects."""
+
+
+class RunTime(TypedDict):
+    """A run's time span."""
+
+    end: MediaTime
+    """When it ends; after `start`."""
+    start: MediaTime
+    """When it starts."""
 
 
 class ShapeGeometryRectangle(TypedDict):
@@ -2441,6 +2505,45 @@ TextAlign: TypeAlias = Literal["start", "center", "end"]
 """How lines of text align within it."""
 
 
+class TextAnimator(TypedDict):
+    """One animator: what it selects, and what it does to what it selects."""
+
+    properties: NotRequired[TextAnimatorProperties]
+    """Applied to each character in proportion to its selection.
+
+    Default: `{}`.
+    """
+    selector: TextSelector
+    """Gives each character its selection, in `[0, 1]`."""
+
+
+class TextAnimatorProperties(TypedDict):
+    """What an animator does to each character, in proportion to its selection.
+    A property left out does nothing.
+    """
+
+    fill: NotRequired[Animated[Rgba] | None]
+    """The fill color a fully selected character takes; a gradient fill is
+    mixed toward it.
+    """
+    offset: NotRequired[Animated[Vec2] | None]
+    """Moves the character, in font sizes, +y down."""
+    opacity: NotRequired[Animated[float] | None]
+    """The opacity a fully selected character takes, in `[0, 1]`."""
+    rotation_degrees: NotRequired[Animated[float] | None]
+    """Turns the character about its centre, clockwise degrees."""
+    scale: NotRequired[Animated[Vec2] | None]
+    """Scales the character about its centre; 1 is none. Each axis in
+    `[0, 10]`.
+    """
+    stroke: NotRequired[Animated[Rgba] | None]
+    """The color every stroke of a fully selected character takes."""
+    tracking: NotRequired[Animated[float] | None]
+    """Space added after the character, in font sizes, in `[-0.5, 1]`, as
+    letter spacing adds it; lines are not broken again.
+    """
+
+
 class TextBackground(TypedDict):
     """A box behind each line of text."""
 
@@ -2452,6 +2555,105 @@ class TextBackground(TypedDict):
 
     Default: `0`.
     """
+
+
+TextContent: TypeAlias = "str | list[TextRun]"
+"""A text: one string, or runs whose texts joined are the text.
+
+Written as `"Hello"` or `[{ "text": "Hel" }, { "text": "lo", "class": ["key"] }]`.
+"""
+
+
+TextRun = TypedDict(
+    "TextRun",
+    {
+        "class": NotRequired[list[str]],
+        "text": str,
+        "time": NotRequired[RunTime | None],
+    },
+)
+TextRun.__doc__ = "A piece of a text that animators' Class and Timing selectors can pick."
+
+
+class TextSelectorRange(TypedDict):
+    """A range over the text's units, shaped at its ends: After Effects'
+    range selector.
+    """
+
+    amount: NotRequired[Animated[float]]
+    """The selection's scale, in `[0, 1]`. Default 1.
+
+    Default: `{"mode":"constant","value":1}`.
+    """
+    based_on: NotRequired[TextUnit]
+    """What the range counts: characters (the default), characters that
+    are not spaces, words, or lines.
+
+    Default: `"characters"`.
+    """
+    end: NotRequired[Animated[float]]
+    """Where it ends, in the same range. Default 100.
+
+    Default: `{"mode":"constant","value":100}`.
+    """
+    offset: NotRequired[Animated[float]]
+    """Added to start and end, in the same range. Default 0.
+
+    Default: `{"mode":"constant","value":0}`.
+    """
+    shape: NotRequired[RangeShape]
+    """How selection rises and falls across the range.
+
+    Default: `"square"`.
+    """
+    start: NotRequired[Animated[float]]
+    """Where the range starts: in `[-100, 200]` percent, or `[-N, 2N]`
+    units for `N` of `MAX_RANGE_INDEX`. Default 0.
+
+    Default: `{"mode":"constant","value":0}`.
+    """
+    type: Literal["range"]
+    units: NotRequired[RangeUnits]
+    """Whether start, end and offset are percents of the units (the
+    default) or unit indices.
+
+    Default: `"percent"`.
+    """
+
+
+class TextSelectorTiming(TypedDict):
+    """Characters of timed runs, by where the run's time lies against the
+    current time.
+    """
+
+    ramp: NotRequired[MediaTime]
+    """How long the state takes to fade in and out; zero switches.
+
+    Default: `0`.
+    """
+    state: RunState
+    """Which runs it selects: those not yet said, being said, or said."""
+    sweep: NotRequired[bool]
+    """Splits each run's span over its characters in order, so the run
+    is swept character by character.
+
+    Default: `false`.
+    """
+    type: Literal["timing"]
+
+
+TextSelectorClass = TypedDict(
+    "TextSelectorClass",
+    {
+        "class": str,
+        "type": Literal["class"],
+    },
+)
+TextSelectorClass.__doc__ = "Characters of runs that carry a class."
+
+
+TextSelector: TypeAlias = "TextSelectorRange | TextSelectorTiming | TextSelectorClass"
+"""How an animator selects characters."""
 
 
 class TextShadow(TypedDict):
@@ -2513,6 +2715,13 @@ class TextStyle(TypedDict):
     `position`: `(0.5, 1)` is its bottom centre.
 
     Default: `{"x":0.5,"y":1}`.
+    """
+    animators: NotRequired[list[TextAnimator]]
+    """Per-character motion and color, applied in order: at most
+    `MAX_TEXT_ANIMATORS`. Their keyframes are in the time of what
+    holds the text: since a caption cue's start, or a text generator's
+    picture time. They never change layout: lines are those of the text
+    without them.
     """
     background: NotRequired[TextBackground | None]
     """A box behind each line.
@@ -2586,6 +2795,10 @@ class TextStyle(TypedDict):
     before it. At most `MAX_TEXT_STROKES`, their widths summing to at
     most `MAX_TEXT_STROKE_EXTENT`.
     """
+
+
+TextUnit: TypeAlias = Literal["characters", "characters_excluding_spaces", "words", "lines"]
+"""The units a Range selector counts."""
 
 
 class TimeMapForward(TypedDict):

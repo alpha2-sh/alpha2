@@ -1,3 +1,4 @@
+import { textOf } from "alpha2/project";
 import type { EditorDocument, Marker } from "./document.js";
 
 /** One row of a timeline index: something placed in time the user can find and go to. */
@@ -82,7 +83,7 @@ export function timelineIndex(document: EditorDocument): readonly IndexEntry[] {
       entries.push({
         kind: "caption",
         id: `${track.id}#${index}`,
-        name: cue.text,
+        name: textOf(cue.text),
         trackId: track.id,
         start: cue.timeline_range.start,
         end: cue.timeline_range.end,
