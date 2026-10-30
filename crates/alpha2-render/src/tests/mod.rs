@@ -91,11 +91,11 @@ static SHARED_GPU: OnceLock<GpuContext> = OnceLock::new();
 /// `device_creation_survives_repeated_teardown` still covers that path on
 /// demand.
 ///
-/// It is the adapter a native host renders on, `request_high_performance`'s,
-/// not the first one listed: on a machine with an integrated and a discrete
-/// GPU those differ, and a failure only on the host's adapter would pass here.
-/// `WGPU_POWER_PREF` and `WGPU_BACKEND` still choose another. A failing test
-/// prints which adapter it ran on.
+/// It is the product device: the backend the host renders on for this OS
+/// (DX12 on Windows, Metal on macOS, a plain Vulkan device on Linux, not the
+/// host's shared video device), the adapter `ALPHA2_GPU_ADAPTER` pins or the
+/// high-performance one; `WGPU_BACKEND` overrides for a secondary run. A
+/// failing test prints which adapter it ran on.
 ///
 /// `ALPHA2_TEST_INTERMEDIATE=rgba8unorm` runs the whole suite on the 8-bit
 /// intermediate an adapter without renderable half floats falls back to; no
@@ -116,15 +116,11 @@ fn gpu() -> GpuContext {
 fn adapter_gpu() -> GpuContext {
     let shared = SHARED_GPU
         .get_or_init(|| {
-            pollster::block_on(GpuContext::request_high_performance())
+            pollster::block_on(GpuContext::request_product())
                 .expect("render tests require a working GPU adapter")
         })
         .clone();
-    let capabilities = shared.capabilities();
-    eprintln!(
-        "render tests on {} ({}, {})",
-        capabilities.adapter_name, capabilities.backend, capabilities.driver_info
-    );
+    eprintln!("render tests on {}", shared.capabilities().summary());
     shared
 }
 

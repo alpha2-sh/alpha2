@@ -57,7 +57,9 @@ fn hevc_is_written_as_hvc1_and_a_copy_keeps_its_entry() {
         while let Some(mut packet) = input.read_packet().expect("packet") {
             muxer.write_video(&mut packet, time_base).expect("write");
         }
-        muxer.close().expect("close");
+        muxer
+            .close(&alpha2_media::CancelToken::default())
+            .expect("close");
         let written = crate::decode::open_input(&path).expect("output");
         assert_eq!(
             written.streams()[0].codecpar().codec_tag,
@@ -343,7 +345,9 @@ fn mux_in_band(name: &str, color: ColorMetadata, audio: usize, audio_first: usiz
     muxer
         .write_ready_audio(true, &mut stages)
         .expect("write audio");
-    muxer.close().expect("close");
+    muxer
+        .close(&alpha2_media::CancelToken::default())
+        .expect("close");
     path
 }
 
@@ -519,7 +523,9 @@ fn a_deferred_header_that_never_comes_leaves_no_file() {
             muxer
                 .write_ready_audio(true, &mut stages)
                 .expect("audio waits");
-            let error = muxer.close().expect_err("no video packet");
+            let error = muxer
+                .close(&alpha2_media::CancelToken::default())
+                .expect_err("no video packet");
             assert!(
                 matches!(&error, EncodeError::Adapter(message) if message.contains("the encoder produced no parameter sets")),
                 "{error:?}"

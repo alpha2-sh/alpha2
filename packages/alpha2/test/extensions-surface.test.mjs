@@ -8,17 +8,25 @@ import test from "node:test";
 
 import ts from "typescript";
 
+import {
+  missingCapability,
+  suiteOf,
+} from "../../../scripts/lib/capabilities.mjs";
+
 const root = resolve(import.meta.dirname, "../../..");
 const packageDirectory = join(root, "packages/alpha2");
 const wasmDirectory = join(packageDirectory, "wasm");
 const corpus = join(root, "tests/corpus/extensions");
 const packaged = existsSync(join(wasmDirectory, "alpha2_extensions_bg.wasm"));
-// Skipped before `npm run build` packages the wasm; ALPHA2_REQUIRE_WASM=1 (set by CI after the
+// Skipped before `npm run build` packages the wasm; ALPHA2_REQUIRE=wasm (set by CI after the
 // build) makes a missing package fail them.
 const skip =
   !packaged &&
-  process.env.ALPHA2_REQUIRE_WASM !== "1" &&
-  "the extension wasm package is not built";
+  missingCapability(
+    "wasm",
+    suiteOf(import.meta.url),
+    "the extension wasm package is not built",
+  );
 
 /**
  * Type-checks `source` as a module of `packages/alpha2/test`, with the package's compiler options,

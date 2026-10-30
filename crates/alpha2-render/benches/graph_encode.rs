@@ -118,7 +118,7 @@ fn report(case: &str, size: RenderSize, mut times: Vec<Duration>) {
 }
 
 fn main() {
-    let gpu = pollster::block_on(GpuContext::request_high_performance()).expect("GPU adapter");
+    let gpu = pollster::block_on(GpuContext::request_product()).expect("GPU adapter");
     let device = gpu.device().clone();
     let mut renderer = Renderer::new(gpu);
     let tint = pollster::block_on(renderer.register_effect(tint_effect())).expect("tint compiles");

@@ -69,6 +69,7 @@ flate2 = "1"
 wgpu.workspace = true
 
 [dev-dependencies]
+alpha2-test-support.workspace = true
 # Tests acquire devices one at a time (`alpha2_gpu::serialize_acquisition`).
 alpha2-gpu = { workspace = true, features = ["serial-acquisition"] }
 # The audio contract only: the visual one (a default feature) turns the extension providers on.

@@ -224,6 +224,25 @@ export type ExportProgressCallback = (
   progress: ExportProgress,
 ) => void | Promise<void>;
 
+/** How a finished output was moved into place. */
+export interface PublishReport {
+  /**
+   * `rename-no-replace`: one rename that refuses an existing file. `placeholder-rename`: the file
+   * system refused that rename (exFAT on macOS, FUSE mounts such as rclone), so an empty file was
+   * created at the path, refusing an existing one, and renamed over. `rename-replace`: the request
+   * overwrites, and the rename replaced what was there.
+   */
+  readonly method:
+    "rename-no-replace" | "placeholder-rename" | "rename-replace";
+  /**
+   * The output folder cannot rewrite a file at an earlier offset, so the output was written to a
+   * staging file in the temporary directory and copied into the folder once finished.
+   */
+  readonly stagedLocally: boolean;
+  /** Tries repeated while another program held a file without sharing deletion (Windows). */
+  readonly retries: number;
+}
+
 /** Successful metadata returned by the native host after an export. */
 export interface NativeExportResult {
   /** The container the file was written in. */
@@ -257,6 +276,17 @@ export interface NativeExportResult {
    * `null` on the GPU-resident path.
    */
   readonly gpuOutputPathUnavailable: string | null;
+  /**
+   * The GPU-resident export the readback path started over from: its encoder rejected frame
+   * `frame` on a device that was still usable, for `reason`. `null` when nothing started over.
+   */
+  readonly gpuOutputPathFallback: {
+    readonly encoder: string;
+    readonly frame: number;
+    readonly reason: string;
+  } | null;
+  /** How the finished file was moved to `output`. */
+  readonly publish: PublishReport;
   /**
    * The installed library behind the video encoder (`openh264`): its provider, version, path and
    * the notice its licence requires. `null` for FFmpeg's encoders and when no video was encoded.
@@ -1006,6 +1036,8 @@ export interface Alpha2HostErrorOptions extends ErrorOptions {
   /** How the host process ended, when it ended before answering. */
   readonly exitCode?: number | null;
   readonly signal?: string | null;
+  /** As {@link Alpha2HostError.keptPath}. */
+  readonly keptPath?: string;
 }
 
 /** Bytes of the host's standard error an error keeps. */
@@ -1024,6 +1056,11 @@ export class Alpha2HostError extends Error {
   readonly stderr?: string;
   readonly exitCode?: number | null;
   readonly signal?: string | null;
+  /**
+   * For `OUTPUT_PUBLISH_FAILED`: the absolute path the finished render was kept at, beside the
+   * output, when the host could keep it. The file is the caller's to move or remove.
+   */
+  readonly keptPath?: string;
 
   constructor(code: string, message: string, options?: Alpha2HostErrorOptions) {
     super(message, options);
@@ -1045,6 +1082,7 @@ export class Alpha2HostError extends Error {
     if (options?.stderr !== undefined) this.stderr = options.stderr;
     if (options?.exitCode !== undefined) this.exitCode = options.exitCode;
     if (options?.signal !== undefined) this.signal = options.signal;
+    if (options?.keptPath !== undefined) this.keptPath = options.keptPath;
   }
 }
 
@@ -1254,6 +1292,8 @@ export interface StillFrame {
   readonly frameTime: number;
   readonly width: number;
   readonly height: number;
+  /** How the PNG was moved to `output`. */
+  readonly publish: PublishReport;
 }
 
 /** What a still request did. */
@@ -2514,10 +2554,15 @@ function errorFromHost(
       error.details as ConformReport,
       { failure, stderr, phase },
     );
+  const keptPath = (error.details as { keptPath?: unknown } | undefined)
+    ?.keptPath;
   return new Alpha2HostError(error.code, error.message, {
     failure,
     stderr,
     phase,
+    ...(error.code === "OUTPUT_PUBLISH_FAILED" && typeof keptPath === "string"
+      ? { keptPath }
+      : {}),
   });
 }
 

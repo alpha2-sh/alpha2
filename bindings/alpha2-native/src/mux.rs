@@ -9,11 +9,9 @@
 //! renames the partial file into place, and anything else removes it.
 
 use std::collections::VecDeque;
-use std::fs;
-use std::path::PathBuf;
 
 use alpha2_ffmpeg_bridge::OutputFile;
-use alpha2_media::{Container, EncodeError};
+use alpha2_media::{CancelToken, Container, EncodeError};
 use rsmpeg::avcodec::{AVCodecContext, AVCodecParameters, AVPacket};
 use rsmpeg::avutil::AVRational;
 use rsmpeg::ffi;
@@ -26,7 +24,7 @@ use crate::encode::{
     AudioCommand, AudioEncodeThread, AudioEncoderConfig, EncodeStageTimings, QueuedPacket,
     spawn_audio_encoder, timed,
 };
-use crate::partial::{OutputTarget, PartialOutput};
+use crate::partial::{OutputTarget, PartialOutput, PublishReport, SeekNeed};
 
 /// The video stream a [`Muxer`] carries.
 pub(crate) struct VideoStream {
@@ -65,11 +63,12 @@ enum MuxedAudioTrack {
 /// A transactional output with one video stream and at most one audio
 /// stream.
 pub(crate) struct Muxer {
-    target: OutputTarget,
-    partial_path: PathBuf,
-    /// Held until the partial file is renamed into place or removed.
-    _partial_lock: crate::partial::PartialLock,
     format: Option<OutputFile>,
+    /// The partial file `format` writes, until it is published or removed.
+    /// Declared after `format`, which is closed first.
+    partial: PartialOutput,
+    /// How the finished file was published.
+    published: Option<PublishReport>,
     stream_index: i32,
     /// The container's time base for the video stream; the encoder's until
     /// a deferred header is written.
@@ -260,6 +259,11 @@ impl Muxer {
     /// Returns an adapter failure when this output copies no audio, the
     /// muxer is closed, or the write fails.
     pub(crate) fn write_copied_audio(&mut self, packet: &mut AVPacket) -> Result<(), EncodeError> {
+        self.write_copied_audio_packet(packet)
+            .map_err(|error| self.partial.explain(error))
+    }
+
+    fn write_copied_audio_packet(&mut self, packet: &mut AVPacket) -> Result<(), EncodeError> {
         let Some(MuxedAudioTrack::Copied {
             stream_index,
             source_time_base,
@@ -289,6 +293,15 @@ impl Muxer {
     /// and behind a deferred header when the first packet brings no parameter
     /// sets or a later one brings different ones.
     pub(crate) fn write_video(
+        &mut self,
+        packet: &mut AVPacket,
+        encoder_time_base: AVRational,
+    ) -> Result<(), EncodeError> {
+        self.write_video_packet(packet, encoder_time_base)
+            .map_err(|error| self.partial.explain(error))
+    }
+
+    fn write_video_packet(
         &mut self,
         packet: &mut AVPacket,
         encoder_time_base: AVRational,
@@ -381,6 +394,15 @@ impl Muxer {
         flushing: bool,
         stages: &mut EncodeStageTimings,
     ) -> Result<(), EncodeError> {
+        self.write_ready_audio_packets(flushing, stages)
+            .map_err(|error| self.partial.explain(error))
+    }
+
+    fn write_ready_audio_packets(
+        &mut self,
+        flushing: bool,
+        stages: &mut EncodeStageTimings,
+    ) -> Result<(), EncodeError> {
         let Some(MuxedAudioTrack::Encoded(audio)) = self.audio.as_ref() else {
             return Ok(());
         };
@@ -438,13 +460,29 @@ impl Muxer {
         }
     }
 
-    /// Writes the trailer and renames the partial output into place.
+    /// Writes the trailer, closes the file and publishes it
+    /// ([`PartialOutput::finish`]).
     ///
     /// # Errors
-    /// Returns an adapter failure when the trailer or the rename fails, or
+    /// Returns an adapter failure when the trailer or the close fails, or
     /// when a deferred header was never written because no video packet
-    /// arrived; the partial file then goes with the muxer.
-    pub(crate) fn close(&mut self) -> Result<(), EncodeError> {
+    /// arrived; the partial file then goes with the muxer. A failed publish
+    /// keeps the finished file ([`EncodeError::Publish`]), and `cancel`
+    /// stopping its retries removes it.
+    pub(crate) fn close(&mut self, cancel: &CancelToken) -> Result<(), EncodeError> {
+        self.close_format()
+            .map_err(|error| self.partial.explain(error))?;
+        self.published = Some(self.partial.finish(cancel)?);
+        self.complete = true;
+        Ok(())
+    }
+
+    /// How the finished file was published; `None` until it is.
+    pub(crate) fn publish_report(&self) -> Option<PublishReport> {
+        self.published
+    }
+
+    fn close_format(&mut self) -> Result<(), EncodeError> {
         if self.pending_header.is_some() {
             return Err(EncodeError::Adapter(
                 "the encoder produced no parameter sets: no video packet reached the header".into(),
@@ -463,8 +501,6 @@ impl Muxer {
                 .close()
                 .map_err(|error| encode_adapter_error_at("closing the output", error))?;
         }
-        crate::partial::publish(&self.partial_path, &self.target)?;
-        self.complete = true;
         Ok(())
     }
 
@@ -479,7 +515,7 @@ impl Muxer {
         }
         if !self.complete {
             drop(self.format.take());
-            let _ = fs::remove_file(&self.partial_path);
+            let _ = self.partial.discard();
         }
     }
 }
@@ -494,7 +530,6 @@ impl Drop for Muxer {
 /// A transactional output whose streams exist and whose header is not
 /// written yet.
 struct Unwritten {
-    target: OutputTarget,
     /// Declared before `partial`, so a failed header closes the file before
     /// the partial is removed: Windows removes no file that is still open.
     format: OutputFile,
@@ -518,7 +553,7 @@ impl Unwritten {
         audio: Option<AudioStream>,
     ) -> Result<Self, EncodeError> {
         let target = path.into();
-        let partial = PartialOutput::claim(&target)?;
+        let partial = PartialOutput::claim(&target, SeekNeed::Required)?;
         let mut format = partial.open_muxer(container)?;
         let global_header =
             format.oformat().flags & i32::try_from(ffi::AVFMT_GLOBALHEADER).unwrap_or(0) != 0;
@@ -579,7 +614,6 @@ impl Unwritten {
             None => {}
         }
         Ok(Self {
-            target,
             format,
             partial,
             stream_index,
@@ -607,7 +641,6 @@ impl Unwritten {
     ) -> Result<Muxer, EncodeError> {
         // Bound after `partial`, `format` is dropped before it when the thread cannot start.
         let Self {
-            target,
             partial,
             format,
             stream_index,
@@ -615,7 +648,6 @@ impl Unwritten {
             opened_audio,
             copied_audio,
         } = self;
-        let partial_path = partial.path().to_owned();
         // Started after the header: the stream index and container time base it rescales into exist
         // only then. A deferred header is the exception ([`Muxer::open_deferred`]).
         let audio = match (opened_audio, copied_audio) {
@@ -637,12 +669,10 @@ impl Unwritten {
             }),
             (None, None) => None,
         };
-        let partial_lock = partial.keep();
         Ok(Muxer {
-            target,
-            partial_path,
-            _partial_lock: partial_lock,
             format: Some(format),
+            partial,
+            published: None,
             stream_index,
             stream_time_base,
             complete: false,

@@ -339,8 +339,7 @@ fn gpu_with_the_adapters_uniform_alignment() -> GpuContext {
     let shared = gpu();
     let wanted = shared.capabilities();
     let _turn = alpha2_gpu::serialize_acquisition();
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let instance = wgpu::Instance::new(alpha2_gpu::instance_descriptor(wgpu::Backends::all()));
     let adapter = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()))
         .into_iter()
         .find(|adapter| {
@@ -456,13 +455,32 @@ fn effect_with_float_params(id: &str, count: usize) -> EffectDef {
 }
 
 #[test]
+fn a_definition_past_the_webgl2_uniform_limit_is_refused_on_every_device() {
+    let _lock = gpu_test_lock();
+    let mut renderer = Renderer::new(gpu());
+    let refused = pollster::block_on(
+        renderer.register_effect(effect_with_float_params("test.webgl2-limit", 1025)),
+    )
+    .expect_err("1025 parameters are refused");
+    assert!(
+        refused
+            .messages
+            .iter()
+            .any(|message| message.message.contains("at most 1024 parameters")),
+        "{refused:?}"
+    );
+}
+
+#[test]
 fn an_effect_whose_parameters_overflow_the_uniform_binding_limit_is_refused_at_registration() {
     // Each parameter is a 16-byte slot of one uniform binding (16 KiB on WebGL2's limits). Past
     // the cap the pipeline compiles but every bind group is invalid.
     let _lock = gpu_test_lock();
     let mut renderer = Renderer::new(gpu());
-    let limit = renderer.limits().max_uniform_buffer_binding_size;
-    let fitting = usize::try_from(limit / 16).expect("parameter count fits usize");
+    // The WebGL2 limit, whatever more this device grants: an effect registers on every runtime or
+    // on none.
+    assert!(renderer.limits().max_uniform_buffer_binding_size >= 16_384);
+    let fitting = 16_384 / 16;
     let refused = pollster::block_on(
         renderer.register_effect(effect_with_float_params("test.too-many", fitting + 1)),
     )
@@ -474,7 +492,8 @@ fn an_effect_whose_parameters_overflow_the_uniform_binding_limit_is_refused_at_r
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        message.contains("uniform binding limit") && message.contains(&fitting.to_string()),
+        message.contains("16384-byte limit every alpha2 runtime binds")
+            && message.contains(&fitting.to_string()),
         "{message}"
     );
     assert!(!renderer.is_effect_registered(&crate::EffectId::new("test.too-many".into(), 1)));

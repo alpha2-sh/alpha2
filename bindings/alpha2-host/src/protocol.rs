@@ -728,6 +728,10 @@ crate::tag::tags! {
     pub fn copy_ineligible_tag = "COPY_INELIGIBLE] ";
     /// How a code tag opens: [`code_tag`].
     fn code_tag_open = "code=";
+    /// How a rejected-frame tag opens: [`encoder_rejected_tag`].
+    fn encoder_rejected_tag_open = "rejected=";
+    /// How a kept-render tag opens: [`output_publish_failed`].
+    fn kept_path_tag_open = "kept=";
 }
 /// Part of a [`decode_stalled_tag`] message, kept in the protocol message:
 /// the stuck shard had opened a hardware decode session, and decoding in
@@ -741,7 +745,7 @@ pub const HARDWARE_DECODE_STALL_MARKER: &str = "holding hardware decode sessions
 pub const HARDWARE_ENCODE_STALL_MARKER: &str = "holding a hardware encode session";
 
 /// Every code a protocol error can carry.
-pub const PROTOCOL_CODES: [&str; 22] = [
+pub const PROTOCOL_CODES: [&str; 23] = [
     "UNSUPPORTED_PROTOCOL",
     "INVALID_REQUEST",
     "INVALID_INPUT",
@@ -760,6 +764,7 @@ pub const PROTOCOL_CODES: [&str; 22] = [
     "ENCODE_ERROR",
     "IO_ERROR",
     "OUTPUT_IN_USE",
+    "OUTPUT_PUBLISH_FAILED",
     "CANCELLED",
     "RESOURCE_LIMIT",
     "INTERNAL",
@@ -780,6 +785,72 @@ pub fn code_tag(code: &'static str, message: impl Into<String>) -> String {
         return message;
     }
     format!("{}{code}] {message}", code_tag_open())
+}
+
+/// `message`, a frame the encoder refused at `frame` on a device that is
+/// still usable: the export may start over on another path. Answered
+/// `ENCODE_ERROR` when it does not; the tag only says where the encoder stopped.
+pub fn encoder_rejected_tag(frame: u64, message: impl Into<String>) -> String {
+    let message = message.into();
+    if message.contains(encoder_rejected_tag_open()) {
+        return message;
+    }
+    code_tag(
+        "ENCODE_ERROR",
+        format!("{}{frame}] {message}", encoder_rejected_tag_open()),
+    )
+}
+
+/// `message`, an output rendered in full that could not be moved to its path:
+/// answered `OUTPUT_PUBLISH_FAILED`, with the absolute path the finished file
+/// was kept at, when it was, as `details.keptPath`. The path travels in the
+/// tag as a JSON string whose `]` are escaped, so no path ends the tag early.
+pub fn output_publish_failed(kept: Option<&std::path::Path>, message: impl Into<String>) -> String {
+    let message = message.into();
+    let tag = kept.map_or_else(String::new, |kept| {
+        let path = Value::String(crate::host::written_path(kept))
+            .to_string()
+            .replace(']', "\\u005d");
+        format!("{}{path}] ", kept_path_tag_open())
+    });
+    code_tag("OUTPUT_PUBLISH_FAILED", format!("{tag}{message}"))
+}
+
+/// The kept path `message` carries ([`output_publish_failed`]), and
+/// `message` without that tag.
+fn take_kept_path(mut message: String) -> (Option<String>, String) {
+    let mut kept = None;
+    while let Some(start) = message.find(kept_path_tag_open()) {
+        let Some(end) = crate::tag::end(&message, start) else {
+            break;
+        };
+        if kept.is_none() {
+            kept = serde_json::from_str::<String>(
+                &message[start + kept_path_tag_open().len()..end - 2],
+            )
+            .ok();
+        }
+        message.replace_range(start..end, "");
+    }
+    (kept, message)
+}
+
+/// The frame `message` says the encoder rejected ([`encoder_rejected_tag`]),
+/// and `message` without that tag.
+pub fn take_encoder_rejected(mut message: String) -> (Option<u64>, String) {
+    let mut frame = None;
+    while let Some(start) = message.find(encoder_rejected_tag_open()) {
+        let Some(end) = crate::tag::end(&message, start) else {
+            break;
+        };
+        if frame.is_none() {
+            frame = message[start + encoder_rejected_tag_open().len()..end - 2]
+                .parse()
+                .ok();
+        }
+        message.replace_range(start..end, "");
+    }
+    (frame, message)
 }
 
 /// `message`, a refusal for an asset, a source, or a file the request did not
@@ -883,6 +954,9 @@ pub struct Progress {
     pub phase: ProgressPhase,
     pub completed: u64,
     pub total: u64,
+    /// The export started over from frame 0 on the readback path: the
+    /// GPU-resident encoder rejected a frame. Written only when true.
+    pub restarted: bool,
 }
 
 impl Progress {
@@ -892,6 +966,17 @@ impl Progress {
             phase: ProgressPhase::Frames,
             completed,
             total,
+            restarted: false,
+        }
+    }
+
+    /// The event that starts an export over from frame 0 on the readback path.
+    pub const fn restarted(total: u64) -> Self {
+        Self {
+            phase: ProgressPhase::Frames,
+            completed: 0,
+            total,
+            restarted: true,
         }
     }
 
@@ -905,6 +990,7 @@ impl Progress {
             phase: ProgressPhase::Finalizing,
             completed,
             total,
+            restarted: false,
         }
     }
 }
@@ -957,8 +1043,12 @@ impl HostError {
     /// `ALPHA2_ERROR`.
     pub fn classify(message: String) -> Self {
         let (evidence, message) = crate::failure::take_evidence_tag(message);
+        let (kept, message) = take_kept_path(message);
         let mut error = Self::classify_code(message);
         error.evidence = evidence;
+        if let Some(kept) = kept {
+            error.details = Some(json!({ "keptPath": kept }));
+        }
         error
     }
 

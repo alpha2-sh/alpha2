@@ -255,6 +255,30 @@ def test_an_export_defaults_to_the_whole_project_at_its_own_rate(
         HostClient(host_path=host_path).export(project_document(), tmp_path / "empty.mp4")
 
 
+def test_a_render_kept_after_a_failed_publish_is_named_on_the_error(
+    tmp_path: Path, fake_host: FakeHost
+) -> None:
+    kept = str(tmp_path / "out.a2kept.mp4")
+    host_path = fake_host(
+        tmp_path,
+        f"""
+        request, line = read_request()
+        send(request, ok=False, error={{
+            "code": "OUTPUT_PUBLISH_FAILED",
+            "message": "cannot publish the output: denied; the finished render is kept at " + {kept!r},
+            "details": {{"keptPath": {kept!r}}},
+            "failure": {{"code": "OUTPUT_IO_FAILED", "origin": "native-host", "operation": "export",
+                         "backend": "native", "phase": "mux", "resource": "unknown"}},
+        }})
+        """,
+    )
+    with pytest.raises(Alpha2HostError) as caught:
+        alpha2.export(**export_args(tmp_path / "out.mp4"), host_path=host_path)
+    assert caught.value.code == "OUTPUT_PUBLISH_FAILED"
+    assert caught.value.kept_path == kept
+    assert caught.value.failure["code"] == "OUTPUT_IO_FAILED"
+
+
 def test_binary_resolution_order_and_its_not_found_message(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

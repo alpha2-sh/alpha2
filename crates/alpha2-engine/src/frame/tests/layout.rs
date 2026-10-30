@@ -291,25 +291,25 @@ fn layout_goldens_on_the_cpu() {
     let renderer = alpha2_render::CpuRenderer::new(3);
     let mut texts = texts();
     let title = render_cpu(&renderer, &mut texts, &project(&title_card(), "", ""), 0);
-    alpha2_golden_support::assert_rgba8_golden("layout_title_card", (W, H), &title, 2);
+    assert_cpu_golden("layout_title_card", (W, H), &title, 2);
     let third = project(&lower_third(), "", "");
     let mid = render_cpu(&renderer, &mut texts, &third, 15_000);
     let end = render_cpu(&renderer, &mut texts, &third, 60_000);
-    alpha2_golden_support::assert_rgba8_golden(
+    assert_cpu_golden(
         "layout_lower_third",
         (W * 2, H),
         &side_by_side(&[&mid, &end]),
         2,
     );
     let panel = render_cpu(&renderer, &mut texts, &project(&text_panel(), "", ""), 0);
-    alpha2_golden_support::assert_rgba8_golden("layout_text_panel", (W, H), &panel, 2);
+    assert_cpu_golden("layout_text_panel", (W, H), &panel, 2);
     let grid = render_cpu(
         &renderer,
         &mut texts,
         &project(&grid_dashboard(), "", ""),
         0,
     );
-    alpha2_golden_support::assert_rgba8_golden("layout_grid", (W, H), &grid, 2);
+    assert_cpu_golden("layout_grid", (W, H), &grid, 2);
 }
 
 #[test]
@@ -318,18 +318,31 @@ fn layout_goldens() {
     let renderer = renderer();
     let mut texts = texts();
     let title = render(&renderer, &mut texts, &project(&title_card(), "", ""), 0);
-    alpha2_golden_support::assert_rgba8_golden("layout_title_card", (W, H), &title, 2);
+    assert_golden_or_rgba8(
+        "layout_title_card",
+        "layout_title_card_rgba8",
+        (W, H),
+        &title,
+        2,
+    );
     let third = project(&lower_third(), "", "");
     let mid = render(&renderer, &mut texts, &third, 15_000);
     let end = render(&renderer, &mut texts, &third, 60_000);
-    alpha2_golden_support::assert_rgba8_golden(
+    assert_golden_or_rgba8(
         "layout_lower_third",
+        "layout_lower_third_rgba8",
         (W * 2, H),
         &side_by_side(&[&mid, &end]),
         2,
     );
     let panel = render(&renderer, &mut texts, &project(&text_panel(), "", ""), 0);
-    alpha2_golden_support::assert_rgba8_golden("layout_text_panel", (W, H), &panel, 2);
+    assert_golden_or_rgba8(
+        "layout_text_panel",
+        "layout_text_panel_rgba8",
+        (W, H),
+        &panel,
+        2,
+    );
 }
 
 /// A grid dashboard in the authoring forms: pixel lengths on the 320x180 canvas, hex colors, the
@@ -389,7 +402,7 @@ fn layout_grid_golden() {
         &project(&grid_dashboard(), "", ""),
         0,
     );
-    alpha2_golden_support::assert_rgba8_golden("layout_grid", (W, H), &grid, 2);
+    assert_golden_or_rgba8("layout_grid", "layout_grid_rgba8", (W, H), &grid, 2);
 }
 
 /// Two overlapping half-white squares in a box: `group` puts the opacity on the box, else on

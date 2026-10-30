@@ -62,6 +62,8 @@ _CODE_CLASSES: dict[str, tuple[str, str]] = {
     "DECODE_STALLED": ("GPU_TIMEOUT", "unknown"),
     "ENCODE_STALLED": ("GPU_TIMEOUT", "unknown"),
     "IO_ERROR": ("OUTPUT_IO_FAILED", "unknown"),
+    # The output rendered in full and is kept beside its path; moving it into place failed.
+    "OUTPUT_PUBLISH_FAILED": ("OUTPUT_IO_FAILED", "unknown"),
     "CANCELLED": ("CANCELLED", "unknown"),
     "RESOURCE_LIMIT": ("RESOURCE_LIMIT", "unknown"),
     "GPU_INIT_FAILED": _UNKNOWN,
@@ -132,7 +134,9 @@ class Alpha2HostError(Exception):
     ``code`` is machine-readable, such as ``HOST_NOT_FOUND``, ``INVALID_INPUT`` or
     ``DECODE_STALLED``; ``failure`` classifies it for a retry policy. ``stderr`` is the last part of
     the host's standard error, and ``exit_code`` and ``signal`` say how the host ended when it ended
-    before answering.
+    before answering. For ``OUTPUT_PUBLISH_FAILED``, ``kept_path`` is the absolute path the
+    finished render was kept at, beside the output, when the host could keep it; the file is the
+    caller's to move or remove.
     """
 
     code: str
@@ -140,6 +144,7 @@ class Alpha2HostError(Exception):
     stderr: str | None
     exit_code: int | None
     signal: str | None
+    kept_path: str | None
 
     def __init__(
         self,
@@ -152,6 +157,7 @@ class Alpha2HostError(Exception):
         exit_code: int | None = None,
         signal: str | None = None,
         has_exit: bool = False,
+        kept_path: str | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -159,6 +165,7 @@ class Alpha2HostError(Exception):
         self.stderr = stderr
         self.exit_code = exit_code
         self.signal = signal
+        self.kept_path = kept_path
         self.failure = (
             failure
             if failure is not None

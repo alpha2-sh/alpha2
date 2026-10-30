@@ -9,6 +9,10 @@ fn a_device_selector_resolves_to_the_adapter_the_host_chooses() {
     // SAFETY: adapter enumeration does not require a surface.
     let adapters = unsafe { instance.enumerate_adapters(None) };
     let Some(first) = adapters.first() else {
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::Vulkan,
+            "the Vulkan instance lists no adapter"
+        );
         return;
     };
     let raw = first.adapter.shared_instance().raw_instance();
@@ -57,13 +61,13 @@ fn a_device_selector_resolves_to_the_adapter_the_host_chooses() {
 #[test]
 fn encode_copier_timeout_retains_its_entire_ownership_graph() {
     let output = failure_tests::child_output(
-        std::process::Command::new(std::env::current_exe().expect("test executable"))
-            .args([
-                "--exact",
-                "vulkan::tests::encode_copier_timeout_child",
-                "--nocapture",
-            ])
-            .env("ALPHA2_COPIER_TIMEOUT_CHILD", "1"),
+        std::process::Command::new(std::env::current_exe().expect("test executable")).args([
+            "--exact",
+            "vulkan::tests::encode_copier_timeout_child",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ]),
         "encode_copier_timeout_child",
     );
     eprintln!("{}", String::from_utf8_lossy(&output.stderr));
@@ -75,11 +79,9 @@ fn encode_copier_timeout_retains_its_entire_ownership_graph() {
 }
 
 #[test]
+#[ignore = "run by encode_copier_timeout_retains_its_entire_ownership_graph"]
 fn encode_copier_timeout_child() {
     use super::*;
-    if std::env::var_os("ALPHA2_COPIER_TIMEOUT_CHILD").is_none() {
-        return;
-    }
     let Some(context) = failure_tests::shared_context() else {
         return;
     };
@@ -164,13 +166,13 @@ fn a_decode_probe_that_times_out_says_so_and_frees_nothing_the_gpu_may_use() {
     // A probe whose fence wait times out must leave the fence and command pool of its batch,
     // still pending on the GPU, alive, and report a timeout rather than an FFmpeg code.
     let output = failure_tests::child_output(
-        std::process::Command::new(std::env::current_exe().expect("test executable"))
-            .args([
-                "--exact",
-                "vulkan::tests::decode_probe_timeout_child",
-                "--nocapture",
-            ])
-            .env("ALPHA2_PROBE_TIMEOUT_CHILD", "1"),
+        std::process::Command::new(std::env::current_exe().expect("test executable")).args([
+            "--exact",
+            "vulkan::tests::decode_probe_timeout_child",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ]),
         "decode_probe_timeout_child",
     );
     eprintln!("{}", String::from_utf8_lossy(&output.stderr));
@@ -182,17 +184,13 @@ fn a_decode_probe_that_times_out_says_so_and_frees_nothing_the_gpu_may_use() {
 }
 
 #[test]
+#[ignore = "run by a_decode_probe_that_times_out_says_so_and_frees_nothing_the_gpu_may_use"]
 fn decode_probe_timeout_child() {
     use super::*;
-    if std::env::var_os("ALPHA2_PROBE_TIMEOUT_CHILD").is_none() {
-        return;
-    }
-    let Ok(context) = SharedVulkanContext::create() else {
-        assert!(
-            std::env::var_os("ALPHA2_REQUIRE_VULKAN_VIDEO").is_none(),
-            "Vulkan Video required"
-        );
-        eprintln!("skipped: no Vulkan Video device");
+    let Some(context) = alpha2_test_support::available!(
+        alpha2_test_support::Capability::VulkanVideo,
+        SharedVulkanContext::create().map_err(|error| format!("no Vulkan Video device ({error})"))
+    ) else {
         return;
     };
     // A sampled NV12 frame of the shared device, as a decoder would hand out.
@@ -311,10 +309,14 @@ fn in_process_device() -> std::sync::MutexGuard<'static, ()> {
 }
 
 #[test]
-#[ignore = "requires a Vulkan Video capable GPU"]
 fn creates_one_device_for_wgpu_and_ffmpeg() {
     let _device = in_process_device();
-    let context = SharedVulkanContext::create().expect("shared Vulkan device");
+    let Some(context) = alpha2_test_support::available!(
+        alpha2_test_support::Capability::VulkanVideo,
+        SharedVulkanContext::create().map_err(|error| format!("no Vulkan Video device ({error})"))
+    ) else {
+        return;
+    };
     assert!(context.decode_codecs().contains(&"h264"));
     assert_ne!(context.identity().device, 0);
 }
@@ -341,16 +343,11 @@ fn vulkan_frames_add_usage_refuses_a_frames_context_of_another_device_type() {
     assert_eq!(usage, 0, "a CUDA frames context has no Vulkan usage");
 }
 
-const LAYER_CHILD_ENV: &str = "ALPHA2_VALIDATION_LAYER_CHILD";
-
 /// The body [`the_validation_layer_counts_as_loaded_exactly_when_the_loader_loads_it`]
-/// runs in a child process, one per environment. Does nothing when run
-/// directly.
+/// runs in a child process, one per environment.
 #[test]
+#[ignore = "run by the_validation_layer_counts_as_loaded_exactly_when_the_loader_loads_it"]
 fn validation_layer_child() {
-    if std::env::var_os(LAYER_CHILD_ENV).is_none() {
-        return;
-    }
     let _turn = alpha2_gpu::serialize_acquisition();
     let instance = hal_instance().expect("Vulkan instance");
     // SAFETY: adapter enumeration does not require a surface.
@@ -381,6 +378,7 @@ fn validation_layer_child() {
 /// match case-insensitively, take four glob forms, enable nothing for
 /// `~explicit~`, and can disable a layer something else enables.
 #[test]
+#[allow(clippy::too_many_lines)]
 fn the_validation_layer_counts_as_loaded_exactly_when_the_loader_loads_it() {
     let run = |env: &[(&str, &str)]| {
         let mut command =
@@ -389,9 +387,10 @@ fn the_validation_layer_counts_as_loaded_exactly_when_the_loader_loads_it() {
             .args([
                 "--exact",
                 "vulkan::tests::validation_layer_child",
+                "--ignored",
                 "--nocapture",
+                "--test-threads=1",
             ])
-            .env(LAYER_CHILD_ENV, "1")
             .env("WGPU_VALIDATION", "0");
         for name in [
             "VK_INSTANCE_LAYERS",
@@ -430,11 +429,14 @@ fn the_validation_layer_counts_as_loaded_exactly_when_the_loader_loads_it() {
     };
     let requested = [("VK_INSTANCE_LAYERS", KHRONOS_VALIDATION)];
     let Some((loader, installed)) = report(&requested) else {
-        eprintln!("skipped: no Vulkan adapter");
+        alpha2_test_support::skip!(alpha2_test_support::Capability::Vulkan, "no Vulkan adapter");
         return;
     };
     if !installed {
-        eprintln!("skipped: no Khronos validation layer is installed");
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::VulkanValidation,
+            "no Khronos validation layer is installed"
+        );
         return;
     }
     let filters = loader
@@ -555,12 +557,17 @@ fn the_encode_extent_is_the_profile_and_granularity_h264_vulkan_opens_with() {
 #[test]
 fn this_device_reports_the_h264_profile_ffmpeg_opens() {
     let _device = in_process_device();
-    let Ok(context) = SharedVulkanContext::create() else {
-        eprintln!("skipped: no Vulkan Video device");
+    let Some(context) = alpha2_test_support::available!(
+        alpha2_test_support::Capability::VulkanVideo,
+        SharedVulkanContext::create().map_err(|error| format!("no Vulkan Video device ({error})"))
+    ) else {
         return;
     };
     let Some(extent) = context.encode_extent() else {
-        eprintln!("skipped: no H.264 encode on this device");
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::VulkanVideoEncode,
+            "no H.264 encode on this device"
+        );
         return;
     };
     // Every device with Vulkan H.264 encode this runs on (NVIDIA, RADV) has High, which FFmpeg
@@ -575,15 +582,11 @@ fn layer_versions_order_by_major_minor_patch() {
     assert!(packaged < VulkanLayerVersion::from_packed(vk::make_api_version(0, 1, 4, 0)));
 }
 
-const CHILD_ENV: &str = "ALPHA2_SHARED_VULKAN_CHILD";
-
 /// The body [`creation_never_crashes_on_any_installed_driver`] runs in a
-/// child process, one per driver. Does nothing when run directly.
+/// child process, one per driver.
 #[test]
+#[ignore = "run by creation_never_crashes_on_any_installed_driver"]
 fn shared_context_creation_child() {
-    if std::env::var_os(CHILD_ENV).is_none() {
-        return;
-    }
     match SharedVulkanContext::create() {
         Ok(context) => eprintln!("created: {context:?}"),
         Err(error) => eprintln!("refused: {error}"),
@@ -713,19 +716,22 @@ fn creation_never_crashes_on_any_installed_driver() {
         .collect::<Vec<_>>();
     manifests.sort();
     if manifests.is_empty() {
-        eprintln!("skipped: the Vulkan loader finds no driver manifest here");
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::Vulkan,
+            "the Vulkan loader finds no driver manifest here"
+        );
         return;
     }
     let executable = std::env::current_exe().expect("test executable");
     for manifest in manifests {
         let mut child = std::process::Command::new(&executable);
-        child
-            .args([
-                "--exact",
-                "vulkan::tests::shared_context_creation_child",
-                "--nocapture",
-            ])
-            .env(CHILD_ENV, "1");
+        child.args([
+            "--exact",
+            "vulkan::tests::shared_context_creation_child",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ]);
         for (name, value) in one_driver_environment(&manifest) {
             match value {
                 Some(value) => child.env(name, value),

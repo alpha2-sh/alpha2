@@ -32,6 +32,7 @@ wgpu.workspace = true
 web-time = "1.1.0"
 
 [dev-dependencies]
+alpha2-test-support.workspace = true
 alpha2-gpu = { path = ".", features = ["serial-acquisition"] }
 pollster.workspace = true
 

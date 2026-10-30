@@ -174,26 +174,16 @@ test("a Chrome that exits before its endpoint fails with a start error", async (
 
 test("without Chrome a check skips its browser half unless the run requires it", () => {
   const none = { platform: "linux", exists: () => false };
-  assert.equal(browserForCheck({ ...none, argv: [], env: {} }), null);
+  assert.equal(browserForCheck({ ...none, env: {} }), null);
   assert.throws(
-    () => browserForCheck({ ...none, argv: ["--require-browser"], env: {} }),
-    /no Chrome found.*a browser is required/,
-  );
-  assert.throws(
-    () =>
-      browserForCheck({
-        ...none,
-        argv: [],
-        env: { ALPHA2_REQUIRE_BROWSER: "1" },
-      }),
-    /a browser is required/,
+    () => browserForCheck({ ...none, env: { ALPHA2_REQUIRE: "wasm,browser" } }),
+    /no Chrome found.*browser is required by ALPHA2_REQUIRE/,
   );
   assert.equal(
     browserForCheck({
       platform: "linux",
       exists: only("/snap/bin/chromium"),
-      argv: ["--require-browser"],
-      env: {},
+      env: { ALPHA2_REQUIRE: "browser" },
     }),
     "/snap/bin/chromium",
   );
@@ -214,7 +204,7 @@ test("a run's end lists each case the browser could not run, with its reason", (
       },
     ]),
     [
-      "2 case(s) skipped: this browser cannot run them; --no-skips fails them",
+      "2 case(s) skipped: this browser cannot run them; ALPHA2_REQUIRE fails the ones it names",
       "  webgpu-video-frame: this browser cannot import a VideoFrame into WebGPU (Destroyed)",
       "  audio-decoder: this browser has no WebCodecs AudioDecoder",
       "",

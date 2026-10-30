@@ -41,6 +41,9 @@ alpha2-media.workspace = true
 bytes.workspace = true
 rsmpeg = { version = "0.18.0", features = ["link_system_ffmpeg"] }
 
+[dev-dependencies]
+alpha2-test-support.workspace = true
+
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
 missing_docs = "warn"

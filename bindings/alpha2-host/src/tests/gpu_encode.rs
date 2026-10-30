@@ -287,7 +287,7 @@ fn input_policies_parse_and_classify() {
 fn the_input_policy_and_a_pinned_encoder_choose_the_output_path() {
     use crate::config::VideoInputPolicy;
     let _gpu = gpu_test_lock();
-    let Some((mut host, capability)) = gpu_output_host(VideoDecodePolicy::Auto) else {
+    let Some((mut host, capability, _)) = gpu_output_host(VideoDecodePolicy::Auto) else {
         return;
     };
     let encoder = capability.encoder;
@@ -502,4 +502,101 @@ fn the_capability_lists_each_codec_the_path_takes() {
             }
         }
     }
+}
+
+/// A request for a short H.264 export of the parity clip into `directory`, under `policy`.
+#[cfg(feature = "hwencode")]
+fn rejection_request(directory: &std::path::Path, policy: &str) -> Value {
+    let mut request = json!({
+        "protocolVersion": 1, "requestId": "rejected", "operation": "export",
+        "project": conform_project(&json!({})),
+        "assets": {"video": corpus("parity-rgb.mov")},
+        "startTicks": 0, "endTicks": 120_000,
+        "frameRate": {"num": 12, "den": 1},
+        "videoCodec": "h264",
+        "inputPolicy": policy,
+        "output": directory.join("out.mp4")
+    });
+    request["project"]["settings"]["width"] = json!(640);
+    request["project"]["settings"]["height"] = json!(360);
+    request
+}
+
+/// A frame the GPU-resident encoder rejects on a device still usable starts the export over on
+/// the readback path, once, and the result says where and why.
+#[cfg(feature = "hwencode")]
+#[test]
+fn a_rejected_gpu_frame_restarts_the_export_on_the_readback_path() {
+    let _gpu = gpu_test_lock();
+    let Some((mut host, _, _)) = gpu_output_host(VideoDecodePolicy::Software) else {
+        return;
+    };
+    let directory = scratch_directory("rejected-restart");
+    let request = rejection_request(&directory, "auto");
+    let _rejecting = crate::encode::reject_gpu_frame(5);
+    let mut events = Vec::new();
+    let result = host
+        .handle(
+            parse_request(&request.to_string()).expect("request"),
+            &mut |progress| {
+                events.push(progress);
+                Ok(())
+            },
+        )
+        .unwrap_or_else(|error| panic!("{}: {}", error.code, error.message));
+    assert_eq!(result["videoPipeline"], "readback", "{result}");
+    let fallback = &result["gpuOutputPathFallback"];
+    assert_eq!(fallback["frame"], 5, "{result}");
+    assert!(
+        fallback["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("injected rejected frame 5")),
+        "{result}"
+    );
+    assert!(
+        result["gpuOutputPathUnavailable"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("restarted on the readback path")),
+        "{result}"
+    );
+    let restarts = events.iter().filter(|event| event.restarted).count();
+    assert_eq!(restarts, 1, "{events:?}");
+    let last = events.last().expect("progress");
+    assert_eq!(last.completed, last.total, "{events:?}");
+    assert_eq!(decoded_luma(&directory.join("out.mp4")).len(), 12);
+    std::fs::remove_dir_all(&directory).ok();
+}
+
+/// `inputPolicy: gpu-required` takes no other path: a rejected frame fails the export, naming the
+/// encoder's reason, and leaves no output.
+#[cfg(feature = "hwencode")]
+#[test]
+fn gpu_required_does_not_restart_after_a_rejected_frame() {
+    let _gpu = gpu_test_lock();
+    let Some((mut host, _, _)) = gpu_output_host(VideoDecodePolicy::Software) else {
+        return;
+    };
+    let directory = scratch_directory("rejected-required");
+    let request = rejection_request(&directory, "gpu-required");
+    let _rejecting = crate::encode::reject_gpu_frame(5);
+    let error = host
+        .handle(
+            parse_request(&request.to_string()).expect("request"),
+            &mut |progress| {
+                assert!(!progress.restarted);
+                Ok(())
+            },
+        )
+        .expect_err("a rejected frame fails a gpu-required export");
+    assert_eq!(error.code, "ENCODE_ERROR", "{}", error.message);
+    assert!(
+        error.message.contains("injected rejected frame 5")
+            && error
+                .message
+                .contains("was not restarted on the readback path"),
+        "{}",
+        error.message
+    );
+    assert!(!directory.join("out.mp4").exists());
+    std::fs::remove_dir_all(&directory).ok();
 }

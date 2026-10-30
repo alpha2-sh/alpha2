@@ -63,6 +63,9 @@ pub struct GpuReport {
     pub driver: String,
     /// The driver's version and details, where the platform gives them.
     pub driver_info: String,
+    /// The DX12 shader compiler (`FXC`, `DXC <path>`, ...); empty on other
+    /// backends, in browsers and on the CPU.
+    pub shader_compiler: String,
     /// `a` (an adapter meeting all of WebGPU) or `b` (a downlevel one).
     pub tier: &'static str,
     /// The intermediate texture format every picture is stored in, decided
@@ -153,6 +156,7 @@ impl CapabilityReport {
                 backend: capabilities.backend.clone(),
                 driver: capabilities.driver.clone(),
                 driver_info: capabilities.driver_info.clone(),
+                shader_compiler: capabilities.shader_compiler.clone(),
                 tier: match capabilities.tier {
                     CapabilityTier::TierA => "a",
                     CapabilityTier::TierB => "b",
@@ -194,6 +198,7 @@ impl CapabilityReport {
                 backend: "cpu".to_owned(),
                 driver: "alpha2".to_owned(),
                 driver_info: env!("CARGO_PKG_VERSION").to_owned(),
+                shader_compiler: String::new(),
                 tier: "a",
                 intermediate_format: "rgba16float",
                 max_texture_dimension_2d: alpha2_render::RenderSize::MAX_DIMENSION,

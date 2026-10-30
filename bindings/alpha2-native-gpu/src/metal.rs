@@ -14,7 +14,42 @@ use crate::{NativeGpuIdentity, NativePlaneLayout};
 
 use crate::interop::Alpha2MetalFrameInfo as MetalFrameInfo;
 
+/// A codec `VideoToolbox` may decode in hardware.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VideoToolboxCodec {
+    /// H.264 (`avc1`).
+    H264,
+    /// HEVC (`hvc1`).
+    Hevc,
+    /// VP9 (`vp09`), through the supplemental decoder.
+    Vp9,
+    /// AV1 (`av01`), through the supplemental decoder.
+    Av1,
+}
+
+impl VideoToolboxCodec {
+    /// The `CMVideoCodecType` four-character code.
+    const fn four_cc(self) -> u32 {
+        u32::from_be_bytes(*match self {
+            Self::H264 => b"avc1",
+            Self::Hevc => b"hvc1",
+            Self::Vp9 => b"vp09",
+            Self::Av1 => b"av01",
+        })
+    }
+}
+
+/// Whether `VideoToolbox` decodes `codec` in hardware on this machine, as
+/// `VTIsHardwareDecodeSupported` answers after registering the supplemental
+/// decoders. It answers per codec, not per profile.
+#[must_use]
+pub fn videotoolbox_hardware_decodes(codec: VideoToolboxCodec) -> bool {
+    // SAFETY: takes a plain integer and calls two VideoToolbox queries.
+    unsafe { alpha2_native_gpu_vt_hardware_decodes(codec.four_cc()) != 0 }
+}
+
 unsafe extern "C" {
+    fn alpha2_native_gpu_vt_hardware_decodes(codec_type: u32) -> i32;
     fn alpha2_native_gpu_metal_cache_create(device: *mut c_void, output: *mut *mut c_void) -> i32;
     fn alpha2_native_gpu_metal_cache_destroy(cache: *mut c_void);
     fn alpha2_native_gpu_metal_frame_info(

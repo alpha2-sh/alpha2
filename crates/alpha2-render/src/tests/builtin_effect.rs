@@ -1050,12 +1050,12 @@ fn every_builtin_effect_draws_its_reviewed_picture() {
         // Thresholds (solarize, halftone, VHS) land on either side of a step on other GPUs; Metal
         // compiles with fast math as well, and GL is a few levels off every other backend.
         &[
-            "builtin_effects",
-            "builtin_effects_lavapipe",
-            "builtin_effects_radv",
-            "builtin_effects_metal",
-            "builtin_effects_gl",
-            "builtin_effects_dx12",
+            alpha2_golden_support::Variant::everywhere("builtin_effects"),
+            super::golden::on_adapter("builtin_effects_lavapipe", "Vulkan", "llvmpipe"),
+            super::golden::on_adapter("builtin_effects_radv", "Vulkan", "RADV"),
+            super::golden::on_backend("builtin_effects_metal", "Metal"),
+            super::golden::on_backend("builtin_effects_gl", "Gl"),
+            super::golden::on_backend("builtin_effects_dx12", "Dx12"),
         ],
         RenderSize::new(
             size.width * u32::try_from(effects.len()).expect("a few tiles"),

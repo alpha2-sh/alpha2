@@ -29,10 +29,8 @@ const ROUNDS: usize = 16;
 /// A device on the adapter a default request picks, made as a test that
 /// shares its queue makes one.
 fn device() -> GpuContext {
-    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-    descriptor.backends = BACKENDS;
     let turn = alpha2_gpu::serialize_acquisition();
-    let instance = wgpu::Instance::new(descriptor.with_env());
+    let instance = alpha2_gpu::new_instance(BACKENDS);
     let adapter =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
             .expect("an adapter");

@@ -156,7 +156,7 @@ impl Host {
             timings.render += render_started.elapsed();
             let write_started = Instant::now();
             let straight = unpremultiplied(pixels);
-            alpha2_native::write_png(
+            let published = alpha2_native::write_png(
                 OutputTarget {
                     path: still.output.clone(),
                     existing,
@@ -172,6 +172,7 @@ impl Host {
                 "frameTime": frame_time.ticks(),
                 "width": size.width,
                 "height": size.height,
+                "publish": crate::host::publish_json(Some(published)),
             });
             check_cancel(&cancel)?;
         }

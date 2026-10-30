@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import ROOT, corpus, read_rgba_png
+from conftest import ROOT, corpus, read_rgba_png, require_or_skip, required
 
 from alpha2 import (
     Alpha2AbortError,
@@ -37,13 +37,13 @@ HOST = Path(
     or ROOT / "target" / "debug" / ("alpha2-host.exe" if sys.platform == "win32" else "alpha2-host")
 )
 if not HOST.is_file():
-    pytest.skip(
-        f"no alpha2-host at {HOST}; build it or set ALPHA2_HOST_BINARY", allow_module_level=True
+    require_or_skip(
+        "host", f"no alpha2-host at {HOST}; build it or set ALPHA2_HOST_BINARY", module=True
     )
 
 PROJECT: dict[str, Any] = json.loads((ROOT / "tests/cases/host-parity-project.json").read_text())
 ASSET = ROOT / "tests/corpus/cross_topology_parity.png"
-REQUIRE_H264 = os.environ.get("ALPHA2_REQUIRE_H264") == "1"
+REQUIRE_H264 = required("h264")
 
 
 @pytest.fixture(scope="module")
@@ -82,7 +82,7 @@ def sized(width: int, height: int) -> dict[str, Any]:
 
 
 def partial_of(output: Path) -> Path:
-    return output.with_name(f"{output.stem}.alpha2-partial{output.suffix}")
+    return output.with_name(f"{output.stem}.a2partial{output.suffix}")
 
 
 def assert_declared_performance(performance: dict[str, Any], path: str) -> None:
@@ -148,6 +148,11 @@ def test_the_client_exports_a_project_through_the_host_binary(
     assert progress[-1].completed == progress[-1].total
     assert progress[-1].phase == "finalizing"
     assert result["frames"] == 1
+    assert result["publish"] == {
+        "method": "rename-no-replace",
+        "stagedLocally": False,
+        "retries": 0,
+    }
     assert result["effectiveRange"] == {"startTicks": 0, "endTicks": 5_000}
     assert result["color"]["workingSpace"] == "linear_bt709_sdr"
     assert result["color"]["output"] == "bt709_sdr"
@@ -237,6 +242,7 @@ def test_a_still_is_a_png_of_the_canvas_in_the_projects_colors(
     # 0.51 s is between frames 15 and 16 at 30 fps: the grid frame holding it is 15.
     assert frame["frameTime"] == 15 * 4_000
     assert Path(frame["output"]) == output.resolve()
+    assert frame["publish"]["method"] == "rename-no-replace"
     width, height, pixels = read_rgba_png(output)
     assert (width, height) == (frame["width"], frame["height"]) == (64, 48)
     assert pixels[: 4 * 2] == bytes([255, 0, 0, 255]) * 2
@@ -580,8 +586,10 @@ def test_an_invalid_project_or_range_is_rejected_before_a_host_process_is_starte
 def test_video_quality_reaches_the_encoder(
     client: HostClient, encode: dict[str, Any], tmp_path: Path
 ) -> None:
-    if not h264_available(encode) and not REQUIRE_H264:
-        pytest.skip("MPEG-4 Part 2 at 256x192 is at its quality ceiling: this needs H.264")
+    if not h264_available(encode):
+        require_or_skip(
+            "h264", "MPEG-4 Part 2 at 256x192 is at its quality ceiling: this needs H.264"
+        )
     project = json.loads((ROOT / "tests/cases/host-video-export-project.json").read_text())
     project["settings"] = {
         **project["settings"],
@@ -887,8 +895,9 @@ def test_a_clip_shown_as_it_is_reaches_the_gpu_encoder_as_its_decoded_planes(
     gpu = encode["gpuOutputPath"]
     width, height = 256, 144
     if not gpu["available"] or width < gpu["minimumWidth"] or height < gpu["minimumHeight"]:
-        pytest.skip(
-            f"no GPU-resident path for {width}x{height}: {gpu['reason'] or 'below its extent'}"
+        require_or_skip(
+            "gpu-resident",
+            f"no GPU-resident path for {width}x{height}: {gpu['reason'] or 'below its extent'}",
         )
     half = 60_000
 

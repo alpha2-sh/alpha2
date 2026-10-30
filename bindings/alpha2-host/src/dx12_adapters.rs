@@ -12,7 +12,7 @@
 use alpha2_gpu::GpuContext;
 use alpha2_native_gpu::SharedD3D12Context;
 
-use crate::adapter_choice::{AdapterPolicy, AdapterRecord, choose_adapter, decode_refusals};
+use crate::adapter_choice::{AdapterPin, AdapterRecord, choose_adapter, decode_refusals};
 
 /// What the scan found, and the device the renderer takes.
 pub struct Dx12Choice {
@@ -66,6 +66,18 @@ struct Opened {
     shared: Option<Result<SharedD3D12Context, String>>,
 }
 
+/// The DX12 adapters in preference order. None at all is a backend that did
+/// not start (its shader compiler), not a pin that matches nothing.
+async fn listed_adapters() -> Result<Vec<(usize, wgpu::Adapter)>, ScanError> {
+    let adapters = GpuContext::adapters_by_preference_on(wgpu::Backends::DX12).await;
+    if adapters.is_empty() {
+        return Err(ScanError::Unavailable(
+            alpha2_gpu::GpuError::no_dx12_adapter(),
+        ));
+    }
+    Ok(adapters)
+}
+
 /// Opens the DX12 adapters and takes one under `policy`.
 ///
 /// `decode` is whether the decode policy allows decoding on the GPU, and
@@ -81,19 +93,19 @@ struct Opened {
 /// [`ScanError::Pin`] when the pin takes nothing; [`ScanError::Unavailable`]
 /// when no adapter renders.
 pub async fn scan(
-    policy: &AdapterPolicy,
+    policy: &AdapterPin,
     decode: bool,
     encode: bool,
 ) -> Result<Dx12Choice, ScanError> {
-    let exhaustive = encode || *policy != AdapterPolicy::Default;
+    let exhaustive = encode || *policy != AdapterPin::Default;
     let mut records = Vec::new();
     let mut opened: Vec<Option<Opened>> = Vec::new();
-    for (index, adapter) in GpuContext::adapters_by_preference_on(wgpu::Backends::DX12).await {
+    let adapters = listed_adapters().await?;
+    let identities = row_identities(&adapters);
+    let duplicates = crate::adapter_choice::duplicate_rows(&identities);
+    for ((index, adapter), identity) in adapters.into_iter().zip(&identities) {
         let info = adapter.get_info();
-        let software = alpha2_native_gpu::d3d12_adapter_identity(&adapter)
-            .map_or(info.device_type == wgpu::DeviceType::Cpu, |identity| {
-                identity.software
-            });
+        let software = identity.software;
         let mut record = AdapterRecord {
             index,
             name: info.name.clone(),
@@ -106,7 +118,16 @@ pub async fn scan(
             }),
             encodes: Vec::new(),
         };
-        let pinned = policy.names(&record);
+        let pinned = policy.names(record.index, &record.name);
+        // A second row of a GPU another row is: never opened, and named only by its index.
+        if let Some(&(_, same)) = duplicates.iter().find(|(row, _)| *row == index)
+            && !matches!(policy, AdapterPin::Index(pinned) if *pinned == index)
+        {
+            record.renders = Err(format!("same GPU as [{same}], not opened"));
+            records.push(record);
+            opened.push(None);
+            continue;
+        }
         let hardware_renders = records
             .iter()
             .any(|other: &AdapterRecord| !other.software && other.renders.is_ok());
@@ -121,7 +142,9 @@ pub async fn scan(
             Ok(gpu) => {
                 record.renders = Ok(());
                 let shared = (decode || encode).then(|| {
-                    SharedD3D12Context::from_gpu(gpu.clone()).map_err(|error| error.to_string())
+                    // The record names the adapter; the reason is the step that failed.
+                    SharedD3D12Context::from_gpu(gpu.clone())
+                        .map_err(|error| error.step().to_owned())
                 });
                 ask(&mut record, shared.as_ref(), decode, encode);
                 Some(Opened { gpu, shared })
@@ -153,7 +176,7 @@ pub async fn scan(
         // A plain request answers with the reason no adapter renders, as a request without a
         // scan would.
         Err(_) => {
-            return GpuContext::request_high_performance_on(wgpu::Backends::DX12)
+            return GpuContext::request_product_with(&alpha2_gpu::ProductRequest::default())
                 .await
                 .map(Dx12Choice::without_scan)
                 .map_err(ScanError::Unavailable);
@@ -176,6 +199,27 @@ pub async fn scan(
         records,
         chosen: Some(chosen),
     })
+}
+
+/// What tells each adapter's GPU from the others', for [`crate::adapter_choice::duplicate_rows`].
+fn row_identities(adapters: &[(usize, wgpu::Adapter)]) -> Vec<crate::adapter_choice::RowIdentity> {
+    adapters
+        .iter()
+        .map(|(index, adapter)| {
+            let info = adapter.get_info();
+            let identity = alpha2_native_gpu::d3d12_adapter_identity(adapter);
+            crate::adapter_choice::RowIdentity {
+                index: *index,
+                vendor_device: identity.map_or((info.vendor, info.device), |identity| {
+                    identity.vendor_device
+                }),
+                pci_address: identity.and_then(|identity| identity.pci_address),
+                software: identity.map_or(info.device_type == wgpu::DeviceType::Cpu, |identity| {
+                    identity.software
+                }),
+            }
+        })
+        .collect()
 }
 
 /// Fills in what `record`'s shared device (`shared`, when one was made)

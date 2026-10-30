@@ -196,10 +196,8 @@ struct Watched {
 
 impl Watched {
     fn new() -> Self {
-        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-        descriptor.backends = wgpu::Backends::VULKAN;
         let turn = alpha2_gpu::serialize_acquisition();
-        let instance = wgpu::Instance::new(descriptor.with_env());
+        let instance = alpha2_gpu::new_instance(wgpu::Backends::VULKAN);
         let adapter =
             pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
                 .expect("a Vulkan adapter");

@@ -125,7 +125,10 @@ fn gpu_ten_bit_planes_upload_as_16_bit_normalized_textures_where_supported() {
         .features
         .contains(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM)
     {
-        eprintln!("skipped: no 16-bit normalized textures on this device");
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::Unorm16,
+            "no 16-bit normalized textures on this device"
+        );
         return;
     }
     let size = RenderSize::new(4, 2).expect("size");
@@ -616,8 +619,8 @@ fn the_suite_runs_on_the_adapter_a_native_host_exports_on() {
     // The first adapter listed may not be the one the host renders on. Hold the lock: a second
     // instance loads and unloads the Vulkan layers and drivers.
     let _lock = gpu_test_lock();
-    let host = pollster::block_on(GpuContext::request_high_performance())
-        .expect("a native host's GPU adapter");
+    let host =
+        pollster::block_on(GpuContext::request_product()).expect("a native host's GPU adapter");
     let (suite, host) = (gpu(), host.capabilities().clone());
     assert_eq!(
         (

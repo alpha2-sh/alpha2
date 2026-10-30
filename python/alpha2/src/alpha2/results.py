@@ -20,6 +20,21 @@ class EffectiveRange(TypedDict):
     endTicks: int
 
 
+class PublishReport(TypedDict):
+    """How a finished output was moved into place."""
+
+    method: Literal["rename-no-replace", "placeholder-rename", "rename-replace"]
+    """``rename-no-replace``: one rename that refuses an existing file. ``placeholder-rename``: the
+    file system refused that rename (exFAT on macOS, FUSE mounts such as rclone), so an empty file
+    was created at the path, refusing an existing one, and renamed over. ``rename-replace``: the
+    request overwrites, and the rename replaced what was there."""
+    stagedLocally: bool
+    """The output folder cannot rewrite a file at an earlier offset, so the output was written to
+    a staging file in the temporary directory and copied into the folder once finished."""
+    retries: int
+    """Tries repeated while another program held a file without sharing deletion (Windows)."""
+
+
 class ExportResult(TypedDict):
     """The result of :func:`alpha2.export`."""
 
@@ -55,6 +70,9 @@ class ExportResult(TypedDict):
     audioCopyIneligible: NotRequired[str | None]
     copiedSegments: NotRequired[int]
     gpuOutputPathUnavailable: str | None
+    gpuOutputPathFallback: dict[str, Any] | None
+    publish: PublishReport
+    """How the finished file was moved to ``output``."""
     videoTranscode: Literal["yuv-repack"] | None
     yuvTranscodeIneligible: str | None
     videoEncoderLibrary: NotRequired[dict[str, Any] | None]
@@ -84,6 +102,8 @@ class StillFrame(TypedDict):
     asked for."""
     width: int
     height: int
+    publish: PublishReport
+    """How the PNG was moved to ``output``."""
 
 
 class StillTimings(TypedDict):

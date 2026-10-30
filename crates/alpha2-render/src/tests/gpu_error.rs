@@ -201,7 +201,7 @@ fn a_lost_device_fails_the_frame_without_a_panic_and_the_log_says_so() {
     // Its own device, since it is destroyed; it holds the lock because a second instance loads
     // and unloads the Vulkan layers and drivers.
     let _lock = gpu_test_lock();
-    let gpu = pollster::block_on(GpuContext::request_high_performance()).expect("a GPU adapter");
+    let gpu = pollster::block_on(GpuContext::request_product()).expect("a GPU adapter");
     let log = Arc::new(GpuDiagnosticLog::default());
     let recorded = Arc::clone(&log);
     gpu.set_diagnostic_handler(move |diagnostic: GpuDiagnostic| recorded.push(diagnostic));

@@ -5,7 +5,7 @@
 //! remains in `alpha2-native` or `alpha2-wasm`.
 //!
 //! The API names no `wgpu` type: open a device with
-//! [`GpuContext::request_high_performance`], lend source frames to the
+//! [`GpuContext::request_product`], lend source frames to the
 //! renderer as [`SourceView`]s through a [`FrameProvider`] (an
 //! [`Renderer::upload_rgba8`] upload is one), and take frames back as
 //! [`RenderedTexture`]s and readbacks from [`Player`] and [`Exporter`].

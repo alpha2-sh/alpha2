@@ -26,8 +26,7 @@ impl ExternalQueueLock for CountingLock {
 /// A context made from handles a host created itself, sharing its queue.
 fn shared_queue_context(lock: Arc<CountingLock>) -> GpuContext {
     let _turn = alpha2_gpu::serialize_acquisition();
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let instance = alpha2_gpu::new_instance(wgpu::Backends::all());
     let adapter =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
             .expect("a GPU adapter");

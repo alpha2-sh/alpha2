@@ -1,10 +1,10 @@
 //! The D3D12VA GPU-resident backend on this machine's D3D12 Video Encode.
 //!
 //! The capability's answers need only a D3D12 adapter; without one those
-//! tests skip, unless `ALPHA2_REQUIRE_D3D12` is set. The session tests need
-//! an adapter whose D3D12 Video Encode opens a session and encodes, and the
-//! output tests one whose first packet a decoder can also start from; without
-//! one they skip with the reason, unless `ALPHA2_REQUIRE_D3D12_ENCODE` is set.
+//! tests skip, recorded as the `d3d12-video` capability. The session tests
+//! need an adapter whose D3D12 Video Encode opens a session and encodes, and
+//! the output tests one whose first packet a decoder can also start from;
+//! without one they skip with the reason, recorded as `d3d12-encode`.
 //!
 //! The session tests never decode what they write, so they run on a device
 //! whose test encode opens but writes an undecodable first packet (an Intel
@@ -31,6 +31,20 @@ use crate::OutputTarget;
 
 thread_local! {
     static ACCEPT_UNDECODABLE: Cell<bool> = const { Cell::new(false) };
+    static REFUSE_RATE_CONTROL_MODE: Cell<Option<&'static str>> = const { Cell::new(None) };
+    static FAIL_SEND_AT: Cell<Option<u64>> = const { Cell::new(None) };
+}
+
+/// Whether this thread's session answers frame `index`'s `send_frame` with `EINVAL`, as the Iris
+/// Xe's `h264_d3d12va` intermittently does.
+pub(super) fn send_fails_at(index: u64) -> bool {
+    FAIL_SEND_AT.get() == Some(index)
+}
+
+/// Whether this thread's device answers as if it did not list `mode`, the way an adapter without
+/// that rate control answers.
+pub(super) fn refuses_rate_control_mode(mode: &str) -> bool {
+    REFUSE_RATE_CONTROL_MODE.get() == Some(mode)
 }
 
 /// Whether this thread's capability offers a device whose test encode
@@ -39,41 +53,31 @@ pub(super) fn accepts_undecodable_packets() -> bool {
     ACCEPT_UNDECODABLE.get()
 }
 
-fn encode_required() -> bool {
-    std::env::var_os("ALPHA2_REQUIRE_D3D12_ENCODE").is_some()
-}
-
 /// The renderer's D3D12 device as the host shares it, on the first adapter
-/// `accept` takes, or `None` (and a note) when none does.
+/// `accept` takes, or `None` (a recorded skip of `capability`) when none does.
 fn shared_where<T>(
     what: &str,
-    required: bool,
+    capability: alpha2_test_support::Capability,
     mut accept: impl FnMut(&SharedD3D12Context) -> Result<T, String>,
 ) -> Option<(SharedD3D12Context, T)> {
-    let made = pollster::block_on(
-        alpha2_gpu::GpuContext::request_high_performance_on_accepted(wgpu::Backends::DX12, |gpu| {
-            let shared =
-                SharedD3D12Context::from_gpu(gpu.clone()).map_err(|error| error.to_string())?;
-            accept(&shared).map(|accepted| (shared, accepted))
-        }),
-    )
+    let made = pollster::block_on(alpha2_gpu::GpuContext::request_product_accepted(|gpu| {
+        let shared =
+            SharedD3D12Context::from_gpu(gpu.clone()).map_err(|error| error.to_string())?;
+        accept(&shared).map(|accepted| (shared, accepted))
+    }))
     .map_err(|error| format!("{error:?}"))
     .and_then(|found| found.accepted.ok_or_else(|| found.refusals.to_string()));
-    match made {
-        Ok(made) => Some(made),
-        Err(error) => {
-            assert!(!required, "{what} is required: {error}");
-            eprintln!("skipped: no {what} ({error})");
-            None
-        }
-    }
+    alpha2_test_support::available!(
+        capability,
+        made.map_err(|error| format!("no {what} ({error})"))
+    )
 }
 
 /// Any D3D12 device, whether it encodes or not.
 fn any_device() -> Option<SharedD3D12Context> {
     shared_where(
         "D3D12 device",
-        encode_required() || std::env::var_os("ALPHA2_REQUIRE_D3D12").is_some(),
+        alpha2_test_support::Capability::D3d12Video,
         |_| Ok(()),
     )
     .map(|(shared, ())| shared)
@@ -110,9 +114,11 @@ fn device_where(
     HardwareEncodeDevice,
     HardwareEncodeCapability,
 )> {
-    shared_where(what, encode_required(), |shared| {
-        HardwareEncodeDevice::d3d12(shared.clone()).preferred_capability()
-    })
+    shared_where(
+        what,
+        alpha2_test_support::Capability::D3d12Encode,
+        |shared| HardwareEncodeDevice::d3d12(shared.clone()).preferred_capability(),
+    )
     .map(|(shared, capability)| {
         let device = HardwareEncodeDevice::d3d12(shared.clone());
         (shared, device, capability)
@@ -459,7 +465,7 @@ fn the_test_encode_opens_the_advertised_profile() {
         // The capability's own test encode: on a bad driver every further encode is another chance
         // to hang or crash the process (see `drive`).
         let key = (
-            shared.identity().device,
+            ProbedAdapter::of(&shared),
             Encoder::for_codec(codec).expect("encoder").d3d12,
         );
         let probe = PROBED
@@ -560,10 +566,26 @@ fn a_bitrate_the_device_cannot_encode_with_is_refused_before_any_output_naming_i
         refused += 1;
     }
     if refused == 0 {
+        // This adapter lists both modes: the refusal is reached by a device that answers as one
+        // without constant bit rate does.
         eprintln!(
-            "skipped: {} encodes with both bitrate modes here",
+            "note: {} encodes with both bitrate modes here; checking an injected refusal",
             capability.encoder
         );
+        REFUSE_RATE_CONTROL_MODE.set(Some("cbr"));
+        let rate = VideoRateControl::bitrate(4_000_000, BitrateMode::Constant).expect("rate");
+        let opened = device.open(&request(
+            &capability,
+            &OutputTarget::from(&output),
+            (256, 192),
+            rate,
+        ));
+        REFUSE_RATE_CONTROL_MODE.set(None);
+        let Err(HardwareEncodeOpenError::Refused(reason)) = opened else {
+            panic!("an unlisted cbr is refused before the output exists");
+        };
+        assert!(reason.contains("no cbr rate control"), "{reason}");
+        assert_empty(&directory);
     }
     let _ = std::fs::remove_dir_all(directory);
 }
@@ -729,7 +751,9 @@ fn ten_frames_encode_with_parameter_sets_in_the_first_packet_only() {
         let surface = packed_surface(&shared, &mut input, index, luma);
         session.encode(&surface).expect("encode");
     }
-    session.finish().expect("finish");
+    session
+        .finish(&alpha2_media::CancelToken::default())
+        .expect("finish");
     let stats = input.stats();
     input.finish().expect("the input finishes");
     assert_eq!(stats.acquired, 10);
@@ -951,4 +975,95 @@ fn every_d3d12va_mode_is_opened_on_an_adapter_or_refused_with_a_reason() {
             }
         }
     }
+}
+
+/// A frame the encoder rejects is reported with everything that tells one rejection from another:
+/// the encoder, the frame and its size, the adapter, the call and its error, and the pool.
+#[test]
+fn a_send_frame_failure_names_the_frame_adapter_and_pool() {
+    let Some((shared, device, capability)) = session_device() else {
+        return;
+    };
+    let directory = scratch("send-failure");
+    let output = directory.join("out.mp4");
+    let (mut session, mut input) = open(&device, &capability, &output, (256, 256));
+    FAIL_SEND_AT.set(Some(2));
+    let mut failure = None;
+    for index in 0..4 {
+        let surface = packed_surface(&shared, &mut input, index, 100);
+        if let Err(error) = session.encode(&surface) {
+            failure = Some(error);
+            break;
+        }
+    }
+    FAIL_SEND_AT.set(None);
+    let Some(EncodeError::EncoderRejected {
+        encoder,
+        frame,
+        message,
+    }) = failure
+    else {
+        panic!("frame 2 is rejected: {failure:?}");
+    };
+    assert_eq!((encoder.as_str(), frame), (capability.encoder, 2));
+    for part in [
+        format!("{} rejected frame 2 (256x256) on ", capability.encoder),
+        format!("{} (LUID 0x", shared.gpu().capabilities().adapter_name),
+        "at send_frame: ".to_owned(),
+        "pool allocated ".to_owned(),
+        ", acquired 3, copier slot ".to_owned(),
+        ", frame fence ".to_owned(),
+    ] {
+        assert!(message.contains(&part), "{part:?} in {message}");
+    }
+    session.abort();
+}
+
+/// Two contexts on one adapter share one test encode; an adapter nothing ran on has no answer.
+#[test]
+fn the_test_encode_cache_is_keyed_by_adapter_luid() {
+    let Some((first, _, capability)) = session_device() else {
+        return;
+    };
+    let second = SharedD3D12Context::from_gpu(
+        pollster::block_on(alpha2_gpu::GpuContext::open_adapter(
+            first.gpu().adapter().clone(),
+        ))
+        .expect("a second device on the adapter"),
+    )
+    .expect("a second context");
+    // D3D12 hands one process one device per adapter, so the two share a device pointer too; the
+    // LUID is what outlives that device when it is removed and made again.
+    assert_eq!(ProbedAdapter::of(&first), ProbedAdapter::of(&second));
+    let codec = capability.codec;
+    let encoder = Encoder::for_codec(codec).expect("encoder").d3d12;
+    let answers = || {
+        PROBED
+            .lock()
+            .expect("probes")
+            .iter()
+            .filter(|((adapter, probed), _)| {
+                *adapter == ProbedAdapter::of(&first) && *probed == encoder
+            })
+            .count()
+    };
+    assert_eq!(
+        answers(),
+        1,
+        "the first context's capability ran one test encode"
+    );
+    HardwareEncodeDevice::d3d12(second.clone())
+        .capability(codec)
+        .expect("the second context is answered as the first was");
+    assert_eq!(answers(), 1, "and no second test encode ran");
+    let other = ProbedAdapter::Luid(first.adapter().expect("an adapter").luid ^ 1);
+    assert_ne!(other, ProbedAdapter::of(&first));
+    assert!(
+        PROBED
+            .lock()
+            .expect("probes")
+            .iter()
+            .all(|((adapter, _), _)| *adapter != other),
+        "an adapter nothing ran on has no answer"
+    );
 }

@@ -233,7 +233,7 @@ function withoutStartReport(stderr) {
 export function partialOf(output) {
   return join(
     dirname(output),
-    `${basename(output, extname(output))}.alpha2-partial${extname(output)}`,
+    `${basename(output, extname(output))}.a2partial${extname(output)}`,
   );
 }
 

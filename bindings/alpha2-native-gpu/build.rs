@@ -63,7 +63,14 @@ fn main() {
                 &["-fobjc-arc"],
                 "failed to compile native Metal helper",
             );
-            for framework in ["CoreFoundation", "CoreVideo", "IOSurface", "Metal"] {
+            for framework in [
+                "CoreFoundation",
+                "CoreMedia",
+                "CoreVideo",
+                "IOSurface",
+                "Metal",
+                "VideoToolbox",
+            ] {
                 println!("cargo:rustc-link-lib=framework={framework}");
             }
         }

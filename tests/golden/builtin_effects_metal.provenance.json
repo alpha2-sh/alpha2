@@ -1,0 +1,187 @@
+{
+  "tiles": {
+    "alpha2.effect.alpha-adjust": {
+      "unrecorded": true
+    },
+    "alpha2.effect.black-and-white": {
+      "unrecorded": true
+    },
+    "alpha2.effect.bulge": {
+      "unrecorded": true
+    },
+    "alpha2.effect.channel-mixer": {
+      "unrecorded": true
+    },
+    "alpha2.effect.chroma-key": {
+      "unrecorded": true
+    },
+    "alpha2.effect.color-controls": {
+      "unrecorded": true
+    },
+    "alpha2.effect.color-isolate": {
+      "unrecorded": true
+    },
+    "alpha2.effect.corner-pin": {
+      "unrecorded": true
+    },
+    "alpha2.effect.crop": {
+      "unrecorded": true
+    },
+    "alpha2.effect.crt": {
+      "unrecorded": true
+    },
+    "alpha2.effect.directional-blur": {
+      "unrecorded": true
+    },
+    "alpha2.effect.displacement-map": {
+      "unrecorded": true
+    },
+    "alpha2.effect.drop-shadow": {
+      "unrecorded": true
+    },
+    "alpha2.effect.duotone": {
+      "unrecorded": true
+    },
+    "alpha2.effect.edge-detect": {
+      "unrecorded": true
+    },
+    "alpha2.effect.emboss": {
+      "unrecorded": true
+    },
+    "alpha2.effect.fill": {
+      "unrecorded": true
+    },
+    "alpha2.effect.film-grain": {
+      "unrecorded": true
+    },
+    "alpha2.effect.gaussian-blur": {
+      "unrecorded": true
+    },
+    "alpha2.effect.glitch": {
+      "unrecorded": true
+    },
+    "alpha2.effect.glow": {
+      "unrecorded": true
+    },
+    "alpha2.effect.gradient-map": {
+      "unrecorded": true
+    },
+    "alpha2.effect.halftone": {
+      "unrecorded": true
+    },
+    "alpha2.effect.hue-saturation": {
+      "unrecorded": true
+    },
+    "alpha2.effect.invert": {
+      "unrecorded": true
+    },
+    "alpha2.effect.kaleidoscope": {
+      "unrecorded": true
+    },
+    "alpha2.effect.lens-blur": {
+      "unrecorded": true
+    },
+    "alpha2.effect.lens-distortion": {
+      "unrecorded": true
+    },
+    "alpha2.effect.letterbox": {
+      "unrecorded": true
+    },
+    "alpha2.effect.levels": {
+      "unrecorded": true
+    },
+    "alpha2.effect.lift-gamma-gain": {
+      "unrecorded": true
+    },
+    "alpha2.effect.light-leak": {
+      "unrecorded": true
+    },
+    "alpha2.effect.luma-key": {
+      "unrecorded": true
+    },
+    "alpha2.effect.matte-choker": {
+      "unrecorded": true
+    },
+    "alpha2.effect.mirror": {
+      "unrecorded": true
+    },
+    "alpha2.effect.offset": {
+      "unrecorded": true
+    },
+    "alpha2.effect.oil-paint": {
+      "unrecorded": true
+    },
+    "alpha2.effect.outline": {
+      "unrecorded": true
+    },
+    "alpha2.effect.pixelate": {
+      "unrecorded": true
+    },
+    "alpha2.effect.polar-coordinates": {
+      "unrecorded": true
+    },
+    "alpha2.effect.posterize": {
+      "unrecorded": true
+    },
+    "alpha2.effect.radial-blur": {
+      "unrecorded": true
+    },
+    "alpha2.effect.rgb-split": {
+      "unrecorded": true
+    },
+    "alpha2.effect.ripple": {
+      "unrecorded": true
+    },
+    "alpha2.effect.sepia": {
+      "unrecorded": true
+    },
+    "alpha2.effect.set-matte": {
+      "unrecorded": true
+    },
+    "alpha2.effect.shake": {
+      "unrecorded": true
+    },
+    "alpha2.effect.sharpen": {
+      "unrecorded": true
+    },
+    "alpha2.effect.solarize": {
+      "unrecorded": true
+    },
+    "alpha2.effect.spill-suppress": {
+      "unrecorded": true
+    },
+    "alpha2.effect.surface-blur": {
+      "unrecorded": true
+    },
+    "alpha2.effect.swirl": {
+      "unrecorded": true
+    },
+    "alpha2.effect.threshold": {
+      "unrecorded": true
+    },
+    "alpha2.effect.tile": {
+      "unrecorded": true
+    },
+    "alpha2.effect.tilt-shift": {
+      "unrecorded": true
+    },
+    "alpha2.effect.turbulent-displace": {
+      "unrecorded": true
+    },
+    "alpha2.effect.unsharp-mask": {
+      "unrecorded": true
+    },
+    "alpha2.effect.vhs": {
+      "unrecorded": true
+    },
+    "alpha2.effect.vibrance": {
+      "unrecorded": true
+    },
+    "alpha2.effect.vignette": {
+      "unrecorded": true
+    },
+    "alpha2.effect.wave-warp": {
+      "unrecorded": true
+    }
+  }
+}

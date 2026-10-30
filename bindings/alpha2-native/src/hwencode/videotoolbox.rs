@@ -603,7 +603,7 @@ impl VideoToolboxEncodeSession {
     }
 
     /// Flushes the audio and the encoder, then closes the output.
-    pub(super) fn finish(&mut self) -> Result<(), EncodeError> {
+    pub(super) fn finish(&mut self, cancel: &alpha2_media::CancelToken) -> Result<(), EncodeError> {
         self.muxer.finish_audio()?;
         crate::encode::beat_encode_call();
         self.context
@@ -611,7 +611,11 @@ impl VideoToolboxEncodeSession {
             .map_err(encode_adapter_error)?;
         self.drain()?;
         self.muxer.write_ready_audio(true, &mut self.stages)?;
-        self.muxer.close()
+        self.muxer.close(cancel)
+    }
+
+    pub(super) fn publish_report(&self) -> Option<crate::PublishReport> {
+        self.muxer.publish_report()
     }
 
     pub(super) fn abort(&mut self) {

@@ -1316,6 +1316,26 @@ pub enum EncodeError {
     /// output: it holds the output's partial file. Nothing was encoded, and
     /// the other export's file is untouched.
     OutputInUse(String),
+    /// The output was encoded in full, but it could not be moved to its
+    /// final path. The finished file is never deleted for that: it is kept
+    /// beside the target under another name.
+    Publish {
+        /// The target, the step that failed and the operating system's error.
+        message: String,
+        /// Where the finished file is now; `None` when even moving it there
+        /// failed, which `message` then explains.
+        kept: Option<std::path::PathBuf>,
+    },
+    /// The encoder refused one input frame on a device that is still usable:
+    /// the same frames may encode on another path.
+    EncoderRejected {
+        /// The encoder that refused, as `FFmpeg` names it (`h264_d3d12va`).
+        encoder: String,
+        /// The frame it refused, counted from 0 in the order frames were sent.
+        frame: u64,
+        /// What it said, and the state of the session when it did.
+        message: String,
+    },
     /// A GPU call the adapter made failed, and its platform status says what
     /// that was evidence of. `message` names the call and the status.
     Gpu {
@@ -1346,9 +1366,25 @@ impl fmt::Display for EncodeError {
             Self::Adapter(message) | Self::Gpu { message, .. } => {
                 write!(formatter, "encoder adapter failed: {message}")
             }
+            Self::EncoderRejected { message, .. } => formatter.write_str(message),
             Self::Output(message) | Self::OutputInUse(message) => {
                 write!(formatter, "cannot create the output: {message}")
             }
+            Self::Publish {
+                message,
+                kept: Some(kept),
+            } => write!(
+                formatter,
+                "cannot publish the output: {message}; the finished render is kept at {}",
+                kept.display()
+            ),
+            Self::Publish {
+                message,
+                kept: None,
+            } => write!(
+                formatter,
+                "cannot publish the output: {message}; the finished render could not be kept"
+            ),
         }
     }
 }

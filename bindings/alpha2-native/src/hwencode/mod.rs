@@ -810,19 +810,38 @@ impl HardwareEncodeSession {
         }
     }
 
-    /// Flushes the encoder and the audio, writes the trailer, and renames the
-    /// output into place. Only this makes the output visible.
+    /// Flushes the encoder and the audio, writes the trailer, and publishes
+    /// the output. Only this makes the output visible.
     ///
     /// # Errors
-    /// Returns an adapter failure from the flush, the trailer, or the rename.
-    pub fn finish(&mut self) -> Result<(), EncodeError> {
+    /// Returns an adapter failure from the flush or the trailer;
+    /// [`EncodeError::Publish`] when the finished file could not be moved into
+    /// place and was kept beside it; [`EncodeError::Cancelled`] when `cancel`
+    /// stopped the publish's retries.
+    pub fn finish(&mut self, cancel: &alpha2_media::CancelToken) -> Result<(), EncodeError> {
         match &mut self.0 {
             #[cfg(target_os = "linux")]
-            SessionBackend::Vulkan(session) => session.finish(),
+            SessionBackend::Vulkan(session) => session.finish(cancel),
             #[cfg(target_os = "macos")]
-            SessionBackend::VideoToolbox(session) => session.finish(),
+            SessionBackend::VideoToolbox(session) => session.finish(cancel),
             #[cfg(target_os = "windows")]
-            SessionBackend::D3D12(session) => session.finish(),
+            SessionBackend::D3D12(session) => session.finish(cancel),
+            #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+            SessionBackend::Unsupported(never) => match *never {},
+        }
+    }
+
+    /// How the finished file was published; `None` until [`Self::finish`]
+    /// has published it.
+    #[must_use]
+    pub fn publish_report(&self) -> Option<crate::PublishReport> {
+        match &self.0 {
+            #[cfg(target_os = "linux")]
+            SessionBackend::Vulkan(session) => session.publish_report(),
+            #[cfg(target_os = "macos")]
+            SessionBackend::VideoToolbox(session) => session.publish_report(),
+            #[cfg(target_os = "windows")]
+            SessionBackend::D3D12(session) => session.publish_report(),
             #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
             SessionBackend::Unsupported(never) => match *never {},
         }

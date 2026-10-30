@@ -81,16 +81,18 @@ cargo test --workspace --no-default-features --no-fail-fast
 
 ### GPU
 
-The renderer and engine tests need a GPU adapter. They use the machine's GPU, or lavapipe (software Vulkan) on Linux without one. `WGPU_BACKEND` picks a backend:
+The renderer and engine tests need a GPU adapter. They run on the device the host renders on: DX12 on Windows, Metal on macOS, Vulkan (then GL) on Linux, the adapter `ALPHA2_GPU_ADAPTER` names (an enumeration index or part of the name) or else a discrete GPU before an integrated one, and lavapipe (software Vulkan) on Linux without a GPU. `WGPU_BACKEND` picks another backend for a second run:
 
 ```sh
 WGPU_BACKEND=vulkan cargo test -p alpha2-render -p alpha2-engine -- --test-threads=1   # or metal, dx12, gl
 ```
 
 - `alpha2-host` renders on the CPU when the machine has no hardware GPU (`ALPHA2_RENDERER=auto`). To run the host tests on lavapipe, set `ALPHA2_RENDERER=gpu`, as CI does; `ALPHA2_RENDERER=cpu` runs them on the CPU renderer. The CPU renderer's parity tests (`cargo test -p alpha2-render --lib cpu_`) compare every CPU pass with the GPU's; a failure writes both pictures to `target/cpu-parity/`.
+- On Windows the host compiles its DX12 shaders with DXC and refuses to start without it: set `ALPHA2_DXC_PATH="$(scripts/fetch-dxc.sh)"` for the host and its tests (a release ships `dxcompiler.dll` beside `alpha2-host.exe`). Without it the library and its tests compile with FXC, and the test header line says which one ran.
+- `cargo test` builds `alpha2-host` with its test features and copies it to `target/<profile>/alpha2-host`: scripts that run that path build it with `cargo build -p alpha2-host` first.
 - Render goldens live in `tests/golden/`. `ALPHA2_UPDATE_GOLDENS=1` rewrites them instead of comparing, and `ALPHA2_GOLDEN_ACTUAL_DIR=<dir>` keeps a mismatching render for inspection.
 - `ALPHA2_TEST_INTERMEDIATE=rgba8unorm` runs the renderer on its 8-bit intermediate.
-- Hardware decode and encode tests skip without the hardware. To make a skip fail on a machine that has it, set the matching variable: `ALPHA2_REQUIRE_VIDEOTOOLBOX=1` (macOS), `ALPHA2_REQUIRE_D3D12=1` (Windows), `ALPHA2_REQUIRE_H264=1`.
+- A test that cannot run on this machine skips and names the capability it lacks (the list, with what each probe checks, is `tests/capabilities.json`). `ALPHA2_REQUIRE=<comma list>` turns the skips of the capabilities it names into failures, for example `ALPHA2_REQUIRE=videotoolbox,gpu-resident` on a Mac or `ALPHA2_REQUIRE=d3d12-video,d3d12-encode,gpu-resident` on Windows; an unknown name fails at once. `ALPHA2_SKIP_LOG=<absolute path>` appends one JSON line per skip from Rust, JavaScript and Python alike, and `node scripts/skip-log-summary.mjs <path>` prints it per capability and suite.
 
 ### JavaScript and the browser
 
@@ -107,7 +109,7 @@ npm run test:package       # the npm tarballs' contents and exports
 
 - `ALPHA2_CHROME_GPU` picks Chrome's GPU stack: `machine` (the machine's GPU; the default on macOS and Windows), `swiftshader` (the default on Linux) or `none` (no GPU process: `auto` renders on the CPU). On Linux, `machine` needs a headed Chrome on a DRI3 display. `ALPHA2_CHROME_GPU_FLAGS` replaces the GPU flags altogether (for example `"--use-angle=vulkan --enable-features=Vulkan"`), and `ALPHA2_CHROME_HEADED=1` runs a window.
 - Every browser run starts with one probe page and prints a `browser-run:` line naming the browser, its version, the GPU mode, the flags and the WebGPU adapter; the full report goes to `target/browser-reports/`. A browser that cannot start ends the run before its first case.
-- `ALPHA2_REQUIRE_WASM=1` and `ALPHA2_REQUIRE_BROWSER=1` turn a skip for a missing wasm build or browser into a failure.
+- `ALPHA2_REQUIRE=wasm,browser` turns a skip for a missing wasm build or browser into a failure.
 
 ## Lint and format
 

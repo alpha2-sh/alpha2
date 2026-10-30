@@ -6,12 +6,14 @@ import { existsSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
+import { recordSkip, suiteOf } from "../../../scripts/lib/capabilities.mjs";
+
 const root = resolve(import.meta.dirname, "..", "..", "..");
 
 /**
  * The newer of the packaged DSP module and the plain cargo build CI makes before these tests, so a
  * stale package never stands in for the source. Without either it returns undefined and the
- * caller skips, unless ALPHA2_REQUIRE_WASM=1, which CI sets, makes that a failure.
+ * caller skips, and the skip is recorded (a failure when ALPHA2_REQUIRE names wasm).
  */
 export async function workletWasm() {
   const newest = [
@@ -27,11 +29,12 @@ export async function workletWasm() {
     .filter((path) => existsSync(path))
     .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0];
   if (newest !== undefined) return (await readFile(newest)).buffer;
-  assert.notEqual(
-    process.env.ALPHA2_REQUIRE_WASM,
-    "1",
-    "ALPHA2_REQUIRE_WASM=1, but the worklet wasm is not built",
-  );
+  // Throws when the run requires the wasm.
+  recordSkip({
+    suite: suiteOf(import.meta.url),
+    capability: "wasm",
+    reason: "the worklet wasm is not built",
+  });
   return undefined;
 }
 

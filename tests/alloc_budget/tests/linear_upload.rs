@@ -71,7 +71,7 @@ fn allocated<T>(work: impl FnOnce() -> T) -> (T, u64) {
 
 #[test]
 fn a_linear_frame_reaches_the_gpu_without_a_cpu_copy_of_its_halves() {
-    let gpu = pollster::block_on(GpuContext::request_high_performance())
+    let gpu = pollster::block_on(GpuContext::request_product())
         .expect("these budgets need a GPU adapter");
     let renderer = Renderer::new(gpu);
     let size = RenderSize::new(1920, 1080).expect("size");

@@ -27,6 +27,8 @@ export interface GpuCapability {
   readonly backend: string;
   readonly driver: string;
   readonly driverInfo: string;
+  /** The DX12 shader compiler (`FXC`, `DXC <path>`); empty on other backends and in browsers. */
+  readonly shaderCompiler: string;
   /** `a`: an adapter meeting all of WebGPU; `b`: a downlevel one (GL, WebGL2). */
   readonly tier: "a" | "b" | "unknown";
   /**

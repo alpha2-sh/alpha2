@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import ROOT, read_rgba_png
+from conftest import ROOT, read_rgba_png, require_or_skip
 
 import alpha2
 from alpha2 import HostClient, key, keyframes, visual
@@ -27,8 +27,8 @@ HOST = Path(
     or ROOT / "target" / "debug" / ("alpha2-host.exe" if sys.platform == "win32" else "alpha2-host")
 )
 if not HOST.is_file():
-    pytest.skip(
-        f"no alpha2-host at {HOST}; build it or set ALPHA2_HOST_BINARY", allow_module_level=True
+    require_or_skip(
+        "host", f"no alpha2-host at {HOST}; build it or set ALPHA2_HOST_BINARY", module=True
     )
 
 FIXTURE = ROOT / "tests/fonts/Alpha2Fixture.ttf"

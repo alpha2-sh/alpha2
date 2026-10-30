@@ -720,9 +720,10 @@ fn a_multi_pass_group_draws_what_its_passes_draw_inline() {
     };
     let glowing = pixels(&renderer, &inline(2.0), 120_000);
     assert_eq!(pixels(&renderer, &grouped(2.0), 120_000), glowing);
-    // The white left half stays white, and its glow reaches the transparent right half.
+    // The white left half stays white, and its glow reaches the transparent right half (the
+    // column next to it: on the 8-bit intermediate the far column's glow rounds to nothing).
     assert_eq!(pixel(&glowing, 0, 0), [255, 255, 255, 255]);
-    assert!(pixel(&glowing, 3, 0)[0] > 0, "{:?}", pixel(&glowing, 3, 0));
+    assert!(pixel(&glowing, 2, 0)[0] > 0, "{:?}", pixel(&glowing, 2, 0));
     // Without intensity there is no glow: the picture is the source's.
     let plain = pixels(&renderer, &grouped(0.0), 120_000);
     assert_eq!(pixels(&renderer, &inline(0.0), 120_000), plain);

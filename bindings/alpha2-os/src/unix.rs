@@ -1,7 +1,7 @@
 //! The output lock (an open-file-description lock on one unreachable byte on
 //! Linux, `flock` elsewhere), file identity by device and inode, the
-//! no-replace rename, `SIGTERM`/`SIGINT` through a self-pipe, and resident
-//! memory.
+//! no-replace rename, directory sync and name limit, `SIGTERM`/`SIGINT`
+//! through a self-pipe, and resident memory.
 
 use std::fs::{self, File};
 use std::io::{self, Read};
@@ -119,40 +119,52 @@ pub(crate) fn same_file(file: &File, path: &Path) -> io::Result<bool> {
     }
 }
 
-pub(crate) fn same_file_at(a: &Path, b: &Path) -> io::Result<bool> {
-    let identity = |path: &Path| match fs::metadata(path) {
+/// A file's identity: its device and inode.
+pub(crate) type FileIdentity = (u64, u64);
+
+pub(crate) fn file_identity(file: &File) -> io::Result<FileIdentity> {
+    let metadata = file.metadata()?;
+    Ok((metadata.dev(), metadata.ino()))
+}
+
+/// The identity of the file `path` names; `None` when nothing is there.
+pub(crate) fn path_identity(path: &Path) -> io::Result<Option<FileIdentity>> {
+    match fs::metadata(path) {
         Ok(metadata) => Ok(Some((metadata.dev(), metadata.ino()))),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error),
-    };
-    Ok(match (identity(a)?, identity(b)?) {
+    }
+}
+
+pub(crate) fn same_file_at(a: &Path, b: &Path) -> io::Result<bool> {
+    Ok(match (path_identity(a)?, path_identity(b)?) {
         (Some(a), Some(b)) => a == b,
         _ => false,
     })
 }
 
-pub(crate) fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
-    match rename_exclusive(from, to) {
-        Err(error) if flag_refused(&error) => {}
-        renamed => return renamed,
-    }
-    fs::hard_link(from, to)?;
-    fs::remove_file(from)
-}
+/// `RENAME_NOREPLACE` from `<linux/fs.h>`, the same on every architecture.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const RENAME_NOREPLACE: libc::c_uint = 1;
 
 /// The platform's no-replace rename; `ENOTSUP` where it has none.
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
-fn rename_exclusive(from: &Path, to: &Path) -> io::Result<()> {
+///
+/// On Linux and Android it is the raw `renameat2` system call, so every C
+/// library (musl and old glibc have no wrapper) gets it; a kernel older than
+/// 3.15 answers `ENOSYS`, which [`flag_refused`] takes as a refused flag.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub(crate) fn rename_exclusive(from: &Path, to: &Path) -> io::Result<()> {
     let (from, to) = (c_path(from)?, c_path(to)?);
     // SAFETY: both are NUL-terminated paths that outlive the call; `AT_FDCWD` resolves relative
-    // ones as `rename` does.
+    // ones as `rename` does, and the arguments are the types the system call takes.
     let renamed = unsafe {
-        libc::renameat2(
+        libc::syscall(
+            libc::SYS_renameat2,
             libc::AT_FDCWD,
             from.as_ptr(),
             libc::AT_FDCWD,
             to.as_ptr(),
-            libc::RENAME_NOREPLACE,
+            RENAME_NOREPLACE,
         )
     };
     if renamed == 0 {
@@ -163,7 +175,7 @@ fn rename_exclusive(from: &Path, to: &Path) -> io::Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-fn rename_exclusive(from: &Path, to: &Path) -> io::Result<()> {
+pub(crate) fn rename_exclusive(from: &Path, to: &Path) -> io::Result<()> {
     let (from, to) = (c_path(from)?, c_path(to)?);
     // SAFETY: both are NUL-terminated paths that outlive the call.
     let renamed = unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) };
@@ -174,21 +186,57 @@ fn rename_exclusive(from: &Path, to: &Path) -> io::Result<()> {
     }
 }
 
-#[cfg(not(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos")))]
-fn rename_exclusive(_from: &Path, _to: &Path) -> io::Result<()> {
+#[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
+pub(crate) fn rename_exclusive(_from: &Path, _to: &Path) -> io::Result<()> {
     Err(io::Error::from_raw_os_error(libc::ENOTSUP))
 }
 
 /// Whether a rename failed because the file system or kernel does not take
 /// its no-replace flag, rather than for the files' sake.
-fn flag_refused(error: &io::Error) -> bool {
-    matches!(
-        error.raw_os_error(),
-        Some(libc::EINVAL | libc::ENOSYS | libc::ENOTSUP)
-    )
+pub(crate) fn flag_refused(error: &io::Error) -> bool {
+    error.raw_os_error().is_some_and(|code| {
+        code == libc::EINVAL
+            || code == libc::ENOSYS
+            || code == libc::ENOTSUP
+            || code == libc::EOPNOTSUPP
+    })
 }
 
-#[cfg(any(all(target_os = "linux", target_env = "gnu"), target_os = "macos"))]
+/// An open handle never stops a rename or a removal on Unix.
+pub(crate) fn is_retryable_publish_error(_error: &io::Error) -> bool {
+    false
+}
+
+pub(crate) fn sync_directory(dir: &Path) -> io::Result<()> {
+    match File::open(dir).and_then(|directory| directory.sync_all()) {
+        Err(error)
+            if error.raw_os_error().is_some_and(|code| {
+                code == libc::EINVAL
+                    || code == libc::ENOTSUP
+                    || code == libc::EOPNOTSUPP
+                    || code == libc::EBADF
+            }) =>
+        {
+            Ok(())
+        }
+        synced => synced,
+    }
+}
+
+pub(crate) fn name_limit(dir: &Path) -> crate::NameLimit {
+    let queried = c_path(dir).ok().map(|dir| {
+        // SAFETY: `dir` is a NUL-terminated path that outlives the call, which only reads it.
+        unsafe { libc::pathconf(dir.as_ptr(), libc::_PC_NAME_MAX) }
+    });
+    crate::NameLimit {
+        max: queried
+            .and_then(|max| usize::try_from(max).ok())
+            .filter(|max| *max > 0)
+            .unwrap_or(255),
+        unit: crate::NameUnit::Bytes,
+    }
+}
+
 fn c_path(path: &Path) -> io::Result<std::ffi::CString> {
     use std::os::unix::ffi::OsStrExt;
     std::ffi::CString::new(path.as_os_str().as_bytes())

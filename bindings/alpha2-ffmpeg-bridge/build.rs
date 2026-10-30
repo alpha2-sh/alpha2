@@ -41,7 +41,18 @@ fn main() {
     );
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     // docs.rs documents without linking and has no FFmpeg headers to compile against.
-    if env::var_os("CARGO_FEATURE_HWDEVICE").is_none() || docs_rs() {
+    if docs_rs() {
+        return;
+    }
+    // Every build captures FFmpeg's log lines for typed errors (`src/log.rs`).
+    compile_ffmpeg_shim(
+        "alpha2_ffmpeg_log_shim",
+        &["src/log_shim.c"],
+        &["include".into()],
+        &ffmpeg_include_dirs(&["libavutil"]),
+        &format!("failed to compile the FFmpeg log shim. {FFMPEG_SDK_HINT}"),
+    );
+    if env::var_os("CARGO_FEATURE_HWDEVICE").is_none() {
         return;
     }
     // The VideoToolbox shim reads only FFmpeg's structures, so Linux compiles and tests it too.

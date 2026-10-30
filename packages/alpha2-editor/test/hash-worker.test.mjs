@@ -12,13 +12,20 @@ import {
   hashInWorker,
   installHashWorker,
 } from "../dist/browser/index.js";
+import {
+  missingCapability,
+  suiteOf,
+} from "../../../scripts/lib/capabilities.mjs";
 
 const root = resolve(import.meta.dirname, "..", "..", "..");
 const wasmDirectory = join(root, "packages", "alpha2", "wasm");
 const skip =
   !existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm")) &&
-  process.env.ALPHA2_REQUIRE_WASM !== "1" &&
-  "the wasm package is not built";
+  missingCapability(
+    "wasm",
+    suiteOf(import.meta.url),
+    "the wasm package is not built",
+  );
 
 /**
  * A dedicated worker running the hash worker's handler, or, with `broken`, one whose script never

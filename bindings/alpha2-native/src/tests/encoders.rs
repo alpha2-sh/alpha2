@@ -125,15 +125,23 @@ fn codec_capabilities_report_stable_logical_ids_and_concrete_encoders() {
 #[test]
 fn a_rejected_candidate_falls_through_to_the_next_one() {
     // Only meaningful with more than one H.264 encoder: a hardware candidate and a software floor.
+    let skip = |why: &str| {
+        alpha2_test_support::skip!(alpha2_test_support::Capability::HardwareH264Encode, "{why}");
+    };
     let Ok(candidates) = video_encoder_candidates(NativeVideoCodec::H264, None) else {
+        skip("this runtime has no H.264 encoder");
         return;
     };
     if candidates.len() < 2 {
+        skip("this runtime has one H.264 encoder, so nothing to fall through to");
         return;
     }
     let first = candidates[0].name();
     let (minimum_width, minimum_height) = crate::capabilities::encoder_minimum_dimensions(&first);
     if minimum_width <= 64 && minimum_height <= 48 {
+        skip(&format!(
+            "the first H.264 candidate {first} accepts 64x48, so nothing rejects it"
+        ));
         return;
     }
     let path = output_path("h264-fallback");
@@ -166,12 +174,22 @@ fn a_rejected_candidate_falls_through_to_the_next_one() {
 }
 
 #[test]
+#[allow(unsafe_code)]
 fn a_failed_open_with_options_does_not_free_them_twice() {
     // `avcodec_open2` updates the dictionary even on failure; rsmpeg 0.18 handles this only on
-    // success. Encoders excluding YUV420P exercise that failure.
-    let Some(encoder) = AVCodec::find_encoder_by_name(c"h264_vulkan") else {
-        return;
-    };
+    // success. Encoders excluding YUV420P exercise that failure; every pinned runtime registers
+    // one (a hardware encoder that takes only its device's frames).
+    let encoder = AVCodec::iterate()
+        .find(|codec| {
+            // SAFETY: `codec` is a registered codec descriptor.
+            let encoder = unsafe { rsmpeg::ffi::av_codec_is_encoder(codec.as_ptr()) } != 0;
+            encoder
+                && codec.type_ == ffi::AVMEDIA_TYPE_VIDEO
+                && codec
+                    .pix_fmts()
+                    .is_some_and(|formats| !formats.contains(&ffi::AV_PIX_FMT_YUV420P))
+        })
+        .expect("a registered video encoder that does not take YUV420P");
     let mut context = AVCodecContext::new(&encoder);
     context.set_width(1_920);
     context.set_height(1_080);
@@ -604,12 +622,22 @@ fn a_constant_rate_opens_on_every_advertised_encoder() {
     // encoders may not run here at all (hevc_mf failed every mode with E_FAIL on a Windows runner),
     // so only one that encodes a variable-rate frame is held to constant.
     for capability in codec_capabilities().video {
+        // A ProRes profile fixes its rate, and it takes packed 10-bit pictures only
+        // (`pixel_outputs`): there is no bitrate mode to hold it to.
+        if capability.codec == NativeVideoCodec::ProRes {
+            continue;
+        }
         let name = &capability.encoder_name;
         let variable = VideoRateControl::bitrate(500_000, BitrateMode::Variable).expect("rate");
         if let Err((stage, error)) = encode_one_frame(&capability, variable, "variable") {
-            eprintln!(
-                "skipped {name}: it does not encode on this machine at all \
-                 (variable rate, {stage:?}: {error:?})"
+            let Some(needs) = super::encoder_capability(name) else {
+                panic!(
+                    "the software encoder {name} does not encode (variable rate, {stage:?}: {error:?})"
+                );
+            };
+            alpha2_test_support::skip!(
+                needs,
+                "{name} does not encode on this machine at all (variable rate, {stage:?}: {error:?})"
             );
             continue;
         }

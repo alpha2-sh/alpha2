@@ -204,7 +204,23 @@ fn glow_falls_off_smoothly_from_a_bright_line() {
     assert_falls_off(&row, 129, 12, "glow");
     // GL on the 8-bit intermediate is up to 3 levels off every other backend: it gets its own
     // reviewed variant rather than a looser tolerance for all.
-    assert_rgba8_golden_tiles(&["glow", "glow_gl_rgba8"], size, &["glow"], &glowing, 2);
+    assert_rgba8_golden_tiles(
+        &[
+            alpha2_golden_support::Variant::everywhere("glow"),
+            alpha2_golden_support::Variant {
+                name: "glow_gl_rgba8",
+                scope: alpha2_golden_support::Scope {
+                    backend: Some("Gl"),
+                    adapter_contains: None,
+                    intermediate: Some("Rgba8Unorm"),
+                },
+            },
+        ],
+        size,
+        &["glow"],
+        &glowing,
+        2,
+    );
 }
 
 /// Opaque black with a white rectangle over columns `x` and rows `y`.

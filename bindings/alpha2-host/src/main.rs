@@ -273,6 +273,8 @@ fn exit_unflushed(code: u8) -> ! {
 /// Runs the command the arguments name, leaving the GPU host it made, if
 /// any, in `host` for [`conclude`] to release.
 fn run(host: &mut Option<Host>) -> Result<(), HostError> {
+    #[cfg(windows)]
+    configure_dx12_compiler();
     let mut args = utf8_arguments(env::args_os().skip(1))?.into_iter();
     match args.next().as_deref() {
         Some("serve") => {
@@ -450,7 +452,9 @@ fn render_gpu_encode_slice(
         session.encode(&surface).map_err(encode_error)?;
         frames += 1;
     }
-    session.finish().map_err(encode_error)?;
+    session
+        .finish(&alpha2_media::CancelToken::default())
+        .map_err(encode_error)?;
     input.finish().map_err(encode_error)?;
     Ok(json!({
         "path": path,
@@ -478,7 +482,7 @@ fn probe_metal_gpu_encode(args: Vec<String>) -> Result<(), HostError> {
     if args.next().is_some() {
         return Err(HostError::invalid_input(usage()));
     }
-    let gpu = pollster::block_on(GpuContext::request_high_performance())
+    let gpu = pollster::block_on(GpuContext::request_product())
         .map_err(|error| HostError::new("GPU_INIT_FAILED", error_message(error)))?;
     let shared = alpha2_native_gpu::SharedMetalContext::from_gpu(gpu)
         .map_err(|error| HostError::new("GPU_ERROR", format!("shared Metal device: {error}")))?;
@@ -507,6 +511,29 @@ fn probe_metal_gpu_encode(args: Vec<String>) -> Result<(), HostError> {
     }))
 }
 
+/// Makes every DX12 instance of this process compile with DXC: the DLL
+/// `ALPHA2_DXC_PATH` names, else the `dxcompiler.dll` beside the executable,
+/// where a release ships it. A DLL that does not load fails the DX12 backend,
+/// which the host reports and refuses to start on; it never falls back to FXC,
+/// whose first frame costs seconds, or to another backend.
+#[cfg(windows)]
+fn configure_dx12_compiler() {
+    let library = env::var_os("ALPHA2_DXC_PATH")
+        .filter(|path| !path.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(|dir| dir.join("dxcompiler.dll")))
+        });
+    if let Some(library) = library {
+        // Nothing has made an instance yet, so the settings cannot be frozen.
+        let _ = alpha2_gpu::configure_instances(alpha2_gpu::InstanceSettings {
+            dx12_compiler: alpha2_gpu::Dx12Compiler::Dxc { library },
+        });
+    }
+}
+
 /// Makes the host that `ALPHA2_RENDERER` (default `auto`) asks for,
 /// decoding as `policy` says.
 fn create_host(policy: VideoDecodePolicy) -> Result<Host, HostError> {
@@ -525,64 +552,42 @@ pub(crate) fn create_host_with(
     renderer: crate::config::RendererPolicy,
 ) -> Result<Host, HostError> {
     use crate::config::RendererPolicy;
+    use alpha2_gpu::SoftwareAdapters;
     match renderer {
-        RendererPolicy::Gpu => create_gpu_host(policy),
+        RendererPolicy::Gpu => create_gpu_host(policy, SoftwareAdapters::Allow),
         RendererPolicy::Cpu => create_cpu_host(policy, "requested (--renderer cpu)".to_owned()),
-        RendererPolicy::Auto => {
-            if let Some(reason) = no_hardware_adapter() {
-                return create_cpu_host(policy, reason);
-            }
-            match create_gpu_host(policy) {
-                Ok(host) => {
-                    let software = host
-                        .renderer
-                        .gpu()
-                        .filter(|renderer| renderer.gpu_capabilities().software_rasterizer)
-                        .map(|renderer| renderer.gpu_capabilities().adapter_name.clone());
-                    match software {
-                        None => Ok(host),
-                        Some(adapter) => {
-                            drop(host);
-                            create_cpu_host(
-                                policy,
-                                format!("the GPU host started on the software adapter {adapter}"),
-                            )
-                        }
+        RendererPolicy::Auto => match create_gpu_host(policy, SoftwareAdapters::Refuse) {
+            Ok(host) => {
+                let software = host
+                    .renderer
+                    .gpu()
+                    .filter(|renderer| renderer.gpu_capabilities().software_rasterizer)
+                    .map(|renderer| renderer.gpu_capabilities().adapter_name.clone());
+                match software {
+                    None => Ok(host),
+                    Some(adapter) => {
+                        drop(host);
+                        create_cpu_host(
+                            policy,
+                            format!("the GPU host started on the software adapter {adapter}"),
+                        )
                     }
                 }
-                Err(error) if error.code == "GPU_INIT_FAILED" => {
-                    create_cpu_host(policy, format!("no GPU host: {}", error.message))
-                }
-                Err(error) => Err(error),
             }
-        }
+            // A missing shader compiler is a broken installation, not a machine without a
+            // GPU: rendering on the CPU would hide it.
+            Err(error)
+                if error.code == "GPU_INIT_FAILED"
+                    && error
+                        .details
+                        .as_ref()
+                        .is_none_or(|details| details["cause"] != SHADER_COMPILER_CAUSE) =>
+            {
+                create_cpu_host(policy, format!("no GPU host: {}", error.message))
+            }
+            Err(error) => Err(error),
+        },
     }
-}
-
-/// Why there is no hardware adapter to render on, or `None` when there is
-/// one: every adapter the backends in use list is a software rasterizer, or
-/// none is listed (no driver, or no graphics loader at all).
-fn no_hardware_adapter() -> Option<String> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let backends = wgpu::Backends::from_env().unwrap_or(wgpu::Backends::all());
-    let adapters = pollster::block_on(instance.enumerate_adapters(backends));
-    let mut software = Vec::new();
-    for adapter in &adapters {
-        let info = adapter.get_info();
-        if info.device_type != wgpu::DeviceType::Cpu {
-            return None;
-        }
-        software.push(info.name);
-    }
-    Some(if software.is_empty() {
-        "no GPU adapter was found".to_owned()
-    } else {
-        format!(
-            "no hardware GPU; only software adapters ({}), which auto does not use",
-            software.join(", ")
-        )
-    })
 }
 
 /// A host that renders on the CPU, for `reason`.
@@ -619,8 +624,58 @@ fn create_cpu_host(policy: VideoDecodePolicy, reason: String) -> Result<Host, Ho
     Ok(host)
 }
 
+/// A GPU host on the adapter `ALPHA2_GPU_ADAPTER` asks for.
+fn create_gpu_host(
+    policy: VideoDecodePolicy,
+    software: alpha2_gpu::SoftwareAdapters,
+) -> Result<Host, HostError> {
+    create_gpu_host_with_adapter(
+        policy,
+        &crate::adapter_choice::AdapterPin::from_env(),
+        software,
+    )
+}
+
+/// The host error for a product device that could not be opened: a pin that
+/// names no adapter is the request's error; a DX12 backend that did not
+/// start names its shader compiler and is an installation defect, which no
+/// renderer policy works around (`details.cause` is `shader-compiler`);
+/// anything else is the GPU's.
+fn gpu_init_error(error: alpha2_gpu::GpuError) -> HostError {
+    match error.step() {
+        alpha2_gpu::GpuAcquisitionStep::Pin => HostError::invalid_input(error.to_string()),
+        alpha2_gpu::GpuAcquisitionStep::Instance => HostError::new(
+            "GPU_INIT_FAILED",
+            format!(
+                "the DX12 backend did not start: shader compiler {} (set ALPHA2_DXC_PATH to the \
+                 dxcompiler.dll of scripts/fetch-dxc.sh, or keep it beside alpha2-host.exe)",
+                alpha2_gpu::dx12_shader_compiler()
+            ),
+        )
+        .with_details(json!({ "cause": SHADER_COMPILER_CAUSE })),
+        _ => HostError::new("GPU_INIT_FAILED", error_message(error)),
+    }
+}
+
+/// `details.cause` of a `GPU_INIT_FAILED` whose DX12 shader compiler did not load.
+const SHADER_COMPILER_CAUSE: &str = "shader-compiler";
+
+/// A GPU host on the adapter `adapter_policy` chooses where the host scans
+/// adapters (Windows; elsewhere the product device follows the same
+/// `ALPHA2_GPU_ADAPTER` pin). `software` says whether a software adapter is
+/// acceptable: `auto` refuses one and renders on the CPU instead.
 #[allow(clippy::too_many_lines)]
-fn create_gpu_host(policy: VideoDecodePolicy) -> Result<Host, HostError> {
+pub(crate) fn create_gpu_host_with_adapter(
+    policy: VideoDecodePolicy,
+    adapter_policy: &crate::adapter_choice::AdapterPin,
+    software: alpha2_gpu::SoftwareAdapters,
+) -> Result<Host, HostError> {
+    #[cfg(not(all(target_os = "windows", feature = "hwdevice")))]
+    let _ = adapter_policy;
+    // The Windows scan opens a software adapter only when nothing else renders; `auto` then
+    // lets that host go for the CPU renderer below.
+    #[cfg(all(target_os = "windows", feature = "hwdevice"))]
+    let _ = software;
     // Nothing in a build without hardware decode can keep `hardware-required`: it would decode
     // every frame in software under the mode's name.
     if policy.requires_hardware()
@@ -638,9 +693,16 @@ fn create_gpu_host(policy: VideoDecodePolicy) -> Result<Host, HostError> {
             "hardware decode is required, but this host was built without hardware decode",
         ));
     }
+    // Windows renders on the scan's DX12 device or refuses to start; it never asks for another.
+    #[cfg(not(all(target_os = "windows", feature = "hwdevice")))]
     let request_default = || {
-        pollster::block_on(GpuContext::request_high_performance())
-            .map_err(|error| HostError::new("GPU_INIT_FAILED", error_message(error)))
+        pollster::block_on(GpuContext::request_product_with(
+            &alpha2_gpu::ProductRequest {
+                software,
+                ..alpha2_gpu::ProductRequest::default()
+            },
+        ))
+        .map_err(gpu_init_error)
     };
     // The renderer goes on the shared Vulkan device, so a non-Vulkan backend skips it.
     #[cfg(all(target_os = "linux", feature = "hwdevice"))]
@@ -672,28 +734,34 @@ fn create_gpu_host(policy: VideoDecodePolicy) -> Result<Host, HostError> {
     #[cfg(all(target_os = "windows", feature = "hwencode"))]
     crate::d3d12va_probe::install();
     #[cfg(all(target_os = "windows", feature = "hwdevice"))]
-    let adapter_policy = crate::adapter_choice::AdapterPolicy::from_env();
-    #[cfg(all(target_os = "windows", feature = "hwdevice"))]
     let decode_on_gpu = cfg!(feature = "hwdecode") && policy.allows_hardware();
     #[cfg(all(target_os = "windows", feature = "hwdevice"))]
     let encode_on_gpu = gpu_encode_wanted();
     #[cfg(all(target_os = "windows", feature = "hwdevice"))]
     let (mut dx12, dx12_unavailable) = {
+        // The renderer is on DX12 or nowhere: rendering on another backend would give other bytes
+        // and no hardware decode, so a DX12 that does not start refuses the host.
         let scanned = pollster::block_on(crate::dx12_adapters::scan(
-            &adapter_policy,
+            adapter_policy,
             decode_on_gpu,
             encode_on_gpu,
         ));
-        // A pin that names no adapter refuses to start under every mode.
-        if let Err(crate::dx12_adapters::ScanError::Pin(reason)) = &scanned {
-            return Err(HostError::invalid_input(reason.clone()));
+        match scanned {
+            Ok(choice) => (choice, None::<String>),
+            // A pin that names no adapter refuses to start under every mode.
+            Err(crate::dx12_adapters::ScanError::Pin(reason)) => {
+                return Err(HostError::invalid_input(reason));
+            }
+            Err(crate::dx12_adapters::ScanError::Unavailable(error)) => {
+                if policy.requires_hardware() {
+                    return Err(HostError::new(
+                        "HARDWARE_DECODE_UNAVAILABLE",
+                        format!("DX12 unavailable: {error}"),
+                    ));
+                }
+                return Err(gpu_init_error(error));
+            }
         }
-        decode_backend_gpu(
-            policy,
-            "DX12",
-            || scanned,
-            || request_default().map(crate::dx12_adapters::Dx12Choice::without_scan),
-        )?
     };
     #[cfg(all(target_os = "windows", feature = "hwdevice"))]
     let gpu = dx12.gpu.clone();
@@ -732,15 +800,18 @@ fn create_gpu_host(policy: VideoDecodePolicy) -> Result<Host, HostError> {
             format!("built-in effect registration failed: {diagnostics:?}"),
         )
     })?;
-    let adapter = renderer.diagnostics().adapter;
+    let capabilities = renderer.gpu_capabilities();
     alpha2_os::diagnostic!(
-        "alpha2-host GPU: {}, {}, {} {}, tier {:?}",
-        adapter.name,
-        adapter.backend,
-        adapter.driver,
-        adapter.driver_info,
-        adapter.tier
+        "alpha2-host GPU: {}, tier {:?}",
+        capabilities.summary(),
+        capabilities.tier
     );
+    if capabilities.shader_compiler.starts_with("DXC ") {
+        alpha2_os::diagnostic!(
+            "alpha2-host shader compiler: {}",
+            crate::renderer_backend::describe_shader_compiler(&capabilities.shader_compiler)
+        );
+    }
     log_runtime_codecs();
     let builtins = builtin_ids
         .into_iter()
@@ -842,40 +913,6 @@ fn log_runtime_codecs() {
             format!(" probed when first used=[{}]", unprobed.join(", "))
         }
     );
-}
-
-/// Creates the renderer's GPU on the backend hardware decode shares.
-///
-/// `preferred` makes it on that backend, under every decode mode: the
-/// renderer's backend does not change with the mode, so the backend a
-/// platform's tests run on is the one every export runs on. When it
-/// cannot, `software` and `auto` take the default GPU (`auto` reporting why
-/// and decoding in software), and `hardware-required` refuses to start with
-/// that reason instead of a generic GPU failure.
-#[cfg(any(test, all(target_os = "windows", feature = "hwdevice")))]
-fn decode_backend_gpu<T, E: std::fmt::Debug>(
-    policy: VideoDecodePolicy,
-    backend: &str,
-    preferred: impl FnOnce() -> Result<T, E>,
-    fallback: impl FnOnce() -> Result<T, HostError>,
-) -> Result<(T, Option<String>), HostError> {
-    match preferred() {
-        Ok(gpu) => Ok((gpu, None)),
-        Err(error) => {
-            let reason = format!("{backend} unavailable: {error:?}");
-            if policy.requires_hardware() {
-                return Err(HostError::new("HARDWARE_DECODE_UNAVAILABLE", reason));
-            }
-            if !policy.allows_hardware() {
-                alpha2_os::diagnostic!("alpha2-host {reason}; rendering on the default backend");
-                return fallback().map(|gpu| (gpu, None));
-            }
-            alpha2_os::diagnostic!(
-                "alpha2-host hardware decode unavailable, using software: {reason}"
-            );
-            fallback().map(|gpu| (gpu, Some(reason)))
-        }
-    }
 }
 
 /// Whether this host may encode on the GPU: a build with the GPU-resident
@@ -1305,7 +1342,7 @@ fn serve_requests(
                 crate::host::conform_media(request, serving.policy)
             }
             Ok(request) => serving.host()?.handle(request, &mut |progress| {
-                let event = json!({
+                let mut event = json!({
                     "protocolVersion": PROTOCOL_VERSION,
                     "type": "progress",
                     "requestId": request_id,
@@ -1313,6 +1350,9 @@ fn serve_requests(
                     "completed": progress.completed,
                     "total": progress.total,
                 });
+                if progress.restarted {
+                    event["restarted"] = json!(true);
+                }
                 serde_json::to_writer(&mut *stdout, &event).map_err(HostError::json)?;
                 stdout.write_all(b"\n").map_err(HostError::io)?;
                 stdout.flush().map_err(HostError::io)
@@ -1490,6 +1530,12 @@ fn error_message(error: impl std::error::Error + 'static) -> String {
         }
         Some(alpha2_media::EncodeError::OutputInUse(_)) => {
             return protocol::code_tag("OUTPUT_IN_USE", error.to_string());
+        }
+        Some(alpha2_media::EncodeError::Publish { kept, .. }) => {
+            return protocol::output_publish_failed(kept.as_deref(), error.to_string());
+        }
+        Some(alpha2_media::EncodeError::EncoderRejected { frame, .. }) => {
+            return protocol::encoder_rejected_tag(*frame, error.to_string());
         }
         _ => {}
     }

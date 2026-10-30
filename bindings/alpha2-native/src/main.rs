@@ -1002,6 +1002,7 @@ fn write_png(path: &str, frame: &DecodedVideoFrame) -> Result<(), String> {
         height,
         &straight,
     )
+    .map(|_| ())
     .map_err(|error| format!("writing {path}: {error}"))
 }
 

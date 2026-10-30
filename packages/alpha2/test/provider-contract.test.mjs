@@ -6,15 +6,17 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { MediabunnyAudioDecoder } from "../dist/mediabunny.js";
+import {
+  missingCapability,
+  suiteOf,
+} from "../../../scripts/lib/capabilities.mjs";
 
 const wasmDirectory = join(resolve(import.meta.dirname, ".."), "wasm");
-// The adapter resamples with the packaged binding; ALPHA2_REQUIRE_WASM=1 loads it even when
-// missing, so the run fails instead of skipping.
-const binding =
-  process.env.ALPHA2_REQUIRE_WASM === "1" ||
-  existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"))
-    ? await import(pathToFileURL(join(wasmDirectory, "alpha2_wasm.js")).href)
-    : null;
+// The adapter resamples with the packaged binding; a missing package is a recorded skip, which
+// ALPHA2_REQUIRE=wasm turns into a failure.
+const binding = existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"))
+  ? await import(pathToFileURL(join(wasmDirectory, "alpha2_wasm.js")).href)
+  : null;
 binding?.initSync({
   module: readFileSync(join(wasmDirectory, "alpha2_wasm_bg.wasm")),
 });
@@ -41,7 +43,15 @@ function ticks(sample) {
 
 test(
   "the mediabunny decoder meets the audio provider contract",
-  { skip: binding === null && "the wasm package is not built" },
+  {
+    skip:
+      binding === null &&
+      missingCapability(
+        "wasm",
+        suiteOf(import.meta.url),
+        "the wasm package is not built",
+      ),
+  },
   async () => {
     const decoder = await MediabunnyAudioDecoder.open(
       "surround",
@@ -100,7 +110,15 @@ test(
 
 test(
   "the mediabunny decoder reports the speakers a source declares, its planes as the file lays them out",
-  { skip: binding === null && "the wasm package is not built" },
+  {
+    skip:
+      binding === null &&
+      missingCapability(
+        "wasm",
+        suiteOf(import.meta.url),
+        "the wasm package is not built",
+      ),
+  },
   async (t) => {
     const frames = contract.layoutFrames;
     for (const layout of contract.layouts)
@@ -146,7 +164,15 @@ test(
 
 test(
   "the mediabunny decoder reads the speakers a codec's header declares",
-  { skip: binding === null && "the wasm package is not built" },
+  {
+    skip:
+      binding === null &&
+      missingCapability(
+        "wasm",
+        suiteOf(import.meta.url),
+        "the wasm package is not built",
+      ),
+  },
   async (t) => {
     // Decoding these needs WebCodecs; the browser harness (`audio-speaker-layout`) checks them.
     for (const layout of contract.codecLayouts)

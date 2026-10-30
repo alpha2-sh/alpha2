@@ -126,7 +126,7 @@ export function unavailableCapabilityProblem(gpu) {
   if (gpu?.available !== false) {
     return (
       `gpuOutputPath.available is ${JSON.stringify(gpu?.available)}, expected false: this host ` +
-      "has a GPU-resident path, so run --require-gpu here, or set ALPHA2_GPU_ENCODE=0"
+      "has a GPU-resident path, so run with ALPHA2_REQUIRE=gpu-resident here, or set ALPHA2_GPU_ENCODE=0"
     );
   }
   if (typeof gpu.reason !== "string" || gpu.reason.trim() === "") {

@@ -80,6 +80,9 @@ jobs:
       matrix:
         features: [all-features, no-default-features]
     runs-on: ubuntu-latest
+    env:
+      ALPHA2_REQUIRE: c-compiler
+      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Free disk space
@@ -109,11 +112,23 @@ jobs:
             echo "LD_LIBRARY_PATH=$sdk_root/lib"
           } >> "$GITHUB_ENV"
       - run: cargo test --workspace --${{ matrix.features }} --no-fail-fast
+      - name: Skips this run recorded
+        if: always()
+        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: skip-log-rust-tests-${{ matrix.features }}
+          path: ${{ github.workspace }}/target/skip-log.jsonl
+          if-no-files-found: ignore
 
   js:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',js,') }}
     needs: release-wasm
     runs-on: ubuntu-latest
+    env:
+      ALPHA2_REQUIRE: wasm
+      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install native media build dependencies
@@ -147,8 +162,6 @@ jobs:
           name: alpha2-build
           path: packages
       - run: npm run test:js
-        env:
-          ALPHA2_REQUIRE_WASM: "1"
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run test:wasm-parity
@@ -159,11 +172,23 @@ jobs:
       - run: npm run test:render-determinism
       - run: npm run test:package
       - run: scripts/test-clean-consumers.sh
+      - name: Skips this run recorded
+        if: always()
+        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: skip-log-js
+          path: ${{ github.workspace }}/target/skip-log.jsonl
+          if-no-files-found: ignore
 
   host:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',host,') }}
     needs: release-wasm
     runs-on: ubuntu-latest
+    env:
+      ALPHA2_REQUIRE: wasm,browser,python,host
+      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install native media build dependencies
@@ -207,8 +232,6 @@ jobs:
       - run: npm run test:host-parity
         env:
           ALPHA2_CHROME_GPU: swiftshader
-          ALPHA2_REQUIRE_BROWSER: "1"
-          ALPHA2_REQUIRE_PYTHON: "1"
       - name: A Vulkan device without Vulkan Video falls back to software
         run: |
           set -- /usr/share/vulkan/icd.d/lvp_icd*.json
@@ -223,6 +246,15 @@ jobs:
           grep "hardware decode unavailable, using software" "$RUNNER_TEMP/lavapipe.log"
       - run: npm run test:node-e2e
       - run: python/alpha2/.venv/bin/pytest python/alpha2/tests/test_e2e.py
+      - name: Skips this run recorded
+        if: always()
+        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: skip-log-host
+          path: ${{ github.workspace }}/target/skip-log.jsonl
+          if-no-files-found: ignore
 
   openh264:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',openh264,') }}
@@ -236,6 +268,9 @@ jobs:
           - target: linux-arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
+    env:
+      ALPHA2_REQUIRE: openh264,c-compiler
+      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install native media build dependencies
@@ -302,6 +337,15 @@ jobs:
           assert not any(f["encoder"].endswith(("_vulkan", "_nvenc")) for f in result["videoEncoderFallbacks"])
           EOF
           cmp "$RUNNER_TEMP/first.mp4" "$RUNNER_TEMP/second.mp4"
+      - name: Skips this run recorded
+        if: always()
+        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: skip-log-openh264-${{ matrix.target }}
+          path: ${{ github.workspace }}/target/skip-log.jsonl
+          if-no-files-found: ignore
 
   cpu-renderer:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',cpu-renderer,') }}
@@ -520,11 +564,32 @@ jobs:
               echo "FFMPEG_LINK_MODE=dynamic"
             } >> "$GITHUB_ENV"
           fi
+      # The Windows host compiles its DX12 pipelines with the pinned DXC and refuses to start without it.
+      - if: runner.os == 'Windows'
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ runner.temp }}/dxc
+          key: dxc-${{ hashFiles('release/dxc/manifest.toml') }}
+      - name: Fetch the pinned DXC
+        if: runner.os == 'Windows'
+        run: echo "ALPHA2_DXC_PATH=$(scripts/fetch-dxc.sh "$RUNNER_TEMP/dxc")" >> "$GITHUB_ENV"
       - run: cargo clippy -p alpha2-native -p alpha2-native-gpu -p alpha2-host --all-features --all-targets -- -D warnings
       - name: Link and start the host
         run: |
           cargo build -p alpha2-host
           { target/debug/alpha2-host 2>&1 || true; } | grep "usage: alpha2-host"
+      - name: The Windows host reports DXC
+        if: runner.os == 'Windows'
+        run: |
+          echo '{"protocolVersion":1,"requestId":"c","operation":"capabilities"}' \
+            | ALPHA2_RENDERER=gpu target/debug/alpha2-host serve > "$RUNNER_TEMP/capabilities.json"
+          python - "$RUNNER_TEMP/capabilities.json" <<'EOF'
+          import json, sys
+          answer = json.loads(open(sys.argv[1]).read().splitlines()[0])
+          compiler = answer["result"]["capabilities"]["gpu"]["shaderCompiler"]
+          assert compiler.startswith("DXC"), compiler
+          print(compiler)
+          EOF
 
   node-client:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',node-client,') }}
@@ -561,6 +626,9 @@ jobs:
       run:
         shell: bash
         working-directory: python/alpha2
+    env:
+      ALPHA2_REQUIRE: ""
+      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
@@ -584,6 +652,16 @@ jobs:
           "$PY/mypy"
       # The end-to-end tests skip: there is no host here (the host job runs them).
       - run: '"$PY/pytest"'
+      - name: Skips this run recorded
+        if: always()
+        working-directory: ${{ github.workspace }}
+        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: skip-log-python-${{ matrix.runner }}
+          path: ${{ github.workspace }}/target/skip-log.jsonl
+          if-no-files-found: ignore
 
   determinism:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',determinism,') }}
@@ -690,6 +768,9 @@ jobs:
             runner: ubuntu-latest
           - backend: dx12
             runner: windows-latest
+            # Debug builds compile the same optimized HLSL as release ones, so a strict debug run
+            # is the release lane's check too.
+            strict: "1"
           - backend: metal
             runner: macos-latest
     env:
@@ -697,7 +778,7 @@ jobs:
       LIBGL_ALWAYS_SOFTWARE: "1"
       WGPU_VALIDATION: "1"
       MTL_DEBUG_LAYER: "1"
-      ALPHA2_GOLDEN_ACTUAL_DIR: ${{ github.workspace }}/target/golden-actual
+      ALPHA2_GPU_STRICT: ${{ matrix.strict || '0' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
@@ -713,13 +794,25 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: Add-WindowsCapability -Online -Name "Tools.Graphics.DirectX~~~~0.0.1.0"
+      - if: runner.os == 'Windows'
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ runner.temp }}/dxc
+          key: dxc-${{ hashFiles('release/dxc/manifest.toml') }}
+      - name: Fetch the pinned DXC
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "ALPHA2_DXC_PATH=$(scripts/fetch-dxc.sh "$RUNNER_TEMP/dxc")" >> "$GITHUB_ENV"
       - name: Run render goldens and engine frame tests on ${{ matrix.backend }}
+        env:
+          ALPHA2_GOLDEN_ACTUAL_DIR: ${{ github.workspace }}/target/golden-actual/f16
         run: cargo test -p alpha2-render -p alpha2-engine --no-fail-fast -- --test-threads=1
-      - name: Run render goldens on the 8-bit intermediate on ${{ matrix.backend }}
+      - name: Run render goldens and engine frame tests on the 8-bit intermediate on ${{ matrix.backend }}
         if: ${{ !cancelled() }}
         env:
           ALPHA2_TEST_INTERMEDIATE: rgba8unorm
-        run: cargo test -p alpha2-render --lib --no-fail-fast -- --test-threads=1
+          ALPHA2_GOLDEN_ACTUAL_DIR: ${{ github.workspace }}/target/golden-actual/rgba8
+        run: cargo test -p alpha2-render --lib -p alpha2-engine --no-fail-fast -- --test-threads=1
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
@@ -732,8 +825,9 @@ jobs:
     needs: release-wasm
     runs-on: ubuntu-latest
     env:
+      ALPHA2_REQUIRE: browser,wasm,webgpu,webgl2,webcodecs-audio,webcodecs-video
+      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
       ALPHA2_CHROME_GPU: swiftshader
-      ALPHA2_REQUIRE_BROWSER: "1"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
@@ -754,3 +848,12 @@ jobs:
       - run: npm run test:wgsl-browser
       - run: node scripts/test-wasm-browser.mjs
       - run: npm run test:editor:package
+      - name: Skips this run recorded
+        if: always()
+        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: skip-log-browser
+          path: ${{ github.workspace }}/target/skip-log.jsonl
+          if-no-files-found: ignore

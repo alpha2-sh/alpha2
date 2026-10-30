@@ -20,11 +20,10 @@ fn an_export_survives_a_hardware_session_that_fails_on_its_first_packet() {
             .expect("host")
             .hardware_decode_ready()
         {
-            assert!(
-                std::env::var_os("ALPHA2_REQUIRE_VIDEOTOOLBOX").is_none(),
-                "VideoToolbox decode is required"
+            alpha2_test_support::skip!(
+                alpha2_test_support::Capability::Videotoolbox,
+                "this host has no VideoToolbox decode"
             );
-            eprintln!("skipped: this host has no VideoToolbox decode");
             return;
         }
         [("recovery-mpeg4.mp4", 64, 48)]
@@ -199,7 +198,7 @@ fn a_resident_host_exports_again_after_a_gpu_resident_export_fails_midway() {
     let _gpu = gpu_test_lock();
     // `serve` keeps one host, so whatever a failed export leaves on the shared device is what the
     // next export runs into.
-    let Some((mut host, capability)) = gpu_output_host(VideoDecodePolicy::Auto) else {
+    let Some((mut host, capability, _)) = gpu_output_host(VideoDecodePolicy::Auto) else {
         return;
     };
     let directory = scratch_directory("resident-retry");
@@ -321,7 +320,7 @@ fn a_resident_host_exports_again_after_a_gpu_resident_export_fails_midway() {
 #[test]
 fn a_software_decoded_export_still_encodes_on_the_gpu() {
     let _gpu = gpu_test_lock();
-    let Some((mut host, _)) = gpu_output_host(VideoDecodePolicy::Software) else {
+    let Some((mut host, _, _)) = gpu_output_host(VideoDecodePolicy::Software) else {
         return;
     };
     let directory = scratch_directory("software-gpu");
@@ -496,20 +495,13 @@ fn a_generated_source_exports_without_an_asset() {
 #[allow(clippy::too_many_lines)]
 fn an_untouched_clip_is_transcoded_from_its_decoded_planes() {
     let _gpu = gpu_test_lock();
-    let Some((mut hardware, _)) = gpu_output_host(VideoDecodePolicy::Auto) else {
+    let Some((mut hardware, _, _)) = gpu_output_host(VideoDecodePolicy::Auto) else {
         return;
     };
-    let software = gpu_output_host(VideoDecodePolicy::Software);
     // Software decode keeps the adapter wgpu prefers, which on a hybrid Windows laptop can be one
-    // without the encoder the auto host found.
-    #[cfg(target_os = "windows")]
-    let Some(software) = software else {
-        eprintln!("skipped: the software-decode host renders on an adapter without the encoder");
-        return;
-    };
-    #[cfg(not(target_os = "windows"))]
-    let software = software.expect("the same device");
-    let (mut software, _) = software;
+    // without the encoder: the same retry finds the adapter that has it.
+    let (mut software, _, _) = gpu_output_host(VideoDecodePolicy::Software)
+        .expect("a software-decode host encodes on the GPU where a hardware-decode one does");
     let imported_h264 = imports_decoded(&hardware, "h264");
     let directory = scratch_directory("yuv-transcode");
     let end = alpha2_time::TICKS_PER_SECOND / 2;
@@ -629,25 +621,11 @@ fn an_untouched_clip_is_transcoded_from_its_decoded_planes() {
         let exported = decoded_planes(&output);
         let original = decoded_planes(&source);
         assert_eq!(exported.len(), 15, "{name}");
-        for (index, (exported, original)) in exported.iter().zip(&original).enumerate() {
-            assert_eq!(exported.len(), 3, "{name} frame {index}: Y, U and V");
-            for (plane, (exported, original)) in exported.iter().zip(original).enumerate() {
-                assert_eq!(
-                    exported.len(),
-                    original.len(),
-                    "{name} frame {index} plane {plane}"
-                );
-                let difference = exported
-                    .iter()
-                    .zip(original)
-                    .map(|(a, b)| u64::from(a.abs_diff(*b)))
-                    .sum::<u64>();
-                let samples = u64::try_from(exported.len()).expect("sample count");
-                assert!(
-                    difference < samples,
-                    "{name} frame {index} plane {plane} differs by {difference} over {samples} samples"
-                );
-            }
+        if std::env::var_os("ALPHA2_PLANE_PSNR_REPORT").is_some() {
+            report_plane_psnr(name, &exported, &original, 128);
+        }
+        if let Err(problem) = plane_check(&exported, &original, 256, 144) {
+            panic!("{name}: {problem}");
         }
     }
 
@@ -696,7 +674,7 @@ fn an_untouched_clip_is_transcoded_from_its_decoded_planes() {
 #[allow(clippy::too_many_lines)]
 fn a_rendered_gpu_resident_export_carries_each_frames_colors_into_its_chroma() {
     let _gpu = gpu_test_lock();
-    let Some((mut host, _)) = gpu_output_host(VideoDecodePolicy::Software) else {
+    let Some((mut host, _, _)) = gpu_output_host(VideoDecodePolicy::Software) else {
         return;
     };
     let directory = scratch_directory("gpu-resident-chroma");
@@ -1028,19 +1006,18 @@ fn a_transcoded_picture_is_the_last_of_its_frame_set() {
 
 /// On Windows, a hardware-decoded clip reaches the render as D3D12 copies of
 /// the decoder's surfaces, one per frame, and exports the pictures a
-/// software-decoded run of the same clip does. Without
-/// a D3D12VA device it skips, unless `ALPHA2_REQUIRE_D3D12` is set.
+/// software-decoded run of the same clip does. Without a D3D12VA device it
+/// skips, recorded as the `d3d12-video` capability.
 #[cfg(all(target_os = "windows", feature = "hwdecode"))]
 #[test]
 fn a_d3d12va_decoded_export_renders_copies_of_its_surfaces_as_software_decode_would() {
     let _gpu = gpu_test_lock();
     let mut hardware = create_gpu_test_host(VideoDecodePolicy::Auto).expect("host");
     if !hardware.hardware_decode_ready() {
-        assert!(
-            std::env::var_os("ALPHA2_REQUIRE_D3D12").is_none(),
-            "the D3D12VA device is required"
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::D3d12Video,
+            "no D3D12VA device for the renderer's adapter"
         );
-        eprintln!("skipped: no D3D12VA device for the renderer's adapter");
         return;
     }
     let mut software = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
@@ -1134,7 +1111,7 @@ fn a_d3d12va_decoded_export_renders_copies_of_its_surfaces_as_software_decode_wo
 fn a_gpu_resident_export_writes_every_container_that_offers_its_codec() {
     use alpha2_media::Container;
     let _gpu = gpu_test_lock();
-    let Some((mut host, capability)) = gpu_output_host(VideoDecodePolicy::Software) else {
+    let Some((mut host, capability, _)) = gpu_output_host(VideoDecodePolicy::Software) else {
         return;
     };
     let directory = scratch_directory("gpu-resident-containers");
@@ -1233,4 +1210,66 @@ fn a_gpu_resident_export_writes_every_container_that_offers_its_codec() {
         assert_eq!(video_stream.codec, video.as_str());
     }
     let _ = std::fs::remove_dir_all(directory);
+}
+
+/// Prints, per plane, the lowest PSNR over the frames of an export against its source, and the
+/// same for three defects of the source: chroma shifted one row, U and V swapped, chroma one
+/// column on. The floor of [`plane_check`] was chosen from these figures. `chroma_width` is the
+/// width of the U and V planes.
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos", target_os = "windows"),
+    feature = "hwencode"
+))]
+fn report_plane_psnr(
+    name: &str,
+    exported: &[Vec<Vec<u8>>],
+    original: &[Vec<Vec<u8>>],
+    chroma_width: usize,
+) {
+    /// One plane of a frame's planes, as a defect makes it.
+    type Defect<'a> = dyn Fn(&[Vec<u8>], usize) -> Vec<u8> + 'a;
+    let lowest = |defect: &Defect<'_>| {
+        (0..3)
+            .map(|plane| {
+                exported
+                    .iter()
+                    .zip(original)
+                    .map(|(frame, source)| plane_psnr(&frame[plane], &defect(source, plane)))
+                    .fold(f64::INFINITY, f64::min)
+            })
+            .collect::<Vec<_>>()
+    };
+    // A plane read one row or one column on, its last row or column repeated.
+    let shifted = |plane: &[u8], rows: usize, columns: usize| -> Vec<u8> {
+        let height = plane.len() / chroma_width;
+        (0..height)
+            .flat_map(|y| {
+                (0..chroma_width).map(move |x| {
+                    let (sy, sx) = (
+                        (y + rows).min(height - 1),
+                        (x + columns).min(chroma_width - 1),
+                    );
+                    plane[sy * chroma_width + sx]
+                })
+            })
+            .collect()
+    };
+    let real = lowest(&|source, plane| source[plane].clone());
+    let row = lowest(&|source, plane| match plane {
+        0 => source[0].clone(),
+        _ => shifted(&source[plane], 1, 0),
+    });
+    let swapped = lowest(&|source, plane| match plane {
+        1 => source[2].clone(),
+        2 => source[1].clone(),
+        _ => source[0].clone(),
+    });
+    let column = lowest(&|source, plane| match plane {
+        0 => source[0].clone(),
+        _ => shifted(&source[plane], 0, 1),
+    });
+    eprintln!(
+        "plane PSNR {name} (Y, U, V, dB): real {real:.2?}, chroma one row down {row:.2?}, \
+         U/V swapped {swapped:.2?}, chroma one column on {column:.2?}"
+    );
 }

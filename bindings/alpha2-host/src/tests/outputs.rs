@@ -78,6 +78,69 @@ fn the_result_names_the_file_written_by_its_absolute_path() {
 }
 
 #[test]
+fn the_result_says_how_the_output_was_published() {
+    let _gpu = gpu_test_lock();
+    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let directory = scratch_directory("publish-method");
+    let output = directory.join("out.mp4");
+    let result = host
+        .handle(export_request(&output, false), &mut |_| Ok(()))
+        .expect("export");
+    assert_eq!(
+        result["publish"],
+        json!({"method": "rename-no-replace", "stagedLocally": false, "retries": 0}),
+        "{result}"
+    );
+    let result = host
+        .handle(export_request(&output, true), &mut |_| Ok(()))
+        .expect("an overwriting export");
+    assert_eq!(result["publish"]["method"], "rename-replace", "{result}");
+}
+
+#[test]
+fn a_file_saved_at_the_output_during_an_export_keeps_the_render_beside_it() {
+    let _gpu = gpu_test_lock();
+    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let directory = scratch_directory("publish-kept");
+    let output = directory.join("out.mp4");
+    // Another program saves a file at the path while the frames encode.
+    let error = host
+        .handle(export_request(&output, false), &mut |_| {
+            if !output.exists() {
+                std::fs::write(&output, b"someone else's").expect("save");
+            }
+            Ok(())
+        })
+        .expect_err("the publish fails");
+    assert_eq!(error.code, "OUTPUT_PUBLISH_FAILED", "{error:?}");
+    assert_eq!(std::fs::read(&output).expect("saved"), b"someone else's");
+    let kept = PathBuf::from(
+        error.details.as_ref().expect("details")["keptPath"]
+            .as_str()
+            .expect("keptPath"),
+    );
+    assert!(kept.is_absolute(), "{}", kept.display());
+    assert!(
+        names_written_file(&kept, &directory.join("out.a2kept.mp4")),
+        "{}",
+        kept.display()
+    );
+    assert!(
+        error.message.contains("appeared") && error.message.contains("kept at"),
+        "{}",
+        error.message
+    );
+    assert_eq!(decoded_luma(&kept).len(), 30, "the kept render is whole");
+    let failure = error.failure.expect("a failure report");
+    assert_eq!(failure["code"], "OUTPUT_IO_FAILED", "{failure}");
+    let names: Vec<_> = std::fs::read_dir(&*directory)
+        .expect("directory")
+        .map(|entry| entry.expect("entry").file_name())
+        .collect();
+    assert_eq!(names.len(), 2, "{names:?}");
+}
+
+#[test]
 fn a_cancelled_overwrite_leaves_the_old_file_whole() {
     let _gpu = gpu_test_lock();
     let mut host = create_host(VideoDecodePolicy::Software).expect("host");

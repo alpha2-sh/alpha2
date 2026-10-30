@@ -14,17 +14,17 @@ import {
   roundingQuantum,
 } from "../dist/media.js";
 import { MediabunnyAudioDecoder } from "../dist/mediabunny.js";
+import {
+  missingCapability,
+  suiteOf,
+} from "../../../scripts/lib/capabilities.mjs";
 
 const wasmDirectory = join(resolve(import.meta.dirname, ".."), "wasm");
 
 // The packaged binding, whose resampler the audio adapter uses, or null before `npm run build` made
-// it. ALPHA2_REQUIRE_WASM=1 loads it regardless, so a missing package fails instead of skipping.
+// it. ALPHA2_REQUIRE=wasm loads it regardless, so a missing package fails instead of skipping.
 async function loadBinding() {
-  if (
-    process.env.ALPHA2_REQUIRE_WASM !== "1" &&
-    !existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"))
-  )
-    return null;
+  if (!existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"))) return null;
   const wasm = await import(
     pathToFileURL(join(wasmDirectory, "alpha2_wasm.js")).href
   );
@@ -34,7 +34,13 @@ async function loadBinding() {
   return wasm;
 }
 const binding = await loadBinding();
-const needsWasm = binding === null && "the wasm package is not built";
+const needsWasm =
+  binding === null &&
+  missingCapability(
+    "wasm",
+    suiteOf(import.meta.url),
+    "the wasm package is not built",
+  );
 
 class FakeVideoFrame {
   constructor(timestamp) {

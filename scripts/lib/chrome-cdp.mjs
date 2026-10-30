@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import path, { join, win32 } from "node:path";
 
 import { BrowserStartError } from "./browser-errors.mjs";
+import { recordSkip, required } from "./capabilities.mjs";
 
 /**
  * The Chrome to run: ALPHA2_PARITY_CHROME, else the first usual install of Chrome or Chromium on
@@ -122,28 +123,27 @@ export function chromeGpuMode({
 
 /**
  * The Chrome a browser check runs in, or null when the machine has none (the check then skips its
- * browser half). `--require-browser` in `argv` or ALPHA2_REQUIRE_BROWSER=1 makes a missing Chrome
- * throw.
+ * browser half). A missing Chrome throws when ALPHA2_REQUIRE names `browser`.
  */
-export function browserForCheck({
-  argv = process.argv,
-  env = process.env,
-  platform,
-  exists,
-} = {}) {
+export function browserForCheck({ env = process.env, platform, exists } = {}) {
   const chrome = chromeExecutable({ env, platform, exists });
   if (chrome !== null) return chrome;
-  const message =
-    "no Chrome found: set ALPHA2_PARITY_CHROME to a Chrome executable";
-  if (argv.includes("--require-browser") || env.ALPHA2_REQUIRE_BROWSER === "1")
-    throw new Error(`${message} (a browser is required)`);
+  if (required("browser", env))
+    throw new Error(
+      "no Chrome found: set ALPHA2_PARITY_CHROME to a Chrome executable (browser is required by ALPHA2_REQUIRE)",
+    );
   return null;
 }
 
-/** Prints that a check's browser half did not run, and why. */
-export function reportSkippedBrowser(what) {
-  process.stderr.write(
-    `skipped ${what}: no Chrome found; set ALPHA2_PARITY_CHROME to a Chrome executable, or pass --require-browser to fail instead\n`,
+/** Records that a check's browser half did not run (the `browser` capability), and why. */
+export function reportSkippedBrowser(what, suite, env = process.env) {
+  recordSkip(
+    {
+      suite,
+      capability: "browser",
+      reason: `${what} did not run: no Chrome found; set ALPHA2_PARITY_CHROME to a Chrome executable`,
+    },
+    env,
   );
 }
 
@@ -156,7 +156,7 @@ export function reportSkippedBrowser(what) {
 export function skippedCasesSummary(skipped) {
   if (skipped.length === 0) return "";
   return [
-    `${skipped.length} case(s) skipped: this browser cannot run them; --no-skips fails them`,
+    `${skipped.length} case(s) skipped: this browser cannot run them; ALPHA2_REQUIRE fails the ones it names`,
     ...skipped.map(({ name, reason }) => `  ${name}: ${reason}`),
     "",
   ].join("\n");

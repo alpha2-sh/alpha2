@@ -59,6 +59,8 @@ unsafe extern "C" {
     ) -> i32;
     fn alpha2_native_gpu_d3d12_copy_destroy(ticket: *mut c_void) -> i32;
     fn alpha2_native_gpu_d3d12_set_wait_timeout(milliseconds: u32);
+    fn alpha2_native_gpu_d3d12_video_device_check(device: *mut c_void) -> i32;
+    fn alpha2_native_gpu_d3d12_device_removed_reason(device: *mut c_void) -> i32;
     fn alpha2_native_gpu_d3d12_wait_timeout() -> u32;
     fn alpha2_native_gpu_d3d12_encode_copier_create(
         device: *mut c_void,
@@ -209,13 +211,26 @@ pub(crate) mod inject {
     }
 }
 
-/// Failure while binding D3D12VA to the renderer's D3D12 device.
+/// Failure while binding D3D12VA to the renderer's D3D12 device: the adapter,
+/// as `<name> (LUID 0x<luid>)`, and the step that failed.
 #[derive(Debug)]
-pub struct SharedD3D12Error(String);
+pub struct SharedD3D12Error {
+    adapter: String,
+    step: String,
+}
+
+impl SharedD3D12Error {
+    /// The step that failed, without the adapter: for a caller that names the
+    /// adapter itself.
+    #[must_use]
+    pub fn step(&self) -> &str {
+        &self.step
+    }
+}
 
 impl fmt::Display for SharedD3D12Error {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
+        write!(formatter, "{}: {}", self.adapter, self.step)
     }
 }
 
@@ -386,10 +401,25 @@ impl SharedD3D12Context {
             .device()
             .features()
             .contains(wgpu::Features::TEXTURE_FORMAT_NV12);
+        let named = adapter_label(&gpu);
+        let refuse = |step: &str| SharedD3D12Error {
+            adapter: named.clone(),
+            step: step.to_owned(),
+        };
         // SAFETY: the guard only borrows the renderer's live D3D12 device.
         let hal = unsafe { gpu.device().as_hal::<wgpu_hal::api::Dx12>() }
-            .ok_or_else(|| SharedD3D12Error("renderer is not using D3D12".into()))?;
+            .ok_or_else(|| refuse("the renderer is not using D3D12"))?;
         let raw = hal.raw_device().as_raw();
+        // FFmpeg's D3D12VA device context asks for this interface and fails with a bare EINVAL
+        // without it, which names neither the adapter nor the call.
+        // SAFETY: `raw` is the renderer's live device; the check only queries an interface.
+        let video = unsafe { alpha2_native_gpu_d3d12_video_device_check(raw) };
+        if video != 0 {
+            return Err(refuse(&format!(
+                "ID3D12VideoDevice unavailable ({})",
+                hresult_text(video)
+            )));
+        }
         let identity = NativeGpuIdentity {
             physical_device: raw.addr() as u64,
             device: raw.addr() as u64,
@@ -398,11 +428,11 @@ impl SharedD3D12Context {
         // SAFETY: `raw` is the renderer's live `ID3D12Device`, borrowed through `hal`, and the
         // context takes its own COM reference to it.
         let ffmpeg_device = unsafe { create_d3d12_device_context(raw.addr() as u64) }
-            .map_err(|error| SharedD3D12Error(error.to_string()))?;
+            .map_err(|error| refuse(&format!("FFmpeg D3D12VA device context: {error}")))?;
         // SAFETY: as above; the pool takes its own reference to the device.
         let copies = NonNull::new(unsafe { alpha2_native_gpu_d3d12_pool_create(raw) })
             .map(CopyPool)
-            .ok_or_else(|| SharedD3D12Error("out of memory for the D3D12 copy pool".into()))?;
+            .ok_or_else(|| refuse("out of memory for the D3D12 copy pool"))?;
         drop(hal);
         Ok(Self {
             gpu,
@@ -423,11 +453,30 @@ impl SharedD3D12Context {
     pub fn for_decode(gpu: GpuContext) -> Result<Self, SharedD3D12Error> {
         let shared = Self::from_gpu(gpu)?;
         if !shared.decode_planes {
-            return Err(SharedD3D12Error(
-                "D3D12 adapter does not expose NV12 plane views".into(),
-            ));
+            return Err(SharedD3D12Error {
+                adapter: adapter_label(&shared.gpu),
+                step: "the D3D12 adapter does not expose NV12 plane views".to_owned(),
+            });
         }
         Ok(shared)
+    }
+
+    /// Why the device was removed, as its `HRESULT` (`DXGI_ERROR_DEVICE_HUNG`, ...), or `None`
+    /// while it is usable: what tells a failed call on a lost device from one the device refused.
+    #[must_use]
+    pub fn device_removed_reason(&self) -> Option<i32> {
+        // SAFETY: the guard only borrows the renderer's live D3D12 device.
+        let hal = unsafe { self.gpu.device().as_hal::<wgpu_hal::api::Dx12>() }?;
+        // SAFETY: the device is live for the call, which only reads its state.
+        let reason =
+            unsafe { alpha2_native_gpu_d3d12_device_removed_reason(hal.raw_device().as_raw()) };
+        (reason != 0).then_some(reason)
+    }
+
+    /// The adapter as error messages name it: `<name> (LUID 0x<luid>)`.
+    #[must_use]
+    pub fn adapter_label(&self) -> String {
+        adapter_label(&self.gpu)
     }
 
     /// Whether the renderer can show decoded surfaces here: wgpu exposes NV12
@@ -677,6 +726,36 @@ impl SharedD3D12Context {
 
 /// The error for a D3D12 helper's `operation` that failed at `step` with the
 /// `HRESULT` `status`.
+/// `gpu`'s adapter as error messages name it: `<name> (LUID 0x<luid>)`, the LUID being what
+/// tells two adapters of one name apart.
+fn adapter_label(gpu: &GpuContext) -> String {
+    let name = &gpu.capabilities().adapter_name;
+    d3d12_adapter_identity(gpu.adapter()).map_or_else(
+        || name.clone(),
+        |identity| format!("{name} (LUID {:#x})", identity.luid),
+    )
+}
+
+/// An `HRESULT` as messages give it: `HRESULT 0x80004002 E_NOINTERFACE`, the name where it is
+/// one a D3D12 call commonly returns.
+#[must_use]
+pub fn hresult_text(status: i32) -> String {
+    let name = match status.cast_unsigned() {
+        0x8000_4002 => " E_NOINTERFACE",
+        0x8000_4005 => " E_FAIL",
+        0x8007_000E => " E_OUTOFMEMORY",
+        0x8007_0057 => " E_INVALIDARG",
+        0x887A_0001 => " DXGI_ERROR_INVALID_CALL",
+        0x887A_0004 => " DXGI_ERROR_UNSUPPORTED",
+        0x887A_0005 => " DXGI_ERROR_DEVICE_REMOVED",
+        0x887A_0006 => " DXGI_ERROR_DEVICE_HUNG",
+        0x887A_0007 => " DXGI_ERROR_DEVICE_RESET",
+        0x887A_0020 => " DXGI_ERROR_DRIVER_INTERNAL_ERROR",
+        _ => "",
+    };
+    format!("HRESULT {:#010X}{name}", status.cast_unsigned())
+}
+
 fn helper_error(operation: &'static str, step: i32, status: i32) -> BridgeError {
     crate::status::helper_failure(
         alpha2_ffmpeg_bridge::NativeGpuBackend::D3D12,
@@ -699,6 +778,13 @@ pub struct D3D12AdapterIdentity {
     /// Whether DXGI flags it `DXGI_ADAPTER_FLAG_SOFTWARE`: WARP, the
     /// Microsoft Basic Render Driver.
     pub software: bool,
+    /// `DXGI_ADAPTER_DESC1`'s PCI vendor and device ids.
+    pub vendor_device: (u32, u32),
+    /// The adapter's PCI bus, device and function, as the kernel driver
+    /// reports them; `None` where it reports none: WARP, and the second DXGI
+    /// row a hybrid laptop's driver lists for its integrated GPU (same vendor
+    /// and device ids, another LUID).
+    pub pci_address: Option<(u32, u32, u32)>,
 }
 
 /// The DXGI identity of `adapter`, or `None` for an adapter on another
@@ -716,7 +802,53 @@ pub fn d3d12_adapter_identity(adapter: &wgpu::Adapter) -> Option<D3D12AdapterIde
             .0
             .cast_unsigned()
         != 0;
-    Some(D3D12AdapterIdentity { luid, software })
+    Some(D3D12AdapterIdentity {
+        luid,
+        software,
+        vendor_device: (description.VendorId, description.DeviceId),
+        pci_address: pci_address(description.AdapterLuid),
+    })
+}
+
+/// The PCI address the kernel driver reports for the adapter at `luid`.
+fn pci_address(luid: windows::Win32::Foundation::LUID) -> Option<(u32, u32, u32)> {
+    use windows::Wdk::Graphics::Direct3D::{
+        D3DKMT_ADAPTERADDRESS, D3DKMT_CLOSEADAPTER, D3DKMT_OPENADAPTERFROMLUID,
+        D3DKMT_QUERYADAPTERINFO, D3DKMTCloseAdapter, D3DKMTOpenAdapterFromLuid,
+        D3DKMTQueryAdapterInfo, KMTQAITYPE_ADAPTERADDRESS,
+    };
+    let mut open = D3DKMT_OPENADAPTERFROMLUID {
+        AdapterLuid: luid,
+        hAdapter: 0,
+    };
+    // SAFETY: fills `hAdapter` of a structure it is given.
+    if unsafe { D3DKMTOpenAdapterFromLuid(&raw mut open) }.is_err() {
+        return None;
+    }
+    let mut address = D3DKMT_ADAPTERADDRESS::default();
+    let mut query = D3DKMT_QUERYADAPTERINFO {
+        hAdapter: open.hAdapter,
+        Type: KMTQAITYPE_ADAPTERADDRESS,
+        pPrivateDriverData: (&raw mut address).cast(),
+        PrivateDriverDataSize: u32::try_from(std::mem::size_of::<D3DKMT_ADAPTERADDRESS>())
+            .unwrap_or(u32::MAX),
+    };
+    // SAFETY: writes at most `PrivateDriverDataSize` bytes into `address`.
+    let queried = unsafe { D3DKMTQueryAdapterInfo(&raw mut query) }.is_ok();
+    let close = D3DKMT_CLOSEADAPTER {
+        hAdapter: open.hAdapter,
+    };
+    // SAFETY: closes the handle opened above.
+    let _ = unsafe { D3DKMTCloseAdapter(&raw const close) };
+    // Adapters without a PCI function (WARP, a second view of a hybrid laptop's GPU) answer
+    // with every field at its maximum.
+    let none = (u32::MAX, u32::from(u16::MAX), u32::from(u16::MAX));
+    let found = (
+        address.BusNumber,
+        address.DeviceNumber,
+        address.FunctionNumber,
+    );
+    (queried && found != none).then_some(found)
 }
 
 /// A codec D3D12 Video Encode is asked about, at the profile `FFmpeg`'s

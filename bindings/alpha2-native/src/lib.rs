@@ -27,9 +27,10 @@ pub use recovery::{
 mod encode;
 mod mux;
 mod partial;
+pub use alpha2_os::PublishMethod;
 pub use partial::{
-    ExistingOutput, OutputTarget, PARTIAL_OUTPUT_IN_USE, remove_stale_partial_output, write_png,
-    write_whole,
+    ExistingOutput, OutputTarget, PARTIAL_OUTPUT_IN_USE, PublishReport,
+    remove_stale_partial_output, write_png, write_whole,
 };
 #[cfg(any(
     test,

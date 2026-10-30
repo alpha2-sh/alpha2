@@ -325,7 +325,10 @@ fn a_library_of_another_api_version_or_without_the_entry_points_is_refused() {
         "newer",
         &format!("#define MAJOR 3\n#define MINOR 0\n{FAKE_ENCODER}"),
     ) else {
-        eprintln!("no C compiler: the fake-library cases did not run");
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::CCompiler,
+            "no C compiler: the fake-library cases did not run"
+        );
         return;
     };
     let OpenH264Status::Unusable(reason) = unverified(newer) else {
@@ -366,7 +369,10 @@ fn a_library_of_another_api_version_or_without_the_entry_points_is_refused() {
 #[test]
 fn cisco_s_binary_loads_as_itself() {
     let Some(path) = std::env::var_os("ALPHA2_OPENH264_LIBRARY") else {
-        eprintln!("ALPHA2_OPENH264_LIBRARY is not set: Cisco's binary was not loaded");
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::Openh264,
+            "ALPHA2_OPENH264_LIBRARY is not set: Cisco's binary was not loaded"
+        );
         return;
     };
     let status = resolve(&Lookup {

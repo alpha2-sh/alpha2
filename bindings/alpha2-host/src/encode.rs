@@ -379,6 +379,10 @@ impl NativeExportSink {
             session.abort();
             return Err(encode_error("native encode was cancelled"));
         }
+        #[cfg(test)]
+        if let Some(error) = rejected_for_tests() {
+            return Err(encode_failure("writing media", error));
+        }
         session
             .encode(surface)
             .map_err(|error| encode_failure("writing media", error))
@@ -408,12 +412,23 @@ impl NativeExportSink {
         .map_err(|error| encode_failure("writing media", error))
     }
 
+    /// How the finished output was published; `None` until [`Self::finish`]
+    /// has published it.
+    pub fn publish_report(&self) -> Option<alpha2_native::PublishReport> {
+        match self {
+            Self::AudioVideo(sink) => sink.publish_report(),
+            Self::Video(sink) => sink.publish_report(),
+            #[cfg(feature = "hwencode")]
+            Self::GpuVideo(session) => session.publish_report(),
+        }
+    }
+
     /// Flushes the encoders and closes the output, which moves the partial
     /// file into place.
     ///
     /// # Errors
-    /// Returns an error when the export was cancelled or flushing or closing
-    /// failed.
+    /// Returns an error when the export was cancelled or flushing, closing
+    /// or publishing failed.
     pub fn finish(&mut self, cancel: &CancelToken) -> Result<(), String> {
         #[cfg(feature = "hwencode")]
         if let Self::GpuVideo(session) = self {
@@ -424,7 +439,7 @@ impl NativeExportSink {
             // Flush and close are one step: only a closed output renames the partial file into
             // place.
             return session
-                .finish()
+                .finish(cancel)
                 .map_err(|error| encode_failure("finalizing output", error));
         }
         match self {
@@ -501,8 +516,9 @@ pub enum EncodeWorkerEvent {
         /// The sink's running totals after this command.
         stages: EncodeStageTimings,
     },
-    /// The output was closed, with the sink's final totals.
-    Finished(EncodeStageTimings),
+    /// The output was closed and published, with the sink's final totals
+    /// and how it was published.
+    Finished(EncodeStageTimings, Option<alpha2_native::PublishReport>),
     /// The worker stopped on this error, already recorded and phase-tagged.
     Failed(String),
 }
@@ -541,6 +557,14 @@ pub struct PipelineFailure {
 }
 
 impl PipelineFailure {
+    /// Forgets the recorded failure, for an export that starts over on another path.
+    pub fn clear(&self) {
+        self.cause
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+    }
+
     /// Records `error` as the first failure, unless one was recorded already.
     pub fn record(&self, error: &str) {
         let mut cause = self
@@ -884,9 +908,10 @@ fn run_encode_worker(state: &mut EncodeWorkerState) {
                 let _work = state.heartbeat.begin_close();
                 match state.sink.finish(&state.cancel) {
                     Ok(()) => {
-                        let _ = state
-                            .results
-                            .send(EncodeWorkerEvent::Finished(state.sink.stage_timings()));
+                        let _ = state.results.send(EncodeWorkerEvent::Finished(
+                            state.sink.stage_timings(),
+                            state.sink.publish_report(),
+                        ));
                     }
                     Err(error) => {
                         let error = crate::failure::tag_phase(
@@ -1342,8 +1367,9 @@ pub fn handle_encode_worker_event(
             }
             Ok(false)
         }
-        EncodeWorkerEvent::Finished(stages) => {
+        EncodeWorkerEvent::Finished(stages, publish) => {
             metrics.encode_stages = stages;
+            metrics.publish = publish;
             Ok(true)
         }
         EncodeWorkerEvent::Failed(error) => Err(error),
@@ -1371,4 +1397,40 @@ pub fn drain_encode_worker(
         }
     }
     Ok(())
+}
+
+/// The GPU-resident frame index a test makes the encoder reject, and the frames
+/// sent so far, process-wide: the encode worker runs on a thread of its own.
+#[cfg(all(test, feature = "hwencode"))]
+static REJECT_GPU_FRAME: std::sync::Mutex<Option<(u64, u64)>> = std::sync::Mutex::new(None);
+
+/// Makes the GPU-resident encoder reject frame `frame` of the next export, as
+/// the Iris Xe's `h264_d3d12va` intermittently does; dropping the guard stops it.
+#[cfg(all(test, feature = "hwencode"))]
+pub(crate) fn reject_gpu_frame(frame: u64) -> impl Drop {
+    struct Stop;
+    impl Drop for Stop {
+        fn drop(&mut self) {
+            *REJECT_GPU_FRAME.lock().expect("injection") = None;
+        }
+    }
+    *REJECT_GPU_FRAME.lock().expect("injection") = Some((frame, 0));
+    Stop
+}
+
+#[cfg(all(test, feature = "hwencode"))]
+fn rejected_for_tests() -> Option<alpha2_media::EncodeError> {
+    let mut injected = REJECT_GPU_FRAME.lock().expect("injection");
+    let (frame, sent) = injected.as_mut()?;
+    let index = *sent;
+    *sent += 1;
+    if index != *frame {
+        return None;
+    }
+    // As the session's own rejection does, this leaves the session to the export's teardown.
+    Some(alpha2_media::EncodeError::EncoderRejected {
+        encoder: "injected".to_owned(),
+        frame: index,
+        message: format!("injected rejected frame {index}"),
+    })
 }

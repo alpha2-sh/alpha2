@@ -48,6 +48,8 @@ pub struct AdapterDiagnostics {
     pub tier: CapabilityTier,
     /// Whether hardware timestamps are active.
     pub timestamp_queries: bool,
+    /// The DX12 shader compiler; empty on other backends and in browsers.
+    pub shader_compiler: String,
 }
 
 /// Snapshot of render performance, cache, memory, and scheduling behavior.
@@ -296,6 +298,7 @@ pub(crate) fn snapshot(
             driver_info: capabilities.driver_info.clone(),
             tier: capabilities.tier,
             timestamp_queries: capabilities.timestamp_queries,
+            shader_compiler: capabilities.shader_compiler.clone(),
         },
         passes: state.passes.iter().copied().collect(),
         textures: resources.textures,

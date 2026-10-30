@@ -158,7 +158,7 @@ impl GpuContext {
         queue: wgpu::Queue,
         queue_lock: Option<Arc<dyn ExternalQueueLock>>,
     ) -> Self {
-        let capabilities = Arc::new(Capabilities::from_adapter(&adapter));
+        let capabilities = Arc::new(Capabilities::from_device(&adapter, &device));
         let diagnostics = Arc::new(DiagnosticHook::new());
         install_device_callbacks(&device, &diagnostics);
         Self {
@@ -279,125 +279,80 @@ impl GpuContext {
     /// Returns [`GpuError`] when adapter or device acquisition fails.
     pub async fn request() -> Result<Self, GpuError> {
         let _turn = crate::serialize_acquisition();
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let instance = crate::new_instance(wgpu::Backends::all());
         Self::request_compatible(&instance, None).await
     }
 
-    /// Requests a surface-independent device, preferring a discrete/high-performance adapter.
-    ///
-    /// `WGPU_POWER_PREF` still takes precedence when it is explicitly set.
+    /// Requests the product device with the default request: the device a
+    /// host renders on, as [`Self::request_product_with`] picks it.
     ///
     /// # Errors
-    /// Returns [`GpuError`] when adapter or device acquisition fails.
-    pub async fn request_high_performance() -> Result<Self, GpuError> {
-        Self::request_high_performance_without(wgpu::Features::empty()).await
+    /// Returns [`GpuError`] when no adapter opens a device.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn request_product() -> Result<Self, GpuError> {
+        Self::request_product_with(&ProductRequest::default()).await
     }
 
-    /// Requests a device as [`Self::request_high_performance`] does, on the
-    /// same adapter and with the same limits, without the optional features in
-    /// `withheld`.
+    /// Requests the product device: on this OS's product backends
+    /// ([`product_backends`]), the adapter `ALPHA2_GPU_ADAPTER` pins, else the
+    /// first in the high-performance order that opens a device.
     ///
-    /// A native device stands in for a browser's this way: browser WebGPU
-    /// never has 16-bit normalized textures, so the path a browser takes for
-    /// 10-bit frames is tested on a device that withholds them. Opening such a
-    /// device straight from wgpu would skip the adapter fallback below and
-    /// fail where wgpu prefers an adapter that makes no device.
+    /// Each backend group is enumerated once. A DX12 group that lists no
+    /// adapter is a failed DX12 instance (WARP is always listed on Windows),
+    /// reported with the shader compiler it was made with. OpenGL adapters
+    /// older than desktop GL 4.3 or GLES 3.1 are refused with the version.
+    /// `WGPU_POWER_PREF` is not consulted.
     ///
     /// # Errors
-    /// Returns [`GpuError`] when adapter or device acquisition fails.
-    #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
-    pub async fn request_high_performance_without(
-        withheld: wgpu::Features,
-    ) -> Result<Self, GpuError> {
+    /// Returns [`GpuError`]: a pin that names no adapter, a DX12 instance
+    /// that did not start, no hardware adapter under
+    /// [`SoftwareAdapters::Refuse`], or the first device error.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub async fn request_product_with(request: &ProductRequest) -> Result<Self, GpuError> {
         let _turn = crate::serialize_acquisition();
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        let preference =
-            wgpu::PowerPreference::from_env().unwrap_or(wgpu::PowerPreference::HighPerformance);
-        Self::request_compatible_with_preference(&instance, None, preference, withheld).await
+        let mut tried = ProductAttempt::default();
+        for adapter in product_candidates(request).await? {
+            match Self::open_device(adapter.adapter, request.withheld).await {
+                Ok(context) => return Ok(context),
+                Err(error) => tried.refused(adapter.name, error),
+            }
+        }
+        Err(tried.into_error(request))
     }
 
-    /// Requests a high-performance device on `backends` only.
-    ///
-    /// A host whose hardware decoder shares its device with the renderer
-    /// needs that device on the decoder's API, so it cannot let wgpu pick.
-    /// `WGPU_BACKEND`, when set, still wins, for debugging.
-    ///
-    /// # Errors
-    /// Returns [`GpuError`] when no adapter on `backends` can create a device.
-    #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
-    pub async fn request_high_performance_on(backends: wgpu::Backends) -> Result<Self, GpuError> {
-        let _turn = crate::serialize_acquisition();
-        let instance = Self::instance_on(backends);
-        let preference =
-            wgpu::PowerPreference::from_env().unwrap_or(wgpu::PowerPreference::HighPerformance);
-        Self::request_compatible_with_preference(
-            &instance,
-            None,
-            preference,
-            wgpu::Features::empty(),
-        )
-        .await
-    }
-
-    /// Requests a high-performance device on `backends`, as
-    /// [`Self::request_high_performance_on`] does, that `accept` takes.
+    /// Requests the product device that `accept` takes, trying adapters in
+    /// the order [`Self::request_product_with`] does.
     ///
     /// A hardware decoder that shares the renderer's device may not open on
     /// every adapter: on a laptop whose discrete GPU's driver has no D3D12
     /// video device, D3D12VA opens on the integrated GPU only. When `accept`
-    /// refuses the preferred adapter's device, a device is opened on each
-    /// other GPU adapter in turn, in the order that request falls back
-    /// through, until `accept` takes one; a CPU adapter is not tried. When
-    /// none is taken, the result holds the preferred adapter's device, to
+    /// refuses the first device, a device is opened on each other hardware
+    /// adapter in turn until `accept` takes one; a CPU adapter is tried only
+    /// when pinned. When none is taken, the result holds the first device, to
     /// render on without what `accept` makes.
     ///
     /// # Errors
-    /// Returns [`GpuError`] when no adapter on `backends` can create a device.
+    /// Returns [`GpuError`] when no adapter opens a device.
     #[cfg(not(target_arch = "wasm32"))]
     #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
-    pub async fn request_high_performance_on_accepted<T, E>(
-        backends: wgpu::Backends,
+    pub async fn request_product_accepted<T, E>(
         mut accept: impl FnMut(&Self) -> Result<T, E>,
     ) -> Result<AcceptedDevice<T, E>, GpuError> {
         let _turn = crate::serialize_acquisition();
-        let instance = Self::instance_on(backends);
-        let preference =
-            wgpu::PowerPreference::from_env().unwrap_or(wgpu::PowerPreference::HighPerformance);
-        let preferred = Self::request_compatible_with_preference(
-            &instance,
-            None,
-            preference,
-            wgpu::Features::empty(),
-        )
-        .await?;
+        let request = ProductRequest::default();
+        let mut tried = ProductAttempt::default();
         let mut refusals = AdapterRefusals(Vec::new());
-        match accept(&preferred) {
-            Ok(value) => {
-                return Ok(AcceptedDevice {
-                    context: preferred,
-                    accepted: Some(value),
-                    refusals,
-                });
-            }
-            Err(error) => refusals.0.push((preferred.adapter.get_info().name, error)),
-        }
-        let tried = preferred.adapter.get_info();
-        let mut others: Vec<wgpu::Adapter> = instance
-            .enumerate_adapters(wgpu::Backends::all())
-            .await
-            .into_iter()
-            .filter(|other| {
-                let info = other.get_info();
-                info != tried && info.device_type != wgpu::DeviceType::Cpu
-            })
-            .collect();
-        others.sort_by_key(|other| fallback_rank(other.get_info().device_type, preference));
-        for other in others {
-            let name = other.get_info().name;
-            let Ok(context) = Self::open_device(other, wgpu::Features::empty()).await else {
+        let mut first: Option<Self> = None;
+        for candidate in product_candidates(&request).await? {
+            if first.is_some() && candidate.cpu && !candidate.pinned {
                 continue;
+            }
+            let context = match Self::open_device(candidate.adapter, request.withheld).await {
+                Ok(context) => context,
+                Err(error) => {
+                    tried.refused(candidate.name, error);
+                    continue;
+                }
             };
             match accept(&context) {
                 Ok(value) => {
@@ -407,22 +362,26 @@ impl GpuContext {
                         refusals,
                     });
                 }
-                Err(error) => refusals.0.push((name, error)),
+                Err(error) => {
+                    refusals.0.push((candidate.name, error));
+                    first.get_or_insert(context);
+                }
             }
         }
-        Ok(AcceptedDevice {
-            context: preferred,
-            accepted: None,
-            refusals,
-        })
+        match first {
+            Some(context) => Ok(AcceptedDevice {
+                context,
+                accepted: None,
+                refusals,
+            }),
+            None => Err(tried.into_error(&request)),
+        }
     }
 
-    /// Every adapter on `backends`, in the order
-    /// [`Self::request_high_performance_on_accepted`] tries them: the one
-    /// `wgpu` prefers first, then the other GPUs by kind for the preference,
-    /// and CPU adapters last, which that request never tries. Each comes
-    /// with its position in the backend's own enumeration, which names it
-    /// for as long as the machine's adapters stay the same.
+    /// Every adapter on `backends`, in the order a product request tries
+    /// them (the high-performance rank, enumeration order within a rank),
+    /// each with its position in the backend's own enumeration, which names it
+    /// for as long as the machine's adapters stay the same. Enumerates once.
     ///
     /// A caller that has to know what every adapter can do, and not only
     /// whether the first acceptable one exists, opens each one it wants
@@ -433,35 +392,27 @@ impl GpuContext {
         backends: wgpu::Backends,
     ) -> Vec<(usize, wgpu::Adapter)> {
         let _turn = crate::serialize_acquisition();
-        let instance = Self::instance_on(backends);
-        let preference =
-            wgpu::PowerPreference::from_env().unwrap_or(wgpu::PowerPreference::HighPerformance);
-        let preferred = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: preference,
-                ..Default::default()
-            })
-            .await
-            .ok()
-            .map(|adapter| adapter.get_info());
-        let mut adapters: Vec<(usize, wgpu::Adapter)> = instance
+        let instance = crate::new_instance(backends);
+        let mut adapters: Vec<Option<wgpu::Adapter>> = instance
             .enumerate_adapters(wgpu::Backends::all())
             .await
             .into_iter()
-            .enumerate()
+            .map(Some)
             .collect();
-        // A stable sort, so adapters of one kind keep the backend's own order.
-        adapters.sort_by_key(|(_, adapter)| {
-            let info = adapter.get_info();
-            if info.device_type == wgpu::DeviceType::Cpu {
-                (2, u8::MAX)
-            } else if preferred.as_ref() == Some(&info) {
-                (0, 0)
-            } else {
-                (1, fallback_rank(info.device_type, preference))
-            }
-        });
-        adapters
+        let kinds: Vec<(usize, wgpu::DeviceType)> = adapters
+            .iter()
+            .enumerate()
+            .map(|(index, adapter)| {
+                let kind = adapter.as_ref().map_or(wgpu::DeviceType::Other, |adapter| {
+                    adapter.get_info().device_type
+                });
+                (index, kind)
+            })
+            .collect();
+        crate::adapter_pin::product_order(&kinds)
+            .into_iter()
+            .filter_map(|index| adapters[index].take().map(|adapter| (index, adapter)))
+            .collect()
     }
 
     /// Opens a device on `adapter`, with the features and limits every
@@ -472,8 +423,23 @@ impl GpuContext {
     #[cfg(not(target_arch = "wasm32"))]
     #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
     pub async fn open_adapter(adapter: wgpu::Adapter) -> Result<Self, GpuError> {
+        Self::open_adapter_without(adapter, wgpu::Features::empty()).await
+    }
+
+    /// Opens a device on `adapter` as [`Self::open_adapter`] does, without
+    /// the optional features in `withheld`, so a test can reach the paths a
+    /// device without them takes on an adapter that has them.
+    ///
+    /// # Errors
+    /// Returns [`GpuError`] when the adapter cannot create the device.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
+    pub async fn open_adapter_without(
+        adapter: wgpu::Adapter,
+        withheld: wgpu::Features,
+    ) -> Result<Self, GpuError> {
         let _turn = crate::serialize_acquisition();
-        Self::open_device(adapter, wgpu::Features::empty()).await
+        Self::open_device(adapter, withheld).await
     }
 
     /// The adapter this device was opened on.
@@ -481,13 +447,6 @@ impl GpuContext {
     #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
     pub const fn adapter(&self) -> &wgpu::Adapter {
         &self.adapter
-    }
-
-    /// An instance on `backends`, which `WGPU_BACKEND` overrides when set.
-    fn instance_on(backends: wgpu::Backends) -> wgpu::Instance {
-        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-        descriptor.backends = backends;
-        wgpu::Instance::new(descriptor.with_env())
     }
 
     /// Requests a device compatible with an optional presentation surface.
@@ -570,7 +529,6 @@ impl GpuContext {
         adapter: wgpu::Adapter,
         withheld: wgpu::Features,
     ) -> Result<Self, GpuError> {
-        let capabilities = Arc::new(Capabilities::from_adapter(&adapter));
         // 16-bit norm formats carry 10-bit planes CoreVideo hands over as standalone R16/RG16
         // textures; NV12/P010 are needed only for one bi-planar decoder resource.
         let optional_features = wgpu::Features::TIMESTAMP_QUERY
@@ -591,6 +549,7 @@ impl GpuContext {
             })
             .await
             .map_err(GpuError::device)?;
+        let capabilities = Arc::new(Capabilities::from_device(&adapter, &device));
         let diagnostics = Arc::new(DiagnosticHook::new());
         install_device_callbacks(&device, &diagnostics);
         Ok(Self {
@@ -690,9 +649,9 @@ impl GpuContext {
     }
 }
 
-/// What [`GpuContext::request_high_performance_on_accepted`] found: the device
-/// to render on and what `accept` made of it, or, when no adapter's device
-/// was taken, the preferred adapter's device and no value.
+/// What [`GpuContext::request_product_accepted`] found: the device to render
+/// on and what `accept` made of it, or, when no adapter's device was taken,
+/// the first device and no value.
 #[derive(Debug)]
 #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
 pub struct AcceptedDevice<T, E> {
@@ -723,6 +682,147 @@ impl<E: std::fmt::Display> std::fmt::Display for AdapterRefusals<E> {
 }
 
 impl<E: std::fmt::Display + std::fmt::Debug> std::error::Error for AdapterRefusals<E> {}
+
+/// Whether a product request may open a device on a software adapter
+/// (lavapipe, llvmpipe, WARP, `SwiftShader`).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SoftwareAdapters {
+    /// A software adapter is tried after every hardware one.
+    #[default]
+    Allow,
+    /// A software adapter is never opened unless `ALPHA2_GPU_ADAPTER` pins it:
+    /// the host's `auto` renders on the CPU instead.
+    Refuse,
+}
+
+/// What a product request may open.
+#[derive(Clone, Debug, Default)]
+pub struct ProductRequest {
+    /// Whether software adapters are acceptable.
+    pub software: SoftwareAdapters,
+    /// Optional features the device is opened without, so a test can reach
+    /// the paths a device without them takes.
+    #[cfg_attr(not(feature = "wgpu-interop"), doc(hidden))]
+    pub withheld: wgpu::Features,
+}
+
+/// The backends a product device is tried on, in order: Windows DX12, macOS
+/// Metal, Linux and other native systems Vulkan then GL, the browser any.
+/// `WGPU_BACKEND`, when set, is the one group instead.
+#[must_use]
+pub fn product_backends() -> Vec<wgpu::Backends> {
+    if let Some(backends) = wgpu::Backends::from_env() {
+        return vec![backends];
+    }
+    if cfg!(target_arch = "wasm32") {
+        vec![wgpu::Backends::all()]
+    } else if cfg!(target_os = "windows") {
+        vec![wgpu::Backends::DX12]
+    } else if cfg!(any(target_os = "macos", target_os = "ios")) {
+        vec![wgpu::Backends::METAL]
+    } else {
+        vec![wgpu::Backends::VULKAN, wgpu::Backends::GL]
+    }
+}
+
+/// An adapter a product request will try.
+#[cfg(not(target_arch = "wasm32"))]
+struct Candidate {
+    adapter: wgpu::Adapter,
+    name: String,
+    cpu: bool,
+    pinned: bool,
+}
+
+/// What a product request tried and why each failed.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Default)]
+struct ProductAttempt {
+    refusals: Vec<(String, String)>,
+    first: Option<GpuError>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ProductAttempt {
+    fn refused(&mut self, adapter: String, error: GpuError) {
+        self.refusals.push((adapter, error.to_string()));
+        self.first.get_or_insert(error);
+    }
+
+    fn into_error(self, request: &ProductRequest) -> GpuError {
+        match (request.software, self.first) {
+            (SoftwareAdapters::Allow, Some(first)) => first,
+            _ => GpuError::no_hardware(Vec::new(), self.refusals),
+        }
+    }
+}
+
+/// The adapters of the first product backend group that has one acceptable
+/// adapter, in the order a product request tries them.
+#[cfg(not(target_arch = "wasm32"))]
+async fn product_candidates(request: &ProductRequest) -> Result<Vec<Candidate>, GpuError> {
+    let pin = crate::AdapterPin::from_env();
+    let mut listed = Vec::new();
+    let mut software = Vec::new();
+    let mut refusals = Vec::new();
+    for group in product_backends() {
+        let instance = crate::new_instance(group);
+        let adapters = instance.enumerate_adapters(group).await;
+        if group == wgpu::Backends::DX12 && adapters.is_empty() {
+            return Err(GpuError::no_dx12_adapter());
+        }
+        let kinds: Vec<(usize, wgpu::DeviceType)> = adapters
+            .iter()
+            .enumerate()
+            .map(|(index, adapter)| (index, adapter.get_info().device_type))
+            .collect();
+        let mut adapters: Vec<Option<wgpu::Adapter>> = adapters.into_iter().map(Some).collect();
+        let mut candidates = Vec::new();
+        for index in crate::adapter_pin::product_order(&kinds) {
+            let Some(adapter) = adapters[index].take() else {
+                continue;
+            };
+            let info = adapter.get_info();
+            listed.push(format!("[{index}] {} ({:?})", info.name, info.backend));
+            let pinned = pin.names(index, &info.name);
+            if pin.is_pin() && !pinned {
+                continue;
+            }
+            let cpu = info.device_type == wgpu::DeviceType::Cpu;
+            if cpu && request.software == SoftwareAdapters::Refuse && !pinned {
+                software.push(info.name);
+                continue;
+            }
+            if info.backend == wgpu::Backend::Gl
+                && let Err(reason) = crate::adapter_pin::gl_version_supported(&info.driver_info)
+            {
+                refusals.push((info.name.clone(), reason));
+                continue;
+            }
+            candidates.push(Candidate {
+                adapter,
+                name: info.name,
+                cpu,
+                pinned,
+            });
+        }
+        if !candidates.is_empty() {
+            return Ok(candidates);
+        }
+    }
+    if pin.is_pin() {
+        return Err(GpuError::pin(format!(
+            "{} names no adapter; the adapters are {}",
+            pin.setting(),
+            if listed.is_empty() {
+                "none".to_owned()
+            } else {
+                listed.join(", ")
+            }
+        )));
+    }
+    Err(GpuError::no_hardware(software, refusals))
+}
 
 /// Where an adapter of `device_type` comes among the fallbacks for
 /// `preference`: the kinds of GPU it asks for first, a CPU last. Without a

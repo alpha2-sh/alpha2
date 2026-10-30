@@ -2,9 +2,9 @@
 //! fails.
 //!
 //! Each test needs the device wgpu and `FFmpeg` share, which only a GPU with
-//! Vulkan Video creates; elsewhere they skip, unless
-//! `ALPHA2_REQUIRE_VULKAN_VIDEO` is set. A failure a helper cannot be made to
-//! produce on a healthy device comes from [`inject`].
+//! Vulkan Video creates; elsewhere they skip, recorded as the `vulkan-video`
+//! capability. A failure a helper cannot be made to produce on a healthy
+//! device comes from [`inject`].
 
 use std::process::Command;
 use std::sync::atomic::AtomicBool;
@@ -16,19 +16,12 @@ use rsmpeg::avutil::AVFrame;
 use super::inject::{self, Hook};
 use super::*;
 
-/// The shared device, or `None` (and a note) where this GPU cannot make one.
+/// The shared device, or `None` (a recorded skip) where this GPU cannot make one.
 pub(super) fn shared_context() -> Option<SharedVulkanContext> {
-    match SharedVulkanContext::create() {
-        Ok(context) => Some(context),
-        Err(error) => {
-            assert!(
-                std::env::var_os("ALPHA2_REQUIRE_VULKAN_VIDEO").is_none(),
-                "Vulkan Video required: {error}"
-            );
-            eprintln!("skipped: no Vulkan Video device ({error})");
-            None
-        }
-    }
+    alpha2_test_support::available!(
+        alpha2_test_support::Capability::VulkanVideo,
+        SharedVulkanContext::create().map_err(|error| format!("no Vulkan Video device ({error})"))
+    )
 }
 
 /// How long a child test may run before it counts as hung. A healthy one
@@ -76,16 +69,23 @@ pub(super) fn child_output(command: &mut Command, what: &str) -> std::process::O
         }
         std::thread::sleep(Duration::from_millis(50));
     };
-    std::process::Output {
+    let output = std::process::Output {
         status,
         stdout: stdout.join().unwrap_or_default(),
         stderr: stderr.join().unwrap_or_default(),
-    }
+    };
+    // A child run by an `--exact` path that matches nothing runs nothing and still succeeds.
+    assert!(
+        !output.status.success() || String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "{what} did not run:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    output
 }
 
-/// Runs `test`, a `*_child` test of this module that does nothing without
-/// `env`, in a child process: a short wait timeout stays there, and a child
-/// still running after [`CHILD_DEADLINE`] has hung, which fails the test.
+/// Runs `test`, an ignored `*_child` test of this module, in a child process:
+/// a short wait timeout stays there, and a child still running after
+/// [`CHILD_DEADLINE`] has hung, which fails the test.
 ///
 /// Every test here that makes a shared device runs this way, one device per
 /// process. Run side by side in one process, the NVIDIA 580 driver could
@@ -94,15 +94,15 @@ pub(super) fn child_output(command: &mut Command, what: &str) -> std::process::O
 /// device's `vkCreateImageView`, blocked on the driver lock that thread
 /// holds: one test thread at full CPU, the suite never ending. A host makes
 /// one shared device per process, so only the tests can meet it.
-fn run_child(test: &str, env: &str) {
+fn run_child(test: &str) {
     let output = child_output(
-        Command::new(std::env::current_exe().expect("test executable"))
-            .args([
-                "--exact",
-                &format!("vulkan::failure_tests::{test}"),
-                "--nocapture",
-            ])
-            .env(env, "1"),
+        Command::new(std::env::current_exe().expect("test executable")).args([
+            "--exact",
+            &format!("vulkan::failure_tests::{test}"),
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ]),
         test,
     );
     eprint!("{}", String::from_utf8_lossy(&output.stderr));
@@ -138,14 +138,12 @@ fn frames(context: &SharedVulkanContext, count: usize, usage: Option<u32>) -> Ve
 /// usage `FFmpeg` picked, which has `TRANSFER_DST`.
 #[test]
 fn a_pool_keeps_the_usage_it_asks_for_and_ffmpeg_picks_only_for_zero() {
-    run_child("pool_usage_child", "ALPHA2_POOL_USAGE_CHILD");
+    run_child("pool_usage_child");
 }
 
 #[test]
+#[ignore = "run by a_pool_keeps_the_usage_it_asks_for_and_ffmpeg_picks_only_for_zero"]
 fn pool_usage_child() {
-    if std::env::var_os("ALPHA2_POOL_USAGE_CHILD").is_none() {
-        return;
-    }
     let Some(context) = shared_context() else {
         return;
     };
@@ -284,17 +282,12 @@ fn a_copy_after_a_render_the_gpu_rejected_runs_and_leaves_the_queue_moving() {
     // A copy that waited on the GPU for a timeline value the render's submission was to signal
     // would wait forever when wgpu rejects that submission, stalling the queue the renderer and
     // FFmpeg share.
-    run_child(
-        "rejected_render_copy_child",
-        "ALPHA2_REJECTED_RENDER_COPY_CHILD",
-    );
+    run_child("rejected_render_copy_child");
 }
 
 #[test]
+#[ignore = "run by a_copy_after_a_render_the_gpu_rejected_runs_and_leaves_the_queue_moving"]
 fn rejected_render_copy_child() {
-    if std::env::var_os("ALPHA2_REJECTED_RENDER_COPY_CHILD").is_none() {
-        return;
-    }
     let Some(context) = shared_context() else {
         return;
     };
@@ -389,17 +382,12 @@ fn a_frame_dropped_after_its_second_import_failed_to_acquire_gives_the_first_bac
     // take its signal off the renderer's queue, raise it with a submission of its own so the value
     // the frame records is reached, and return its ticket. A release that waits for the signal
     // taken off the queue waits forever, so this runs in a child.
-    run_child(
-        "dropped_frame_rollback_child",
-        "ALPHA2_DROPPED_FRAME_ROLLBACK_CHILD",
-    );
+    run_child("dropped_frame_rollback_child");
 }
 
 #[test]
+#[ignore = "run by a_frame_dropped_after_its_second_import_failed_to_acquire_gives_the_first_back"]
 fn dropped_frame_rollback_child() {
-    if std::env::var_os("ALPHA2_DROPPED_FRAME_ROLLBACK_CHILD").is_none() {
-        return;
-    }
     let Some(context) = shared_context() else {
         return;
     };
@@ -465,14 +453,12 @@ fn a_dropped_frame_raises_the_signal_a_decode_already_waits_for() {
     // and records the next. The frame is dropped before the sampling submission: only taking the
     // signal back off the queue would leave the decode, and the release behind it, waiting forever,
     // so this runs in a child.
-    run_child("raised_signal_child", "ALPHA2_RAISED_SIGNAL_CHILD");
+    run_child("raised_signal_child");
 }
 
 #[test]
+#[ignore = "run by a_dropped_frame_raises_the_signal_a_decode_already_waits_for"]
 fn raised_signal_child() {
-    if std::env::var_os("ALPHA2_RAISED_SIGNAL_CHILD").is_none() {
-        return;
-    }
     let Some(context) = shared_context() else {
         return;
     };
@@ -563,14 +549,12 @@ fn a_ticket_whose_acquire_may_still_run_waits_in_the_pool_until_it_has() {
     // followed it fails. Dropping the lease must not free the ticket's command pool while the
     // acquire is still waiting on the decoder's timeline. Freeing commands the GPU has yet to run
     // is undefined, so this runs in a child.
-    run_child("unfenced_acquire_child", "ALPHA2_UNFENCED_ACQUIRE_CHILD");
+    run_child("unfenced_acquire_child");
 }
 
 #[test]
+#[ignore = "run by a_ticket_whose_acquire_may_still_run_waits_in_the_pool_until_it_has"]
 fn unfenced_acquire_child() {
-    if std::env::var_os("ALPHA2_UNFENCED_ACQUIRE_CHILD").is_none() {
-        return;
-    }
     let Some(context) = shared_context() else {
         return;
     };
@@ -665,14 +649,12 @@ fn a_frame_retried_after_an_import_failed_to_acquire_acquires_what_it_missed() {
     // The batch re-enqueue: a flush drains the batch, so a lease left unacquired by a failure must
     // be queueable again, or the frame's retry never acquires it and samples it in its decode
     // layout.
-    run_child("retried_acquire_child", "ALPHA2_RETRIED_ACQUIRE_CHILD");
+    run_child("retried_acquire_child");
 }
 
 #[test]
+#[ignore = "run by a_frame_retried_after_an_import_failed_to_acquire_acquires_what_it_missed"]
 fn retried_acquire_child() {
-    if std::env::var_os("ALPHA2_RETRIED_ACQUIRE_CHILD").is_none() {
-        return;
-    }
     let Some(context) = shared_context() else {
         return;
     };
@@ -718,14 +700,12 @@ fn retried_acquire_child() {
 fn a_ticket_the_device_cannot_vouch_for_is_never_reused() {
     // The reclaim branches: a ticket whose fence poll fails, or whose reset fails, is abandoned
     // rather than reused; finished tickets beyond the idle cap are destroyed.
-    run_child("unvouched_ticket_child", "ALPHA2_UNVOUCHED_TICKET_CHILD");
+    run_child("unvouched_ticket_child");
 }
 
 #[test]
+#[ignore = "run by a_ticket_the_device_cannot_vouch_for_is_never_reused"]
 fn unvouched_ticket_child() {
-    if std::env::var_os("ALPHA2_UNVOUCHED_TICKET_CHILD").is_none() {
-        return;
-    }
     let Some(context) = shared_context() else {
         return;
     };
@@ -775,7 +755,7 @@ fn too_many_unfinished_tickets_wait_a_bounded_time_then_leak_the_oldest() {
     // The give-back overflow: past MAX_PENDING_IMPORT_TICKETS tickets whose releases are still
     // running, the oldest is destroyed after a bounded wait, which, when the wait runs out, leaks
     // it instead of freeing what the GPU still uses.
-    run_child("pending_overflow_child", "ALPHA2_PENDING_OVERFLOW_CHILD");
+    run_child("pending_overflow_child");
 }
 
 /// Makes every later acquire and release of `frame` wait, through its timeline, for a value nothing
@@ -846,10 +826,8 @@ fn unblock(device: &ash::Device, (semaphore, blocked): (u64, u64)) {
 }
 
 #[test]
+#[ignore = "run by too_many_unfinished_tickets_wait_a_bounded_time_then_leak_the_oldest"]
 fn pending_overflow_child() {
-    if std::env::var_os("ALPHA2_PENDING_OVERFLOW_CHILD").is_none() {
-        return;
-    }
     let Some(context) = shared_context() else {
         return;
     };
@@ -884,17 +862,12 @@ fn pending_overflow_child() {
 fn a_ticket_given_back_past_the_cap_waits_without_holding_the_pool() {
     // Destroying the overflow ticket waits for its release, up to the wait timeout. Waiting under
     // the pool's lock would stall every import of the device for that long.
-    run_child(
-        "overflow_outside_lock_child",
-        "ALPHA2_OVERFLOW_OUTSIDE_LOCK_CHILD",
-    );
+    run_child("overflow_outside_lock_child");
 }
 
 #[test]
+#[ignore = "run by a_ticket_given_back_past_the_cap_waits_without_holding_the_pool"]
 fn overflow_outside_lock_child() {
-    if std::env::var_os("ALPHA2_OVERFLOW_OUTSIDE_LOCK_CHILD").is_none() {
-        return;
-    }
     let Some(context) = shared_context() else {
         return;
     };
@@ -936,17 +909,12 @@ fn a_pool_dropped_with_unfinished_tickets_waits_once_for_all_of_them() {
     // A device that is hung but not lost: every pending ticket's fence stays unsignalled. The
     // pool's drop must give them all one wait timeout together, and leak what is still unfinished,
     // rather than wait the whole timeout for each in turn.
-    run_child(
-        "pool_drop_deadline_child",
-        "ALPHA2_POOL_DROP_DEADLINE_CHILD",
-    );
+    run_child("pool_drop_deadline_child");
 }
 
 #[test]
+#[ignore = "run by a_pool_dropped_with_unfinished_tickets_waits_once_for_all_of_them"]
 fn pool_drop_deadline_child() {
-    if std::env::var_os("ALPHA2_POOL_DROP_DEADLINE_CHILD").is_none() {
-        return;
-    }
     let Some(context) = shared_context() else {
         return;
     };
@@ -1046,13 +1014,11 @@ impl crate::conformance::Backend for Conformance {
 
 #[test]
 fn the_vulkan_import_keeps_the_interop_contract() {
-    run_child("conformance_child", "ALPHA2_CONFORMANCE_CHILD");
+    run_child("conformance_child");
 }
 
 #[test]
+#[ignore = "run by the_vulkan_import_keeps_the_interop_contract"]
 fn conformance_child() {
-    if std::env::var_os("ALPHA2_CONFORMANCE_CHILD").is_none() {
-        return;
-    }
     crate::conformance::check::<Conformance>();
 }

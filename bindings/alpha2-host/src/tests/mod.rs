@@ -22,7 +22,7 @@ use crate::memory::InFlightBudget;
 use crate::metrics::{ExportMetrics, add_stage_split_metrics, export_pipeline_limits};
 use crate::protocol::{
     AudioQualityRequest, HostError, LoudnessRequest, RateRequest, Request, VideoQualityRequest,
-    parse_request, request_id_from_line,
+    parse_request,
 };
 use crate::trace::{AudioBlockTrace, ExportTrace, VideoFrameTrace};
 use alpha2_engine::{ExportFrameNeeds, ExportStepTimings};
@@ -192,58 +192,92 @@ fn image_and_tone_project(end_ticks: i64, sample_rate: u32) -> Value {
     })
 }
 
-/// A Vulkan device fit for `FFmpeg` video sessions, or `None` (with a note)
-/// on a machine without one.
+/// A Vulkan device fit for `FFmpeg` video sessions, or `None` (a recorded
+/// `vulkan-video` skip) on a machine without one.
 #[cfg(all(target_os = "linux", feature = "hwdecode"))]
 fn vulkan_video_context() -> Option<alpha2_native_gpu::SharedVulkanContext> {
-    let context = alpha2_native_gpu::SharedVulkanContext::create()
-        .inspect_err(|error| eprintln!("skipped: no Vulkan video decode device ({error:?})"))
-        .ok()?;
+    let context = alpha2_test_support::available!(
+        alpha2_test_support::Capability::VulkanVideo,
+        alpha2_native_gpu::SharedVulkanContext::create()
+            .map_err(|error| format!("no Vulkan video decode device ({error:?})"))
+    )?;
     // A debug build loads the system's validation layer wherever it has one, and one older than 1.4
     // crashes inside FFmpeg's video session setup.
     if let Some(hazard) = context.video_session_hazard() {
-        eprintln!("skipped: {hazard}; use 1.4+");
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::VulkanVideo,
+            "{hazard}; run a release build, or point VK_LAYER_PATH at the 1.4 layer \
+             scripts/fetch-vulkan-validation-layer.sh fetches"
+        );
         return None;
     }
     Some(context)
 }
 
+/// The H.264 GPU-resident capability of `host`'s device, or why it has none.
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos", target_os = "windows"),
+    feature = "hwencode"
+))]
+fn h264_gpu_output(host: &Host) -> Result<alpha2_native::HardwareEncodeCapability, String> {
+    // These tests export H.264, which a Windows device may not encode while it encodes HEVC or
+    // AV1; elsewhere the one encoder there is encodes H.264.
+    #[cfg(target_os = "windows")]
+    return host
+        .gpu_output_candidate(NativeVideoCodec::H264, None)
+        .map(|(_, capability)| capability)
+        .map_err(|refusal| refusal.reason);
+    #[cfg(not(target_os = "windows"))]
+    host.gpu_output_capability()
+}
+
 /// A host whose renderer's device feeds a hardware encoder, with what that
-/// encoder takes, whichever backend this platform has; or `None` (with a
-/// note) on a machine without one. `ALPHA2_REQUIRE_VIDEOTOOLBOX` makes a Mac
-/// without one a failure, where the Mac GPU workflow runs.
+/// encoder takes and the adapter policy it was made with; or `None` (a
+/// recorded `gpu-resident` skip) on a machine without one.
+///
+/// The host on the default adapter is tried first. Where the host scans
+/// adapters (Windows), a hybrid laptop's default adapter may lack the encoder
+/// another has, so a host on the adapter that encodes H.264 is tried next,
+/// as `ALPHA2_GPU_ADAPTER=encoder` would make it.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwencode"
 ))]
 fn gpu_output_host(
     policy: VideoDecodePolicy,
-) -> Option<(Host, alpha2_native::HardwareEncodeCapability)> {
+) -> Option<(
+    Host,
+    alpha2_native::HardwareEncodeCapability,
+    crate::adapter_choice::AdapterPin,
+)> {
+    use crate::adapter_choice::AdapterPin;
     // The host itself is made everywhere, lavapipe included; only the GPU-resident output may be
     // missing.
     let host = create_host(policy).expect("host");
-    // These tests export H.264, which a Windows device may not encode while it encodes HEVC or
-    // AV1; elsewhere the one encoder there is encodes H.264.
+    let first = match h264_gpu_output(&host) {
+        Ok(capability) => return Some((host, capability, AdapterPin::from_env())),
+        Err(reason) => reason,
+    };
+    drop(host);
     #[cfg(target_os = "windows")]
-    let made = host
-        .gpu_output_candidate(NativeVideoCodec::H264, None)
-        .map(|(_, capability)| capability)
-        .map_err(|refusal| refusal.reason);
+    let second = match crate::create_gpu_host_with_adapter(
+        policy,
+        &AdapterPin::Encoder,
+        alpha2_gpu::SoftwareAdapters::Allow,
+    ) {
+        Ok(host) => match h264_gpu_output(&host) {
+            Ok(capability) => return Some((host, capability, AdapterPin::Encoder)),
+            Err(reason) => format!("; on the encoder adapter: {reason}"),
+        },
+        Err(error) => format!("; no host on the encoder adapter: {}", error.message),
+    };
     #[cfg(not(target_os = "windows"))]
-    let made = host.gpu_output_capability();
-    let made = made.map(|capability| (host, capability));
-    match made {
-        Ok(made) => Some(made),
-        Err(reason) => {
-            assert!(
-                !cfg!(target_os = "macos")
-                    || std::env::var_os("ALPHA2_REQUIRE_VIDEOTOOLBOX").is_none(),
-                "the GPU-resident path is required: {reason}"
-            );
-            eprintln!("skipped: no GPU-resident output here ({reason})");
-            None
-        }
-    }
+    let second = String::new();
+    alpha2_test_support::skip!(
+        alpha2_test_support::Capability::GpuResident,
+        "no GPU-resident H.264 output here ({first}{second})"
+    );
+    None
 }
 
 /// Whether `host` decodes `codec` into surfaces its renderer imports: the
@@ -303,6 +337,93 @@ fn decoded_planes(path: &Path) -> Vec<Vec<Vec<u8>>> {
             _ => {}
         }
     }
+}
+
+/// The lowest per-plane PSNR, in dB, an exported plane may have against the source plane it was
+/// encoded from. Measured on the GPU-resident transcode test's 15 frames: every hardware encoder
+/// stays above it, and a chroma plane swapped, shifted by a row or offset by a column falls far
+/// below it.
+pub(crate) const PLANE_PSNR_FLOOR_DB: f64 = 38.0;
+
+/// The PSNR, in dB, of `exported` against `original`, two planes of 8-bit samples.
+pub(crate) fn plane_psnr(exported: &[u8], original: &[u8]) -> f64 {
+    let squared = exported
+        .iter()
+        .zip(original)
+        .map(|(a, b)| {
+            let difference = f64::from(*a) - f64::from(*b);
+            difference * difference
+        })
+        .sum::<f64>();
+    if squared == 0.0 {
+        return f64::INFINITY;
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let samples = exported.len() as f64;
+    10.0 * (255.0 * 255.0 * samples / squared).log10()
+}
+
+/// The sum of absolute differences of `exported` and `original`, the latter's rows read
+/// `row_offset` rows down (rows past the end are skipped).
+fn plane_sad(exported: &[u8], original: &[u8], width: usize, row_offset: usize) -> u64 {
+    exported
+        .chunks(width)
+        .zip(original.chunks(width).skip(row_offset))
+        .flat_map(|(a, b)| a.iter().zip(b))
+        .map(|(a, b)| u64::from(a.abs_diff(*b)))
+        .sum()
+}
+
+/// Checks that each exported frame's Y, U and V planes (`width` x `height` 4:2:0) are the source's
+/// up to coding loss: each plane's PSNR is at least [`PLANE_PSNR_FLOOR_DB`], and each chroma plane
+/// is closer to its own source plane than to the other chroma plane or to itself one row down, so
+/// a swapped or shifted plane fails even where the encoder is good enough to pass the floor.
+pub(crate) fn plane_check(
+    exported: &[Vec<Vec<u8>>],
+    original: &[Vec<Vec<u8>>],
+    width: u32,
+    height: u32,
+) -> Result<(), String> {
+    if exported.len() != original.len() {
+        return Err(format!(
+            "{} frames exported for {} source frames",
+            exported.len(),
+            original.len()
+        ));
+    }
+    let chroma_width = width.div_ceil(2) as usize;
+    for (index, (frame, source)) in exported.iter().zip(original).enumerate() {
+        if frame.len() != 3 || source.len() != 3 {
+            return Err(format!("frame {index}: not three planes"));
+        }
+        for plane in 0..3 {
+            if frame[plane].len() != source[plane].len() {
+                return Err(format!("frame {index} plane {plane}: another size"));
+            }
+            let psnr = plane_psnr(&frame[plane], &source[plane]);
+            if psnr < PLANE_PSNR_FLOOR_DB {
+                return Err(format!(
+                    "frame {index} plane {plane}: {psnr:.2} dB, below the {PLANE_PSNR_FLOOR_DB} dB floor"
+                ));
+            }
+        }
+        for (plane, other) in [(1, 2), (2, 1)] {
+            let own = plane_sad(&frame[plane], &source[plane], chroma_width, 0);
+            let swapped = plane_sad(&frame[plane], &source[other], chroma_width, 0);
+            let shifted = plane_sad(&frame[plane], &source[plane], chroma_width, 1);
+            // A swap or a shift the source itself does not change cannot be told apart.
+            let swap_visible = plane_sad(&source[plane], &source[other], chroma_width, 0) > 0;
+            let shift_visible = plane_sad(&source[plane], &source[plane], chroma_width, 1) > 0;
+            if (swap_visible && own >= swapped) || (shift_visible && own >= shifted) {
+                return Err(format!(
+                    "frame {index} plane {plane}: {own} from its source plane, {swapped} from the \
+                     other chroma plane, {shifted} from its own one row down"
+                ));
+            }
+        }
+    }
+    let _ = height;
+    Ok(())
 }
 
 /// A 1 s project showing `video` (the 12 fps parity clip) with `recorded` as
@@ -543,4 +664,76 @@ fn within<T>(limit: Duration, what: &str, body: impl FnOnce() -> T) -> T {
     drop(done);
     watchdog.join().expect("watchdog");
     value
+}
+
+#[test]
+fn the_plane_check_refuses_a_swapped_or_shifted_chroma_plane() {
+    let (width, height) = (256_usize, 144_usize);
+    let (chroma_width, chroma_height) = (width / 2, height / 2);
+    // Structured chroma: U varies along rows, V along columns, so a swap, a row shift and a
+    // column offset each move it.
+    let plane = |w: usize, h: usize, sample: &dyn Fn(usize, usize) -> u8| -> Vec<u8> {
+        (0..h)
+            .flat_map(|y| (0..w).map(move |x| sample(x, y)))
+            .collect()
+    };
+    let frame = |noise: u8| -> Vec<Vec<u8>> {
+        vec![
+            plane(width, height, &|x, y| {
+                u8::try_from((x * 3 + y * 5) % 200 + 16).expect("luma")
+                    ^ (noise & u8::try_from(x % 2).expect("bit"))
+            }),
+            plane(chroma_width, chroma_height, &|_, y| {
+                u8::try_from(16 + y * 3 % 200).expect("u")
+            }),
+            plane(chroma_width, chroma_height, &|x, _| {
+                u8::try_from(16 + x * 2 % 200).expect("v")
+            }),
+        ]
+    };
+    let (w32, h32) = (
+        u32::try_from(width).expect("w"),
+        u32::try_from(height).expect("h"),
+    );
+    let source = vec![frame(0); 3];
+    assert_eq!(plane_check(&source, &source, w32, h32), Ok(()));
+    assert_eq!(
+        plane_check(&vec![frame(1); 3], &source, w32, h32),
+        Ok(()),
+        "one code of noise"
+    );
+    let swapped: Vec<Vec<Vec<u8>>> = source
+        .iter()
+        .map(|planes| vec![planes[0].clone(), planes[2].clone(), planes[1].clone()])
+        .collect();
+    assert!(
+        plane_check(&swapped, &source, w32, h32).is_err(),
+        "U and V swapped"
+    );
+    let shift = |plane: &[u8], rows: usize, columns: usize| -> Vec<u8> {
+        (0..chroma_height)
+            .flat_map(|y| {
+                (0..chroma_width).map(move |x| {
+                    plane[(y + rows).min(chroma_height - 1) * chroma_width
+                        + (x + columns).min(chroma_width - 1)]
+                })
+            })
+            .collect()
+    };
+    for (rows, columns, what) in [(1, 0, "one row"), (0, 1, "one column")] {
+        let moved: Vec<Vec<Vec<u8>>> = source
+            .iter()
+            .map(|planes| {
+                vec![
+                    planes[0].clone(),
+                    shift(&planes[1], rows, columns),
+                    shift(&planes[2], rows, columns),
+                ]
+            })
+            .collect();
+        assert!(
+            plane_check(&moved, &source, w32, h32).is_err(),
+            "chroma moved {what}"
+        );
+    }
 }

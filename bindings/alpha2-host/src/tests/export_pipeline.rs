@@ -6,8 +6,7 @@ use super::*;
 #[allow(clippy::used_underscore_binding)]
 fn rgba_frames_present_on_the_gpu_from_pooled_upload_textures() {
     let _gpu = gpu_test_lock();
-    let gpu = pollster::block_on(alpha2_gpu::GpuContext::request_high_performance())
-        .expect("a GPU device");
+    let gpu = pollster::block_on(alpha2_gpu::GpuContext::request_product()).expect("a GPU device");
     let device = gpu.device().clone();
     let renderer = alpha2_render::Renderer::new(gpu);
     let frame = DecodedVideoFrame {

@@ -133,12 +133,7 @@ fn captions_show_their_cue_between_the_tracks_around_them() {
                 .flat_map(move |pixels| pixels[row * 640..(row + 1) * 640].iter().copied())
         })
         .collect::<Vec<_>>();
-    alpha2_golden_support::assert_rgba8_golden(
-        "caption_cues",
-        (golden.width, golden.height),
-        &rows,
-        2,
-    );
+    assert_golden("caption_cues", (golden.width, golden.height), &rows, 2);
 }
 
 /// The style every text test draws in: a stroke and a box, so the
@@ -723,5 +718,5 @@ fn captions_draw_the_same_cues_on_the_cpu() {
                 .flat_map(move |pixels| pixels[row * 640..(row + 1) * 640].iter().copied())
         })
         .collect::<Vec<_>>();
-    alpha2_golden_support::assert_rgba8_golden("caption_cues", (320, 90), &rows, 2);
+    assert_cpu_golden("caption_cues", (320, 90), &rows, 2);
 }

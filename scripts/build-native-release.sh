@@ -253,6 +253,14 @@ EOF
         ;;
       windows)
         cp "$sdk_root/bin"/*.dll "$package/bin/"
+        # The host compiles its DX12 pipelines with the DXC beside it and refuses to start
+        # without it, so the archive carries the pinned release's DLL and licences.
+        dxc=$("$workspace/scripts/fetch-dxc.sh")
+        dxc_dir=$(dirname "$(cygpath -u "$dxc")")
+        cp "$dxc_dir/dxcompiler.dll" "$package/bin/"
+        mkdir -p "$package/licenses/DirectXShaderCompiler"
+        cp "$dxc_dir"/LICEN*.txt "$package/licenses/DirectXShaderCompiler/"
+        cp "$workspace/release/dxc/manifest.toml" "$package/compliance/DXC.toml"
         ;;
     esac
     "$workspace/release/ffmpeg-lgpl/verify-runtime.sh" "$package" "$target" "$report" executables

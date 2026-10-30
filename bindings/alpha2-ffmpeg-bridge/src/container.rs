@@ -242,6 +242,8 @@ impl std::error::Error for OpenInputError {}
 /// [`OpenInputError::Refused`] for a container `formats` leaves out, else the
 /// `FFmpeg` failure.
 pub fn open_input(url: &CStr, formats: &CStr) -> Result<DemuxInput, OpenInputError> {
+    // Every decode starts here, so what its demuxer and decoders log is kept from the first line.
+    crate::install_log_capture();
     let still = still_image_format(url)
         .filter(|name| allowed_name(name, formats))
         // SAFETY: `name` is a NUL-terminated demuxer name; the result is null or one of `FFmpeg`'s

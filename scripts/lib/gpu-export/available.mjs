@@ -20,6 +20,7 @@ import {
 } from "./harness.mjs";
 import { compareWithMediaFoundation } from "./media-foundation.mjs";
 import { qualityChecks } from "./quality.mjs";
+import { recordSkip } from "../capabilities.mjs";
 
 export function runAvailable(harness) {
   const { check, options, runExport, scratch } = harness;
@@ -31,8 +32,12 @@ export function runAvailable(harness) {
     const message = `this host reports no GPU-resident output path: ${
       gpu.reason ?? "the capability is missing"
     }`;
-    if (options.requireGpu) throw new Error(message);
-    process.stderr.write(`skipped: ${message}\n`);
+    // Throws when the run requires the path.
+    recordSkip({
+      suite: "gpu-export",
+      capability: "gpu-resident",
+      reason: message,
+    });
     return;
   }
   // Not H.264 everywhere: the Windows path on FFmpeg 8.0.3 encodes HEVC only.

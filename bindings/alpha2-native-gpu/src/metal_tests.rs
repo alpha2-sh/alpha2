@@ -4,8 +4,8 @@
 //! a decoder or the encoder pool would hand over, with known samples, and
 //! checks what the renderer's device sees through the import, or what a
 //! render into the encoder planes leaves in the buffer. Each test needs the
-//! renderer's `Metal` device; without one it skips, unless
-//! `ALPHA2_REQUIRE_VIDEOTOOLBOX` is set.
+//! renderer's `Metal` device; without one it skips, recorded as the `metal`
+//! capability.
 
 use std::ffi::c_void;
 use std::sync::Arc;
@@ -65,22 +65,25 @@ unsafe extern "C" {
     fn CVBufferSetAttachment(buffer: CVPixelBufferRef, key: CFTypeRef, value: CFTypeRef, mode: u32);
 }
 
-/// The renderer's `Metal` device as the host shares it, or `None` (and a note).
+/// The renderer's `Metal` device as the host shares it, or `None` (a recorded skip).
 fn shared_context() -> Option<SharedMetalContext> {
-    let made = pollster::block_on(alpha2_gpu::GpuContext::request_high_performance())
-        .map_err(|error| format!("{error:?}"))
-        .and_then(|gpu| SharedMetalContext::from_gpu(gpu).map_err(|error| error.to_string()));
-    match made {
-        Ok(context) => Some(context),
-        Err(error) => {
-            assert!(
-                std::env::var_os("ALPHA2_REQUIRE_VIDEOTOOLBOX").is_none(),
-                "the Metal device is required: {error}"
-            );
-            eprintln!("skipped: no Metal device ({error})");
-            None
-        }
-    }
+    shared_context_without(wgpu::Features::empty())
+}
+
+/// [`shared_context`] on a device opened without the optional features in `withheld`.
+fn shared_context_without(withheld: wgpu::Features) -> Option<SharedMetalContext> {
+    let made = pollster::block_on(alpha2_gpu::GpuContext::request_product_with(
+        &alpha2_gpu::ProductRequest {
+            withheld,
+            ..alpha2_gpu::ProductRequest::default()
+        },
+    ))
+    .map_err(|error| format!("{error:?}"))
+    .and_then(|gpu| SharedMetalContext::from_gpu(gpu).map_err(|error| error.to_string()));
+    alpha2_test_support::available!(
+        alpha2_test_support::Capability::Metal,
+        made.map_err(|error| format!("no Metal device ({error})"))
+    )
 }
 
 /// An owned `CVPixelBuffer`, released when it drops unless a frame took it.
@@ -493,12 +496,15 @@ fn a_decoded_surface_imports_as_the_planes_it_holds_at_either_depth() {
 
 #[test]
 fn a_ten_bit_surface_is_refused_on_a_device_without_sixteen_bit_planes() {
-    let Some(context) = shared_context() else {
+    // Every Apple GPU has 16-bit normalized textures, so the refusal is reached on a device opened
+    // without them.
+    let Some(context) = shared_context_without(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM) else {
         return;
     };
-    if context.supports_ten_bit() {
-        return;
-    }
+    assert!(
+        !context.supports_ten_bit(),
+        "a device without 16-bit textures imports 10-bit planes"
+    );
     let buffer = pixel_buffer(64, 32, PIXEL_FORMAT_420_10_VIDEO_RANGE, true);
     let error = import(&context, buffer, (64, 32)).expect_err("refused");
     assert!(error.to_string().contains("16-bit"), "{error}");

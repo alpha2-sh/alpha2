@@ -468,7 +468,7 @@ impl WebEffectRegistry {
         height: u32,
     ) -> Result<WebEffectRegistry, JsValue> {
         let instance = wgpu::util::new_instance_with_webgpu_detection(
-            wgpu::InstanceDescriptor::new_without_display_handle_from_env(),
+            alpha2_gpu::instance_descriptor(wgpu::Backends::all()),
         )
         .await;
         let surface = instance
@@ -1612,6 +1612,7 @@ impl WebEffectRegistry {
                 "backend": diagnostics.adapter.backend,
                 "driver": diagnostics.adapter.driver,
                 "driverInfo": diagnostics.adapter.driver_info,
+                "shaderCompiler": diagnostics.adapter.shader_compiler,
                 "tier": format!("{:?}", diagnostics.adapter.tier),
                 "timestampQueries": diagnostics.adapter.timestamp_queries,
             },

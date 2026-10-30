@@ -110,7 +110,7 @@ test("a page check opens Chrome unless the run names Safari or Firefox", () => {
   assert.equal(browserForRun({ argv: [], ...withoutChrome }), null);
   assert.throws(
     () => browserForRun({ argv: [], ...withoutChrome, required: true }),
-    /no Chrome found.*a browser is required/,
+    /no Chrome found.*browser is required by ALPHA2_REQUIRE/,
   );
   assert.throws(
     () => browserForRun({ argv: ["--browser", "opera"], ...machine }),

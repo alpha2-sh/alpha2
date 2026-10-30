@@ -1,15 +1,16 @@
 //! `OpenH264` through the native sinks. These run where Cisco's binary is
 //! installed or named (`ALPHA2_OPENH264_LIBRARY`), as CI's `OpenH264` job does,
-//! and say so and pass where it is not.
+//! and are recorded as the `openh264` capability where it is not.
 
 use super::*;
 
-/// The library this process loaded, or `None` after saying why not.
+/// Whether this process loaded the library; a recorded skip when not.
 fn openh264_available() -> bool {
     match crate::openh264_status() {
         crate::OpenH264Status::Available(_) => true,
         status => {
-            eprintln!(
+            alpha2_test_support::skip!(
+                alpha2_test_support::Capability::Openh264,
                 "OpenH264 is {}: the OpenH264 cases did not run ({})",
                 status.as_str(),
                 status.reason().unwrap_or_default()

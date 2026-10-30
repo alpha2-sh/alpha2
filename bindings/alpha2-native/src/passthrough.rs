@@ -241,6 +241,8 @@ pub struct PacketCopyReport {
     pub encoded_audio_frames: u64,
     /// Payload bytes written, both streams.
     pub bytes: u64,
+    /// How the finished file was published.
+    pub publish: Option<crate::PublishReport>,
 }
 
 /// One video packet as the scan saw it.
@@ -1073,7 +1075,8 @@ pub fn copy_packets(
     }
     muxer.finish_audio()?;
     muxer.write_ready_audio(true, &mut stages)?;
-    muxer.close()?;
+    muxer.close(cancel)?;
+    report.publish = muxer.publish_report();
     Ok(report)
 }
 

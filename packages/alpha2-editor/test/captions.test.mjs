@@ -16,6 +16,10 @@ import {
 } from "../dist/index.js";
 import { createBrowserBridge } from "../dist/browser/index.js";
 import { MAX_CAPTION_FILE_BYTES, MAX_CAPTION_FILE_CUES } from "alpha2/project";
+import {
+  missingCapability,
+  suiteOf,
+} from "../../../scripts/lib/capabilities.mjs";
 
 const cue = (start, end, text) => ({
   timeline_range: { start, end },
@@ -120,11 +124,14 @@ const wasmFile = join(
   "wasm",
   "alpha2_wasm_bg.wasm",
 );
-// Skips without the packaged wasm (before `npm run build`); ALPHA2_REQUIRE_WASM=1 fails instead.
+// Skips without the packaged wasm (before `npm run build`); ALPHA2_REQUIRE=wasm fails instead.
 const noWasm =
   !existsSync(wasmFile) &&
-  process.env.ALPHA2_REQUIRE_WASM !== "1" &&
-  "the wasm package is not built";
+  missingCapability(
+    "wasm",
+    suiteOf(import.meta.url),
+    "the wasm package is not built",
+  );
 
 /** A subtitle file as the bridge reads one: its name, size and text. */
 const subtitles = (name, text, size = Buffer.byteLength(text)) => ({

@@ -7,14 +7,21 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { decideRetry, isRetryableFailure } from "alpha2/export-retry";
+import {
+  missingCapability,
+  suiteOf,
+} from "../../../scripts/lib/capabilities.mjs";
 
 const root = resolve(import.meta.dirname, "..", "..", "..");
 const wasmDirectory = join(root, "packages", "alpha2", "wasm");
 const packaged = existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"));
 const skip =
   !packaged &&
-  process.env.ALPHA2_REQUIRE_WASM !== "1" &&
-  "the wasm package is not built";
+  missingCapability(
+    "wasm",
+    suiteOf(import.meta.url),
+    "the wasm package is not built",
+  );
 
 /** A WebCodecs frame as the exporter hands it to the muxer: its pixels and how they lie. */
 globalThis.VideoFrame ??= class VideoFrame {

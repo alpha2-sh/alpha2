@@ -13,9 +13,8 @@ export const PAGE_BROWSERS = Object.freeze(["chrome", ...WEBDRIVER_BROWSERS]);
 
 /**
  * The browser a run asked for: `--browser <name>` in `argv`, else ALPHA2_BROWSER, else Chrome. Null
- * means this machine has no Chrome and the check skips its browser half, unless `required` (or
- * `--require-browser`, ALPHA2_REQUIRE_BROWSER=1) makes it throw. A missing Safari or Firefox
- * driver always throws.
+ * means this machine has no Chrome and the check skips its browser half, unless `required` or
+ * ALPHA2_REQUIRE naming `browser` makes it throw. A missing Safari or Firefox driver always throws.
  *
  * @returns {{ kind: "chrome", name: "chrome", command: string } |
  *   { kind: "webdriver", name: string, webdriver: ReturnType<typeof webDriverBrowser> } | null}
@@ -30,8 +29,9 @@ export function browserForRun({
   const name = requestedBrowser(argv, env);
   if (name === "chrome") {
     const command = browserForCheck({
-      argv: required ? [...argv, "--require-browser"] : argv,
-      env,
+      env: required
+        ? { ...env, ALPHA2_REQUIRE: `${env.ALPHA2_REQUIRE ?? ""},browser` }
+        : env,
       platform,
       exists,
     });

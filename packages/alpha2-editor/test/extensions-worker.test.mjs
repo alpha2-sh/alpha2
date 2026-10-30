@@ -13,14 +13,21 @@ const installExtensionsWorker = browser.installExtensionsWorker ?? (() => {});
 const { callExtensions } =
   await import("../dist/browser/extensions-worker.js").catch(() => ({}));
 import { refusedProviderFiles } from "../../../scripts/lib/extension-import-fixtures.mjs";
+import {
+  missingCapability,
+  suiteOf,
+} from "../../../scripts/lib/capabilities.mjs";
 
 const root = resolve(import.meta.dirname, "..", "..", "..");
 const wasmDirectory = join(root, "packages", "alpha2", "wasm");
 const corpus = join(root, "tests", "corpus", "extensions");
 const skip =
   !existsSync(join(wasmDirectory, "alpha2_extensions_bg.wasm")) &&
-  process.env.ALPHA2_REQUIRE_WASM !== "1" &&
-  "the extension wasm package is not built";
+  missingCapability(
+    "wasm",
+    suiteOf(import.meta.url),
+    "the extension wasm package is not built",
+  );
 
 // What a thumbnail needs of the page: a canvas to encode it and a reader for its data URL.
 globalThis.ImageData ??= class {

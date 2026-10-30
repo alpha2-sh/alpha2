@@ -189,8 +189,7 @@ fn the_synchronous_frame_supply_keys_a_frame_by_its_picture() {
     let project = Project::from_json(&conform_project(&json!({})).to_string()).expect("project");
     let source = SourceId::new("video").expect("source ID");
     let assets = HashMap::from([(source.as_str().to_owned(), corpus("parity-rgb.mov"))]);
-    let gpu = pollster::block_on(alpha2_gpu::GpuContext::request_high_performance())
-        .expect("a GPU device");
+    let gpu = pollster::block_on(alpha2_gpu::GpuContext::request_product()).expect("a GPU device");
     let renderer = alpha2_render::Renderer::new(gpu);
     let size = RenderSize::new(96, 64).expect("size");
     let mut frames =
@@ -1694,4 +1693,29 @@ fn a_render_cache_directory_that_cannot_be_made_in_time_is_abandoned() {
         panic!("an abandoned directory was opened again");
     };
     assert!(reason.contains("earlier export"), "{reason}");
+}
+
+/// A cache baked with one DX12 shader compiler is not read back under another: DXC and FXC
+/// compile one pipeline to different bytes.
+#[test]
+fn the_cache_key_changes_with_the_shader_compiler() {
+    let key = |compiler: &str| {
+        let mut identity = crate::render_cache::SnapshotIdentity::default();
+        crate::host::add_adapter_identity(
+            &mut identity,
+            &crate::renderer_backend::AdapterIdentity {
+                name: "NVIDIA GeForce MX450".to_owned(),
+                backend: "Dx12".to_owned(),
+                driver: "32.0.16.1742".to_owned(),
+                driver_info: String::new(),
+                shader_compiler: compiler.to_owned(),
+            },
+        );
+        identity.finish()
+    };
+    assert_ne!(
+        key("FXC"),
+        key(r"DXC 1.9.2609.1 (C:\alpha2\dxcompiler.dll)")
+    );
+    assert_eq!(key("FXC"), key("FXC"));
 }

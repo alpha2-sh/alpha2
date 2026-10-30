@@ -3,7 +3,6 @@
 use std::collections::VecDeque;
 use std::fs;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
-use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -17,7 +16,7 @@ use crate::convert::{
     codec_thread_budget, configure_rgba_to_yuv, encode_adapter_error, encode_adapter_error_at,
     tick_base,
 };
-use crate::partial::{OutputTarget, PartialOutput};
+use crate::partial::{OutputTarget, PartialOutput, PublishReport, SeekNeed};
 use alpha2_ffmpeg_bridge::OutputFile;
 use alpha2_ffmpeg_bridge::Yuv420pFrameBuffer;
 use alpha2_media::{
@@ -146,11 +145,12 @@ pub(crate) fn timed<T>(total: &mut Duration, body: impl FnOnce() -> T) -> T {
 
 /// Transactional IEEE-f32 WAV encoder used by native offline audio export.
 pub struct NativeWavEncodeSink {
-    pub(crate) target: OutputTarget,
-    pub(crate) partial_path: PathBuf,
-    /// Held until the partial file is renamed into place or removed.
-    pub(crate) _partial_lock: crate::partial::PartialLock,
     pub(crate) file: Option<BufWriter<fs::File>>,
+    /// The partial file `file` writes, until it is published or removed.
+    /// Declared after `file`, which is closed first.
+    pub(crate) partial: PartialOutput,
+    /// How the finished file was published.
+    pub(crate) published: Option<PublishReport>,
     pub(crate) sample_rate: u32,
     pub(crate) channels: u16,
     /// The speakers every block feeds.
@@ -177,11 +177,12 @@ const WAV_WRITE_BUFFER: usize = 1 << 20;
 /// and audio blocks must be submitted in nondecreasing start-timestamp order;
 /// ready packets are muxed incrementally instead of retained for the full file.
 pub struct NativeAvEncodeSink {
-    pub(crate) target: OutputTarget,
-    pub(crate) partial_path: PathBuf,
-    /// Held until the partial file is renamed into place or removed.
-    pub(crate) _partial_lock: crate::partial::PartialLock,
     pub(crate) output: Option<OutputFile>,
+    /// The partial file `output` writes, until it is published or removed.
+    /// Declared after `output`, which is closed first.
+    pub(crate) partial: PartialOutput,
+    /// How the finished file was published.
+    pub(crate) published: Option<PublishReport>,
     pub(crate) video_encoder: crate::video_backend::VideoEncoderBackend,
     pub(crate) video_stream_index: i32,
     pub(crate) video_encoder_time_base: AVRational,
@@ -373,8 +374,7 @@ impl NativeAvEncodeSink {
             )));
         }
         let target = path.into();
-        let partial = PartialOutput::claim(&target)?;
-        let partial_path = partial.path().to_owned();
+        let partial = PartialOutput::claim(&target, SeekNeed::Required)?;
         let mut output = partial.open_muxer(config.video.container)?;
         let global_header =
             output.oformat().flags & i32::try_from(ffi::AVFMT_GLOBALHEADER).unwrap_or(0) != 0;
@@ -458,12 +458,10 @@ impl NativeAvEncodeSink {
             sample_rate: audio.encoder_rate,
             sample_format: audio.sample_format,
         })?;
-        let partial_lock = partial.keep();
         Ok(Self {
-            target,
-            partial_path,
-            _partial_lock: partial_lock,
             output: Some(output),
+            partial,
+            published: None,
             video_encoder,
             video_stream_index,
             video_encoder_time_base,
@@ -510,16 +508,18 @@ impl NativeAvEncodeSink {
         &self.video_selection
     }
 
+    /// How the finished file was published; `None` until it is.
+    #[must_use]
+    pub fn publish_report(&self) -> Option<PublishReport> {
+        self.published
+    }
+
     pub(crate) fn cleanup(&mut self) -> Result<(), EncodeError> {
         // Stop the audio thread before the muxer goes, so nothing is queued against a closed
         // output.
         self.audio.shutdown();
         drop(self.output.take());
-        match fs::remove_file(&self.partial_path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(encode_adapter_error(error)),
-        }
+        self.partial.discard()
     }
 
     /// Queues one finished video packet for the muxer.
@@ -642,8 +642,9 @@ impl NativeAvEncodeSink {
             encode_adapter_error_at("video encoder rejected a YUV420P frame", error)
         })?;
         self.last_video_pts = Some(pts);
-        self.drain_video_packets(false)?;
-        self.write_ready_packets(false)
+        self.drain_video_packets(false)
+            .and_then(|()| self.write_ready_packets(false))
+            .map_err(|error| self.partial.explain(error))
     }
 
     pub(crate) fn write_video(&mut self, frame: &DecodedVideoFrame) -> Result<(), EncodeError> {
@@ -929,9 +930,10 @@ impl EncodeSink for NativeAvEncodeSink {
             return Err(EncodeError::InvalidTimestamp);
         }
         match event {
-            EncodeEvent::Video(frame) => self.write_video(&frame)?,
-            EncodeEvent::Audio(block) => self.write_audio(&block)?,
+            EncodeEvent::Video(frame) => self.write_video(&frame),
+            EncodeEvent::Audio(block) => self.write_audio(&block),
         }
+        .map_err(|error| self.partial.explain(error))?;
         self.last_input_ticks = Some(ticks);
         Ok(())
     }
@@ -940,6 +942,21 @@ impl EncodeSink for NativeAvEncodeSink {
             self.cleanup()?;
             return Err(EncodeError::Cancelled);
         }
+        self.close_output()
+            .map_err(|error| self.partial.explain(error))?;
+        self.published = Some(self.partial.finish(cancel)?);
+        self.complete = true;
+        Ok(())
+    }
+    fn abort(&mut self) -> Result<(), EncodeError> {
+        self.cleanup()
+    }
+}
+
+impl NativeAvEncodeSink {
+    /// Flushes both encoders, writes the trailer and closes the file: what
+    /// [`EncodeSink::finish`] does before it publishes.
+    fn close_output(&mut self) -> Result<(), EncodeError> {
         // Let the thread flush its encoder and wait, so every audio packet exists before the muxer
         // decides the final interleave.
         let covered = self.audio_input.received_ticks();
@@ -970,12 +987,7 @@ impl EncodeSink for NativeAvEncodeSink {
                 .close()
                 .map_err(|error| encode_adapter_error_at("closing the output", error))?;
         }
-        crate::partial::publish(&self.partial_path, &self.target)?;
-        self.complete = true;
         Ok(())
-    }
-    fn abort(&mut self) -> Result<(), EncodeError> {
-        self.cleanup()
     }
 }
 
@@ -1026,8 +1038,7 @@ impl NativeWavEncodeSink {
             .ok_or_else(|| EncodeError::Adapter("invalid WAV format".into()))?;
         let (channel_mask, plane_order) = wav_channel_layout(&speakers)?;
         let target = path.into();
-        let partial = PartialOutput::claim(&target)?;
-        let partial_path = partial.path().to_owned();
+        let partial = PartialOutput::claim(&target, SeekNeed::Required)?;
         let mut file = BufWriter::with_capacity(WAV_WRITE_BUFFER, partial.open_file()?);
         file.write_all(&wav_header_with_mask(
             sample_rate,
@@ -1036,12 +1047,10 @@ impl NativeWavEncodeSink {
             0,
         )?)
         .map_err(encode_adapter_error)?;
-        let partial_lock = partial.keep();
         Ok(Self {
-            target,
-            partial_path,
-            _partial_lock: partial_lock,
             file: Some(file),
+            partial,
+            published: None,
             sample_rate,
             channels,
             speakers,
@@ -1119,7 +1128,13 @@ impl NativeWavEncodeSink {
             })
     }
 
-    pub(crate) fn commit(&mut self) -> Result<(), EncodeError> {
+    /// How the finished file was published; `None` until it is.
+    #[must_use]
+    pub fn publish_report(&self) -> Option<PublishReport> {
+        self.published
+    }
+
+    pub(crate) fn commit(&mut self, cancel: &CancelToken) -> Result<(), EncodeError> {
         let data_bytes = self.data_bytes(self.frames_written)?;
         let header = wav_header_with_mask(
             self.sample_rate,
@@ -1134,9 +1149,9 @@ impl NativeWavEncodeSink {
         file.seek(SeekFrom::Start(0))
             .and_then(|_| file.write_all(&header))
             .and_then(|()| file.flush())
-            .map_err(encode_adapter_error)?;
+            .map_err(|error| self.partial.explain(encode_adapter_error(error)))?;
         drop(file);
-        crate::partial::publish(&self.partial_path, &self.target)?;
+        self.published = Some(self.partial.finish(cancel)?);
         self.complete = true;
         Ok(())
     }
@@ -1149,22 +1164,19 @@ impl AudioBlockSink for NativeWavEncodeSink {
             return Err(EncodeError::Cancelled);
         }
         self.write_block(block)
+            .map_err(|error| self.partial.explain(error))
     }
     fn finish_audio(&mut self, cancel: &CancelToken) -> Result<(), EncodeError> {
         if cancel.is_cancelled() {
             self.abort_audio()?;
             return Err(EncodeError::Cancelled);
         }
-        self.commit()
+        self.commit(cancel)
     }
     fn abort_audio(&mut self) -> Result<(), EncodeError> {
         // Close without writing out samples the file is about to lose.
         drop(self.file.take().map(BufWriter::into_parts));
-        match fs::remove_file(&self.partial_path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(encode_adapter_error(error)),
-        }
+        self.partial.discard()
     }
 }
 

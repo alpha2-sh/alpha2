@@ -281,7 +281,10 @@ fn sixteen_bit_containers_filter_alike_as_integers_and_as_normalized_textures() 
         .features
         .contains(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM)
     {
-        eprintln!("skipped: no 16-bit normalized textures to compare with on this device");
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::Unorm16,
+            "no 16-bit normalized textures to compare with on this device"
+        );
         return;
     }
     // Enlarged 4x so every output pixel filters between samples: the integer build filters and

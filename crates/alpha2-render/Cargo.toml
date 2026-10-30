@@ -42,6 +42,7 @@ serde_json.workspace = true
 rayon = "1.11.0"
 
 [dev-dependencies]
+alpha2-test-support.workspace = true
 alpha2-model.workspace = true
 # Tests acquire devices one at a time (`alpha2_gpu::serialize_acquisition`).
 alpha2-gpu = { workspace = true, features = ["serial-acquisition"] }

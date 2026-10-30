@@ -1,0 +1,22 @@
+schema = 1
+name = "directx-shader-compiler"
+# Microsoft's DirectX Shader Compiler, which the Windows host loads to compile its DX12 pipelines:
+# FXC, built into Windows, takes seconds for the composite pipeline at the first frame of every
+# process. Release v1.9.2609 (published 2026-09-29), from
+# https://github.com/microsoft/DirectXShaderCompiler/releases/tag/v1.9.2609, pinned 2026-10-31.
+# The fetch refuses an archive or a file whose SHA-256 differs.
+version = "1.9.2609"
+download_url = "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2609"
+archive = "dxc_2026_09_29.zip"
+archive_sha256 = "ad31b1fc8443175d204f77a611fdb3ef2ec42759bdc2f1167368de24a4a7e7f1"
+
+# The files kept from the archive (paths inside it, with forward slashes), each with its SHA-256.
+# `dxcompiler.dll` imports only Windows system DLLs.
+[files]
+"bin/x64/dxcompiler.dll" = "0689e2fee0a1c9df8662a59680469f24e2a3ad7ce6bbbcc9284f7a83172bfc59"
+
+# The licence texts the archive carries, copied beside the files.
+[licenses]
+"LICENCE-MIT.txt" = "903df5512f7d02609fed0c780a9b704f5a3eeb6e4d84ebe42a29845c81899a3c"
+"LICENSE-LLVM.txt" = "729615317e28dd03907e46f0fc3b5e88f7853cee61d1a1471d2749335516b46f"
+"LICENSE-MS.txt" = "734f72f239fe7b07b4c7203f294c1a7ce27095687278bab7e56d630d7c672963"

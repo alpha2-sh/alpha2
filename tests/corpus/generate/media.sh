@@ -533,6 +533,12 @@ PATCH
       -colorspace bt709 -color_primaries bt709 -color_trc bt709 -color_range tv \
       -flags:v +bitexact "$name.mp4"
   done
+  # Row padding on every architecture: 336 is a width under each decoder's stride alignment, so a
+  # decoded row is always followed by bytes the decoder never wrote.
+  "${ENCODE[@]}" -f lavfi -i testsrc2=size=336x180:rate=30:duration=0.5 \
+    -an -c:v libx264 -profile:v high -x264-params threads=1:sliced-threads=0 -pix_fmt yuv420p \
+    -colorspace bt709 -color_primaries bt709 -color_trc bt709 -color_range tv \
+    -flags:v +bitexact h264-row-padded.mp4
   # HDR: losslessly coded 10-bit BT.2020 limited, a luma ramp (Y 64 to 940) over a band of four
   # colours, tagged PQ and HLG, so decode and tone map can be checked against the reference from the
   # codes alone.

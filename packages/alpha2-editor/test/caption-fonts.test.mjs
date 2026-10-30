@@ -9,14 +9,21 @@ import { pathToFileURL } from "node:url";
 
 import { registerCaptionFonts } from "../dist/browser/runtime/caption-fonts.js";
 import { createMediaAdapter } from "../dist/browser/index.js";
+import {
+  missingCapability,
+  suiteOf,
+} from "../../../scripts/lib/capabilities.mjs";
 
 const root = resolve(import.meta.dirname, "..", "..", "..");
 const wasmDirectory = join(root, "packages", "alpha2", "wasm");
 const packaged = existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"));
 const skip =
   !packaged &&
-  process.env.ALPHA2_REQUIRE_WASM !== "1" &&
-  "the wasm package is not built";
+  missingCapability(
+    "wasm",
+    suiteOf(import.meta.url),
+    "the wasm package is not built",
+  );
 
 /** An engine registry that refuses what is not an OpenType font, as the engine's parser does. */
 function registry() {

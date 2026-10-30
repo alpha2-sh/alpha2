@@ -238,10 +238,15 @@ pub fn export_request(options: ExportCliOptions) -> Result<(Request, PathBuf), H
 #[allow(clippy::unnecessary_wraps)] // The protocol's progress callback signature.
 fn report_progress(progress: crate::protocol::Progress) -> Result<(), HostError> {
     alpha2_os::diagnostic!(
-        "alpha2-host export: {} {}/{}",
+        "alpha2-host export: {} {}/{}{}",
         progress.phase.as_str(),
         progress.completed,
-        progress.total
+        progress.total,
+        if progress.restarted {
+            " (restarted on the readback path)"
+        } else {
+            ""
+        }
     );
     Ok(())
 }

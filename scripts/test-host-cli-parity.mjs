@@ -1,8 +1,8 @@
 // Host CLI parity: the native host's encoded outputs agree byte for byte across CLI, `serve`, the
 // Python client, pipelined/synchronous and every decode concurrency, and the packaged browser
 // engine draws what the native one does. Without Chrome only the native checks run, and without a
-// Python that imports `alpha2` the Python client's is skipped; ALPHA2_REQUIRE_BROWSER=1 and
-// ALPHA2_REQUIRE_PYTHON=1 fail instead. The checks are in scripts/lib/host-cli-parity/.
+// Python that imports `alpha2` the Python client's is skipped; ALPHA2_REQUIRE naming `browser` or
+// `python` fails instead. The checks are in scripts/lib/host-cli-parity/.
 
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -44,6 +44,7 @@ async function main() {
   if (chrome === null)
     reportSkippedBrowser(
       "browser parity (golden, complex, shapes, effects, HDR, extensions, orientation, sink); only the native checks ran",
+      "host-cli-parity",
     );
 }
 

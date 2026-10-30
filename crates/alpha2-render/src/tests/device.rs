@@ -16,7 +16,7 @@ use super::*;
 fn device_creation_survives_repeated_teardown() {
     let _lock = gpu_test_lock();
     for _ in 0..64 {
-        let gpu = pollster::block_on(GpuContext::request_high_performance())
+        let gpu = pollster::block_on(GpuContext::request_product())
             .expect("render tests require a working GPU adapter");
         let renderer = Renderer::new(gpu);
         let size = RenderSize::new(2, 2).expect("non-zero size");

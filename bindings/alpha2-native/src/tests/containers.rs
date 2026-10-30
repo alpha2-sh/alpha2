@@ -377,10 +377,10 @@ fn exports_every_container_codec_pair_and_reads_it_back() {
             .filter(|codec| **codec != alpha2_media::VideoCodec::ProRes)
             .filter_map(|codec| encodes_video(*codec))
             .collect::<Vec<_>>();
+        // Every container offers a software codec of each kind, which every pinned runtime has.
         let (Some(first_video), Some(first_audio)) = (video_codecs.first(), audio_codecs.first())
         else {
-            eprintln!("skipped {container}: this runtime encodes none of its codecs");
-            continue;
+            panic!("this runtime encodes none of {container}'s video or audio codecs");
         };
         // Each offered video codec beside the container's first audio one, and each offered
         // audio codec beside its first video one, alternating the frame and sample rates.

@@ -1233,6 +1233,13 @@ def _error_from_host(error: dict[str, Any], stderr: str, phase: ExportPhase) -> 
         return Alpha2GpuInitializationError(error["message"], **options)
     if error["code"] == "CONFORM_FAILED" and error.get("details") is not None:
         return Alpha2ConformError(error["message"], error["details"], **options)
+    details = error.get("details")
+    if (
+        error["code"] == "OUTPUT_PUBLISH_FAILED"
+        and isinstance(details, dict)
+        and isinstance(details.get("keptPath"), str)
+    ):
+        options["kept_path"] = details["keptPath"]
     return Alpha2HostError(error["code"], error["message"], **options)
 
 

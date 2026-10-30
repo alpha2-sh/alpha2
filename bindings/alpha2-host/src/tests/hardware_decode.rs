@@ -36,51 +36,6 @@ fn every_hardware_fallback_reason_reports_under_its_own_key() {
     }
 }
 
-#[test]
-fn the_decode_backend_gpu_falls_back_visibly_or_refuses_by_policy() {
-    let unavailable = || Err::<u8, _>("no DX12 adapter");
-    let default = || Ok::<u8, HostError>(2);
-
-    // `auto` takes the default GPU and says why hardware decode is off.
-    let (gpu, reason) =
-        decode_backend_gpu(VideoDecodePolicy::Auto, "DX12", unavailable, default).expect("auto");
-    assert_eq!(gpu, 2);
-    assert_eq!(
-        reason.as_deref(),
-        Some("DX12 unavailable: \"no DX12 adapter\"")
-    );
-
-    // `hardware-required` names the cause instead of a generic GPU failure.
-    let error = decode_backend_gpu(
-        VideoDecodePolicy::HardwareRequired,
-        "DX12",
-        unavailable,
-        default,
-    )
-    .expect_err("hardware is required");
-    assert_eq!(error.code, "HARDWARE_DECODE_UNAVAILABLE");
-    assert!(
-        error.message.contains("DX12 unavailable"),
-        "{}",
-        error.message
-    );
-
-    // The backend is used whenever it works, under every mode: software decode rendered on wgpu's
-    // default adapter (Vulkan on Windows).
-    for policy in [VideoDecodePolicy::Auto, VideoDecodePolicy::Software] {
-        assert_eq!(
-            decode_backend_gpu(policy, "DX12", || Ok::<u8, ()>(1), default).expect("preferred"),
-            (1, None),
-            "{policy:?}"
-        );
-    }
-    // Software decode loses nothing without it: the default GPU, and no decode reason.
-    let (gpu, reason) =
-        decode_backend_gpu(VideoDecodePolicy::Software, "DX12", unavailable, default)
-            .expect("software");
-    assert_eq!((gpu, reason), (2, None));
-}
-
 /// An explicit `WGPU_BACKEND` without Vulkan skips the Linux shared device,
 /// which is the renderer's, as the documented override says: `auto` decodes in
 /// software and says why, `hardware-required` refuses, and an encode-only
@@ -200,13 +155,17 @@ fn a_host_under_a_validation_layer_older_than_1_4_decodes_in_software() {
 #[test]
 #[ignore = "run by a_host_under_a_validation_layer_older_than_1_4_decodes_in_software"]
 fn old_validation_layer_host_child() {
-    let Ok(context) = alpha2_native_gpu::SharedVulkanContext::create() else {
-        eprintln!("skipped: no Vulkan video decode device");
+    let Some(context) = alpha2_test_support::available!(
+        alpha2_test_support::Capability::VulkanVideo,
+        alpha2_native_gpu::SharedVulkanContext::create()
+            .map_err(|error| format!("no Vulkan video decode device ({error:?})"))
+    ) else {
         return;
     };
     let Some(hazard) = context.video_session_hazard() else {
-        eprintln!(
-            "skipped: the system validation layer is {:?}, not one older than 1.4",
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::OldVulkanValidationLayer,
+            "the system validation layer is {:?}, not one older than 1.4",
             context.validation_layer()
         );
         return;
@@ -231,37 +190,130 @@ fn old_validation_layer_host_child() {
 }
 
 /// The streams [`an_imported_decoder_surface_renders_what_a_software_decode_does`]
-/// exports, with the codec the device must decode and whether it is 10-bit.
-/// Each is 320x180, a height no codec's block size divides, so its decoder
-/// surface is taller than the picture (192 rows for H.264, 184 for HEVC and
-/// AV1); the 10-bit ones import as P010.
-#[cfg(all(target_os = "linux", feature = "hwdecode"))]
-const IMPORT_PARITY_STREAMS: [(&str, &str, bool); 5] = [
-    ("h264-padded.mp4", "h264", false),
-    ("hevc-padded.mp4", "hevc", false),
-    ("hevc-main10-padded.mp4", "hevc", true),
-    ("av1-padded.mp4", "av1", false),
-    ("av1-10bit-padded.mp4", "av1", true),
+/// exports: name, codec, whether it is 10-bit, and its size. The 320x180 ones
+/// have a height no codec's block size divides, so their decoder surfaces are
+/// taller than the picture (192 rows for H.264, 184 for HEVC and AV1); the
+/// 10-bit ones import as P010.
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos", target_os = "windows"),
+    feature = "hwdecode"
+))]
+const IMPORT_PARITY_STREAMS: [(&str, &str, bool, u32, u32); 7] = [
+    ("h264-padded.mp4", "h264", false, 320, 180),
+    ("hevc-padded.mp4", "hevc", false, 320, 180),
+    ("hevc-main10-padded.mp4", "hevc", true, 320, 180),
+    ("av1-padded.mp4", "av1", false, 320, 180),
+    ("av1-10bit-padded.mp4", "av1", true, 320, 180),
+    ("vp9.webm", "vp9", false, 128, 96),
+    ("h264-high10.mp4", "h264", true, 128, 96),
 ];
 
-/// A decoder surface the renderer imports renders the picture a software decode
-/// of the same stream does, plane for plane: the H.264, HEVC and AV1 sessions,
-/// the P010 plane views, and the padded coded extent the surface is sampled
-/// against. Each export runs in a child, since the frame capture is read from
-/// its environment, and the hardware one must import every frame with no GPU
-/// diagnostic. Decoding is exact for all three codecs, so the two renders
-/// differ only by how each path's samples reach the shader.
+/// Whether this machine's hardware decoder takes `codec` (at 10 bits when
+/// `ten_bit`): `Some` from the device's own answer, `None` where the platform
+/// has no per-codec query (Windows), so the export itself says.
 #[cfg(all(target_os = "linux", feature = "hwdecode"))]
+#[allow(clippy::unnecessary_wraps)]
+fn decodes_in_hardware(
+    context: &alpha2_native_gpu::SharedVulkanContext,
+    codec: &str,
+    ten_bit: bool,
+) -> Option<bool> {
+    Some(context.decode_codecs().contains(&codec) && (!ten_bit || context.supports_ten_bit()))
+}
+
+#[cfg(all(target_os = "macos", feature = "hwdecode"))]
+#[allow(clippy::unnecessary_wraps)]
+fn decodes_in_hardware(
+    context: &alpha2_native_gpu::SharedMetalContext,
+    codec: &str,
+    ten_bit: bool,
+) -> Option<bool> {
+    use alpha2_native_gpu::{VideoToolboxCodec, videotoolbox_hardware_decodes};
+    let codec = match codec {
+        "h264" => VideoToolboxCodec::H264,
+        "hevc" => VideoToolboxCodec::Hevc,
+        "vp9" => VideoToolboxCodec::Vp9,
+        "av1" => VideoToolboxCodec::Av1,
+        other => panic!("no VideoToolbox codec {other}"),
+    };
+    Some(videotoolbox_hardware_decodes(codec) && (!ten_bit || context.supports_ten_bit()))
+}
+
+#[cfg(all(target_os = "windows", feature = "hwdecode"))]
+#[allow(clippy::unnecessary_wraps, clippy::trivially_copy_pass_by_ref)]
+const fn decodes_in_hardware(_context: &(), _codec: &str, _ten_bit: bool) -> Option<bool> {
+    None
+}
+
+/// The device hardware decode runs on here, or `None` (a recorded skip).
+#[cfg(all(target_os = "linux", feature = "hwdecode"))]
+fn parity_device() -> Option<alpha2_native_gpu::SharedVulkanContext> {
+    vulkan_video_context()
+}
+
+#[cfg(all(target_os = "macos", feature = "hwdecode"))]
+fn parity_device() -> Option<alpha2_native_gpu::SharedMetalContext> {
+    if !create_gpu_test_host(VideoDecodePolicy::Auto)
+        .expect("host")
+        .hardware_decode_ready()
+    {
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::Videotoolbox,
+            "this host has no VideoToolbox decode"
+        );
+        return None;
+    }
+    let gpu = pollster::block_on(alpha2_gpu::GpuContext::request_product()).expect("a GPU device");
+    Some(alpha2_native_gpu::SharedMetalContext::from_gpu(gpu).expect("the shared Metal device"))
+}
+
+#[cfg(all(target_os = "windows", feature = "hwdecode"))]
+fn parity_device() -> Option<()> {
+    if create_gpu_test_host(VideoDecodePolicy::Auto)
+        .expect("host")
+        .hardware_decode_ready()
+    {
+        Some(())
+    } else {
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::D3d12Video,
+            "this host has no D3D12VA decode"
+        );
+        None
+    }
+}
+
+/// A decoder surface the renderer imports renders the picture a software decode
+/// of the same stream does, plane for plane: each codec's session, the P010
+/// plane views, and the padded coded extent the surface is sampled against.
+/// Each export runs in a child, since the frame capture is read from its
+/// environment, and the hardware one must import every frame with no GPU
+/// diagnostic. Decoding is exact, so the two renders differ only by how each
+/// path's samples reach the shader: at most one code, where the 10-bit paths
+/// round to 8 bits apart. The share of off-by-one samples is printed, not
+/// asserted: which 10-bit ties round up differs by GPU.
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos", target_os = "windows"),
+    feature = "hwdecode"
+))]
 #[test]
+#[allow(clippy::too_many_lines)]
 fn an_imported_decoder_surface_renders_what_a_software_decode_does() {
     let _gpu = gpu_test_lock();
-    let Some(context) = vulkan_video_context() else {
+    let Some(device) = parity_device() else {
         return;
     };
     let directory = scratch_directory("import-parity");
     let mut checked = 0;
-    for (name, codec, ten_bit) in IMPORT_PARITY_STREAMS {
-        if !context.decode_codecs().contains(&codec) || (ten_bit && !context.supports_ten_bit()) {
+    for (name, codec, ten_bit, width, height) in IMPORT_PARITY_STREAMS {
+        // Decoders answer per codec, not per profile: whether H.264 High 10 decodes in hardware
+        // (most do not) only the export can say.
+        let claimed = if codec == "h264" && ten_bit {
+            None
+        } else {
+            decodes_in_hardware(&device, codec, ten_bit)
+        };
+        if claimed == Some(false) {
             eprintln!("note: this device does not decode {name} in hardware");
             continue;
         }
@@ -273,8 +325,12 @@ fn an_imported_decoder_surface_renders_what_a_software_decode_does() {
                     "tests::hardware_decode::import_parity_child",
                     "--ignored",
                     "--nocapture",
+                    "--test-threads=1",
                 ])
-                .env("ALPHA2_IMPORT_PARITY", format!("{name}|{policy}"))
+                .env(
+                    "ALPHA2_IMPORT_PARITY",
+                    format!("{name}|{policy}|{width}|{height}"),
+                )
                 .env("ALPHA2_EXPORT_FRAMES_Y4M", &path)
                 .env(
                     "ALPHA2_IMPORT_PARITY_OUTPUT",
@@ -282,18 +338,41 @@ fn an_imported_decoder_surface_renders_what_a_software_decode_does() {
                 )
                 .output()
                 .expect("child");
+            let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
             assert!(
-                output.status.success(),
-                "{name} {policy}: {}\n{}",
+                output.status.success() && stdout.contains("1 passed"),
+                "{name} {policy}: {}\n{stdout}\n{}",
                 output.status,
                 String::from_utf8_lossy(&output.stderr)
             );
-            y4m_frames(&std::fs::read(&path).expect("captured frames"))
+            stdout
+                .lines()
+                .find_map(|line| {
+                    line.split_once("ALPHA2-PARITY-UNSUPPORTED: ")
+                        .map(|(_, reason)| reason)
+                })
+                .map_or_else(
+                    || Ok(y4m_frames(&std::fs::read(&path).expect("captured frames"))),
+                    |reason| Err(reason.to_owned()),
+                )
         };
-        let (imported, software) = (capture("hardware"), capture("software"));
-        assert_eq!(imported.len(), 15, "{name}");
-        assert_eq!(software.len(), 15, "{name}");
+        let imported = match capture("hardware") {
+            Ok(frames) => frames,
+            Err(reason) => {
+                assert!(
+                    claimed.is_none(),
+                    "{name}: the device claims it and the hardware export refused it: {reason}"
+                );
+                eprintln!("note: this device does not decode {name} in hardware ({reason})");
+                continue;
+            }
+        };
+        let software = capture("software").expect("a software decode");
+        assert_eq!(imported.len(), software.len(), "{name}");
+        assert!(!imported.is_empty(), "{name}");
         let mut widest = [0_u8; 3];
+        let mut off_by_one = [0_u64; 3];
+        let mut samples = [0_u64; 3];
         for (index, (imported, software)) in imported.iter().zip(&software).enumerate() {
             for (plane, (imported, software)) in imported.iter().zip(software).enumerate() {
                 assert_eq!(
@@ -301,34 +380,58 @@ fn an_imported_decoder_surface_renders_what_a_software_decode_does() {
                     software.len(),
                     "{name} frame {index} plane {plane}"
                 );
-                let differences = imported
+                let worst = imported
                     .iter()
                     .zip(software)
                     .map(|(a, b)| a.abs_diff(*b))
-                    .collect::<Vec<_>>();
-                let worst = differences.iter().copied().max().unwrap_or(0);
-                let total = differences.iter().map(|&d| u64::from(d)).sum::<u64>();
-                let samples = u64::try_from(differences.len()).expect("samples");
-                widest[plane] = widest[plane].max(worst);
-                // Exact for 8-bit; the 10-bit paths round to 8 bits apart, a code at most. A
-                // surface sampled against the wrong extent is off by a hundred.
+                    .max()
+                    .unwrap_or(0);
+                // A surface sampled against the wrong extent is off by a hundred.
                 assert!(
-                    worst <= 1 && total * 100 < samples,
-                    "{name} frame {index} plane {plane}: worst {worst}, {total} codes over {samples} samples"
+                    worst <= 1,
+                    "{name} frame {index} plane {plane}: off by up to {worst} codes"
                 );
+                widest[plane] = widest[plane].max(worst);
+                off_by_one[plane] += u64::try_from(
+                    imported
+                        .iter()
+                        .zip(software)
+                        .filter(|(a, b)| a != b)
+                        .count(),
+                )
+                .expect("count");
+                samples[plane] += u64::try_from(imported.len()).expect("samples");
             }
         }
+        #[allow(clippy::cast_precision_loss)]
+        let shares =
+            [0, 1, 2].map(|plane| 100.0 * off_by_one[plane] as f64 / samples[plane] as f64);
         eprintln!(
-            "{name}: imported and software renders differ by at most {widest:?} codes (Y, U, V)"
+            "{name}: imported and software renders differ by at most {widest:?} codes (Y, U, V), \
+             {shares:.3?} % of samples one code off"
         );
         checked += 1;
     }
-    assert!(checked > 0 || std::env::var_os("ALPHA2_REQUIRE_VULKAN_VIDEO").is_none());
+    if checked == 0 {
+        alpha2_test_support::skip!(
+            if cfg!(target_os = "linux") {
+                alpha2_test_support::Capability::VulkanVideo
+            } else if cfg!(target_os = "macos") {
+                alpha2_test_support::Capability::Videotoolbox
+            } else {
+                alpha2_test_support::Capability::D3d12Video
+            },
+            "no import parity stream decodes in hardware here"
+        );
+    }
 }
 
 /// The frames of a YUV4MPEG2 file of 8-bit 4:2:0 pictures, each as its Y, U
 /// and V planes.
-#[cfg(all(target_os = "linux", feature = "hwdecode"))]
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos", target_os = "windows"),
+    feature = "hwdecode"
+))]
 fn y4m_frames(bytes: &[u8]) -> Vec<[Vec<u8>; 3]> {
     let header_end = bytes
         .iter()
@@ -365,13 +468,31 @@ fn y4m_frames(bytes: &[u8]) -> Vec<[Vec<u8>; 3]> {
 /// The child half of
 /// `an_imported_decoder_surface_renders_what_a_software_decode_does`: exports
 /// the stream `ALPHA2_IMPORT_PARITY` names under its policy, at the stream's
-/// own size, through the readback path whose frames the capture writes.
-#[cfg(all(target_os = "linux", feature = "hwdecode"))]
+/// own size, through the readback path whose frames the capture writes. A
+/// hardware export the host refuses with a typed hardware decode failure prints
+/// `ALPHA2-PARITY-UNSUPPORTED: <reason>` and passes; the parent decides whether
+/// the device claimed the stream.
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos", target_os = "windows"),
+    feature = "hwdecode"
+))]
 #[test]
 #[ignore = "run by an_imported_decoder_surface_renders_what_a_software_decode_does"]
 fn import_parity_child() {
     let request = std::env::var("ALPHA2_IMPORT_PARITY").expect("a stream and a policy");
-    let (name, policy) = request.split_once('|').expect("name|policy");
+    let mut fields = request.split('|');
+    let (name, policy, width, height) = (
+        fields.next().expect("name"),
+        fields.next().expect("policy"),
+        fields
+            .next()
+            .and_then(|w| w.parse::<u32>().ok())
+            .expect("width"),
+        fields
+            .next()
+            .and_then(|h| h.parse::<u32>().ok())
+            .expect("height"),
+    );
     let hardware = policy == "hardware";
     let mut host = create_gpu_test_host(if hardware {
         VideoDecodePolicy::HardwareRequired
@@ -382,7 +503,7 @@ fn import_parity_child() {
     let half = alpha2_time::TICKS_PER_SECOND / 2;
     let project = json!({
         "schema_version": 1, "id": "import-parity", "name": "Import parity",
-        "settings": {"width": 320, "height": 180, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
+        "settings": {"width": width, "height": height, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000},
         "sources": [{"id": "video", "locator": "fixture://video", "kind": "video"}],
         "timeline": {"tracks": [{"id": "v", "name": "V", "kind": "video", "clips": [{
             "id": "clip", "source_id": "video",
@@ -391,30 +512,37 @@ fn import_parity_child() {
         }]}]}
     });
     let output = PathBuf::from(std::env::var_os("ALPHA2_IMPORT_PARITY_OUTPUT").expect("output"));
-    let result = host
-        .export(
-            &project.to_string(),
-            &HashMap::from([("video".to_owned(), corpus(name))]),
-            &HashMap::new(),
-            Vec::new(),
-            0,
-            half,
-            RateRequest { num: 30, den: 1 },
-            false,
-            crate::protocol::ResolvedFormat {
-                container: alpha2_media::Container::Mp4,
-                video: NativeVideoCodec::Mpeg4Part2,
-                audio: NativeAudioCodec::Aac,
-                pixels: alpha2_media::PixelLayout::YUV420P,
-            },
-            None,
-            VideoQualityRequest::Level(QualityLevel::High),
-            AudioQualityRequest::Level(QualityLevel::High),
-            None,
-            &output,
-            &mut |_| Ok(()),
-        )
-        .expect("export");
+    let exported = host.export(
+        &project.to_string(),
+        &HashMap::from([("video".to_owned(), corpus(name))]),
+        &HashMap::new(),
+        Vec::new(),
+        0,
+        half,
+        RateRequest { num: 30, den: 1 },
+        false,
+        crate::protocol::ResolvedFormat {
+            container: alpha2_media::Container::Mp4,
+            video: NativeVideoCodec::Mpeg4Part2,
+            audio: NativeAudioCodec::Aac,
+            pixels: alpha2_media::PixelLayout::YUV420P,
+        },
+        None,
+        VideoQualityRequest::Level(QualityLevel::High),
+        AudioQualityRequest::Level(QualityLevel::High),
+        None,
+        &output,
+        &mut |_| Ok(()),
+    );
+    let result = match exported.map_err(HostError::classify) {
+        Ok(result) => result,
+        // A hardware-required export the source cannot use refuses before decoding a frame.
+        Err(error) if hardware && error.message.contains("hardware decode is required") => {
+            println!("ALPHA2-PARITY-UNSUPPORTED: {}", error.message);
+            return;
+        }
+        Err(error) => panic!("{name} {policy}: {}: {}", error.code, error.message),
+    };
     let performance = &result["performance"];
     if hardware {
         assert_eq!(
@@ -445,8 +573,7 @@ fn import_parity_child() {
 #[allow(clippy::used_underscore_binding)]
 fn every_yuv_layout_uploads_as_planes_and_keeps_its_aspect_ratio() {
     let _gpu = gpu_test_lock();
-    let gpu = pollster::block_on(alpha2_gpu::GpuContext::request_high_performance())
-        .expect("a GPU device");
+    let gpu = pollster::block_on(alpha2_gpu::GpuContext::request_product()).expect("a GPU device");
     // Uploads run with every feature the host's device has; any validation error fails the test.
     let device = gpu.device().clone();
     let renderer = alpha2_render::Renderer::new(gpu);
@@ -654,18 +781,21 @@ fn only_a_frame_s_own_failure_falls_back_to_a_download() {
 }
 
 /// A host that decodes H.264 into surfaces its renderer reads in place and
-/// encodes on the same device, or `None` (with a note) where there is none.
+/// encodes on the same device, or `None` (a recorded skip) where there is none.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwencode",
     feature = "hwdecode"
 ))]
 fn surface_importing_gpu_output_host() -> Option<Host> {
-    let (host, _) = gpu_output_host(VideoDecodePolicy::Auto)?;
+    let (host, _, _) = gpu_output_host(VideoDecodePolicy::Auto)?;
     if imports_decoded(&host, "h264") == Some(true) {
         Some(host)
     } else {
-        eprintln!("skipped: this host does not import decoded H.264 surfaces");
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::HardwareDecodeImport,
+            "this host does not import decoded H.264 surfaces"
+        );
         None
     }
 }
@@ -928,7 +1058,11 @@ fn a_synchronous_export_decodes_in_software() {
             assert!(!directory.join("strict.mp4").exists());
             println!("checked: hardware-required refused");
         }
-        Err(error) => eprintln!("skipped hardware-required: {}", error.message),
+        Err(error) => alpha2_test_support::skip!(
+            alpha2_test_support::Capability::HardwareDecodeImport,
+            "the hardware-required export was refused: {}",
+            error.message
+        ),
     }
     std::fs::remove_dir_all(&directory).ok();
 }

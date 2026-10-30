@@ -17,7 +17,7 @@ const script = join(root, "scripts", "test-gpu-export.mjs");
 function harness(platform, args = []) {
   const env = { ...process.env };
   delete env.ALPHA2_HOST_BINARY;
-  delete env.ALPHA2_REQUIRE_GPU_EXPORT;
+  delete env.ALPHA2_REQUIRE;
   // os.tmpdir() on win32 reads TEMP.
   env.TEMP = tmpdir();
   const preload = `data:text/javascript,Object.defineProperty(process,"platform",{value:${JSON.stringify(platform)}})`;
@@ -188,10 +188,9 @@ test("a host that never answers its capabilities is killed and reported", () => 
   assert.match(run.stdout, /^FAIL .*capabilities.*did not finish within 2 s/m);
 });
 
-test("--expect-unavailable and --require-gpu contradict each other, from a flag or the environment", () => {
+test("--expect-unavailable and a required gpu-resident capability contradict each other", () => {
   for (const [args, env] of [
-    [["--expect-unavailable", "--require-gpu"], {}],
-    [["--expect-unavailable"], { ALPHA2_REQUIRE_GPU_EXPORT: "1" }],
+    [["--expect-unavailable"], { ALPHA2_REQUIRE: "gpu-resident" }],
   ]) {
     const run = spawnSync(
       process.execPath,
@@ -265,7 +264,7 @@ test("--expect-unavailable on a host that has the path fails at once, naming the
   assert.equal(run.status, 1, run.stdout);
   assert.match(
     run.stdout,
-    /^FAIL the host reports no GPU-resident output path, and why\n {2}gpuOutputPath\.available is true, expected false: .*--require-gpu/m,
+    /^FAIL the host reports no GPU-resident output path, and why\n {2}gpuOutputPath\.available is true, expected false: .*ALPHA2_REQUIRE=gpu-resident/m,
   );
   // Nothing else ran: an export there would only fail for the same reason.
   assert.doesNotMatch(run.stdout, /auto export|gpu-required|start within/);
@@ -467,8 +466,8 @@ test("the unavailable checks hold on a host's refusal and fail on each way it ca
     ],
     [
       refusal,
-      ["required.mp4", "required.alpha2-partial.mp4"],
-      /left required\.mp4, required\.alpha2-partial\.mp4 behind/,
+      ["required.mp4", "required.a2partial.mp4"],
+      /left required\.mp4, required\.a2partial\.mp4 behind/,
     ],
   ]) {
     assert.match(gpuRequiredRefusalProblem(answer, leftBehind) ?? "", expected);

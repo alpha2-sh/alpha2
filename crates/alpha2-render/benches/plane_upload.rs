@@ -28,7 +28,7 @@ fn main() {
         let gpu = if without_16_bit_norm {
             device_without_16_bit_norm().expect("GPU adapter")
         } else {
-            pollster::block_on(GpuContext::request_high_performance()).expect("GPU adapter")
+            pollster::block_on(GpuContext::request_product()).expect("GPU adapter")
         };
         let storage = if gpu
             .device()
@@ -56,8 +56,11 @@ fn main() {
 /// A high-performance device opened without optional features, as browser
 /// WebGPU is: no 16-bit normalized textures.
 fn device_without_16_bit_norm() -> Result<GpuContext, alpha2_gpu::GpuError> {
-    pollster::block_on(GpuContext::request_high_performance_without(
-        wgpu::Features::all(),
+    pollster::block_on(GpuContext::request_product_with(
+        &alpha2_gpu::ProductRequest {
+            withheld: wgpu::Features::all(),
+            ..alpha2_gpu::ProductRequest::default()
+        },
     ))
 }
 

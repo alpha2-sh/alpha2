@@ -10,12 +10,37 @@ pub enum RendererBackend {
     Cpu(Box<CpuRenderer>),
 }
 
+/// How a result names a DX12 shader compiler: `DXC <path>` gains the file
+/// version of the DLL, `DXC 1.9.2609.1 (<path>)`, read once per process.
+pub fn describe_shader_compiler(raw: &str) -> String {
+    static DESCRIBED: std::sync::OnceLock<std::sync::Mutex<Vec<(String, String)>>> =
+        std::sync::OnceLock::new();
+    let Some(path) = raw.strip_prefix("DXC ") else {
+        return raw.to_owned();
+    };
+    let cache = DESCRIBED.get_or_init(std::sync::Mutex::default);
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((_, described)) = cache.iter().find(|(seen, _)| seen == raw) {
+        return described.clone();
+    }
+    let described = alpha2_os::file_version(std::path::Path::new(path)).map_or_else(
+        || raw.to_owned(),
+        |version| format!("DXC {version} ({path})"),
+    );
+    cache.push((raw.to_owned(), described.clone()));
+    described
+}
+
 /// What a result reports about the device that rendered it.
 pub struct AdapterIdentity {
     pub name: String,
     pub backend: String,
     pub driver: String,
     pub driver_info: String,
+    /// The DX12 shader compiler; empty elsewhere and on the CPU.
+    pub shader_compiler: String,
 }
 
 impl RendererBackend {
@@ -60,6 +85,7 @@ impl RendererBackend {
                     backend: adapter.backend,
                     driver: adapter.driver,
                     driver_info: adapter.driver_info,
+                    shader_compiler: describe_shader_compiler(&adapter.shader_compiler),
                 }
             }
             Self::Cpu(renderer) => AdapterIdentity {
@@ -67,6 +93,7 @@ impl RendererBackend {
                 backend: "cpu".to_owned(),
                 driver: "alpha2".to_owned(),
                 driver_info: env!("CARGO_PKG_VERSION").to_owned(),
+                shader_compiler: String::new(),
             },
         }
     }

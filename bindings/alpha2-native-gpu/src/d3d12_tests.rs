@@ -7,7 +7,7 @@
 //! when the copy gives the surface back; each encode test renders known
 //! samples into the renderer's planes, copies them into a frame of such a
 //! pool, and downloads it. Each test needs a D3D12 adapter; without one it
-//! skips, unless `ALPHA2_REQUIRE_D3D12` is set.
+//! skips, recorded as the `d3d12-video` capability.
 
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
@@ -49,26 +49,17 @@ struct SurfaceDescriptor {
 }
 
 /// The renderer's D3D12 device as the host shares it, on the first adapter
-/// D3D12VA opens on, or `None` (and a note).
+/// D3D12VA opens on, or `None` (a recorded skip).
 fn shared_context() -> Option<SharedD3D12Context> {
-    let made = pollster::block_on(
-        alpha2_gpu::GpuContext::request_high_performance_on_accepted(wgpu::Backends::DX12, |gpu| {
-            SharedD3D12Context::from_gpu(gpu.clone())
-        }),
-    )
+    let made = pollster::block_on(alpha2_gpu::GpuContext::request_product_accepted(|gpu| {
+        SharedD3D12Context::from_gpu(gpu.clone())
+    }))
     .map_err(|error| format!("{error:?}"))
     .and_then(|found| found.accepted.ok_or_else(|| found.refusals.to_string()));
-    match made {
-        Ok(context) => Some(context),
-        Err(error) => {
-            assert!(
-                std::env::var_os("ALPHA2_REQUIRE_D3D12").is_none(),
-                "the D3D12 device is required: {error}"
-            );
-            eprintln!("skipped: no D3D12 device ({error})");
-            None
-        }
-    }
+    alpha2_test_support::available!(
+        alpha2_test_support::Capability::D3d12Video,
+        made.map_err(|error| format!("no D3D12 device ({error})"))
+    )
 }
 
 /// The sample code a test writes at `(x, y)` of `plane`, channel `channel`.
@@ -343,6 +334,18 @@ fn sample(
         .collect()
 }
 
+/// Fails unless a child test run by name passed and ran exactly that test: `--exact` with a path
+/// that matches nothing would run nothing and still succeed.
+fn assert_child_ran(output: &std::process::Output) {
+    assert!(
+        output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "the child test failed or did not run ({}):\n{}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 /// Runs `test` inside a validation error scope on `context`'s device; any
 /// validation error fails it.
 fn validated<T>(context: &SharedD3D12Context, test: impl FnOnce() -> T) -> T {
@@ -548,7 +551,7 @@ fn zero_blocks_of_a_decoded_frame_read_as_zero_in_fresh_and_reused_targets() {
                     .copy_surface(Arc::new(D3D12FrameLease::new(bright)))
                     .expect("bright copy"),
             );
-            context.release_idle_copies();
+            let _ = context.release_idle_copies();
             check(
                 surface_with(&device, format, 64, 32, blocks),
                 "fresh target",
@@ -642,13 +645,45 @@ fn a_surface_of_another_device_or_a_mismatched_format_is_refused() {
 
 #[test]
 fn a_ten_bit_surface_is_refused_on_a_device_without_p010_plane_views() {
-    let Some(context) = shared_context() else {
+    // A device opened without P010 (and the 16-bit normalized textures its planes are viewed as)
+    // has no P010 plane views on any adapter, so the refusal runs everywhere D3D12VA does. wgpu
+    // grants P010 on its own, so withholding the 16-bit formats alone is not enough.
+    let made = pollster::block_on(async {
+        let mut refusals = Vec::new();
+        for (_, adapter) in
+            alpha2_gpu::GpuContext::adapters_by_preference_on(wgpu::Backends::DX12).await
+        {
+            if adapter.get_info().device_type == wgpu::DeviceType::Cpu {
+                continue;
+            }
+            let name = adapter.get_info().name;
+            match alpha2_gpu::GpuContext::open_adapter_without(
+                adapter,
+                wgpu::Features::TEXTURE_FORMAT_16BIT_NORM | wgpu::Features::TEXTURE_FORMAT_P010,
+            )
+            .await
+            {
+                Ok(gpu) => match SharedD3D12Context::from_gpu(gpu) {
+                    Ok(context) => return Ok(context),
+                    Err(error) => refusals.push(format!("{name}: {error}")),
+                },
+                Err(error) => refusals.push(format!("{name}: {error:?}")),
+            }
+        }
+        Err(format!(
+            "no D3D12 device without P010 ({})",
+            refusals.join("; ")
+        ))
+    });
+    let Some(context) =
+        alpha2_test_support::available!(alpha2_test_support::Capability::D3d12Video, made)
+    else {
         return;
     };
-    if context.supports_ten_bit() {
-        eprintln!("skipped: this device has P010 plane views");
-        return;
-    }
+    assert!(
+        !context.supports_ten_bit(),
+        "a device opened without P010 has P010 views"
+    );
     let frame = surface(&context.ffmpeg_device(), ffi::AV_PIX_FMT_P010LE, 64, 32);
     let error = context
         .copy_surface(Arc::new(D3D12FrameLease::new(frame)))
@@ -730,10 +765,16 @@ fn a_dropped_copy_takes_its_staged_wait_off_the_queue() {
 fn a_copy_that_does_not_finish_in_time_keeps_its_surface_from_the_decoder() {
     // A child isolates its short wait timeout from concurrently running tests.
     let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
-        .args(["--exact", "d3d12::tests::copy_timeout_child", "--nocapture"])
-        .env("ALPHA2_D3D12_COPY_TIMEOUT_CHILD", "1")
+        .args([
+            "--exact",
+            "d3d12::tests::copy_timeout_child",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
         .output()
         .expect("child");
+    assert_child_ran(&output);
     eprintln!("{}", String::from_utf8_lossy(&output.stderr));
     assert!(
         output.status.success(),
@@ -743,10 +784,8 @@ fn a_copy_that_does_not_finish_in_time_keeps_its_surface_from_the_decoder() {
 }
 
 #[test]
+#[ignore = "run by a_copy_that_does_not_finish_in_time_keeps_its_surface_from_the_decoder"]
 fn copy_timeout_child() {
-    if std::env::var_os("ALPHA2_D3D12_COPY_TIMEOUT_CHILD").is_none() {
-        return;
-    }
     let Some(context) = shared_context() else {
         return;
     };
@@ -804,10 +843,16 @@ fn no_wait_timeout_reaches_the_d3d12_waits_as_infinite() {
     // short, and the C helper itself refuses the value from any caller. A child, so the timeout it
     // stores holds up no other test's wait.
     let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
-        .args(["--exact", "d3d12::tests::wait_timeout_child", "--nocapture"])
-        .env("ALPHA2_D3D12_WAIT_TIMEOUT_CHILD", "1")
+        .args([
+            "--exact",
+            "d3d12::tests::wait_timeout_child",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
         .output()
         .expect("child");
+    assert_child_ran(&output);
     assert!(
         output.status.success(),
         "{:?}: {}",
@@ -817,11 +862,9 @@ fn no_wait_timeout_reaches_the_d3d12_waits_as_infinite() {
 }
 
 #[test]
+#[ignore = "run by no_wait_timeout_reaches_the_d3d12_waits_as_infinite"]
 fn wait_timeout_child() {
     const INFINITE: u32 = u32::MAX;
-    if std::env::var_os("ALPHA2_D3D12_WAIT_TIMEOUT_CHILD").is_none() {
-        return;
-    }
     // SAFETY: reads the one integer the setters store.
     let stored = || unsafe { super::alpha2_native_gpu_d3d12_wait_timeout() };
     assert_eq!(stored(), 30_000, "the default");
@@ -842,11 +885,13 @@ fn a_d3d12va_context_gives_back_the_device_reference_it_took() {
         .args([
             "--exact",
             "d3d12::tests::device_reference_child",
+            "--ignored",
             "--nocapture",
+            "--test-threads=1",
         ])
-        .env("ALPHA2_D3D12_DEVICE_REFERENCE_CHILD", "1")
         .output()
         .expect("child");
+    assert_child_ran(&output);
     eprintln!("{}", String::from_utf8_lossy(&output.stderr));
     assert!(
         output.status.success(),
@@ -857,10 +902,8 @@ fn a_d3d12va_context_gives_back_the_device_reference_it_took() {
 }
 
 #[test]
+#[ignore = "run by a_d3d12va_context_gives_back_the_device_reference_it_took"]
 fn device_reference_child() {
-    if std::env::var_os("ALPHA2_D3D12_DEVICE_REFERENCE_CHILD").is_none() {
-        return;
-    }
     let Some(context) = shared_context() else {
         return;
     };
@@ -905,11 +948,13 @@ fn a_decoder_surface_outlives_the_renderer_device_it_was_made_on() {
         .args([
             "--exact",
             "d3d12::tests::renderer_released_first_child",
+            "--ignored",
             "--nocapture",
+            "--test-threads=1",
         ])
-        .env("ALPHA2_D3D12_RENDERER_RELEASED_FIRST_CHILD", "1")
         .output()
         .expect("child");
+    assert_child_ran(&output);
     eprintln!("{}", String::from_utf8_lossy(&output.stderr));
     assert!(
         output.status.success(),
@@ -920,10 +965,8 @@ fn a_decoder_surface_outlives_the_renderer_device_it_was_made_on() {
 }
 
 #[test]
+#[ignore = "run by a_decoder_surface_outlives_the_renderer_device_it_was_made_on"]
 fn renderer_released_first_child() {
-    if std::env::var_os("ALPHA2_D3D12_RENDERER_RELEASED_FIRST_CHILD").is_none() {
-        return;
-    }
     let Some(context) = shared_context() else {
         return;
     };
@@ -1459,11 +1502,13 @@ fn an_encode_copier_that_does_not_finish_in_time_keeps_what_its_copies_use() {
         .args([
             "--exact",
             "d3d12::tests::encode_copier_timeout_child",
+            "--ignored",
             "--nocapture",
+            "--test-threads=1",
         ])
-        .env("ALPHA2_D3D12_ENCODE_COPIER_TIMEOUT_CHILD", "1")
         .output()
         .expect("child");
+    assert_child_ran(&output);
     eprintln!("{}", String::from_utf8_lossy(&output.stderr));
     assert!(
         output.status.success(),
@@ -1473,10 +1518,8 @@ fn an_encode_copier_that_does_not_finish_in_time_keeps_what_its_copies_use() {
 }
 
 #[test]
+#[ignore = "run by an_encode_copier_that_does_not_finish_in_time_keeps_what_its_copies_use"]
 fn encode_copier_timeout_child() {
-    if std::env::var_os("ALPHA2_D3D12_ENCODE_COPIER_TIMEOUT_CHILD").is_none() {
-        return;
-    }
     let Some(context) = shared_context() else {
         return;
     };
@@ -1572,13 +1615,15 @@ fn the_copy_leaves_the_planes_where_wgpu_expects_them() {
         .args([
             "--exact",
             "d3d12::tests::encode_plane_state_child",
+            "--ignored",
             "--nocapture",
+            "--test-threads=1",
         ])
-        .env("ALPHA2_D3D12_ENCODE_PLANE_STATE_CHILD", "1")
         .env("WGPU_VALIDATION", "1")
         .env("WGPU_GPU_BASED_VALIDATION", "1")
         .output()
         .expect("child");
+    assert_child_ran(&output);
     eprintln!("{}", String::from_utf8_lossy(&output.stderr));
     assert!(
         output.status.success(),
@@ -1588,10 +1633,8 @@ fn the_copy_leaves_the_planes_where_wgpu_expects_them() {
 }
 
 #[test]
+#[ignore = "run by the_copy_leaves_the_planes_where_wgpu_expects_them"]
 fn encode_plane_state_child() {
-    if std::env::var_os("ALPHA2_D3D12_ENCODE_PLANE_STATE_CHILD").is_none() {
-        return;
-    }
     let Some(context) = shared_context() else {
         return;
     };
@@ -1655,9 +1698,7 @@ fn every_adapter_answers_for_every_codec_with_extents_or_a_reason_in_time() {
     let mut answered = 0;
     {
         let _turn = alpha2_gpu::serialize_acquisition();
-        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-        descriptor.backends = wgpu::Backends::DX12;
-        let instance = wgpu::Instance::new(descriptor.with_env());
+        let instance = alpha2_gpu::new_instance(wgpu::Backends::DX12);
         // Every DX12 adapter, the software one (WARP) included.
         for adapter in pollster::block_on(instance.enumerate_adapters(wgpu::Backends::DX12)) {
             let info = adapter.get_info();
@@ -1707,11 +1748,10 @@ fn every_adapter_answers_for_every_codec_with_extents_or_a_reason_in_time() {
         }
     }
     if answered == 0 {
-        assert!(
-            std::env::var_os("ALPHA2_REQUIRE_D3D12").is_none(),
-            "the D3D12 device is required: no DX12 adapter"
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::D3d12Video,
+            "no DX12 adapter"
         );
-        eprintln!("skipped: no DX12 adapter");
         return;
     }
     // A context asks once per codec, and answers the same each time after.
@@ -1804,5 +1844,65 @@ fn an_encode_refusal_names_the_adapter_the_codec_and_the_check() {
         reason(D3D12EncodeCodec::Hevc, &caps),
         "GPU A: D3D12 Video Encode refuses hevc main at the \
          D3D12_FEATURE_VIDEO_ENCODER_SUPPORT check (cbr: HRESULT 0x887A0020, vbr: not supported)"
+    );
+}
+
+/// Prints what tells the DXGI rows of one GPU apart. Run by hand when a machine lists an adapter
+/// twice.
+#[test]
+#[ignore = "a measurement, run by hand"]
+fn print_dxgi_adapter_identities() {
+    for (index, adapter) in pollster::block_on(alpha2_gpu::GpuContext::adapters_by_preference_on(
+        wgpu::Backends::DX12,
+    )) {
+        let info = adapter.get_info();
+        println!(
+            "[{index}] {} {:?}: {:?}",
+            info.name,
+            info.device_type,
+            super::d3d12_adapter_identity(&adapter)
+        );
+    }
+}
+
+/// WARP renders but has no D3D12 Video device. Binding it names the adapter, the interface and
+/// the `HRESULT`, where `FFmpeg`'s device context would fail with a bare `EINVAL`.
+#[test]
+fn an_adapter_without_a_video_device_names_the_interface_and_hresult() {
+    let instance = alpha2_gpu::new_instance(wgpu::Backends::DX12);
+    let warp = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::DX12))
+        .into_iter()
+        .find(|adapter| adapter.get_info().device_type == wgpu::DeviceType::Cpu);
+    let Some(warp) = alpha2_test_support::available!(
+        alpha2_test_support::Capability::D3d12Video,
+        warp.ok_or_else(|| "no WARP adapter".to_owned())
+    ) else {
+        return;
+    };
+    let gpu = pollster::block_on(alpha2_gpu::GpuContext::open_adapter(warp)).expect("WARP opens");
+    let Err(error) = SharedD3D12Context::from_gpu(gpu) else {
+        panic!("WARP has no D3D12 Video device");
+    };
+    let error = error.to_string();
+    assert!(
+        error.contains("Microsoft Basic Render Driver (LUID 0x")
+            && error.contains("ID3D12VideoDevice unavailable (HRESULT 0x80004002 E_NOINTERFACE)"),
+        "{error}"
+    );
+}
+
+#[test]
+fn an_hresult_is_given_in_hex_with_its_name() {
+    assert_eq!(
+        hresult_text(0x8000_4002_u32.cast_signed()),
+        "HRESULT 0x80004002 E_NOINTERFACE"
+    );
+    assert_eq!(
+        hresult_text(0x887A_0006_u32.cast_signed()),
+        "HRESULT 0x887A0006 DXGI_ERROR_DEVICE_HUNG"
+    );
+    assert_eq!(
+        hresult_text(0x8899_0001_u32.cast_signed()),
+        "HRESULT 0x88990001"
     );
 }

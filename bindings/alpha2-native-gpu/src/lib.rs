@@ -100,14 +100,14 @@ pub use context::NativeGpuIdentity;
 pub use d3d12::{
     D3D12AdapterIdentity, D3D12CopyLease, D3D12EncodeCodec, D3D12EncodeCopier, D3D12EncodeExtent,
     ImportedD3D12Frame, SharedD3D12Context, SharedD3D12Error, d3d12_adapter_identity,
-    gpu_wait_timeout as d3d12_wait_timeout,
+    gpu_wait_timeout as d3d12_wait_timeout, hresult_text,
 };
 pub use import::{ImportedPlaneDescriptor, NativePlaneLayout};
 pub use lifetime::{NativeSurfaceLease, SurfaceIdentity};
 #[cfg(all(target_os = "macos", feature = "hwdevice"))]
 pub use metal::{
     ImportedMetalFrame, MetalEncoderPlanes, MetalImportLease, SharedMetalContext, SharedMetalError,
-    gpu_wait_timeout as metal_wait_timeout,
+    VideoToolboxCodec, gpu_wait_timeout as metal_wait_timeout, videotoolbox_hardware_decodes,
 };
 pub use surface_budget::{SurfaceBudget, SurfaceBudgetError, SurfaceReservation, SurfaceUsage};
 pub use sync::{ExternalSyncPoint, NativeImageState};

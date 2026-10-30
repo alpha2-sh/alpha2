@@ -551,6 +551,8 @@ impl Host {
         result["videoEncoderFallbacks"] = json!([]);
         result["videoPipeline"] = json!(VideoPipeline::PacketCopy.as_str());
         result["gpuOutputPathUnavailable"] = Value::Null;
+        result["gpuOutputPathFallback"] = Value::Null;
+        result["publish"] = crate::host::publish_json(report.publish);
         result["videoTranscode"] = Value::Null;
         result["yuvTranscodeIneligible"] = Value::Null;
         result["strategy"] = json!("copy");

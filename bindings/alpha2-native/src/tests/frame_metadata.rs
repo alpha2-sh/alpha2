@@ -544,6 +544,7 @@ fn a_cpu_frames_metadata_says_its_own_layout_and_depth() {
 
 /// Bytes of plane `index` of `frame` past each row's samples, up to its
 /// stride: what a decoder may never have written.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn row_padding(frame: &DecodedVideoFrame, index: usize) -> Vec<u8> {
     let PixelFormat::Yuv(format) = frame.pixel_format else {
         panic!("a YCbCr frame, not {:?}", frame.pixel_format);
@@ -566,13 +567,14 @@ fn row_padding(frame: &DecodedVideoFrame, index: usize) -> Vec<u8> {
 }
 
 /// The child half of `decoded_planes_hold_no_byte_the_decoder_never_wrote`,
-/// run with `MALLOC_PERTURB_` so memory nothing wrote holds a pattern rather
-/// than whatever zeroed pages the allocator happened to reuse.
+/// run with the allocator filling new memory with a pattern (glibc's
+/// `MALLOC_PERTURB_`, macOS's `MallocPreScribble`), so memory nothing wrote
+/// holds that pattern rather than whatever zeroed pages were reused.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
-#[ignore = "run by decoded_planes_hold_no_byte_the_decoder_never_wrote in a child process with MALLOC_PERTURB_ set"]
+#[ignore = "run by decoded_planes_hold_no_byte_the_decoder_never_wrote in a child process with a scribbling allocator"]
 fn decode_planes_under_malloc_perturb() {
     let name = std::env::var("ALPHA2_PADDING_INPUT").expect("run by its parent");
-    let shared = std::env::var("ALPHA2_PADDING_SHARED").expect("run by its parent") == "1";
     let mut decoder = NativeDecoder::open(corpus(&name)).expect("a software session opens");
     let (mut frames, mut padding) = (0, 0);
     loop {
@@ -580,6 +582,13 @@ fn decode_planes_under_malloc_perturb() {
             Ok(DecodeEvent::Video(frame)) => {
                 frames += 1;
                 for index in 0..frame.planes.len() {
+                    if frames == 1 {
+                        let plane = &frame.planes[index];
+                        println!(
+                            "{name} plane {index}: {} wide, stride {}",
+                            plane.width, plane.stride
+                        );
+                    }
                     let bytes = row_padding(&frame, index);
                     padding += bytes.len();
                     let unwritten = bytes.iter().filter(|byte| **byte != 0).count();
@@ -597,27 +606,23 @@ fn decode_planes_under_malloc_perturb() {
         }
     }
     assert!(frames > 0, "{name} decoded no frame");
-    // A decoder whose buffers are written throughout hands its planes on as views, padded rows
-    // and all; any other decoder's planes are copies of their samples alone.
-    assert_eq!(padding > 0, shared, "{name}: {padding} padding bytes");
     println!("{name}: {frames} frames, {padding} padding bytes, all zero");
 }
 
 /// libdav1d decodes into pictures from a pool `FFmpeg` does not zero, and
 /// writes only the picture, so the rest of each row holds whatever the
-/// allocator left there. Every byte of a decoded plane past a row's samples
-/// is zero, whichever decoder made it.
-#[cfg(target_os = "linux")]
+/// allocator left there. Bytes the decoder never wrote are zero, whichever
+/// decoder made them; `sar-16-15.mp4`'s decoded columns past its display
+/// width are written bytes, not padding.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn decoded_planes_hold_no_byte_the_decoder_never_wrote() {
-    // libdav1d's pictures are copied; FFmpeg's own H.264 decoder's are shared.
-    for (name, shared) in [
-        ("av1.mp4", "0"),
-        ("av1-10bit-padded.mp4", "0"),
-        ("h264-padded.mp4", "1"),
-    ] {
+    // libdav1d's pictures are copied; FFmpeg's own H.264 decoder's are shared, and 336 px rows are
+    // padded on x86_64 and aarch64 alike.
+    for name in ["av1.mp4", "av1-10bit-padded.mp4", "h264-row-padded.mp4"] {
         let spawning = child_process_lock();
-        let child = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+        command
             .args([
                 "--exact",
                 "tests::frame_metadata::decode_planes_under_malloc_perturb",
@@ -625,12 +630,17 @@ fn decoded_planes_hold_no_byte_the_decoder_never_wrote() {
                 "--nocapture",
                 "--test-threads=1",
             ])
-            .env("ALPHA2_PADDING_INPUT", name)
-            .env("ALPHA2_PADDING_SHARED", shared)
-            // glibc fills each allocation with the complement of this byte (0xa5).
-            .env("MALLOC_PERTURB_", "90")
-            .output()
-            .expect("child");
+            .env("ALPHA2_PADDING_INPUT", name);
+        // glibc fills each allocation with the complement of this byte (0xa5); macOS fills new
+        // allocations with 0xaa and freed ones with 0x55.
+        if cfg!(target_os = "linux") {
+            command.env("MALLOC_PERTURB_", "90");
+        } else {
+            command
+                .env("MallocPreScribble", "1")
+                .env("MallocScribble", "1");
+        }
+        let child = command.output().expect("child");
         drop(spawning);
         let stdout = String::from_utf8_lossy(&child.stdout);
         let stderr = String::from_utf8_lossy(&child.stderr);
@@ -639,6 +649,14 @@ fn decoded_planes_hold_no_byte_the_decoder_never_wrote() {
             "{name}: {}\n{stdout}\n{stderr}",
             child.status
         );
+        // FFmpeg's H.264 decoder shares its padded buffers, so this fixture's planes reach the
+        // check with their padding: the bytes it found were zero, not missing.
+        if name == "h264-row-padded.mp4" {
+            assert!(
+                !stdout.contains(" 0 padding bytes"),
+                "{name} reached the check without padding:\n{stdout}"
+            );
+        }
     }
 }
 

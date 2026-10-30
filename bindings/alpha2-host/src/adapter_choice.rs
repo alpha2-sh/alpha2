@@ -38,59 +38,43 @@ pub const ENCODE_CODECS: [NativeVideoCodec; 3] = [
 /// `encoder` looks for.
 pub const DEFAULT_ENCODE_CODEC: NativeVideoCodec = NativeVideoCodec::H264;
 
-/// How the renderer's adapter is chosen (`ALPHA2_GPU_ADAPTER`).
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum AdapterPolicy {
-    /// The first the decode policy accepts.
-    Default,
-    /// The first that encodes [`DEFAULT_ENCODE_CODEC`].
-    Encoder,
-    /// The adapter at this enumeration index.
-    Index(usize),
-    /// The first whose name contains this, ignoring case.
-    Name(String),
+/// How the renderer's adapter is chosen (`ALPHA2_GPU_ADAPTER`), parsed in
+/// alpha2-gpu so that tests and the host read one setting.
+pub use alpha2_gpu::AdapterPin;
+
+/// What tells one DXGI row's GPU from another's: its vendor and device ids,
+/// and its PCI address when the driver reports one.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RowIdentity {
+    /// Its position in the backend's enumeration.
+    pub index: usize,
+    pub vendor_device: (u32, u32),
+    pub pci_address: Option<(u32, u32, u32)>,
+    pub software: bool,
 }
 
-impl AdapterPolicy {
-    /// The policy `value` names; unset and empty are `default`.
-    pub fn parse(value: Option<&str>) -> Self {
-        match value.map(str::trim) {
-            None | Some("" | "default") => Self::Default,
-            Some("encoder") => Self::Encoder,
-            Some(text) => text
-                .parse::<usize>()
-                .map_or_else(|_| Self::Name(text.to_owned()), Self::Index),
-        }
-    }
-
-    /// The policy `ALPHA2_GPU_ADAPTER` names.
-    pub fn from_env() -> Self {
-        Self::parse(std::env::var("ALPHA2_GPU_ADAPTER").ok().as_deref())
-    }
-
-    /// Whether this policy names one adapter.
-    pub const fn is_pin(&self) -> bool {
-        matches!(self, Self::Index(_) | Self::Name(_))
-    }
-
-    /// Whether this pin names `record`.
-    pub fn names(&self, record: &AdapterRecord) -> bool {
-        match self {
-            Self::Index(index) => record.index == *index,
-            Self::Name(name) => record.name.to_lowercase().contains(&name.to_lowercase()),
-            Self::Default | Self::Encoder => false,
-        }
-    }
-
-    /// The setting as `ALPHA2_GPU_ADAPTER` spells it.
-    fn setting(&self) -> String {
-        match self {
-            Self::Default => "ALPHA2_GPU_ADAPTER=default".to_owned(),
-            Self::Encoder => "ALPHA2_GPU_ADAPTER=encoder".to_owned(),
-            Self::Index(index) => format!("ALPHA2_GPU_ADAPTER={index}"),
-            Self::Name(name) => format!("ALPHA2_GPU_ADAPTER={name}"),
-        }
-    }
+/// The rows that are another view of a GPU an earlier-found row already is,
+/// each with the enumeration index of that row.
+///
+/// A hybrid laptop's driver lists its integrated GPU twice, with two LUIDs:
+/// one row with the GPU's PCI address and one with none. A hardware row with
+/// no address whose vendor and device ids are those of a row that has one is
+/// that GPU again. Two identical GPUs each report an address of their own, so
+/// they are never taken for one.
+#[must_use]
+pub fn duplicate_rows(rows: &[RowIdentity]) -> Vec<(usize, usize)> {
+    rows.iter()
+        .filter(|row| !row.software && row.pci_address.is_none())
+        .filter_map(|row| {
+            rows.iter()
+                .find(|other| {
+                    !other.software
+                        && other.pci_address.is_some()
+                        && other.vendor_device == row.vendor_device
+                })
+                .map(|other| (row.index, other.index))
+        })
+        .collect()
 }
 
 /// What one adapter was found to do. A check that was not made is an
@@ -190,7 +174,7 @@ fn ranked(records: &[AdapterRecord]) -> impl Iterator<Item = usize> + '_ {
 /// or names only adapters that do not render.
 pub fn choose_adapter(
     records: &[AdapterRecord],
-    policy: &AdapterPolicy,
+    policy: &AdapterPin,
     decode: bool,
     codec: NativeVideoCodec,
 ) -> Result<usize, String> {
@@ -204,8 +188,8 @@ pub fn choose_adapter(
             .or_else(|| rendering().next())
     };
     let chosen = match policy {
-        AdapterPolicy::Default => by_default(),
-        AdapterPolicy::Encoder => {
+        AdapterPin::Default => by_default(),
+        AdapterPin::Encoder => {
             let encoding = || {
                 rendering()
                     .filter(hardware)
@@ -217,9 +201,9 @@ pub fn choose_adapter(
                 .or_else(|| encoding().next())
                 .or_else(by_default)
         }
-        AdapterPolicy::Index(_) | AdapterPolicy::Name(_) => {
+        AdapterPin::Index(_) | AdapterPin::Name(_) => {
             let named: Vec<usize> = ranked(records)
-                .filter(|&at| policy.names(&records[at]))
+                .filter(|&at| policy.names(records[at].index, &records[at].name))
                 .collect();
             if named.is_empty() {
                 return Err(format!(
@@ -285,14 +269,9 @@ pub fn encode_elsewhere(
     let Some(current) = records.get(chosen) else {
         return Vec::new();
     };
-    let by_encoder = choose_adapter(
-        records,
-        &AdapterPolicy::Encoder,
-        decode,
-        DEFAULT_ENCODE_CODEC,
-    )
-    .ok()
-    .filter(|&at| at != chosen && records[at].encodes(DEFAULT_ENCODE_CODEC));
+    let by_encoder = choose_adapter(records, &AdapterPin::Encoder, decode, DEFAULT_ENCODE_CODEC)
+        .ok()
+        .filter(|&at| at != chosen && records[at].encodes(DEFAULT_ENCODE_CODEC));
     ENCODE_CODECS
         .iter()
         .filter(|codec| !current.encodes(**codec))
@@ -304,9 +283,9 @@ pub fn encode_elsewhere(
                     && records[at].encodes(codec)
             })?;
             let setting = if codec == DEFAULT_ENCODE_CODEC && by_encoder == Some(other) {
-                AdapterPolicy::Encoder.setting()
+                AdapterPin::Encoder.setting()
             } else {
-                AdapterPolicy::Index(records[other].index).setting()
+                AdapterPin::Index(records[other].index).setting()
             };
             Some((
                 codec,

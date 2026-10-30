@@ -383,6 +383,38 @@ fn a_code_is_never_read_from_the_words_of_a_message() {
 }
 
 #[test]
+fn a_kept_render_reaches_the_error_details_whatever_its_path_spells() {
+    let directory = scratch_directory("kept-path");
+    // A `] ` would end a tag that carried the path as it is.
+    for name in ["out.a2kept.mp4", "a] b.a2kept.mp4"] {
+        let kept = directory.join(name);
+        std::fs::write(&kept, b"render").expect("kept file");
+        let message = crate::protocol::output_publish_failed(
+            Some(&kept),
+            format!("cannot publish the output: denied; the finished render is kept at {name}"),
+        );
+        let error = HostError::classify(crate::encode::encode_error(format!(
+            "native encode failed while finalizing output: {message}"
+        )));
+        assert_eq!(error.code, "OUTPUT_PUBLISH_FAILED", "{name}");
+        let named = error.details.as_ref().expect("details")["keptPath"]
+            .as_str()
+            .expect("keptPath")
+            .to_owned();
+        assert!(names_written_file(Path::new(&named), &kept), "{named}");
+        assert!(
+            !error.message.contains(crate::tag::open()),
+            "{}",
+            error.message
+        );
+        assert!(error.message.ends_with(name), "{}", error.message);
+    }
+    let unkept = HostError::classify(crate::protocol::output_publish_failed(None, "denied"));
+    assert_eq!(unkept.code, "OUTPUT_PUBLISH_FAILED");
+    assert!(unkept.details.is_none());
+}
+
+#[test]
 fn a_stall_resource_is_never_read_from_the_words_of_its_message() {
     // A software decoder's stall stays software even when the source ID spells a hardware stall's
     // words.

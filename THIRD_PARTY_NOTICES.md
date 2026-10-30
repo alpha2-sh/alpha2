@@ -10,6 +10,10 @@ The `alpha2` npm package and the native archives each list the third-party Rust 
 
 The native archives load FFmpeg 8, built as shared libraries under the LGPL 2.1 or later with its GPL and nonfree components disabled. Each archive carries the license texts of FFmpeg and the libraries it is built with in `licenses/`, and says where to get the corresponding source in `compliance/SOURCE.md`.
 
+## DirectX Shader Compiler
+
+The Windows archive (and the wheel and Node install built from it) carries `bin/dxcompiler.dll` from Microsoft's DirectX Shader Compiler release v1.9.2609 (https://github.com/microsoft/DirectXShaderCompiler/releases/tag/v1.9.2609), which `alpha2-host` loads to compile its DX12 shaders. It is under the University of Illinois/NCSA Open Source License (the LLVM release license), the MIT License, and the Microsoft Software License Terms for the DirectX Shader Compiler; the texts are in `licenses/DirectXShaderCompiler/`, and `compliance/DXC.toml` records the release and the checksums of what was shipped.
+
 ## OpenH264
 
 alpha2 does not include OpenH264. On request (`python -m alpha2 install --openh264`, `npx @alpha2-sh/node install --openh264`) it downloads Cisco's prebuilt OpenH264 binary from Cisco to the user's machine, and `alpha2-host` loads it to encode H.264 in software; `ALPHA2_OPENH264=0` turns it off. Cisco's binary comes with the licence below (https://www.openh264.org/BINARY_LICENSE.txt, v1.0, its typographic quotes and copyright sign written in ASCII).

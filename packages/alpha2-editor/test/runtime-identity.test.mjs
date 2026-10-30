@@ -7,6 +7,10 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createEditor } from "../dist/index.js";
 import * as browser from "../dist/browser/index.js";
+import {
+  missingCapability,
+  suiteOf,
+} from "../../../scripts/lib/capabilities.mjs";
 
 const { createBrowserBridge } = browser;
 
@@ -16,12 +20,15 @@ const wasmDirectory = join(
   "wasm",
 );
 const packaged = existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"));
-// As in assets.test.mjs: skipped before `npm run build`, failed when ALPHA2_REQUIRE_WASM=1 finds no
+// As in assets.test.mjs: skipped before `npm run build`, failed when ALPHA2_REQUIRE=wasm finds no
 // package.
 const skip =
   !packaged &&
-  process.env.ALPHA2_REQUIRE_WASM !== "1" &&
-  "the wasm package is not built";
+  missingCapability(
+    "wasm",
+    suiteOf(import.meta.url),
+    "the wasm package is not built",
+  );
 
 async function engine() {
   const wasm = await import(

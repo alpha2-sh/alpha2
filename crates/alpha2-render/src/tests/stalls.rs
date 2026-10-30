@@ -200,7 +200,7 @@ fn a_readback_behind_stalled_gpu_work_times_out_instead_of_hanging() {
     let _lock = gpu_test_lock();
     // Its own device spares the shared one, but not the process: macOS stops taking a
     // process's submissions after its second GPU restart, whichever device caused them.
-    let context = pollster::block_on(GpuContext::request_high_performance())
+    let context = pollster::block_on(GpuContext::request_product())
         .expect("render tests require a working GPU adapter");
     let mut renderer = Renderer::new(context.clone());
     let size = RenderSize::new(8, 4).expect("even size");
@@ -240,8 +240,9 @@ fn a_readback_behind_stalled_gpu_work_times_out_instead_of_hanging() {
     // On lavapipe the extra iterations cost nothing measurable (the longer run can be the
     // faster one): such a device cannot be stalled by this loop.
     if long - short < 0.005 {
-        eprintln!(
-            "skipped: the busy loop takes no measurable time on this device ({:.2} ms for {timed_iterations} iterations)",
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::MeasurableGpuStall,
+            "the busy loop takes no measurable time on this device ({:.2} ms for {timed_iterations} iterations)",
             (long - short) * 1e3
         );
         return;
@@ -273,11 +274,12 @@ fn a_readback_behind_stalled_gpu_work_times_out_instead_of_hanging() {
         submitting,
         queue_empty,
     ) {
-        eprintln!(
-            "skipped: {reason} (stall submitted in {stalling:?}, readback in {submitting:?}, \
-             queue empty: {queue_empty})"
-        );
         renderer.set_gpu_wait_timeout(crate::DEFAULT_GPU_WAIT_TIMEOUT);
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::MeasurableGpuStall,
+            "{reason} (stall submitted in {stalling:?}, readback in {submitting:?}, queue empty: \
+             {queue_empty})"
+        );
         return;
     }
     let error = match pending.wait() {
@@ -288,9 +290,10 @@ fn a_readback_behind_stalled_gpu_work_times_out_instead_of_hanging() {
             renderer.set_gpu_wait_timeout(crate::DEFAULT_GPU_WAIT_TIMEOUT);
             let stall = std::time::Duration::from_secs_f64(run_once(draws, iterations));
             if stall < std::time::Duration::from_secs_f64(stall_seconds / 4.0) {
-                eprintln!(
-                    "skipped: the calibrated stall takes {stall:?} alone, not {stall_seconds} s: \
-                     the busy loop's cost was the machine's load"
+                alpha2_test_support::skip!(
+                    alpha2_test_support::Capability::MeasurableGpuStall,
+                    "the calibrated stall takes {stall:?} alone, not {stall_seconds} s: the busy \
+                     loop's cost was the machine's load"
                 );
                 return;
             }

@@ -94,7 +94,57 @@
         "requestId": "export-1",
         "ok": true,
         "result": {
-          "frames": 30
+          "frames": 30,
+          "publish": {
+            "method": "rename-no-replace",
+            "stagedLocally": false,
+            "retries": 0
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "a finished export that cannot be published keeps its render",
+    "requestValid": true,
+    "request": {
+      "protocolVersion": 1,
+      "operation": "export",
+      "requestId": "export-kept",
+      "project": {},
+      "assets": {
+        "video": "/staging/video.mp4"
+      },
+      "effects": [],
+      "startTicks": 0,
+      "endTicks": 120000,
+      "frameRate": {
+        "num": 30,
+        "den": 1
+      },
+      "includeAudio": false,
+      "videoCodec": "h264",
+      "output": "/staging/output.mp4"
+    },
+    "messages": [
+      {
+        "protocolVersion": 1,
+        "type": "progress",
+        "requestId": "export-kept",
+        "phase": "finalizing",
+        "completed": 30,
+        "total": 30
+      },
+      {
+        "protocolVersion": 1,
+        "requestId": "export-kept",
+        "ok": false,
+        "error": {
+          "code": "OUTPUT_PUBLISH_FAILED",
+          "message": "native encode failed while finalizing output: cannot publish the output: a file appeared at /staging/output.mp4 while this export ran; it was left as it is; the finished render is kept at /staging/output.a2kept.mp4",
+          "details": {
+            "keptPath": "/staging/output.a2kept.mp4"
+          }
         }
       }
     ]
@@ -751,13 +801,23 @@
               "output": "/staging/a.png",
               "frameTime": 120000,
               "width": 960,
-              "height": 540
+              "height": 540,
+              "publish": {
+                "method": "rename-replace",
+                "stagedLocally": false,
+                "retries": 0
+              }
             },
             {
               "output": "/staging/b.png",
               "frameTime": 0,
               "width": 960,
-              "height": 540
+              "height": 540,
+              "publish": {
+                "method": "rename-replace",
+                "stagedLocally": false,
+                "retries": 0
+              }
             }
           ],
           "renderer": "gpu",

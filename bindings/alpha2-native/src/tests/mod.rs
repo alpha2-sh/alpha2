@@ -42,6 +42,27 @@ pub(crate) fn child_process_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// The capability a hardware or platform encoder needs, by its `FFmpeg` name,
+/// or `None` for a software encoder, which must encode on every machine.
+pub(crate) fn encoder_capability(name: &str) -> Option<alpha2_test_support::Capability> {
+    use alpha2_test_support::Capability;
+    if name.ends_with("_nvenc") {
+        Some(Capability::Nvenc)
+    } else if name.ends_with("_vulkan") {
+        Some(Capability::VulkanVideoEncode)
+    } else if name.ends_with("_d3d12va") {
+        Some(Capability::D3d12Encode)
+    } else if name.ends_with("_videotoolbox") {
+        Some(Capability::VideotoolboxEncode)
+    } else if name.ends_with("_mf") {
+        Some(Capability::MediaFoundation)
+    } else if name.contains("openh264") {
+        Some(Capability::Openh264)
+    } else {
+        None
+    }
+}
+
 mod audio_io;
 mod containers;
 mod copies;
@@ -172,18 +193,24 @@ const PQ_BT2020: ColorMetadata = ColorMetadata {
     dynamic_range: alpha2_media::DynamicRange::Hdr,
 };
 
-/// A hardware session on this machine's Vulkan decode device, or `None` (with
-/// a note) where there is none, which is a property of the machine.
+/// A hardware session on this machine's Vulkan decode device, or `None` (a
+/// recorded `vulkan-video` skip) where there is none.
 #[cfg(all(target_os = "linux", feature = "hwdecode"))]
 fn hardware_decode_context() -> Option<HeldDevice<alpha2_native_gpu::SharedVulkanContext>> {
     let lock = vulkan_device_lock();
-    let context = alpha2_native_gpu::SharedVulkanContext::create()
-        .inspect_err(|error| eprintln!("skipped: no Vulkan video decode device ({error:?})"))
-        .ok()?;
+    let context = alpha2_test_support::available!(
+        alpha2_test_support::Capability::VulkanVideo,
+        alpha2_native_gpu::SharedVulkanContext::create()
+            .map_err(|error| format!("no Vulkan video decode device ({error:?})"))
+    )?;
     // A debug build loads the system's validation layer wherever it has one, and one older than 1.4
     // crashes inside FFmpeg's video session setup.
     if let Some(hazard) = context.video_session_hazard() {
-        eprintln!("skipped: {hazard}; use 1.4+");
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::VulkanVideo,
+            "{hazard}; run a release build, or point VK_LAYER_PATH at the 1.4 layer \
+             scripts/fetch-vulkan-validation-layer.sh fetches"
+        );
         return None;
     }
     Some(HeldDevice {
@@ -220,50 +247,43 @@ impl<T> std::ops::Deref for HeldDevice<T> {
 }
 
 /// The renderer's `Metal` device, whose import the `VideoToolbox` decoder's
-/// surfaces are for, or `None` (with a note) unless
-/// `ALPHA2_REQUIRE_VIDEOTOOLBOX` is set.
+/// surfaces are for, or `None`: a recorded `metal` skip without the device,
+/// a `videotoolbox` one where `VideoToolbox` decodes no H.264 in hardware.
 #[cfg(all(target_os = "macos", feature = "hwdecode"))]
 fn hardware_decode_context() -> Option<alpha2_native_gpu::SharedMetalContext> {
-    let made = pollster::block_on(alpha2_gpu::GpuContext::request_high_performance())
+    let made = pollster::block_on(alpha2_gpu::GpuContext::request_product())
         .map_err(|error| format!("{error:?}"))
         .and_then(|gpu| {
             alpha2_native_gpu::SharedMetalContext::from_gpu(gpu).map_err(|error| error.to_string())
         });
-    match made {
-        Ok(context) => Some(context),
-        Err(error) => {
-            assert!(
-                std::env::var_os("ALPHA2_REQUIRE_VIDEOTOOLBOX").is_none(),
-                "the Metal device is required: {error}"
-            );
-            eprintln!("skipped: no Metal device ({error})");
-            None
-        }
+    let context = alpha2_test_support::available!(
+        alpha2_test_support::Capability::Metal,
+        made.map_err(|error| format!("no Metal device ({error})"))
+    )?;
+    if !alpha2_native_gpu::videotoolbox_hardware_decodes(alpha2_native_gpu::VideoToolboxCodec::H264)
+    {
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::Videotoolbox,
+            "VideoToolbox decodes no H.264 in hardware on this Mac"
+        );
+        return None;
     }
+    Some(context)
 }
 
 /// The renderer's DX12 device shared with D3D12VA, as the host makes it, or
-/// `None` (with a note) unless `ALPHA2_REQUIRE_D3D12` is set.
+/// `None` (a recorded `d3d12-video` skip).
 #[cfg(all(target_os = "windows", feature = "hwdecode"))]
 fn hardware_decode_context() -> Option<alpha2_native_gpu::SharedD3D12Context> {
-    let made = pollster::block_on(
-        alpha2_gpu::GpuContext::request_high_performance_on_accepted(wgpu::Backends::DX12, |gpu| {
-            alpha2_native_gpu::SharedD3D12Context::from_gpu(gpu.clone())
-        }),
-    )
+    let made = pollster::block_on(alpha2_gpu::GpuContext::request_product_accepted(|gpu| {
+        alpha2_native_gpu::SharedD3D12Context::from_gpu(gpu.clone())
+    }))
     .map_err(|error| format!("{error:?}"))
     .and_then(|found| found.accepted.ok_or_else(|| found.refusals.to_string()));
-    match made {
-        Ok(context) => Some(context),
-        Err(error) => {
-            assert!(
-                std::env::var_os("ALPHA2_REQUIRE_D3D12").is_none(),
-                "the D3D12 device is required: {error}"
-            );
-            eprintln!("skipped: no D3D12VA device ({error})");
-            None
-        }
-    }
+    alpha2_test_support::available!(
+        alpha2_test_support::Capability::D3d12Video,
+        made.map_err(|error| format!("no D3D12VA device ({error})"))
+    )
 }
 
 #[cfg(all(target_os = "linux", feature = "hwdecode"))]
@@ -388,7 +408,9 @@ fn export_muxed_audio(label: &str, rate: u32, samples: usize) -> PathBuf {
     muxer
         .write_ready_audio(true, &mut stages)
         .expect("write audio");
-    muxer.close().expect("close");
+    muxer
+        .close(&alpha2_media::CancelToken::default())
+        .expect("close");
     path
 }
 

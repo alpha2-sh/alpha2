@@ -19,6 +19,7 @@
     "ENCODE_ERROR": { "code": "UNKNOWN", "resource": "unknown" },
     "IO_ERROR": { "code": "OUTPUT_IO_FAILED", "resource": "unknown" },
     "OUTPUT_IN_USE": { "code": "INVALID_INPUT", "resource": "unknown" },
+    "OUTPUT_PUBLISH_FAILED": { "code": "OUTPUT_IO_FAILED", "resource": "unknown" },
     "CANCELLED": { "code": "CANCELLED", "resource": "unknown" },
     "RESOURCE_LIMIT": { "code": "RESOURCE_LIMIT", "resource": "unknown" },
     "INTERNAL": { "code": "UNKNOWN", "resource": "unknown" },

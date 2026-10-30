@@ -31,6 +31,7 @@ fn parsed_video_quality(video_quality: Option<Value>) -> Result<VideoQualityRequ
 
 /// An export request line whose project is `objects` small objects: the
 /// shape that costs a JSON tree the most per byte.
+#[cfg(target_os = "linux")]
 fn line_with_a_project_of_small_objects(objects: usize) -> String {
     let mut line = String::from(
         r#"{"protocolVersion":1,"operation":"export","requestId":"wide","assets":{},"startTicks":0,"endTicks":1,"frameRate":{"num":30,"den":1},"output":"out.mp4","project":{"cues":["#,
@@ -72,6 +73,7 @@ fn run_with_stderr_closed(test: &str) -> (std::process::ExitStatus, String) {
 }
 
 /// The child half of `a_closed_stderr_does_not_end_the_host`.
+#[cfg(unix)]
 #[test]
 #[ignore = "run by a_closed_stderr_does_not_end_the_host with its standard error closed"]
 fn start_a_host_and_export_with_stderr_closed() {
@@ -280,6 +282,7 @@ fn a_non_utf8_argument_is_invalid_input() {
 
 /// The child half of `a_request_is_read_without_a_tree_of_its_project`, which
 /// runs it with its heap limited.
+#[cfg(target_os = "linux")]
 #[test]
 #[ignore = "run by a_request_is_read_without_a_tree_of_its_project in a child process whose heap is limited"]
 fn parse_a_wide_request_under_a_heap_limit() {
@@ -290,7 +293,7 @@ fn parse_a_wide_request_under_a_heap_limit() {
         panic!("an export line parses as an export");
     };
     println!("project text: {} bytes", export.project.text().len());
-    assert_eq!(request_id_from_line(&line), "wide");
+    assert_eq!(crate::protocol::request_id_from_line(&line), "wide");
 }
 
 /// `serve` parses a request line into its fields' types and keeps the project

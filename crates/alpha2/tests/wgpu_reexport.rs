@@ -22,9 +22,7 @@ const BACKENDS: wgpu::Backends = if cfg!(target_os = "windows") {
 fn handles_made_through_the_reexported_wgpu_are_adopted_by_a_gpu_context() {
     let (adapter, device, queue) = {
         let _turn = alpha2::gpu::serialize_acquisition();
-        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-        descriptor.backends = BACKENDS;
-        let instance = wgpu::Instance::new(descriptor.with_env());
+        let instance = alpha2::gpu::new_instance(BACKENDS);
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             ..Default::default()

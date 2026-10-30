@@ -49,6 +49,23 @@ pub(crate) enum GpuEncodeOutcome {
     /// re-decode and re-render work the caller already paid for, and would
     /// hide a real failure.
     Failed(String),
+    /// The encoder refused frame `frame` on a device that is still usable: the
+    /// export may start over on the readback path, whose encoder is another.
+    EncoderRejected {
+        /// Why, from the encoder, with the session's state.
+        reason: String,
+        frame: u64,
+    },
+}
+
+impl GpuEncodeOutcome {
+    /// The outcome of the started export failing with `message`.
+    pub(crate) fn failed(message: String) -> Self {
+        match crate::protocol::take_encoder_rejected(message) {
+            (Some(frame), reason) => Self::EncoderRejected { reason, frame },
+            (None, message) => Self::Failed(message),
+        }
+    }
 }
 
 impl Host {
@@ -408,7 +425,7 @@ impl Host {
             cancel.clone(),
             pipeline_failure.clone(),
         )
-        .map_err(GpuEncodeOutcome::Failed)?;
+        .map_err(GpuEncodeOutcome::failed)?;
         let mut decode_scheduler = DecodeScheduler::new(decode_lookahead, project);
         let packed_bytes_per_frame = pipeline_limits.packed_bytes_per_frame;
         let frame_bound =
@@ -421,7 +438,7 @@ impl Host {
             started,
             crate::config::configured_stall_timeout(),
         )
-        .map_err(GpuEncodeOutcome::Failed)?;
+        .map_err(GpuEncodeOutcome::failed)?;
         let mut encode_state = EncodeProgressState::default();
         let cancel_at_frame = configured_cancel_at_frame();
         let mut metrics = ExportMetrics {
@@ -452,11 +469,11 @@ impl Host {
                 )
             })
             .transpose()
-            .map_err(GpuEncodeOutcome::Failed)?;
+            .map_err(GpuEncodeOutcome::failed)?;
         let mut audio_renderer = has_audio
             .then(|| AudioRenderer::new(snapshot, 2, 4_096).map_err(error_message))
             .transpose()
-            .map_err(GpuEncodeOutcome::Failed)?;
+            .map_err(GpuEncodeOutcome::failed)?;
         let effective_range = exporter.effective_range();
         let video_origin = effective_range.start();
         let sample_rate = project.settings.sample_rate;
@@ -482,7 +499,7 @@ impl Host {
                     self.memory.audio_window.byte_budget(),
                     &self.failure.decoding(),
                 )
-                .map_err(GpuEncodeOutcome::Failed)?,
+                .map_err(GpuEncodeOutcome::failed)?,
             ),
             (Some(_), None) => {
                 return Err(GpuEncodeOutcome::Failed(
@@ -818,7 +835,7 @@ impl Host {
             drop(input);
             let reported =
                 cancelled_export(Some(self.gpu_renderer()), encode_state.completed_video);
-            return Err(GpuEncodeOutcome::Failed(match cancelled_at {
+            return Err(GpuEncodeOutcome::failed(match cancelled_at {
                 // A cancel is not a failure, and the worker's own "cancelled" notice would
                 // otherwise be reported as the cause of it.
                 Some(_) => reported,
@@ -827,7 +844,7 @@ impl Host {
         }
 
         metrics.record_decode_pool(&decode_worker);
-        decode_worker.finish().map_err(GpuEncodeOutcome::Failed)?;
+        decode_worker.finish().map_err(GpuEncodeOutcome::failed)?;
         let finish_started = Instant::now();
         self.failure.enter(ExportPhase::Mux, None);
         let mut finish = || -> Result<(), String> {
@@ -852,11 +869,11 @@ impl Host {
             }
             Ok(())
         };
-        finish().map_err(GpuEncodeOutcome::Failed)?;
+        finish().map_err(GpuEncodeOutcome::failed)?;
         let mut encode_worker = encode_worker;
         encode_worker
             .join_success()
-            .map_err(GpuEncodeOutcome::Failed)?;
+            .map_err(GpuEncodeOutcome::failed)?;
         metrics.encode_worker_idle = encode_worker.idle.total();
         metrics.encode_channel_depth_samples = encode_worker.depth.samples();
         metrics.mux_finish = finish_started.elapsed();
@@ -896,6 +913,8 @@ impl Host {
         result["videoEncoderFallbacks"] = json!([]);
         result["videoPipeline"] = json!(VideoPipeline::GpuResident.as_str());
         result["gpuOutputPathUnavailable"] = Value::Null;
+        result["gpuOutputPathFallback"] = Value::Null;
+        result["publish"] = crate::host::publish_json(metrics.publish);
         result["videoTranscode"] = json!(transcode_plan.map(|_| "yuv-repack"));
         result["yuvTranscodeIneligible"] = json!(transcode.as_ref().err());
         result["effectiveRange"] = effective_range_json(effective_range);

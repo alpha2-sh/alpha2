@@ -700,3 +700,50 @@ fn planar_audio_supports_the_declared_channel_matrix() {
         }
     }
 }
+
+/// A warning a codec context logs is kept under the codec's name, after a mark and not before.
+#[test]
+fn log_capture_keeps_warning_lines_with_their_class() {
+    let codec = rsmpeg::avcodec::AVCodec::find_decoder(ffi::AV_CODEC_ID_H264).expect("h264");
+    let before = log_mark();
+    let mut context = AVCodecContext::new(&codec);
+    let options = rsmpeg::avutil::AVDictionary::new(c"threads", c"not-a-number", 0);
+    assert!(
+        context.open(Some(options)).is_err(),
+        "a bad option value fails the open"
+    );
+    let lines = log_since(before, &["h264"]);
+    assert!(
+        lines.iter().any(|line| line.text.contains("not-a-number")),
+        "{lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|line| line.class == "h264" && line.level <= ffi::AV_LOG_WARNING.cast_signed())
+    );
+    // Lines logged before a mark are not after it.
+    assert_eq!(log_since(log_mark(), &["h264"]), []);
+}
+
+#[test]
+fn log_detail_keeps_the_last_four_lines_ascii() {
+    let mark = log_mark();
+    for index in 0..6 {
+        crate::log::record_for_tests(16, "test_detail", &format!("line {index}\n"));
+    }
+    crate::log::record_for_tests(16, "test_detail", &format!("caf\u{e9} {}", "x".repeat(300)));
+    let lines = log_since(mark, &["test_detail"]);
+    assert_eq!(lines.len(), 7);
+    let detail = log_detail(&lines);
+    assert!(
+        detail.starts_with("; FFmpeg said: [test_detail] line 3 | "),
+        "{detail}"
+    );
+    assert!(!detail.contains("line 2"), "{detail}");
+    assert!(detail.is_ascii(), "{detail}");
+    assert!(detail.contains("caf\\u{e9} x"), "{detail}");
+    let last = detail.rsplit(" | ").next().expect("the last line");
+    assert_eq!(last.len(), "[test_detail] ".len() + 200, "{last}");
+    assert_eq!(log_detail(&[]), "");
+}

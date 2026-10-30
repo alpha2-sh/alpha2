@@ -1,0 +1,370 @@
+{
+  "tiles": {
+    "alpha2.transition.advanced-mosaic": {
+      "unrecorded": true
+    },
+    "alpha2.transition.angular": {
+      "unrecorded": true
+    },
+    "alpha2.transition.block-dissolve": {
+      "unrecorded": true
+    },
+    "alpha2.transition.book-flip": {
+      "unrecorded": true
+    },
+    "alpha2.transition.bounce": {
+      "unrecorded": true
+    },
+    "alpha2.transition.bow-tie": {
+      "unrecorded": true
+    },
+    "alpha2.transition.bow-tie-horizontal": {
+      "unrecorded": true
+    },
+    "alpha2.transition.bow-tie-vertical": {
+      "unrecorded": true
+    },
+    "alpha2.transition.box": {
+      "unrecorded": true
+    },
+    "alpha2.transition.burn": {
+      "unrecorded": true
+    },
+    "alpha2.transition.burn-noise": {
+      "unrecorded": true
+    },
+    "alpha2.transition.butterfly-wave-scrawler": {
+      "unrecorded": true
+    },
+    "alpha2.transition.chessboard": {
+      "unrecorded": true
+    },
+    "alpha2.transition.circle": {
+      "unrecorded": true
+    },
+    "alpha2.transition.circle-crop": {
+      "unrecorded": true
+    },
+    "alpha2.transition.circle-open": {
+      "unrecorded": true
+    },
+    "alpha2.transition.color-phase": {
+      "unrecorded": true
+    },
+    "alpha2.transition.colour-distance": {
+      "unrecorded": true
+    },
+    "alpha2.transition.cover": {
+      "unrecorded": true
+    },
+    "alpha2.transition.crazy-parametric-fun": {
+      "unrecorded": true
+    },
+    "alpha2.transition.cross-warp": {
+      "unrecorded": true
+    },
+    "alpha2.transition.crosshatch": {
+      "unrecorded": true
+    },
+    "alpha2.transition.cube": {
+      "unrecorded": true
+    },
+    "alpha2.transition.defocus-blur": {
+      "unrecorded": true
+    },
+    "alpha2.transition.directional": {
+      "unrecorded": true
+    },
+    "alpha2.transition.directional-easing": {
+      "unrecorded": true
+    },
+    "alpha2.transition.directional-scaled": {
+      "unrecorded": true
+    },
+    "alpha2.transition.directional-warp": {
+      "unrecorded": true
+    },
+    "alpha2.transition.directional-wipe": {
+      "unrecorded": true
+    },
+    "alpha2.transition.doorway": {
+      "unrecorded": true
+    },
+    "alpha2.transition.dreamy": {
+      "unrecorded": true
+    },
+    "alpha2.transition.dreamy-zoom": {
+      "unrecorded": true
+    },
+    "alpha2.transition.drop-zone-flicker": {
+      "unrecorded": true
+    },
+    "alpha2.transition.edge": {
+      "unrecorded": true
+    },
+    "alpha2.transition.fade": {
+      "unrecorded": true
+    },
+    "alpha2.transition.fade-color": {
+      "unrecorded": true
+    },
+    "alpha2.transition.fade-grayscale": {
+      "unrecorded": true
+    },
+    "alpha2.transition.film-burn": {
+      "unrecorded": true
+    },
+    "alpha2.transition.fly-eye": {
+      "unrecorded": true
+    },
+    "alpha2.transition.fold": {
+      "unrecorded": true
+    },
+    "alpha2.transition.fragment": {
+      "unrecorded": true
+    },
+    "alpha2.transition.glitch": {
+      "unrecorded": true
+    },
+    "alpha2.transition.glitch-displace": {
+      "unrecorded": true
+    },
+    "alpha2.transition.gradient-wipe": {
+      "unrecorded": true
+    },
+    "alpha2.transition.grid-flip": {
+      "unrecorded": true
+    },
+    "alpha2.transition.heart": {
+      "unrecorded": true
+    },
+    "alpha2.transition.hexagonalize": {
+      "unrecorded": true
+    },
+    "alpha2.transition.horizontal-close": {
+      "unrecorded": true
+    },
+    "alpha2.transition.horizontal-open": {
+      "unrecorded": true
+    },
+    "alpha2.transition.hsv-fade": {
+      "unrecorded": true
+    },
+    "alpha2.transition.kaleidoscope": {
+      "unrecorded": true
+    },
+    "alpha2.transition.left-right": {
+      "unrecorded": true
+    },
+    "alpha2.transition.linear-blur": {
+      "unrecorded": true
+    },
+    "alpha2.transition.luma-burn": {
+      "unrecorded": true
+    },
+    "alpha2.transition.luminance-melt": {
+      "unrecorded": true
+    },
+    "alpha2.transition.morph": {
+      "unrecorded": true
+    },
+    "alpha2.transition.mosaic-tiles": {
+      "unrecorded": true
+    },
+    "alpha2.transition.multiply-blend": {
+      "unrecorded": true
+    },
+    "alpha2.transition.old-tv-lost-signal": {
+      "unrecorded": true
+    },
+    "alpha2.transition.overexposure": {
+      "unrecorded": true
+    },
+    "alpha2.transition.page-peel": {
+      "unrecorded": true
+    },
+    "alpha2.transition.parametric-glitch": {
+      "unrecorded": true
+    },
+    "alpha2.transition.perlin": {
+      "unrecorded": true
+    },
+    "alpha2.transition.pinwheel": {
+      "unrecorded": true
+    },
+    "alpha2.transition.pixelize": {
+      "unrecorded": true
+    },
+    "alpha2.transition.polar-function": {
+      "unrecorded": true
+    },
+    "alpha2.transition.polka-dots-curtain": {
+      "unrecorded": true
+    },
+    "alpha2.transition.power-kaleido": {
+      "unrecorded": true
+    },
+    "alpha2.transition.radial": {
+      "unrecorded": true
+    },
+    "alpha2.transition.random-noise": {
+      "unrecorded": true
+    },
+    "alpha2.transition.random-squares": {
+      "unrecorded": true
+    },
+    "alpha2.transition.rectangle": {
+      "unrecorded": true
+    },
+    "alpha2.transition.rectangle-crop": {
+      "unrecorded": true
+    },
+    "alpha2.transition.revolve": {
+      "unrecorded": true
+    },
+    "alpha2.transition.ripple": {
+      "unrecorded": true
+    },
+    "alpha2.transition.rolls": {
+      "unrecorded": true
+    },
+    "alpha2.transition.rotate": {
+      "unrecorded": true
+    },
+    "alpha2.transition.rotate-scale-fade": {
+      "unrecorded": true
+    },
+    "alpha2.transition.rotate-scale-vanish": {
+      "unrecorded": true
+    },
+    "alpha2.transition.scale-in": {
+      "unrecorded": true
+    },
+    "alpha2.transition.screen-melt": {
+      "unrecorded": true
+    },
+    "alpha2.transition.shape-wipe": {
+      "unrecorded": true
+    },
+    "alpha2.transition.simple-flip": {
+      "unrecorded": true
+    },
+    "alpha2.transition.simple-zoom": {
+      "unrecorded": true
+    },
+    "alpha2.transition.simple-zoom-out": {
+      "unrecorded": true
+    },
+    "alpha2.transition.slides": {
+      "unrecorded": true
+    },
+    "alpha2.transition.split-slide-in-horizontal": {
+      "unrecorded": true
+    },
+    "alpha2.transition.split-slide-in-out-horizontal": {
+      "unrecorded": true
+    },
+    "alpha2.transition.split-slide-in-out-vertical": {
+      "unrecorded": true
+    },
+    "alpha2.transition.split-slide-in-vertical": {
+      "unrecorded": true
+    },
+    "alpha2.transition.split-slide-out-horizontal": {
+      "unrecorded": true
+    },
+    "alpha2.transition.split-slide-out-vertical": {
+      "unrecorded": true
+    },
+    "alpha2.transition.squares-wire": {
+      "unrecorded": true
+    },
+    "alpha2.transition.squeeze": {
+      "unrecorded": true
+    },
+    "alpha2.transition.star-wipe": {
+      "unrecorded": true
+    },
+    "alpha2.transition.static-fade": {
+      "unrecorded": true
+    },
+    "alpha2.transition.static-wipe": {
+      "unrecorded": true
+    },
+    "alpha2.transition.strip-datamosh-glitch": {
+      "unrecorded": true
+    },
+    "alpha2.transition.swap": {
+      "unrecorded": true
+    },
+    "alpha2.transition.swirl": {
+      "unrecorded": true
+    },
+    "alpha2.transition.tiles-wave": {
+      "unrecorded": true
+    },
+    "alpha2.transition.top-bottom": {
+      "unrecorded": true
+    },
+    "alpha2.transition.tv-static": {
+      "unrecorded": true
+    },
+    "alpha2.transition.uncover": {
+      "unrecorded": true
+    },
+    "alpha2.transition.undulating-burn-out": {
+      "unrecorded": true
+    },
+    "alpha2.transition.vertical-close": {
+      "unrecorded": true
+    },
+    "alpha2.transition.vertical-open": {
+      "unrecorded": true
+    },
+    "alpha2.transition.water-drop": {
+      "unrecorded": true
+    },
+    "alpha2.transition.whip-pan": {
+      "unrecorded": true
+    },
+    "alpha2.transition.wind": {
+      "unrecorded": true
+    },
+    "alpha2.transition.window-blinds": {
+      "unrecorded": true
+    },
+    "alpha2.transition.window-slice": {
+      "unrecorded": true
+    },
+    "alpha2.transition.wipe-down": {
+      "unrecorded": true
+    },
+    "alpha2.transition.wipe-left": {
+      "unrecorded": true
+    },
+    "alpha2.transition.wipe-right": {
+      "unrecorded": true
+    },
+    "alpha2.transition.wipe-up": {
+      "unrecorded": true
+    },
+    "alpha2.transition.x-axis-translation": {
+      "unrecorded": true
+    },
+    "alpha2.transition.zoom-blur": {
+      "unrecorded": true
+    },
+    "alpha2.transition.zoom-in-circles": {
+      "unrecorded": true
+    },
+    "alpha2.transition.zoom-in-out": {
+      "unrecorded": true
+    },
+    "alpha2.transition.zoom-left-wipe": {
+      "unrecorded": true
+    },
+    "alpha2.transition.zoom-right-wipe": {
+      "unrecorded": true
+    }
+  }
+}

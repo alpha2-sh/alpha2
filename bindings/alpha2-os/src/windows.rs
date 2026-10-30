@@ -1,6 +1,6 @@
-//! `LockFileEx` on one unreachable byte, file identity by volume and file
-//! index, `MoveFileExW` that does not replace, the console control handler,
-//! and the working set.
+//! `LockFileEx` on one unreachable byte, file identity by volume serial and
+//! 128-bit file id, `MoveFileExW` that does not replace on verbatim paths, the
+//! console control handler, and the working set.
 
 use std::fs::File;
 use std::io;
@@ -9,11 +9,14 @@ use std::path::Path;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use windows_sys::Win32::Foundation::{ERROR_LOCK_VIOLATION, HANDLE};
+use windows_sys::Win32::Foundation::{
+    ERROR_ACCESS_DENIED, ERROR_INVALID_FUNCTION, ERROR_INVALID_PARAMETER, ERROR_LOCK_VIOLATION,
+    ERROR_NOT_SUPPORTED, ERROR_SHARING_VIOLATION, HANDLE,
+};
 use windows_sys::Win32::Storage::FileSystem::{
-    BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, GetFileInformationByHandle,
-    LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY, LockFileEx, MOVEFILE_WRITE_THROUGH,
-    MoveFileExW,
+    BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, FILE_ID_INFO, FileIdInfo,
+    GetFileInformationByHandle, GetFileInformationByHandleEx, LOCKFILE_EXCLUSIVE_LOCK,
+    LOCKFILE_FAIL_IMMEDIATELY, LockFileEx, MOVEFILE_WRITE_THROUGH, MoveFileExW,
 };
 use windows_sys::Win32::System::Console::{
     CTRL_BREAK_EVENT, CTRL_C_EVENT, CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT,
@@ -56,18 +59,56 @@ pub(crate) fn try_lock_exclusive(file: &File) -> io::Result<bool> {
     }
 }
 
-fn identity(file: &File) -> io::Result<(u32, u32, u32)> {
+/// A file's identity: its volume's 64-bit serial number and its 128-bit file
+/// id. The 64-bit file index `BY_HANDLE_FILE_INFORMATION` carries is not
+/// unique on `ReFS` (a Dev Drive), so it is read only from a file system that
+/// refuses the `FileIdInfo` class.
+pub(crate) fn identity(file: &File) -> io::Result<(u64, [u8; 16])> {
+    match file_id_info(file) {
+        Err(error)
+            if error.raw_os_error().is_some_and(|code| {
+                code == ERROR_INVALID_PARAMETER.cast_signed()
+                    || code == ERROR_INVALID_FUNCTION.cast_signed()
+            }) =>
+        {
+            file_index(file)
+        }
+        identity => identity,
+    }
+}
+
+/// `GetFileInformationByHandleEx(FileIdInfo)`.
+pub(crate) fn file_id_info(file: &File) -> io::Result<(u64, [u8; 16])> {
+    // SAFETY: an all-zero `FILE_ID_INFO` is valid, and is overwritten.
+    let mut info: FILE_ID_INFO = unsafe { std::mem::zeroed() };
+    let size = u32::try_from(std::mem::size_of::<FILE_ID_INFO>()).unwrap_or(u32::MAX);
+    // SAFETY: the handle is open for the call, and `info` is a writable `FILE_ID_INFO` of `size`
+    // bytes, the structure the class asks for.
+    let read = unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle() as HANDLE,
+            FileIdInfo,
+            (&raw mut info).cast(),
+            size,
+        )
+    };
+    if read == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok((info.VolumeSerialNumber, info.FileId.Identifier))
+}
+
+/// The 32-bit volume serial and 64-bit file index of
+/// `GetFileInformationByHandle`, widened to [`identity`]'s form.
+fn file_index(file: &File) -> io::Result<(u64, [u8; 16])> {
     // SAFETY: an all-zero `BY_HANDLE_FILE_INFORMATION` is valid, and is overwritten.
     let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
     // SAFETY: the handle is open for the call and `info` is writable.
     if unsafe { GetFileInformationByHandle(file.as_raw_handle() as HANDLE, &raw mut info) } == 0 {
         return Err(io::Error::last_os_error());
     }
-    Ok((
-        info.dwVolumeSerialNumber,
-        info.nFileIndexHigh,
-        info.nFileIndexLow,
-    ))
+    let index = (u128::from(info.nFileIndexHigh) << 32) | u128::from(info.nFileIndexLow);
+    Ok((u64::from(info.dwVolumeSerialNumber), index.to_le_bytes()))
 }
 
 pub(crate) fn same_file(file: &File, path: &Path) -> io::Result<bool> {
@@ -87,11 +128,19 @@ pub(crate) fn same_file(file: &File, path: &Path) -> io::Result<bool> {
     Ok(identity(file)? == identity(&named)?)
 }
 
-pub(crate) fn same_file_at(a: &Path, b: &Path) -> io::Result<bool> {
+/// A file's identity: [`identity`].
+pub(crate) type FileIdentity = (u64, [u8; 16]);
+
+pub(crate) fn file_identity(file: &File) -> io::Result<FileIdentity> {
+    identity(file)
+}
+
+/// The identity of the file `path` names; `None` when nothing is there.
+pub(crate) fn path_identity(path: &Path) -> io::Result<Option<FileIdentity>> {
     use std::os::windows::fs::OpenOptionsExt;
     // Backup semantics opens a directory too; no access is asked for, so a
     // file another program holds without sharing still opens.
-    let open = |path: &Path| match std::fs::OpenOptions::new()
+    match std::fs::OpenOptions::new()
         .access_mode(0)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
         .open(path)
@@ -99,28 +148,83 @@ pub(crate) fn same_file_at(a: &Path, b: &Path) -> io::Result<bool> {
         Ok(file) => Ok(Some(identity(&file)?)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error),
-    };
-    Ok(match (open(a)?, open(b)?) {
+    }
+}
+
+pub(crate) fn same_file_at(a: &Path, b: &Path) -> io::Result<bool> {
+    Ok(match (path_identity(a)?, path_identity(b)?) {
         (Some(a), Some(b)) => a == b,
         _ => false,
     })
 }
 
-pub(crate) fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+/// `path` as a NUL-terminated verbatim wide path, which no Win32 call
+/// limits to `MAX_PATH` or reinterprets: kept as it is when it already starts
+/// with `\\?\`; otherwise made absolute (`GetFullPathNameW`, which resolves
+/// `.` and `..` against the current directory and turns `/` into `\`), then
+/// prefixed with `\\?\UNC\` for a `\\server\share` path, `\\?\` for any other.
+/// A device path (`\\.\`) is kept as `GetFullPathNameW` returns it.
+fn verbatim(path: &Path) -> io::Result<Vec<u16>> {
     use std::os::windows::ffi::OsStrExt;
-    let wide = |path: &Path| {
-        path.as_os_str()
+    const VERBATIM: [u16; 4] = [b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16];
+    const DEVICE: [u16; 4] = [b'\\' as u16, b'\\' as u16, b'.' as u16, b'\\' as u16];
+    const UNC: [u16; 2] = [b'\\' as u16, b'\\' as u16];
+    let given: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let mut wide = if given.starts_with(&VERBATIM) {
+        given
+    } else {
+        let absolute: Vec<u16> = std::path::absolute(path)?
+            .as_os_str()
             .encode_wide()
-            .chain(std::iter::once(0))
-            .collect::<Vec<u16>>()
+            .collect();
+        if absolute.starts_with(&VERBATIM) || absolute.starts_with(&DEVICE) {
+            absolute
+        } else if let Some(share) = absolute.strip_prefix(&UNC) {
+            "\\\\?\\UNC\\"
+                .encode_utf16()
+                .chain(share.iter().copied())
+                .collect()
+        } else {
+            VERBATIM.iter().copied().chain(absolute).collect()
+        }
     };
-    let (from, to) = (wide(from), wide(to));
+    wide.push(0);
+    Ok(wide)
+}
+
+pub(crate) fn rename_exclusive(from: &Path, to: &Path) -> io::Result<()> {
+    let (from, to) = (verbatim(from)?, verbatim(to)?);
     // SAFETY: both are NUL-terminated wide paths that outlive the call. Without
-    // `MOVEFILE_REPLACE_EXISTING` the move fails with `ERROR_ALREADY_EXISTS` when `to` exists.
+    // `MOVEFILE_REPLACE_EXISTING` the move fails with `ERROR_ALREADY_EXISTS` (or
+    // `ERROR_FILE_EXISTS`) when `to` exists, which `io::ErrorKind::AlreadyExists` covers.
     if unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), MOVEFILE_WRITE_THROUGH) } == 0 {
         return Err(io::Error::last_os_error());
     }
     Ok(())
+}
+
+/// Whether a rename failed because the file system does not take a
+/// no-replace move, rather than for the files' sake.
+pub(crate) fn flag_refused(error: &io::Error) -> bool {
+    error.raw_os_error().is_some_and(|code| {
+        code == ERROR_NOT_SUPPORTED.cast_signed() || code == ERROR_INVALID_FUNCTION.cast_signed()
+    })
+}
+
+pub(crate) fn is_retryable_publish_error(error: &io::Error) -> bool {
+    error.raw_os_error().is_some_and(|code| {
+        code == ERROR_ACCESS_DENIED.cast_signed()
+            || code == ERROR_SHARING_VIOLATION.cast_signed()
+            || code == ERROR_LOCK_VIOLATION.cast_signed()
+    })
+}
+
+/// NTFS, `ReFS` and exFAT all take 255 UTF-16 units.
+pub(crate) fn name_limit(_dir: &Path) -> crate::NameLimit {
+    crate::NameLimit {
+        max: 255,
+        unit: crate::NameUnit::Utf16,
+    }
 }
 
 static HANDLER: OnceLock<Box<dyn Fn(Termination) + Send + Sync>> = OnceLock::new();
@@ -193,4 +297,51 @@ pub(crate) fn thread_cpu_work() -> Option<u64> {
     // call, which writes only it.
     let read = unsafe { QueryThreadCycleTime(GetCurrentThread(), &raw mut cycles) } != 0;
     read.then_some(cycles)
+}
+
+/// The file version of the executable or DLL at `path`, from its version
+/// resource, as `major.minor.build.revision`.
+pub(crate) fn file_version(path: &Path) -> Option<String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileVersionInfoSizeW, GetFileVersionInfoW, VS_FIXEDFILEINFO, VerQueryValueW,
+    };
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: `wide` is a NUL-terminated path; the handle argument may be null.
+    let size = unsafe { GetFileVersionInfoSizeW(wide.as_ptr(), std::ptr::null_mut()) };
+    if size == 0 {
+        return None;
+    }
+    let mut data = vec![0_u8; usize::try_from(size).ok()?];
+    // SAFETY: `data` holds the `size` bytes the call writes.
+    if unsafe { GetFileVersionInfoW(wide.as_ptr(), 0, size, data.as_mut_ptr().cast()) } == 0 {
+        return None;
+    }
+    let root: [u16; 2] = [u16::from(b'\\'), 0];
+    let mut info: *mut std::ffi::c_void = std::ptr::null_mut();
+    let mut length = 0_u32;
+    // SAFETY: `data` is the version resource just read; `info` points into it on success.
+    if unsafe {
+        VerQueryValueW(
+            data.as_ptr().cast(),
+            root.as_ptr(),
+            &raw mut info,
+            &raw mut length,
+        )
+    } == 0
+        || info.is_null()
+        || usize::try_from(length).ok()? < std::mem::size_of::<VS_FIXEDFILEINFO>()
+    {
+        return None;
+    }
+    // SAFETY: `info` points at a `VS_FIXEDFILEINFO` inside `data`, which is still alive; the
+    // resource keeps it 4-byte aligned.
+    let fixed = unsafe { info.cast::<VS_FIXEDFILEINFO>().read_unaligned() };
+    Some(format!(
+        "{}.{}.{}.{}",
+        fixed.dwFileVersionMS >> 16,
+        fixed.dwFileVersionMS & 0xffff,
+        fixed.dwFileVersionLS >> 16,
+        fixed.dwFileVersionLS & 0xffff
+    ))
 }

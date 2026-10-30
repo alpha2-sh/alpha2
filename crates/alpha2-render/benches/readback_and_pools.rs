@@ -24,7 +24,7 @@ use alpha2_render::{
 const FRAMES: u32 = 30;
 
 fn main() {
-    let gpu = pollster::block_on(GpuContext::request_high_performance()).expect("GPU adapter");
+    let gpu = pollster::block_on(GpuContext::request_product()).expect("GPU adapter");
     let renderer = Renderer::new(gpu);
     for (width, height) in [(1_920, 1_080), (3_840, 2_160)] {
         readback(&renderer, RenderSize::new(width, height).expect("size"));

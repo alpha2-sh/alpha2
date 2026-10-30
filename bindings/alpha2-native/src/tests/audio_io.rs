@@ -113,7 +113,7 @@ fn an_aborted_wav_sink_leaves_no_file() {
         channels: vec![vec![0.5; 4_096]],
     };
     sink.write_audio(&block, &cancel).expect("wav block");
-    let partial = sink.partial_path.clone();
+    let partial = partial_beside(&path);
     sink.abort_audio().expect("abort");
     assert!(!partial.exists());
     assert!(!path.exists());

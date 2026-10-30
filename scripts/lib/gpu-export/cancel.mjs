@@ -62,7 +62,7 @@ export function cancelChecks(harness, { projectPath, assets }) {
         }
         const partial = join(
           dirname(output),
-          `${basename(output, extname(output))}.alpha2-partial${extname(output)}`,
+          `${basename(output, extname(output))}.a2partial${extname(output)}`,
         );
         if (existsSync(partial)) {
           throw new Error(
@@ -109,7 +109,7 @@ export function cancelChecks(harness, { projectPath, assets }) {
         }
         const partial = join(
           dirname(output),
-          `${basename(output, extname(output))}.alpha2-partial${extname(output)}`,
+          `${basename(output, extname(output))}.a2partial${extname(output)}`,
         );
         for (const left of [output, partial]) {
           if (existsSync(left))

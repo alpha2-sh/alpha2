@@ -6,14 +6,75 @@ import json
 import os
 import sys
 import textwrap
+import threading
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 """The repository root, where the shared corpora live."""
+
+CAPABILITIES: dict[str, Any] = json.loads(
+    (ROOT / "tests" / "capabilities.json").read_text(encoding="utf-8")
+)
+"""Every capability a test can need, from ``tests/capabilities.json`` (shared with Rust and JS)."""
+
+_SKIP_LOG_LOCK = threading.Lock()
+
+
+def required_capabilities(environ: dict[str, str] | None = None) -> set[str]:
+    """The capabilities ``ALPHA2_REQUIRE`` names: a trimmed comma list; unknown names fail."""
+    value = (os.environ if environ is None else environ).get("ALPHA2_REQUIRE", "")
+    names = {name.strip() for name in value.split(",") if name.strip()}
+    unknown = sorted(names - CAPABILITIES.keys())
+    if unknown:
+        pytest.fail(
+            f"ALPHA2_REQUIRE names unknown capabilities {unknown}; known: {', '.join(CAPABILITIES)}"
+        )
+    return names
+
+
+def required(capability: str) -> bool:
+    """Whether ``ALPHA2_REQUIRE`` names ``capability``; an unknown name fails the test."""
+    if capability not in CAPABILITIES:
+        pytest.fail(f"unknown capability {capability!r}")
+    return capability in required_capabilities()
+
+
+def require_or_skip(capability: str, reason: str, *, module: bool = False) -> NoReturn:
+    """``capability`` is missing here: a failure when ``ALPHA2_REQUIRE`` names it, else a skip
+    printed and appended to ``ALPHA2_SKIP_LOG`` (an absolute path) as one JSON line.
+
+    ``module`` skips the whole module, from its top level.
+    """
+    if required(capability):
+        pytest.fail(f"{capability} is required (ALPHA2_REQUIRE): {reason}")
+    path = os.environ.get("ALPHA2_SKIP_LOG")
+    if path:
+        if not os.path.isabs(path):
+            pytest.fail(f"ALPHA2_SKIP_LOG must be absolute ({path})")
+        current = os.environ.get("PYTEST_CURRENT_TEST", "")
+        test = "*" if module or not current else current.rsplit(" ", 1)[0]
+        frame = sys._getframe(1)
+        suite = Path(frame.f_code.co_filename).resolve().relative_to(ROOT).as_posix()
+        record = {
+            "lang": "python",
+            "suite": suite,
+            "test": test,
+            "capability": capability,
+            "reason": reason,
+            "pid": os.getpid(),
+        }
+        line = (json.dumps(record) + "\n").encode("utf-8")
+        # One write of one whole line on an append-mode file, so concurrent processes never
+        # interleave records.
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with _SKIP_LOG_LOCK, open(path, "ab", buffering=0) as log:
+            log.write(line)
+    sys.stderr.write(f"skipped [{capability}]: {reason}\n")
+    pytest.skip(reason, allow_module_level=module)
 
 
 def corpus(name: str) -> Any:

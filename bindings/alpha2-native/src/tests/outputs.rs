@@ -336,8 +336,11 @@ fn a_replacing_write_keeps_the_old_file_until_it_finishes() {
 
     let held_final = output_path("replacing-held").with_extension("png");
     let _ = fs::remove_file(&held_final);
-    let held =
-        crate::partial::PartialOutput::claim(&(&held_final).into()).expect("a running output");
+    let held = crate::partial::PartialOutput::claim(
+        &(&held_final).into(),
+        crate::partial::SeekNeed::NotNeeded,
+    )
+    .expect("a running output");
     let error = crate::write_whole(crate::OutputTarget::replacing(&held_final), |_| Ok(()))
         .expect_err("a held partial");
     assert!(
@@ -419,6 +422,7 @@ fn a_source_that_names_other_files_is_refused() {
 }
 
 /// RGBA noise: frames an encoder cannot make small.
+#[cfg(target_os = "linux")]
 fn noise_frame(pts: MediaTime, seed: u32, width: u32, height: u32) -> DecodedVideoFrame {
     let mut frame = rgba_frame_sized(pts, [0, 0, 0, 255], width, height);
     let mut state = seed.wrapping_mul(2_654_435_761).max(1);
@@ -439,6 +443,7 @@ fn noise_frame(pts: MediaTime, seed: u32, width: u32, height: u32) -> DecodedVid
 }
 
 /// Writes into `output` with the sink named `sink` until the export ends.
+#[cfg(target_os = "linux")]
 fn export_until_it_fails(sink: &str, output: &Path) -> Result<(), EncodeError> {
     let cancel = CancelToken::default();
     let frames = (0..90).map(|index| {
@@ -524,6 +529,7 @@ fn export_until_it_fails(sink: &str, output: &Path) -> Result<(), EncodeError> {
 /// The child half of
 /// `a_write_past_the_file_size_limit_fails_the_export_and_leaves_no_partial`,
 /// which runs it under a file size limit.
+#[cfg(target_os = "linux")]
 #[test]
 #[ignore = "run by a_write_past_the_file_size_limit_fails_the_export_and_leaves_no_partial in a child process whose file size is limited"]
 fn export_into_a_file_size_limit() {
@@ -584,8 +590,8 @@ fn a_write_past_the_file_size_limit_fails_the_export_and_leaves_no_partial() {
 }
 
 /// A file saved at the output path during a long export is left as it is,
-/// not replaced by the partial file's rename, and the export fails and
-/// removes its partial file.
+/// not replaced by the partial file's rename, and the export fails, keeping
+/// its finished render beside the output under another name.
 #[test]
 fn a_file_that_appears_at_the_output_during_an_export_is_not_replaced() {
     let cancel = CancelToken::default();
@@ -627,7 +633,7 @@ fn a_file_that_appears_at_the_output_during_an_export_is_not_replaced() {
                         None,
                     )?;
                     fs::write(&path, b"someone else's").expect("appear");
-                    muxer.close()
+                    muxer.close(&alpha2_media::CancelToken::default())
                 }
                 other => unreachable!("{other}"),
             }
@@ -635,7 +641,132 @@ fn a_file_that_appears_at_the_output_during_an_export_is_not_replaced() {
         .expect_err("the export does not replace the file");
         assert!(error.to_string().contains("appeared"), "{kind}: {error}");
         assert_eq!(fs::read(&path).expect("kept"), b"someone else's", "{kind}");
-        assert!(!partial_beside(&path).exists(), "{kind}: partial removed");
+        assert!(
+            !partial_beside(&path).exists(),
+            "{kind}: partial moved aside"
+        );
+        let EncodeError::Publish {
+            kept: Some(kept), ..
+        } = &error
+        else {
+            panic!("{kind}: {error:?}");
+        };
+        assert!(
+            kept.exists() && fs::read(kept).expect("kept render") != b"someone else's",
+            "{kind}: {}",
+            kept.display()
+        );
+        fs::remove_file(kept).expect("cleanup");
         fs::remove_file(&path).expect("cleanup");
     }
+}
+
+/// One video frame encoded into a new MP4 sink at `path`, ready to finish.
+fn one_frame_video(path: &Path) -> NativeVideoEncodeSink {
+    let mut sink =
+        NativeVideoEncodeSink::create(path, av_config(48_000).video).expect("the sink opens");
+    sink.write(
+        EncodeEvent::Video(rgba_frame(MediaTime::ZERO, [40, 80, 120, 255])),
+        &CancelToken::default(),
+    )
+    .expect("frame");
+    sink
+}
+
+#[test]
+fn a_publish_that_fails_keeps_the_finished_render_and_names_it() {
+    let path = output_path("publish-refused").with_extension("mp4");
+    let _ = fs::remove_file(&path);
+    let mut sink = one_frame_video(&path);
+    // EACCES: a folder whose permissions changed while the export ran.
+    crate::partial::hooks::FAIL_PUBLISH_TO.set(Some((path.clone(), 13)));
+    let finished = sink.finish(&CancelToken::default());
+    crate::partial::hooks::FAIL_PUBLISH_TO.set(None);
+    let error = finished.expect_err("the publish fails");
+    let EncodeError::Publish {
+        message,
+        kept: Some(kept),
+    } = &error
+    else {
+        panic!("{error:?}");
+    };
+    assert!(
+        message.contains(&path.display().to_string()),
+        "the message names the target: {message}"
+    );
+    assert!(
+        error
+            .to_string()
+            .contains(&format!("kept at {}", kept.display())),
+        "{error}"
+    );
+    assert_eq!(
+        kept.file_name().and_then(|name| name.to_str()),
+        path.file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(|stem| format!("{stem}.a2kept.mp4"))
+            .as_deref()
+    );
+    let probed = probe(kept).expect("the kept render is a whole MP4");
+    assert_eq!(
+        probed.selected_video_stream().expect("video").dimensions,
+        Some((16, 16))
+    );
+    assert!(!path.exists());
+    assert!(!partial_beside(&path).exists());
+    drop(sink);
+    assert!(kept.exists(), "dropping the sink removed the kept render");
+    fs::remove_file(kept).expect("cleanup");
+}
+
+#[test]
+fn an_output_folder_that_cannot_seek_is_staged_locally() {
+    let path = output_path("staged").with_extension("mp4");
+    let _ = fs::remove_file(&path);
+    crate::partial::hooks::NOT_SEEKABLE.set(true);
+    let opened = NativeVideoEncodeSink::create(&path, av_config(48_000).video);
+    crate::partial::hooks::NOT_SEEKABLE.set(false);
+    let mut sink = opened.expect("the sink opens");
+    let staging = sink.partial.write_path().to_owned();
+    assert!(
+        staging.starts_with(std::env::temp_dir()) && staging != partial_beside(&path),
+        "{}",
+        staging.display()
+    );
+    sink.write(
+        EncodeEvent::Video(rgba_frame(MediaTime::ZERO, [40, 80, 120, 255])),
+        &CancelToken::default(),
+    )
+    .expect("frame");
+    sink.finish(&CancelToken::default()).expect("finish");
+    let report = sink.publish_report().expect("published");
+    assert!(report.staged_locally, "{report:?}");
+    assert_eq!(report.method, crate::PublishMethod::RenameNoReplace);
+    let probed = probe(&path).expect("the copied output is a whole MP4");
+    assert_eq!(
+        probed.selected_video_stream().expect("video").dimensions,
+        Some((16, 16))
+    );
+    assert!(!staging.exists(), "the staging file was left");
+    assert!(!partial_beside(&path).exists());
+    fs::remove_file(&path).expect("cleanup");
+}
+
+#[test]
+fn a_published_video_is_synced_before_its_rename() {
+    let path = output_path("synced").with_extension("mp4");
+    let _ = fs::remove_file(&path);
+    let mut sink = one_frame_video(&path);
+    crate::partial::hooks::EVENTS.set(Some(Vec::new()));
+    let finished = sink.finish(&CancelToken::default());
+    let events = crate::partial::hooks::EVENTS.take().expect("recorded");
+    finished.expect("finish");
+    #[cfg(unix)]
+    assert_eq!(events, ["sync", "rename", "directory sync"]);
+    #[cfg(not(unix))]
+    assert_eq!(events, ["sync", "rename"]);
+    let report = sink.publish_report().expect("published");
+    assert_eq!(report.method, crate::PublishMethod::RenameNoReplace);
+    assert!(!report.staged_locally && report.retries == 0, "{report:?}");
+    fs::remove_file(&path).expect("cleanup");
 }

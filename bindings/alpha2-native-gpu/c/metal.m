@@ -1,6 +1,7 @@
 #include <CoreVideo/CoreVideo.h>
 #include <IOSurface/IOSurface.h>
 #include <Metal/Metal.h>
+#include <VideoToolbox/VideoToolbox.h>
 #include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -171,4 +172,15 @@ int32_t alpha2_native_gpu_metal_encoder_plane(void *device, void *pixel_buffer,
     *height = (uint32_t)plane_height;
     *texture = (__bridge_retained void *)raw;
     return 0;
+}
+
+/*
+ * Whether VideoToolbox decodes `codec_type` (a CMVideoCodecType) in hardware on this machine.
+ * The supplemental decoders (VP9, AV1) are registered first, as FFmpeg does before it opens one.
+ */
+int32_t alpha2_native_gpu_vt_hardware_decodes(uint32_t codec_type) {
+    if (@available(macOS 11.0, *)) {
+        VTRegisterSupplementalVideoDecoderIfAvailable((CMVideoCodecType)codec_type);
+    }
+    return VTIsHardwareDecodeSupported((CMVideoCodecType)codec_type) ? 1 : 0;
 }

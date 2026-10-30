@@ -141,7 +141,7 @@ fn caption_look_draws_background_shadows_strokes_fill_in_order() {
     // The caption lands at a fractional position, so its edges are bilinear samples; lavapipe
     // weights them a little apart from hardware, and the opaque magenta shadow's edge, cast by
     // those samples over a dark one, shows that as up to 7 codes in green.
-    alpha2_golden_support::assert_rgba8_golden("caption_look", (160, 90), &look, 8);
+    assert_golden("caption_look", (160, 90), &look, 8);
 }
 
 #[test]
@@ -365,5 +365,5 @@ fn caption_speakers_golden() {
                 .flat_map(move |pixels| pixels[row * 640..(row + 1) * 640].iter().copied())
         })
         .collect::<Vec<_>>();
-    alpha2_golden_support::assert_rgba8_golden("caption_speakers", (320, 90), &strip, 2);
+    assert_golden("caption_speakers", (320, 90), &strip, 2);
 }

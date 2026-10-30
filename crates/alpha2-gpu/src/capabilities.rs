@@ -45,6 +45,9 @@ pub struct Capabilities {
     /// Whether `Rgba16Float` render targets blend in hardware, so pictures
     /// can be composited in linear light by blending alone.
     pub half_float_blendable: bool,
+    /// The DX12 shader compiler the device's pipelines are compiled with
+    /// (`FXC`, `DXC <path>`, ...); empty on other backends.
+    pub shader_compiler: String,
 }
 
 impl Capabilities {
@@ -60,6 +63,7 @@ impl Capabilities {
         backend: impl Into<String>,
         driver: impl Into<String>,
         driver_info: impl Into<String>,
+        shader_compiler: impl Into<String>,
     ) -> Self {
         Self {
             tier,
@@ -72,11 +76,39 @@ impl Capabilities {
             driver_info: driver_info.into(),
             software_rasterizer: false,
             half_float_blendable: intermediate_format == IntermediateFormat::Rgba16Float,
+            shader_compiler: shader_compiler.into(),
         }
     }
 
-    pub(crate) fn from_adapter(adapter: &wgpu::Adapter) -> Self {
+    /// One line naming the device: `<adapter> (<backend>, driver <driver> <driver_info>,
+    /// <compiler>)`, empty parts left out.
+    #[must_use]
+    pub fn summary(&self) -> String {
+        let driver = [self.driver.as_str(), self.driver_info.as_str()]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut parts = vec![self.backend.clone()];
+        if !driver.is_empty() {
+            parts.push(format!("driver {driver}"));
+        }
+        if !self.shader_compiler.is_empty() {
+            parts.push(self.shader_compiler.clone());
+        }
+        format!("{} ({})", self.adapter_name, parts.join(", "))
+    }
+
+    /// The facts of `device`, opened on `adapter`: what the device was opened
+    /// with (timestamp queries, texture size), not what the adapter offers;
+    /// format facts come from the adapter.
+    pub(crate) fn from_device(adapter: &wgpu::Adapter, device: &wgpu::Device) -> Self {
         let info = adapter.get_info();
+        let shader_compiler = if info.backend == wgpu::Backend::Dx12 {
+            crate::dx12_shader_compiler().to_string()
+        } else {
+            String::new()
+        };
         let half_float = adapter.get_texture_format_features(wgpu::TextureFormat::Rgba16Float);
         Self {
             tier: tier_for(&adapter.get_downlevel_capabilities()),
@@ -88,12 +120,13 @@ impl Capabilities {
                     .flags
                     .contains(wgpu::TextureFormatFeatureFlags::BLENDABLE),
             adapter_name: info.name,
-            max_texture_dimension_2d: adapter.limits().max_texture_dimension_2d,
-            timestamp_queries: adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY),
+            max_texture_dimension_2d: device.limits().max_texture_dimension_2d,
+            timestamp_queries: device.features().contains(wgpu::Features::TIMESTAMP_QUERY),
             backend: format!("{:?}", info.backend),
             driver: info.driver,
             driver_info: info.driver_info,
             software_rasterizer: info.device_type == wgpu::DeviceType::Cpu,
+            shader_compiler,
         }
     }
 }

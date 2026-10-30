@@ -179,6 +179,11 @@ fn a_still_is_the_engines_frame_at_the_grid_time_that_holds_it() {
         for (index, answer) in answers.iter().enumerate() {
             assert_eq!(answer["frameTime"], grid[index], "{answer}");
             assert_eq!(
+                answer["publish"],
+                json!({"method": "rename-no-replace", "stagedLocally": false, "retries": 0}),
+                "{answer}"
+            );
+            assert_eq!(
                 (answer["width"].clone(), answer["height"].clone()),
                 (json!(96), json!(64))
             );

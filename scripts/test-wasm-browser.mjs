@@ -2,8 +2,9 @@
 
 // Test browser-only wasm paths in a browser: context loss, video conversion and memory, and the
 // packaged engine against native pins. Run `npm run build` first. Chrome unless `--browser
-// safari|firefox` (or ALPHA2_BROWSER) picks a WebDriver browser. Missing Chrome skips the run;
-// `--require-browser` or ALPHA2_REQUIRE_BROWSER=1 fails it. `--case <name>` selects one case;
+// safari|firefox` (or ALPHA2_BROWSER) picks a WebDriver browser. Missing Chrome skips the run,
+// and a case that cannot run in this browser skips naming its capability; ALPHA2_REQUIRE fails
+// the capabilities it names. `--case <name>` selects one case;
 // `--serve[=port]` serves pages for manual runs. Cases are in scripts/lib/wasm-browser/.
 
 import { existsSync } from "node:fs";
@@ -13,6 +14,7 @@ import { join, resolve } from "node:path";
 
 import { browserForRun, runBrowserPage } from "./lib/browser-page.mjs";
 import { probeRun } from "./lib/browser-probe.mjs";
+import { recordSkip } from "./lib/capabilities.mjs";
 import {
   reportSkippedBrowser,
   skippedCasesSummary,
@@ -27,10 +29,6 @@ const root = resolve(import.meta.dirname, "..");
 const args = process.argv.slice(2);
 const only = args.includes("--case") ? args[args.indexOf("--case") + 1] : null;
 const serveArgument = args.find((arg) => arg.startsWith("--serve"));
-// A skip is the machine's (headless or SwiftShader cannot import a VideoFrame); `--no-skips` or
-// ALPHA2_NO_SKIPS=1 makes one a failure.
-const noSkips =
-  args.includes("--no-skips") || process.env.ALPHA2_NO_SKIPS === "1";
 const servePort =
   serveArgument === undefined ? null : Number(serveArgument.split("=")[1] ?? 0);
 
@@ -43,7 +41,7 @@ if (servePort === null) {
     process.exit(1);
   }
   if (browser === null) {
-    reportSkippedBrowser("the wasm browser checks");
+    reportSkippedBrowser("the wasm browser checks", "wasm-browser");
     process.exit(0);
   }
 }
@@ -123,14 +121,27 @@ try {
     return JSON.parse(decodeURIComponent(encoded));
   };
   const report = (name, result) => {
-    if (result.skipped && noSkips) {
+    if (result.skipped && !result.capability) {
       failures += 1;
       process.stdout.write(
-        `FAIL ${name}: skipped where every case must run: ${result.skipped}\n`,
+        `FAIL ${name}: a case skipped without naming its capability: ${result.skipped}\n`,
       );
     } else if (result.skipped) {
-      skipped.push({ name, reason: result.skipped });
-      process.stdout.write(`skip ${name}: ${result.skipped}\n`);
+      try {
+        recordSkip({
+          suite: "wasm-browser",
+          test: name,
+          capability: result.capability,
+          reason: result.skipped,
+        });
+        skipped.push({ name, reason: result.skipped });
+        process.stdout.write(
+          `skip ${name}: [${result.capability}] ${result.skipped}\n`,
+        );
+      } catch (error) {
+        failures += 1;
+        process.stdout.write(`FAIL ${name}: ${error.message}\n`);
+      }
     } else if (result.error || result.ok !== true) {
       failures += 1;
       process.stdout.write(

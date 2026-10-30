@@ -1109,6 +1109,36 @@ createInterface({ input: process.stdin }).once("line", (line) => {
   ]);
 });
 
+test("a render kept after a failed publish is named on the error", async () => {
+  const root = await scratch("alpha2-node-publish-kept-");
+  const kept = join(root, "output.a2kept.mp4");
+  const executable = await fakeHost(
+    root,
+    `import { createInterface } from "node:readline";
+createInterface({ input: process.stdin }).once("line", (line) => {
+  const request = JSON.parse(line);
+  process.stdout.write(JSON.stringify({ protocolVersion: 1, requestId: request.requestId, ok: false, error: {
+    code: "OUTPUT_PUBLISH_FAILED",
+    message: "cannot publish the output: denied; the finished render is kept at " + ${JSON.stringify(kept)},
+    details: { keptPath: ${JSON.stringify(kept)} },
+    failure: { code: "OUTPUT_IO_FAILED", origin: "native-host", operation: "export", backend: "native", phase: "mux", resource: "unknown" },
+  } }) + "\\n");
+  process.exit(1);
+});
+`,
+  );
+  const client = new Alpha2NodeClient({ hostPath: executable });
+  await assert.rejects(
+    client.exportProject(exportRequest(join(root, "output.mp4"))),
+    (error) => {
+      assert.equal(error.code, "OUTPUT_PUBLISH_FAILED");
+      assert.equal(error.keptPath, kept);
+      assert.equal(error.failure.code, "OUTPUT_IO_FAILED");
+      return true;
+    },
+  );
+});
+
 /** A host that records each start in `starts` and answers any request with success. */
 const STARTED_HOST = (starts) => `import { appendFileSync } from "node:fs";
 import { createInterface } from "node:readline";

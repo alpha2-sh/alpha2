@@ -24,8 +24,10 @@ fn a_hardware_session_that_fails_before_its_first_frame_is_reported_as_unsupport
         return;
     };
     let cancel = CancelToken::default();
-    // Apple silicon decodes the first two in hardware. FFmpeg offers VideoToolbox for MPEG-4 Part
-    // 2, which no Mac decodes in hardware, so `get_format` fails and answers NONE.
+    // FFmpeg offers VideoToolbox for MPEG-4 Part 2, which no Mac decodes in hardware, so
+    // `get_format` fails and answers NONE there. Whether a Mac decodes VP9 is VideoToolbox's own
+    // answer; whether it decodes H.264 High 10 it cannot say (it answers per codec, not per
+    // profile), so either outcome is accepted.
     let mut failed_lazily = Vec::new();
     for name in ["h264-high10.mp4", "vp9.webm", "recovery-mpeg4.mp4"] {
         let mut decoder = match open_hardware_decoder(corpus(name), &context) {
@@ -56,7 +58,26 @@ fn a_hardware_session_that_fails_before_its_first_frame_is_reported_as_unsupport
         }
     }
     #[cfg(target_os = "macos")]
-    assert_eq!(failed_lazily, ["recovery-mpeg4.mp4"]);
+    {
+        use alpha2_native_gpu::{VideoToolboxCodec, videotoolbox_hardware_decodes};
+        assert!(
+            failed_lazily.contains(&"recovery-mpeg4.mp4"),
+            "MPEG-4 Part 2 has no VideoToolbox decoder: {failed_lazily:?}"
+        );
+        assert_eq!(
+            failed_lazily.contains(&"vp9.webm"),
+            !videotoolbox_hardware_decodes(VideoToolboxCodec::Vp9),
+            "VP9 fails lazily exactly when VideoToolbox does not decode it: {failed_lazily:?}"
+        );
+        eprintln!(
+            "h264-high10.mp4 {} in hardware on this Mac",
+            if failed_lazily.contains(&"h264-high10.mp4") {
+                "does not decode"
+            } else {
+                "decodes"
+            }
+        );
+    }
     let mut decoder = open_hardware_decoder(corpus("h264-long-gop.mp4"), &context)
         .expect("8-bit H.264 opens in hardware");
     assert!(
@@ -152,8 +173,25 @@ fn a_videotoolbox_frame_describes_the_surface_it_holds() {
     };
     let cancel = CancelToken::default();
     let mut streams = vec![("h264-long-gop.mp4", ffi::AV_PIX_FMT_NV12)];
+    // H.264 High 10 joins only where this Mac decodes it in hardware; a refusal must be typed.
     if context.supports_ten_bit() {
-        streams.push(("h264-high10.mp4", ffi::AV_PIX_FMT_P010LE));
+        match open_hardware_decoder(corpus("h264-high10.mp4"), &context)
+            .map_err(|error| format!("{error:?}"))
+            .and_then(|mut decoder| {
+                decoder
+                    .decode_video_next(&cancel)
+                    .map_err(|error| format!("{error:?}"))
+            }) {
+            Ok(Some(frame)) if frame.is_hardware() => {
+                streams.push(("h264-high10.mp4", ffi::AV_PIX_FMT_P010LE));
+            }
+            Err(error) if error.contains("Unsupported") || error.contains("Refused") => {
+                eprintln!("this Mac decodes H.264 High10 in software ({error})");
+            }
+            other => panic!(
+                "h264-high10.mp4: expected a hardware frame or a typed refusal, got {other:?}"
+            ),
+        }
     }
     for (name, software_format) in streams {
         let mut hardware = open_hardware_decoder(corpus(name), &context)

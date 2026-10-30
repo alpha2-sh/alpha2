@@ -28,8 +28,10 @@ fn ten_bit(chroma: Chroma, alpha: bool) -> PixelLayout {
 }
 
 /// The frame at one second exported in `layout`, rendered on `gpu` or, when
-/// it is `None`, on the CPU: each plane's 16-bit samples.
-fn exported(gpu: Option<&Renderer>, layout: PixelLayout) -> Vec<Vec<u16>> {
+/// it is `None`, on the CPU: each plane's 16-bit samples. `None` when `gpu`
+/// renders through the 8-bit intermediate and `layout` has 10 bits, which it
+/// refuses.
+fn exported(gpu: Option<&Renderer>, layout: PixelLayout) -> Option<Vec<Vec<u16>>> {
     let snapshot = captioned();
     let size = RenderSize::new(160, 90).expect("size");
     let at = MediaTime::from_ticks(120_000);
@@ -60,10 +62,23 @@ fn exported(gpu: Option<&Renderer>, layout: PixelLayout) -> Vec<Vec<u16>> {
         texts
             .prepare_at(renderer, &snapshot, at, size)
             .expect("text");
-        let ExportStep::Rendered { readback, .. } = exporter
-            .render_next(&snapshot, renderer, &CaptionFrames(&texts))
-            .expect("a step")
-        else {
+        let step = exporter.render_next(&snapshot, renderer, &CaptionFrames(&texts));
+        // The 8-bit intermediate cannot hold 10-bit samples, and its readback says so.
+        if rgba8_intermediate(renderer) && layout.bit_depth != BitDepth::Eight {
+            assert!(
+                matches!(
+                    step,
+                    Err(crate::EngineError::Render(
+                        alpha2_render::RenderError::TextureReadback(
+                            alpha2_render::ReadbackFailure::UnsupportedTarget
+                        )
+                    ))
+                ),
+                "{step:?}"
+            );
+            return None;
+        }
+        let ExportStep::Rendered { readback, .. } = step.expect("a step") else {
             panic!("the frame renders");
         };
         assert_eq!(readback.pixel_layout(), Some(layout));
@@ -86,24 +101,28 @@ fn exported(gpu: Option<&Renderer>, layout: PixelLayout) -> Vec<Vec<u16>> {
         assert!(matches!(step, ExportPlaneStep::Rendered { .. }), "{step:?}");
     }
     drop(targets);
-    memory
-        .iter()
-        .map(|bytes| {
-            bytes
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|pair| u16::from_le_bytes(*pair))
-                .collect()
-        })
-        .collect()
+    Some(
+        memory
+            .iter()
+            .map(|bytes| {
+                bytes
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|pair| u16::from_le_bytes(*pair))
+                    .collect()
+            })
+            .collect(),
+    )
 }
 
 #[test]
 fn an_alpha_export_has_no_background() {
     let _lock = gpu_test_lock();
     let renderer = look_renderer();
-    let planes = exported(Some(&renderer), ten_bit(Chroma::Yuv444, true));
+    let Some(planes) = exported(Some(&renderer), ten_bit(Chroma::Yuv444, true)) else {
+        return;
+    };
     let (luma, alpha) = (&planes[0], &planes[3]);
     // The corner shows nothing: transparent, and black where nothing is.
     assert_eq!((alpha[0], luma[0]), (0, 64));
@@ -116,7 +135,9 @@ fn an_alpha_export_has_no_background() {
 fn an_opaque_export_still_draws_the_background() {
     let _lock = gpu_test_lock();
     let renderer = look_renderer();
-    let planes = exported(Some(&renderer), ten_bit(Chroma::Yuv422, false));
+    let Some(planes) = exported(Some(&renderer), ten_bit(Chroma::Yuv422, false)) else {
+        return;
+    };
     // The blue background's luma: BT.709 of sRGB-encoded (0.2, 0.4, 0.8), limited range.
     let luma: f64 = 0.2126 * 0.2 + 0.7152 * 0.4 + 0.0722 * 0.8;
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -134,8 +155,10 @@ fn the_cpu_renderer_packs_an_alpha_export_as_the_gpu_does() {
     let _lock = gpu_test_lock();
     let renderer = look_renderer();
     let layout = ten_bit(Chroma::Yuv444, true);
-    let gpu = exported(Some(&renderer), layout);
-    let cpu = exported(None, layout);
+    let Some(gpu) = exported(Some(&renderer), layout) else {
+        return;
+    };
+    let cpu = exported(None, layout).expect("the CPU renderer packs 10 bits");
     for (plane, (gpu, cpu)) in gpu.iter().zip(&cpu).enumerate() {
         let largest = gpu
             .iter()

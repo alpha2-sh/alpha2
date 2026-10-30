@@ -1,6 +1,7 @@
 #define COBJMACROS
 #include <initguid.h>
 #include <d3d12.h>
+#include <d3d12video.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include "alpha2_native_gpu_d3d12.h"
@@ -73,6 +74,24 @@ void alpha2_native_gpu_d3d12_set_wait_timeout(uint32_t milliseconds) {
 /* The timeout `alpha2_native_gpu_d3d12_set_wait_timeout` stored. */
 uint32_t alpha2_native_gpu_d3d12_wait_timeout(void) {
     return (uint32_t)InterlockedCompareExchange(&alpha2_wait_timeout_ms, 0, 0);
+}
+
+/* S_OK when `raw_device` has a D3D12 Video device (`ID3D12VideoDevice`), else the failing HRESULT
+ * (E_NOINTERFACE on WARP and on drivers without D3D12 Video). */
+int32_t alpha2_native_gpu_d3d12_video_device_check(void *raw_device) {
+    ID3D12VideoDevice *video = NULL;
+    HRESULT result = ID3D12Device_QueryInterface(
+        (ID3D12Device *)raw_device, &IID_ID3D12VideoDevice, (void **)&video);
+    if (SUCCEEDED(result) && video != NULL) {
+        ID3D12VideoDevice_Release(video);
+        return 0;
+    }
+    return FAILED(result) ? (int32_t)result : (int32_t)E_NOINTERFACE;
+}
+
+/* S_OK while `raw_device` is usable, else why it was removed (DXGI_ERROR_DEVICE_HUNG, ...). */
+int32_t alpha2_native_gpu_d3d12_device_removed_reason(void *raw_device) {
+    return (int32_t)ID3D12Device_GetDeviceRemovedReason((ID3D12Device *)raw_device);
 }
 
 static void alpha2_d3d12_target_free(Alpha2D3D12Target *target) {

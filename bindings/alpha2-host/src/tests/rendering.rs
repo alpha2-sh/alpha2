@@ -411,8 +411,7 @@ fn hdr_sources_decode_and_tone_map_or_are_refused_in_words() {
     // Real PQ and HLG files through the native decoder and upload: the neutral luma ramp on their
     // first row must land where the reference conversion puts it.
     let _gpu = gpu_test_lock();
-    let gpu = pollster::block_on(alpha2_gpu::GpuContext::request_high_performance())
-        .expect("a GPU device");
+    let gpu = pollster::block_on(alpha2_gpu::GpuContext::request_product()).expect("a GPU device");
     let renderer = alpha2_render::Renderer::new(gpu);
     let size = RenderSize::new(64, 48).expect("size");
     let tone = alpha2_render::ColorPolicy::ToneMapHdr(alpha2_render::hdr::HdrToneMap::default());
@@ -516,8 +515,7 @@ fn a_bt2020_sdr_source_converts_into_bt709_primaries_without_a_tone_map() {
         }
     );
     let _gpu = gpu_test_lock();
-    let gpu = pollster::block_on(alpha2_gpu::GpuContext::request_high_performance())
-        .expect("a GPU device");
+    let gpu = pollster::block_on(alpha2_gpu::GpuContext::request_product()).expect("a GPU device");
     let renderer = alpha2_render::Renderer::new(gpu);
     let sdr = alpha2_render::ColorPolicy::RejectHdr;
     let pixels = uploaded_first_frame(&renderer, name, sdr);
@@ -620,8 +618,7 @@ fn uploaded_first_frame(
 #[test]
 fn a_frame_the_renderer_cannot_sample_is_tone_mapped_and_keeps_its_alpha() {
     let _gpu = gpu_test_lock();
-    let gpu = pollster::block_on(alpha2_gpu::GpuContext::request_high_performance())
-        .expect("a GPU device");
+    let gpu = pollster::block_on(alpha2_gpu::GpuContext::request_product()).expect("a GPU device");
     let renderer = alpha2_render::Renderer::new(gpu);
     let tone = alpha2_render::ColorPolicy::ToneMapHdr(alpha2_render::hdr::HdrToneMap::default());
     let alpha = uploaded_first_frame(&renderer, "prores-pq-alpha.mov", tone);
@@ -695,8 +692,7 @@ fn a_declared_color_wins_on_the_native_frame_paths() {
     assert_eq!(decoded.frame.metadata().color, Some(declared));
 
     let _gpu = gpu_test_lock();
-    let gpu = pollster::block_on(alpha2_gpu::GpuContext::request_high_performance())
-        .expect("a GPU device");
+    let gpu = pollster::block_on(alpha2_gpu::GpuContext::request_product()).expect("a GPU device");
     let renderer = alpha2_render::Renderer::new(gpu);
     let size = RenderSize::new(64, 48).expect("size");
     let mut frames =

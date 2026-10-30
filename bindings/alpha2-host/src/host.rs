@@ -181,6 +181,24 @@ struct CanvasSize {
     height: u64,
 }
 
+/// The device facts a render cache identity names: the adapter, its backend
+/// and driver, and the DX12 shader compiler, since DXC and FXC compile one
+/// pipeline to different bytes.
+pub(crate) fn add_adapter_identity(
+    identity: &mut crate::render_cache::SnapshotIdentity,
+    adapter: &crate::renderer_backend::AdapterIdentity,
+) {
+    for (label, value) in [
+        ("adapter", &adapter.name),
+        ("backend", &adapter.backend),
+        ("driver", &adapter.driver),
+        ("driver-info", &adapter.driver_info),
+        ("shader-compiler", &adapter.shader_compiler),
+    ] {
+        identity.add(label, value.as_bytes());
+    }
+}
+
 impl Host {
     #[cfg(not(any(
         all(target_os = "linux", feature = "hwdevice"),
@@ -514,6 +532,8 @@ impl Host {
                 alpha2_engine::CapabilityReport::cpu(alpha2_engine::Runtime::Native, renderer)
             }
         };
+        report.gpu.shader_compiler =
+            crate::renderer_backend::describe_shader_compiler(&report.gpu.shader_compiler);
         report.decode = self.decode_capabilities();
         report.encode = encode;
         let cpu = self.renderer.cpu().is_some();
@@ -1150,6 +1170,7 @@ impl Host {
                 "backend": adapter.backend,
                 "driver": adapter.driver,
                 "driverInfo": adapter.driver_info,
+                "shaderCompiler": adapter.shader_compiler,
             },
             "ffmpeg": ffmpeg.version,
             "renderer": self.renderer.name(),
@@ -1184,14 +1205,7 @@ impl Host {
             },
             RendererBackend::Gpu(_) => self.renderer.adapter(),
         };
-        for (label, value) in [
-            ("adapter", &adapter.name),
-            ("backend", &adapter.backend),
-            ("driver", &adapter.driver),
-            ("driver-info", &adapter.driver_info),
-        ] {
-            identity.add(label, value.as_bytes());
-        }
+        add_adapter_identity(&mut identity, &adapter);
         identity.add(
             "intermediate",
             format!("{:?}", self.renderer.intermediate_format()).as_bytes(),
@@ -1718,6 +1732,8 @@ impl Host {
         } else {
             candidate
         };
+        // The GPU-resident export the readback path started over from, when one did.
+        let mut gpu_output_path_fallback = Value::Null;
         let gpu_output_unavailable = match candidate {
             #[cfg(feature = "hwencode")]
             Ok((device, capability)) => {
@@ -1786,6 +1802,47 @@ impl Host {
                         reason
                     }
                     Err(GpuEncodeOutcome::Failed(error)) => return Err(error),
+                    Err(GpuEncodeOutcome::EncoderRejected { reason, frame }) => {
+                        let pinned_gpu_only =
+                            requested_video_encoder.is_some() && capability.gpu_input_only;
+                        if input_policy == crate::config::VideoInputPolicy::GpuRequired
+                            || pinned_gpu_only
+                        {
+                            // The worker's rejection is recorded as the export's cause; this
+                            // refusal, which says why nothing started over, replaces it.
+                            pipeline_failure.clear();
+                            return Err(code_tag(
+                                "ENCODE_ERROR",
+                                format!(
+                                    "{reason} (GPU-resident output is required, so the export \
+                                     was not restarted on the readback path)"
+                                ),
+                            ));
+                        }
+                        // One restart: the readback path below never comes back here. The GPU
+                        // path's sink is aborted and its partial removed already.
+                        alpha2_os::diagnostic!(
+                            "alpha2 native export: {}; restarting on the readback path",
+                            crate::tag::untagged(&reason)
+                        );
+                        pipeline_failure.clear();
+                        self.failure
+                            .enter(crate::failure::ExportPhase::Prepare, None);
+                        progress(crate::protocol::Progress::restarted(
+                            exporter.progress().total,
+                        ))
+                        .map_err(|error| error.message)?;
+                        let reason = crate::tag::untagged(&reason);
+                        gpu_output_path_fallback = json!({
+                            "encoder": capability.encoder,
+                            "frame": frame,
+                            "reason": reason,
+                        });
+                        format!(
+                            "{reason} (the GPU-resident export failed at frame {frame} and was \
+                             restarted on the readback path)"
+                        )
+                    }
                 }
             }
             Err(refusal) => {
@@ -2782,6 +2839,8 @@ impl Host {
         );
         result["videoPipeline"] = json!(VideoPipeline::Readback.as_str());
         result["gpuOutputPathUnavailable"] = json!(gpu_output_unavailable);
+        result["gpuOutputPathFallback"] = gpu_output_path_fallback;
+        result["publish"] = publish_json(metrics.publish);
         result["videoTranscode"] = Value::Null;
         result["yuvTranscodeIneligible"] = json!("only the GPU-resident path transcodes");
         result["inputPolicy"] = json!(input_policy.as_str());
@@ -2874,6 +2933,7 @@ impl Host {
                 "backend": adapter.backend,
                 "driver": adapter.driver,
                 "driverInfo": adapter.driver_info,
+                "shaderCompiler": adapter.shader_compiler,
                 "ffmpegVersion": ffmpeg.version,
                 "ffmpegConfiguration": ffmpeg.configuration,
                 "ffmpegPinnedSdkRelease": ffmpeg.pinned_sdk_release,
@@ -2893,6 +2953,9 @@ impl Host {
             "backend": diagnostics.adapter.backend,
             "driver": diagnostics.adapter.driver,
             "driverInfo": diagnostics.adapter.driver_info,
+            "shaderCompiler": crate::renderer_backend::describe_shader_compiler(
+                &diagnostics.adapter.shader_compiler
+            ),
             "ffmpegVersion": ffmpeg.version,
             "ffmpegConfiguration": ffmpeg.configuration,
             "ffmpegPinnedSdkRelease": ffmpeg.pinned_sdk_release,
@@ -3320,6 +3383,18 @@ fn still_project(
 /// meanwhile, the path is made absolute without resolving links. On Windows
 /// the resolved path loses the `\\?\` prefix `canonicalize` adds, as every
 /// other program writes paths without it.
+/// How an output was published, as export and still results report it:
+/// `{"method", "stagedLocally", "retries"}`, or `null` when it was not.
+pub(crate) fn publish_json(report: Option<alpha2_native::PublishReport>) -> Value {
+    report.map_or(Value::Null, |report| {
+        json!({
+            "method": report.method.as_str(),
+            "stagedLocally": report.staged_locally,
+            "retries": report.retries,
+        })
+    })
+}
+
 pub(crate) fn written_path(path: &Path) -> String {
     let text = std::fs::canonicalize(path)
         .or_else(|_| std::path::absolute(path))

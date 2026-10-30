@@ -98,9 +98,9 @@ fn builtin_transition_catalog_compiles_and_preserves_endpoints() {
         // Thresholds (edge detection) land on either side of a step on other GPUs, and GL is a
         // few levels off every other backend.
         &[
-            "builtin_transitions",
-            "builtin_transitions_lavapipe",
-            "builtin_transitions_gl",
+            alpha2_golden_support::Variant::everywhere("builtin_transitions"),
+            super::golden::on_adapter("builtin_transitions_lavapipe", "Vulkan", "llvmpipe"),
+            super::golden::on_backend("builtin_transitions_gl", "Gl"),
         ],
         RenderSize::new(
             preview_size.width * u32::try_from(ids.len()).expect("catalog size fits u32"),
@@ -245,8 +245,11 @@ fn a_pass_timed_while_the_probe_is_busy_renders_untimed_and_leaves_the_probe_to_
         // same.
         assert!(!timed.gpu.capabilities().timestamp_queries);
         assert_eq!(timestamps(&timed), 0);
-        eprintln!("no timestamp queries on this adapter: the probe paths do not exist here");
         assert!(pollster::block_on(scope.pop()).is_none());
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::TimestampQuery,
+            "no timestamp queries on this adapter: the probe paths do not exist here"
+        );
         return;
     };
     let after_first = timestamps(&timed);

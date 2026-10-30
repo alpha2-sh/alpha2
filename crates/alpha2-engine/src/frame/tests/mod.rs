@@ -98,24 +98,94 @@ static SHARED_GPU: OnceLock<GpuContext> = OnceLock::new();
 /// `device_creation_survives_repeated_teardown` in `alpha2-render` covers
 /// that path on demand.
 ///
-/// It is the adapter a native host renders on, `request_high_performance`'s,
-/// not the first one listed: on a machine with an integrated and a discrete
-/// GPU those differ, and a failure that only the host's adapter shows would
-/// pass here. `WGPU_POWER_PREF` and `WGPU_BACKEND` still choose another. A
+/// It is the product device: the backend the host renders on for this OS
+/// (DX12 on Windows, Metal on macOS, a plain Vulkan device on Linux, not the
+/// host's shared video device), the adapter `ALPHA2_GPU_ADAPTER` pins or the
+/// high-performance one; `WGPU_BACKEND` overrides for a secondary run. A
 /// failing test prints which adapter it ran on.
+///
+/// `ALPHA2_TEST_INTERMEDIATE=rgba8unorm` runs the suite on the 8-bit
+/// intermediate, as it runs `alpha2-render`'s; any other value is refused.
 fn gpu() -> GpuContext {
     let shared = SHARED_GPU
         .get_or_init(|| {
-            pollster::block_on(GpuContext::request_high_performance())
+            pollster::block_on(GpuContext::request_product())
                 .expect("frame tests require a working GPU adapter")
         })
         .clone();
-    let capabilities = shared.capabilities();
-    eprintln!(
-        "frame tests on {} ({}, {})",
-        capabilities.adapter_name, capabilities.backend, capabilities.driver_info
+    eprintln!("frame tests on {}", shared.capabilities().summary());
+    match std::env::var("ALPHA2_TEST_INTERMEDIATE").as_deref() {
+        Err(std::env::VarError::NotPresent) => shared,
+        Ok("rgba8unorm") => shared.with_rgba8_intermediate(),
+        other => panic!("ALPHA2_TEST_INTERMEDIATE must be unset or rgba8unorm, not {other:?}"),
+    }
+}
+
+/// The golden run of this suite's shared device, with the intermediate [`gpu`] gives.
+fn golden_run() -> alpha2_golden_support::GoldenRun {
+    let gpu = gpu();
+    let capabilities = gpu.capabilities();
+    alpha2_golden_support::GoldenRun {
+        renderer: "gpu",
+        adapter: capabilities.adapter_name.clone(),
+        backend: capabilities.backend.clone(),
+        driver: format!("{} {}", capabilities.driver, capabilities.driver_info)
+            .trim()
+            .to_owned(),
+        shader_compiler: capabilities.shader_compiler.clone(),
+        intermediate: format!("{:?}", capabilities.intermediate_format),
+        software: capabilities.software_rasterizer,
+        profile: alpha2_golden_support::GoldenRun::profile(),
+    }
+}
+
+/// Compares a frame the shared device drew with the golden `name`.
+fn assert_golden(name: &'static str, size: (u32, u32), actual: &[u8], tolerance: u8) {
+    alpha2_golden_support::assert_rgba8_golden(&golden_run(), name, size, actual, tolerance);
+}
+
+/// Compares a frame the shared device drew with the golden `name`, or on the 8-bit intermediate
+/// also with `<name>_rgba8`, where that intermediate rounds a picture past the tolerance.
+fn assert_golden_or_rgba8(
+    name: &'static str,
+    rgba8: &'static str,
+    size: (u32, u32),
+    actual: &[u8],
+    tolerance: u8,
+) {
+    alpha2_golden_support::assert_rgba8_golden_tiles(
+        &golden_run(),
+        &[
+            alpha2_golden_support::Variant::everywhere(name),
+            alpha2_golden_support::Variant {
+                name: rgba8,
+                scope: alpha2_golden_support::Scope {
+                    intermediate: Some("Rgba8Unorm"),
+                    ..alpha2_golden_support::Scope::EVERYWHERE
+                },
+            },
+        ],
+        size,
+        &["whole"],
+        actual,
+        tolerance,
     );
-    shared
+}
+
+/// Whether the shared device renders through the 8-bit intermediate.
+fn rgba8_intermediate(renderer: &Renderer) -> bool {
+    renderer.intermediate_format() == wgpu::TextureFormat::Rgba8Unorm
+}
+
+/// Compares a frame the CPU renderer drew with the golden `name`.
+fn assert_cpu_golden(name: &'static str, size: (u32, u32), actual: &[u8], tolerance: u8) {
+    alpha2_golden_support::assert_rgba8_golden(
+        &alpha2_golden_support::GoldenRun::cpu(),
+        name,
+        size,
+        actual,
+        tolerance,
+    );
 }
 
 /// Effect parameters that hold one value for the whole clip.

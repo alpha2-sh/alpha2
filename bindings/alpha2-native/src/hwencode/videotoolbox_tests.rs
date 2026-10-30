@@ -1,8 +1,8 @@
 //! The `VideoToolbox` GPU-resident backend on this Mac's hardware encoder.
 //!
 //! Each test needs the renderer's `Metal` device and a hardware
-//! `h264_videotoolbox` session; without them it skips, unless
-//! `ALPHA2_REQUIRE_VIDEOTOOLBOX` is set.
+//! `h264_videotoolbox` session; without them it skips, recorded as the
+//! `videotoolbox-encode` capability.
 
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
@@ -25,11 +25,10 @@ pub(super) fn refuses_constant_bit_rate(rate: alpha2_media::VideoRateControl) ->
     rate.mode == BitrateMode::Constant && REFUSE_CONSTANT_BIT_RATE.get()
 }
 
-/// The renderer's device with a working hardware encoder, or `None` (and a
-/// note).
+/// The renderer's device with a working hardware encoder, or `None` (a
+/// recorded skip).
 fn device() -> Option<(SharedMetalContext, HardwareEncodeDevice)> {
-    let required = std::env::var_os("ALPHA2_REQUIRE_VIDEOTOOLBOX").is_some();
-    let made = pollster::block_on(alpha2_gpu::GpuContext::request_high_performance())
+    let made = pollster::block_on(alpha2_gpu::GpuContext::request_product())
         .map_err(|error| format!("{error:?}"))
         .and_then(|gpu| SharedMetalContext::from_gpu(gpu).map_err(|error| error.to_string()))
         .and_then(|metal| {
@@ -38,14 +37,10 @@ fn device() -> Option<(SharedMetalContext, HardwareEncodeDevice)> {
                 .capability(NativeVideoCodec::H264)
                 .map(|_| (metal, device))
         });
-    match made {
-        Ok(made) => Some(made),
-        Err(error) => {
-            assert!(!required, "the VideoToolbox encoder is required: {error}");
-            eprintln!("skipped: no VideoToolbox hardware encode ({error})");
-            None
-        }
-    }
+    alpha2_test_support::available!(
+        alpha2_test_support::Capability::VideotoolboxEncode,
+        made.map_err(|error| format!("no VideoToolbox hardware encode ({error})"))
+    )
 }
 
 fn scratch(name: &str) -> PathBuf {
@@ -241,7 +236,9 @@ fn a_session_encodes_what_the_renderer_drew_into_its_surfaces() {
         input.set_time(&mut surface, MediaTime::from_ticks(ticks));
         session.encode(&surface).expect("encode");
     }
-    session.finish().expect("finish");
+    session
+        .finish(&alpha2_media::CancelToken::default())
+        .expect("finish");
     let stats = input.stats();
     input.finish().expect("the input finishes");
     // The renderer drew into the surfaces themselves: no handoff copied anything.

@@ -251,6 +251,8 @@ const CODE_CLASSES: Readonly<Record<string, FailureClass>> = Object.freeze({
   DECODE_STALLED: { code: "GPU_TIMEOUT", resource: "unknown" },
   ENCODE_STALLED: { code: "GPU_TIMEOUT", resource: "unknown" },
   IO_ERROR: { code: "OUTPUT_IO_FAILED", resource: "unknown" },
+  // The output rendered in full and is kept beside its path; moving it into place failed.
+  OUTPUT_PUBLISH_FAILED: { code: "OUTPUT_IO_FAILED", resource: "unknown" },
   CANCELLED: { code: "CANCELLED", resource: "unknown" },
   RESOURCE_LIMIT: { code: "RESOURCE_LIMIT", resource: "unknown" },
   GPU_INIT_FAILED: unknown,

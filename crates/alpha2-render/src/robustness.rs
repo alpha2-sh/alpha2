@@ -139,6 +139,7 @@ mod tests {
             "Gl",
             "software",
             "fixture",
+            "",
         );
         let decision = resolve_degradation(
             &capabilities,
@@ -172,6 +173,7 @@ mod tests {
             "Vulkan",
             "driver",
             "fixture",
+            "",
         );
         let budget = ResourceBudget::new(1_000, 1, 0);
         let decision = resolve_degradation(&capabilities, 1_000, 256, budget);

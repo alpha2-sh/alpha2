@@ -783,6 +783,9 @@ fn activated_validation_layer(
 }
 
 /// The Vulkan-only HAL instance the shared device is made on.
+///
+/// It is made through `wgpu-hal` directly, outside alpha2-gpu's instance builder: it has no DX12
+/// compiler to share, and its flags are its own.
 fn hal_instance() -> Result<wgpu_hal::vulkan::Instance, SharedVulkanError> {
     let hal_desc = wgpu_hal::InstanceDescriptor {
         name: "alpha2 shared Vulkan decode",

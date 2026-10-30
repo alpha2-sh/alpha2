@@ -2,39 +2,48 @@
 //! it unlocks, whatever its record was changed to.
 //!
 //! The frames come from a device `FFmpeg` creates itself on the default
-//! Vulkan device; without one the tests skip. Each test runs in a child
-//! process of its own: the device's driver is then loaded outside any
-//! memcheck run of this binary (whose dynamic loader it trips on reading an
-//! ICD's search path), and a lock an access leaked hangs only the child.
+//! Vulkan device; without one the tests skip, recorded as the `vulkan`
+//! capability. Each test runs in a child process of its own: the device's
+//! driver is then loaded outside any memcheck run of this binary (whose
+//! dynamic loader it trips on reading an ICD's search path), and a lock an
+//! access leaked hangs only the child. The children are ignored tests the
+//! parents run by name.
 
 use std::{
-    process::Command,
+    io::Read,
+    process::{Command, Stdio},
     sync::{Arc, mpsc},
     time::{Duration, Instant},
 };
 
+use alpha2_test_support::{Capability, skip};
+
 use super::*;
 
-/// Set in a child, which then runs the test body.
-const CHILD: &str = "ALPHA2_VULKAN_ACCESS_CHILD";
-
-/// Runs the `*_child` test `test` in a child process, which fails the test
-/// when it fails or is still running after a minute.
+/// Runs the ignored `*_child` test `test` in a child process, which fails the
+/// test when it fails, did not run, or is still running after a minute.
 fn run_child(test: &str) {
     let mut child = Command::new(std::env::current_exe().expect("test executable"))
         .args([
             "--exact",
             &format!("vulkan_access_tests::{test}"),
+            "--ignored",
             "--nocapture",
+            "--test-threads=1",
         ])
-        .env(CHILD, "1")
+        .stdout(Stdio::piped())
         .spawn()
         .expect("child");
+    let mut stdout = child.stdout.take().expect("child stdout");
+    let reader = std::thread::spawn(move || {
+        let mut printed = String::new();
+        let _ = stdout.read_to_string(&mut printed);
+        printed
+    });
     let deadline = Instant::now() + Duration::from_secs(60);
-    loop {
+    let status = loop {
         if let Some(status) = child.try_wait().expect("child status") {
-            assert!(status.success(), "{test} failed: {status}");
-            return;
+            break status;
         }
         if Instant::now() > deadline {
             let _ = child.kill();
@@ -42,7 +51,12 @@ fn run_child(test: &str) {
             panic!("{test} hung");
         }
         std::thread::sleep(Duration::from_millis(50));
-    }
+    };
+    let printed = reader.join().expect("child stdout reader");
+    assert!(
+        status.success() && printed.contains("1 passed"),
+        "{test} failed or did not run: {status}\n{printed}"
+    );
 }
 
 /// One NV12 frame of a pool on a device `FFmpeg` made, or `None` (and a
@@ -51,7 +65,7 @@ fn vulkan_frame() -> Option<VulkanFrameLease> {
     let device = match AVHWDeviceContext::create(ffi::AV_HWDEVICE_TYPE_VULKAN, None, None, 0) {
         Ok(device) => device,
         Err(error) => {
-            eprintln!("skipped: FFmpeg made no Vulkan device ({error})");
+            skip!(Capability::Vulkan, "FFmpeg made no Vulkan device ({error})");
             return None;
         }
     };
@@ -90,10 +104,8 @@ fn a_frame_access_unlocks_what_it_locked_whatever_its_record_holds() {
 }
 
 #[test]
+#[ignore = "run by a_frame_access_unlocks_what_it_locked_whatever_its_record_holds"]
 fn replaced_record_child() {
-    if std::env::var_os(CHILD).is_none() {
-        return;
-    }
     let Some(lease) = vulkan_frame() else {
         return;
     };
@@ -130,10 +142,8 @@ fn a_committed_timeline_value_never_goes_below_the_frames() {
 }
 
 #[test]
+#[ignore = "run by a_committed_timeline_value_never_goes_below_the_frames"]
 fn lowered_timeline_child() {
-    if std::env::var_os(CHILD).is_none() {
-        return;
-    }
     let Some(lease) = vulkan_frame() else {
         return;
     };

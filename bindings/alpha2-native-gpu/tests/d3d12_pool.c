@@ -47,6 +47,7 @@ const IID IID_ID3D12Resource = {1};
 const IID IID_ID3D12CommandAllocator = {2};
 const IID IID_ID3D12GraphicsCommandList = {3};
 const IID IID_ID3D12Fence = {4};
+const IID IID_ID3D12VideoDevice = {5};
 
 static long live[MOCK_KINDS];
 /* `CreateCommittedResource` calls that made a resource: the pool's targets. */
@@ -120,6 +121,19 @@ void mock_release(void *raw) {
         live[object->kind]--;
         free(object);
     }
+}
+
+/* The harness's device has no D3D12 Video interface and is never removed. */
+HRESULT mock_query_interface(ID3D12Device *device, const IID *iid, void **output) {
+    (void)device;
+    (void)iid;
+    *output = NULL;
+    return E_NOINTERFACE;
+}
+
+HRESULT mock_device_removed_reason(ID3D12Device *device) {
+    (void)device;
+    return S_OK;
 }
 
 HRESULT mock_create_committed_resource(

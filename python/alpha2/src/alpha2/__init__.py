@@ -64,7 +64,7 @@ from .install import (
 )
 from .measure import LayoutBounds, NodeBounds, TextBounds, TextMeasurer
 from .protocol import PROTOCOL_VERSION
-from .results import ExportResult, StillResult
+from .results import ExportResult, PublishReport, StillResult
 from .values import constant, key, keyframes, lift, point_key, point_keyframes
 
 __all__ = [
@@ -89,6 +89,7 @@ __all__ = [
     "NodeBounds",
     "OpenH264InstallResult",
     "ProjectBuilder",
+    "PublishReport",
     "StillResult",
     "TextBounds",
     "TextMeasurer",

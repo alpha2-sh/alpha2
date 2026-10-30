@@ -208,7 +208,7 @@ const FRAME_GRAPH: u64 = 27;
 const VECTOR_FRAME_GRAPH: u64 = 240;
 
 fn measure(vectors: bool) -> Vec<u64> {
-    let gpu = pollster::block_on(GpuContext::request_high_performance())
+    let gpu = pollster::block_on(GpuContext::request_product())
         .expect("these budgets need a GPU adapter");
     let mut renderer = Renderer::new(gpu);
     renderer.register_builtins().expect("built-ins");

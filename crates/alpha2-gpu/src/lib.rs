@@ -13,19 +13,29 @@
 //! handles through them, and they are not part of this crate's API.
 
 mod acquisition;
+mod adapter_pin;
 mod capabilities;
 mod context;
 mod diagnostic;
 mod error;
+mod instance;
 
 pub use acquisition::{AcquisitionGuard, serialize_acquisition};
+pub use adapter_pin::{AdapterPin, gl_version_supported, high_performance_rank, product_order};
 pub use capabilities::{Capabilities, CapabilityTier, IntermediateFormat};
-pub use context::{AcceptedDevice, AdapterRefusals, ExternalQueueLock, GpuContext, SubmitTimings};
+pub use context::{
+    AcceptedDevice, AdapterRefusals, ExternalQueueLock, GpuContext, ProductRequest,
+    SoftwareAdapters, SubmitTimings, product_backends,
+};
 pub use diagnostic::{
     GpuDiagnostic, GpuDiagnosticHandler, GpuDiagnosticLog, GpuDiagnosticSnapshot, GpuErrorKind,
     MAX_DIAGNOSTIC_MESSAGE_BYTES,
 };
 pub use error::{GpuAcquisitionStep, GpuError};
+pub use instance::{
+    Dx12Compiler, InstanceSettings, InstanceSettingsError, ShaderCompiler, configure_instances,
+    dx12_shader_compiler, instance_descriptor, instance_settings, new_instance, shader_compiler_of,
+};
 /// The `wgpu` this crate is built on, with the `wgpu-interop` feature. Every
 /// `wgpu` type the interop surface takes or returns, here and in the crates
 /// built on this one, is this crate's, so a caller names them through this

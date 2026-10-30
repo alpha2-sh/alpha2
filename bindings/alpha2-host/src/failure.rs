@@ -364,6 +364,7 @@ pub fn classify_failure(
         return class("STORAGE_QUOTA_EXCEEDED", "unknown");
     }
     if host_code == "IO_ERROR"
+        || host_code == "OUTPUT_PUBLISH_FAILED"
         || (matches!(phase, ExportPhase::Mux) && (lower.contains("i/o") || lower.contains("write")))
     {
         return class("OUTPUT_IO_FAILED", "unknown");

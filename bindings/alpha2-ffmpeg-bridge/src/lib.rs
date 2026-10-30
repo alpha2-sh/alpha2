@@ -32,8 +32,10 @@ use rsmpeg::{
 use rsmpeg::avutil::AVHWDeviceContext;
 
 mod container;
+mod log;
 
 pub use container::{DemuxInput, OpenInputError, OutputFile, open_input};
+pub use log::{LogLine, LogMark, install_log_capture, log_detail, log_mark, log_since};
 
 /// The fixed-width ABI shared with the C shims, generated from their headers
 /// under `include/` by the build script.

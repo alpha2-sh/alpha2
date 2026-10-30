@@ -82,6 +82,8 @@ pub struct ExportMetrics {
     pub video_encode: Duration,
     /// Where the encode sink's own time went, split out of `video_encode`.
     pub encode_stages: alpha2_native::EncodeStageTimings,
+    /// How the finished output was published, once the worker has.
+    pub publish: Option<alpha2_native::PublishReport>,
     /// Encode-channel occupancy the worker observed, indexed by the depth
     /// left behind when it took a command.
     pub encode_channel_depth_samples: Vec<u64>,

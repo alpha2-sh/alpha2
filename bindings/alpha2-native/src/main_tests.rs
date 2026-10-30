@@ -529,7 +529,7 @@ fn a_png_that_cannot_be_written_fails_the_command() {
     let output = scratch("thumb", "png");
     std::fs::write(&output, b"old").expect("old file");
     write_png(&output, &frame).expect("a regular file is replaced");
-    let partial = output.replace(".png", ".alpha2-partial.png");
+    let partial = output.replace(".png", ".a2partial.png");
     assert!(std::fs::read(&output).expect("png").starts_with(b"\x89PNG"));
     assert!(!std::path::Path::new(&partial).exists());
     std::fs::remove_file(output).expect("cleanup");
@@ -552,7 +552,7 @@ fn a_png_does_not_replace_a_fifo() {
     assert!(error.contains("not a regular file"), "{error}");
     let kind = std::fs::symlink_metadata(&fifo).expect("fifo").file_type();
     assert!(kind.is_fifo(), "{kind:?}");
-    let partial = fifo.replace(".png", ".alpha2-partial.png");
+    let partial = fifo.replace(".png", ".a2partial.png");
     assert!(!std::path::Path::new(&partial).exists());
     std::fs::remove_file(fifo).expect("cleanup");
 }
@@ -572,7 +572,7 @@ fn a_png_does_not_replace_a_symbolic_link() {
     let kind = std::fs::symlink_metadata(&link).expect("link").file_type();
     assert!(kind.is_symlink(), "{kind:?}");
     assert_eq!(std::fs::read(&target).expect("target"), b"old");
-    let partial = link.replace(".png", ".alpha2-partial.png");
+    let partial = link.replace(".png", ".a2partial.png");
     assert!(!std::path::Path::new(&partial).exists());
     std::fs::remove_file(link).expect("cleanup");
     std::fs::remove_file(target).expect("cleanup");

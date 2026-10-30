@@ -188,7 +188,7 @@ fn text_animator_frames_golden() {
                 .flat_map(move |pixels| pixels[row * 640..(row + 1) * 640].iter().copied())
         })
         .collect::<Vec<_>>();
-    alpha2_golden_support::assert_rgba8_golden("text_animators", (640, 90), &strip, 2);
+    assert_golden("text_animators", (640, 90), &strip, 2);
 }
 
 /// A project with a layout generator source whose one text node has

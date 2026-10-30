@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
-use alpha2_gpu::CapabilityTier;
+use alpha2_gpu::{CapabilityTier, GpuContext};
 
 use crate::effect::EffectKey;
 use crate::loop_bound::{BUDGET, MAX_LOOP_ITERATIONS, blank_comments, bound_for_loops};
@@ -23,6 +23,8 @@ const MAX_WGSL_NESTING: usize = 64;
 /// naga lowers it by recursing once per operand: about 2,500 operands
 /// overflow a 1 MiB stack (a Windows main thread, wasm32) and abort the
 /// process instead of failing the registration. Engine bodies stay under 32.
+/// DXC needs more at this limit, so D3D12 compiles on a stack of its own
+/// (`D3D12_COMPILE_STACK`).
 const MAX_WGSL_STATEMENT_OPERATORS: usize = 256;
 /// The identifier prefix of everything the generated wrapper declares.
 const RESERVED_PREFIX: &str = "alpha2_";
@@ -74,6 +76,40 @@ impl CreationErrorScopes {
                 .collect()
         })
     }
+}
+
+/// The stack a D3D12 effect pipeline is compiled on. DXC parses an expression
+/// by recursing once per operand, and at [`MAX_WGSL_STATEMENT_OPERATORS`] it
+/// needs about 1.5 MiB, past the 1 MiB of a Windows main thread; the compile
+/// runs on a thread of its own so the caller's stack never decides it.
+#[cfg(not(target_arch = "wasm32"))]
+const D3D12_COMPILE_STACK: usize = 8 << 20;
+
+/// Runs `make`, which creates an effect pipeline on `gpu`, where the pipeline
+/// compiler has the stack it needs: on a thread of `D3D12_COMPILE_STACK` on
+/// D3D12, and on the calling thread elsewhere (naga's own backends need less
+/// than 1 MiB at the operator limit). Error scopes are per thread, so `make`
+/// pushes and pops its own.
+#[cfg(not(target_arch = "wasm32"))]
+fn on_compile_stack<T: Send>(gpu: &GpuContext, make: impl FnOnce() -> T + Send) -> T {
+    if gpu.capabilities().backend != "Dx12" {
+        return make();
+    }
+    std::thread::scope(|scope| {
+        let compile = std::thread::Builder::new()
+            .name("alpha2 shader compile".to_owned())
+            .stack_size(D3D12_COMPILE_STACK)
+            .spawn_scoped(scope, make)
+            .expect("the shader compile thread starts");
+        compile
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
+fn on_compile_stack<T>(_gpu: &GpuContext, make: impl FnOnce() -> T) -> T {
+    make()
 }
 
 /// A device's answer still to come. Browser WebGPU answers on its own event
@@ -265,9 +301,12 @@ impl Renderer {
         let shader = effect_shader(device, &definition);
         let compilation: Answer<wgpu::CompilationInfo> = Box::pin(shader.get_compilation_info());
         let shader_errors = shader_scope.pop();
-        let pipeline_scope = CreationErrorScopes::push(device);
-        let pipeline = effect_pipeline(device, &definition, shader, self.intermediate_format());
-        let pipeline_errors = pipeline_scope.pop();
+        let format = self.intermediate_format();
+        let (pipeline, pipeline_errors) = on_compile_stack(&self.gpu, || {
+            let pipeline_scope = CreationErrorScopes::push(device);
+            let pipeline = effect_pipeline(device, &definition, shader, format);
+            (pipeline, pipeline_scope.pop())
+        });
         Ok(PendingEffect {
             compiled: CompiledEffect {
                 device: device.clone(),
@@ -327,12 +366,10 @@ impl Renderer {
         effect.pipeline.get_or_init(|| {
             let device = self.gpu.device();
             let shader = effect_shader(device, &effect.definition);
-            effect_pipeline(
-                device,
-                &effect.definition,
-                shader,
-                self.intermediate_format(),
-            )
+            let format = self.intermediate_format();
+            on_compile_stack(&self.gpu, || {
+                effect_pipeline(device, &effect.definition, shader, format)
+            })
         })
     }
 
@@ -359,35 +396,42 @@ impl Renderer {
         Ok(compiled.id)
     }
 
-    /// Refuses parameters whose uniform this device cannot bind.
+    /// Refuses parameters whose uniform some alpha2 runtime cannot bind.
     ///
-    /// Every parameter is one 16-byte slot of a single uniform binding, and a
-    /// device caps a binding's size (16 KiB on the WebGL2 limits every alpha2
-    /// device asks for). The pipeline compiles past the cap; it is the bind
-    /// group of each frame that fails, invalidating its submission, so the
-    /// registration refuses it instead.
+    /// Every parameter is one 16-byte slot of a single uniform binding. The
+    /// limit is the WebGL2 one every alpha2 device asks for, whatever more a
+    /// device grants (browsers grant 64 KiB): an effect that registers on one
+    /// runtime registers on every other. The pipeline compiles past the cap; it
+    /// is the bind group of each frame that fails, invalidating its
+    /// submission, so the registration refuses it instead.
     fn validate_parameter_uniform(&self, definition: &EffectDef) -> Result<(), ShaderDiagnostics> {
-        let limit = self.limits.max_uniform_buffer_binding_size;
+        let limit = self
+            .limits
+            .max_uniform_buffer_binding_size
+            .min(wgpu::Limits::downlevel_webgl2_defaults().max_uniform_buffer_binding_size);
         let bytes = u64::try_from(param_uniform_bytes(definition.params.len())).unwrap_or(u64::MAX);
         if bytes > limit {
             let most = limit / u64::try_from(PARAM_SLOT_BYTES).unwrap_or(u64::MAX);
             return Err(ShaderDiagnostics::error(format!(
-                "effect declares {} parameters, a {bytes}-byte uniform past this device's \
-                 {limit}-byte uniform binding limit (at most {most} parameters)",
+                "effect declares {} parameters, a {bytes}-byte uniform past the {limit}-byte \
+                 limit every alpha2 runtime binds (at most {most} parameters)",
                 definition.params.len()
             )));
         }
         Ok(())
     }
 
-    /// Refuses a definition whose textures this device cannot bind in one
-    /// shader stage: the source pair, each resource, and each named input take
-    /// one sampled texture, and a device caps them (16 on the WebGL2 limits
-    /// every alpha2 device asks for). Past the cap the layout fails on the
-    /// device; this says why before it is asked.
+    /// Refuses a definition whose textures some alpha2 runtime cannot bind in
+    /// one shader stage: the source pair, each resource, and each named input
+    /// take one sampled texture, capped at the WebGL2 limit every alpha2 device
+    /// asks for (16), whatever more a device grants. Past the cap the layout
+    /// fails on the device; this says why before it is asked.
     fn validate_texture_bindings(&self, definition: &EffectDef) -> Result<(), ShaderDiagnostics> {
         let textures = 2 + definition.resources.len() + definition.inputs.len();
-        let limit = usize::try_from(self.limits.max_sampled_textures_per_shader_stage)
+        let limit =
+            usize::try_from(self.limits.max_sampled_textures_per_shader_stage.min(
+                wgpu::Limits::downlevel_webgl2_defaults().max_sampled_textures_per_shader_stage,
+            ))
             .unwrap_or(usize::MAX);
         if textures > limit {
             return Err(ShaderDiagnostics::error(format!(

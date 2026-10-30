@@ -33,6 +33,7 @@ members = [
     "tests/provider_contract",
     "tests/render_determinism",
     "tests/scaling_support",
+    "tests/test_support",
 ]
 resolver = "3"
 
@@ -82,6 +83,7 @@ alpha2-text = { version = "0.5.0", path = "bindings/alpha2-text" }
 alpha2-golden-support = { path = "tests/golden_support" }
 alpha2-provider-contract = { path = "tests/provider_contract", default-features = false }
 alpha2-scaling-support = { path = "tests/scaling_support" }
+alpha2-test-support = { path = "tests/test_support" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

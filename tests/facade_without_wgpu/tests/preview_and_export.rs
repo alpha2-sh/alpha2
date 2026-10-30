@@ -34,7 +34,7 @@ impl FrameProvider for Image {
 fn a_project_renders_a_preview_frame_and_exports_through_the_facade_alone() {
     let project = EngineProject::new(Project::from_json(PROJECT).expect("the project loads"))
         .expect("the project evaluates");
-    let gpu = pollster::block_on(GpuContext::request_high_performance()).expect("a GPU device");
+    let gpu = pollster::block_on(GpuContext::request_product()).expect("a GPU device");
     let renderer = Renderer::new(gpu);
     let size = RenderSize::new(1280, 720).expect("a size");
     let image = Image {

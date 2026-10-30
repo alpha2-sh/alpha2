@@ -1,8 +1,5 @@
 //! Video-only encode sink.
 
-use std::fs;
-use std::path::PathBuf;
-
 use crate::capabilities::{
     NativeVideoCodec, NativeVideoEncoderSelection, VideoEncoderOpenRequest, open_video_encoder,
 };
@@ -11,7 +8,7 @@ use crate::convert::{
     tick_base,
 };
 use crate::encode::{EncodeStageTimings, timed};
-use crate::partial::{OutputTarget, PartialOutput};
+use crate::partial::{OutputTarget, PartialOutput, PublishReport, SeekNeed};
 use alpha2_ffmpeg_bridge::OutputFile;
 use alpha2_ffmpeg_bridge::Yuv420pFrameBuffer;
 use alpha2_media::{
@@ -139,11 +136,12 @@ pub(crate) fn describe_output_stream(
 /// Frames are encoded into a sibling partial file. Only a successful encoder
 /// drain and trailer write renames it to the requested destination.
 pub struct NativeVideoEncodeSink {
-    pub(crate) target: OutputTarget,
-    pub(crate) partial_path: PathBuf,
-    /// Held until the partial file is renamed into place or removed.
-    pub(crate) _partial_lock: crate::partial::PartialLock,
     pub(crate) output: Option<OutputFile>,
+    /// The partial file `output` writes, until it is published or removed.
+    /// Declared after `output`, which is closed first.
+    pub(crate) partial: PartialOutput,
+    /// How the finished file was published.
+    pub(crate) published: Option<PublishReport>,
     pub(crate) encoder: crate::video_backend::VideoEncoderBackend,
     pub(crate) stream_index: i32,
     pub(crate) encoder_time_base: AVRational,
@@ -220,8 +218,7 @@ impl NativeVideoEncodeSink {
     ) -> Result<Self, EncodeError> {
         check_video_config(&config)?;
         let target = path.into();
-        let partial = PartialOutput::claim(&target)?;
-        let partial_path = partial.path().to_owned();
+        let partial = PartialOutput::claim(&target, SeekNeed::Required)?;
         let mut output = partial.open_muxer(config.container)?;
         let width = i32::try_from(config.width)
             .map_err(|_| EncodeError::Adapter("width is out of range".into()))?;
@@ -273,12 +270,10 @@ impl NativeVideoEncodeSink {
         )
         .ok_or_else(|| EncodeError::Adapter("cannot create RGBA to YUV scaler".into()))?;
         configure_rgba_to_yuv(&mut scaler, config.color).map_err(encode_adapter_error)?;
-        let partial_lock = partial.keep();
         Ok(Self {
-            target,
-            partial_path,
-            _partial_lock: partial_lock,
             output: Some(output),
+            partial,
+            published: None,
             encoder,
             stream_index,
             encoder_time_base,
@@ -378,6 +373,7 @@ impl NativeVideoEncodeSink {
         })?;
         self.last_pts = Some(pts);
         self.drain_packets(false)
+            .map_err(|error| self.partial.explain(error))
     }
 
     pub(crate) fn write_video(&mut self, frame: &DecodedVideoFrame) -> Result<(), EncodeError> {
@@ -465,7 +461,9 @@ impl EncodeSink for NativeVideoEncodeSink {
             return Err(EncodeError::Cancelled);
         }
         match event {
-            EncodeEvent::Video(frame) => self.write_video(&frame),
+            EncodeEvent::Video(frame) => self
+                .write_video(&frame)
+                .map_err(|error| self.partial.explain(error)),
             EncodeEvent::Audio(_) => Err(EncodeError::Adapter(
                 "this sink was configured for video-only output".into(),
             )),
@@ -477,6 +475,29 @@ impl EncodeSink for NativeVideoEncodeSink {
             self.abort()?;
             return Err(EncodeError::Cancelled);
         }
+        self.close_output()
+            .map_err(|error| self.partial.explain(error))?;
+        self.published = Some(self.partial.finish(cancel)?);
+        self.complete = true;
+        Ok(())
+    }
+
+    fn abort(&mut self) -> Result<(), EncodeError> {
+        drop(self.output.take());
+        self.partial.discard()
+    }
+}
+
+impl NativeVideoEncodeSink {
+    /// How the finished file was published; `None` until it is.
+    #[must_use]
+    pub fn publish_report(&self) -> Option<PublishReport> {
+        self.published
+    }
+
+    /// Flushes the encoder, writes the trailer and closes the file: what
+    /// [`EncodeSink::finish`] does before it publishes.
+    fn close_output(&mut self) -> Result<(), EncodeError> {
         timed(&mut self.stages.video_send_frame, || {
             self.encoder.send_frame(None)
         })
@@ -495,18 +516,7 @@ impl EncodeSink for NativeVideoEncodeSink {
                 .close()
                 .map_err(|error| encode_adapter_error_at("closing the output", error))?;
         }
-        crate::partial::publish(&self.partial_path, &self.target)?;
-        self.complete = true;
         Ok(())
-    }
-
-    fn abort(&mut self) -> Result<(), EncodeError> {
-        drop(self.output.take());
-        match fs::remove_file(&self.partial_path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(EncodeError::Adapter(error.to_string())),
-        }
     }
 }
 
@@ -514,7 +524,7 @@ impl Drop for NativeVideoEncodeSink {
     fn drop(&mut self) {
         if !self.complete {
             drop(self.output.take());
-            let _ = fs::remove_file(&self.partial_path);
+            let _ = self.partial.discard();
         }
     }
 }

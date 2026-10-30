@@ -15,6 +15,10 @@ import {
   MAX_PROVIDER_DOCUMENT_BYTES,
   MAX_SVG_DOCUMENT_BYTES,
 } from "alpha2/project";
+import {
+  missingCapability,
+  suiteOf,
+} from "../../../scripts/lib/capabilities.mjs";
 
 const wasmDirectory = join(
   resolve(import.meta.dirname, "..", ".."),
@@ -24,8 +28,11 @@ const wasmDirectory = join(
 const packaged = existsSync(join(wasmDirectory, "alpha2_wasm_bg.wasm"));
 const skip =
   !packaged &&
-  process.env.ALPHA2_REQUIRE_WASM !== "1" &&
-  "the wasm package is not built";
+  missingCapability(
+    "wasm",
+    suiteOf(import.meta.url),
+    "the wasm package is not built",
+  );
 
 let wasm = null;
 async function engineWasm() {

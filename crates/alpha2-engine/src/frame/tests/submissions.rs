@@ -6,8 +6,8 @@ use super::*;
 fn the_suite_runs_on_the_adapter_a_native_host_exports_on() {
     // On a machine with an integrated and a discrete GPU, the first adapter listed is not the one
     // the host renders on.
-    let host = pollster::block_on(GpuContext::request_high_performance())
-        .expect("a native host's GPU adapter");
+    let host =
+        pollster::block_on(GpuContext::request_product()).expect("a native host's GPU adapter");
     let (suite, host) = (gpu(), host.capabilities().clone());
     assert_eq!(
         (

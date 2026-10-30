@@ -21,9 +21,12 @@
 //! unloaded a layer. So the first turn of a process also
 //! makes an instance the process keeps until it exits, as a host keeps its
 //! one: every driver and layer the tests' instances load stays loaded, and
-//! their unloads become reference counts. A driver that offers no adapter is
-//! still loaded and unloaded around each instance; it holds nothing a thread
-//! keeps.
+//! their unloads become reference counts. That instance is on the first
+//! product backend group (DX12, Metal or Vulkan); the instance builder keeps
+//! one more for each backend set no kept instance covers, so the GL/EGL
+//! libraries load only in a process that makes a GL instance. A driver that
+//! offers no adapter is still loaded and unloaded around each instance; it
+//! holds nothing a thread keeps.
 
 /// While alive, keeps every other thread of the process out of the
 /// acquisitions that take [`serialize_acquisition`]: instance creation,
@@ -56,16 +59,12 @@ pub fn serialize_acquisition() -> AcquisitionGuard {
 
 #[cfg(all(feature = "serial-acquisition", not(target_arch = "wasm32")))]
 mod held {
-    use std::sync::{Condvar, Mutex, OnceLock, PoisonError};
+    use std::sync::{Condvar, Mutex, PoisonError};
     use std::thread::ThreadId;
 
     /// The thread holding the turn and how many guards it holds.
     static TURN: Mutex<Option<(ThreadId, usize)>> = Mutex::new(None);
     static FREED: Condvar = Condvar::new();
-    /// The instance the first turn makes, with the backends and flags every
-    /// instance of the process gets from the environment, kept until the
-    /// process exits so that the drivers and layers stay loaded.
-    static KEPT: OnceLock<wgpu::Instance> = OnceLock::new();
 
     pub(super) struct Held;
 
@@ -88,9 +87,7 @@ mod held {
             }
             drop(turn);
             // Made inside the turn, as any instance is, and before the caller makes its own.
-            KEPT.get_or_init(|| {
-                wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env())
-            });
+            crate::instance::keep(crate::product_backends()[0]);
             Self
         }
     }

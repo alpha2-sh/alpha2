@@ -6,17 +6,24 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
+import {
+  missingCapability,
+  suiteOf,
+} from "../../../scripts/lib/capabilities.mjs";
 
 const root = resolve(import.meta.dirname, "../../..");
 const wasmDirectory = join(root, "packages/alpha2/wasm");
 const corpus = join(root, "tests/corpus/extensions");
 const packaged = existsSync(join(wasmDirectory, "alpha2_extensions_bg.wasm"));
-// Skipped before `npm run build` packages the wasm; ALPHA2_REQUIRE_WASM=1 (set by CI after the
+// Skipped before `npm run build` packages the wasm; ALPHA2_REQUIRE=wasm (set by CI after the
 // build) makes a missing package fail them.
 const skip =
   !packaged &&
-  process.env.ALPHA2_REQUIRE_WASM !== "1" &&
-  "the extension wasm package is not built";
+  missingCapability(
+    "wasm",
+    suiteOf(import.meta.url),
+    "the extension wasm package is not built",
+  );
 
 async function registry() {
   const wasm = await import(

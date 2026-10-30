@@ -686,7 +686,7 @@ fn audio_and_video_start_together_from_an_unaligned_export_start() {
 #[test]
 fn audio_and_video_start_together_on_the_gpu_resident_path() {
     let _gpu = gpu_test_lock();
-    let Some((mut gpu, _)) = gpu_output_host(VideoDecodePolicy::Software) else {
+    let Some((mut gpu, _, _)) = gpu_output_host(VideoDecodePolicy::Software) else {
         return;
     };
     let mut readback = create_host(VideoDecodePolicy::Software).expect("host");
@@ -930,7 +930,7 @@ fn a_normalized_export_reports_its_output_on_every_path() {
         any(target_os = "linux", target_os = "macos", target_os = "windows"),
         feature = "hwencode"
     ))]
-    if let Some((mut gpu, _)) = gpu_output_host(VideoDecodePolicy::Software) {
+    if let Some((mut gpu, _, _)) = gpu_output_host(VideoDecodePolicy::Software) {
         let end_ticks = 6 * alpha2_time::TICKS_PER_SECOND;
         let mut project = image_and_tone_project(end_ticks, 48_000);
         project["settings"]["width"] = json!(256);

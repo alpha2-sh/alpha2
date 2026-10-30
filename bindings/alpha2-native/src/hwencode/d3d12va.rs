@@ -22,9 +22,10 @@
 //! process: a session can fail at `CreateVideoEncoder` on a device that
 //! reports support, or write packets the software decoder cannot decode.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::CStr;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use alpha2_media::{BitrateMode, ColorMetadata, EncodeError, VideoRateControl};
 use alpha2_native_gpu::{D3D12EncodeCodec, D3D12EncodeExtent, SharedD3D12Context};
@@ -480,16 +481,61 @@ pub fn set_d3d12va_test_encode_runner(
     RUNNER.set(runner)
 }
 
-/// A test encode's answer, kept by the device's identity and the codec.
-type TestEncode = ((u64, D3D12EncodeCodec), Result<D3D12EncodeProbe, String>);
+/// Which adapter a test encode ran on: its LUID, which every context on the
+/// adapter shares, or the device itself where DXGI names no adapter.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum ProbedAdapter {
+    Luid(u64),
+    Device(u64),
+}
 
-/// One test encode per device and codec, for the process.
+impl ProbedAdapter {
+    fn of(shared: &SharedD3D12Context) -> Self {
+        shared.adapter().map_or_else(
+            || Self::Device(shared.identity().device),
+            |adapter| Self::Luid(adapter.luid),
+        )
+    }
+}
+
+/// A test encode's answer, kept by the adapter and the codec.
+type TestEncode = (
+    (ProbedAdapter, D3D12EncodeCodec),
+    Result<D3D12EncodeProbe, String>,
+);
+
+/// One test encode per adapter and codec, for the process: another context on
+/// the same adapter gets the same answer.
 static PROBED: Mutex<Vec<TestEncode>> = Mutex::new(Vec::new());
 
-/// Set once a test encode has outlived the GPU wait timeout: the D3D12VA path
-/// is then unavailable for the rest of the process, whatever the device or
+/// The adapters whose test encode outlived the GPU wait timeout: the D3D12VA
+/// path is unavailable on them for the rest of the process, whatever the
 /// codec, because the thread that ran it may never return.
-static TIMED_OUT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static TIMED_OUT: std::sync::LazyLock<Mutex<HashMap<ProbedAdapter, String>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// What `E_OUTOFMEMORY` reads as in a test encode's answer: the device was busy
+/// with other work, which a later ask may not find, so the answer is not kept.
+const BUSY_HRESULT: &str = "0x8007000E";
+
+fn timed_out_on(adapter: ProbedAdapter) -> Option<String> {
+    TIMED_OUT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .get(&adapter)
+        .cloned()
+}
+
+/// Keeps `answer` for `key` unless it says the device was busy.
+fn keep_answer(
+    probed: &mut Vec<TestEncode>,
+    key: (ProbedAdapter, D3D12EncodeCodec),
+    answer: &Result<D3D12EncodeProbe, String>,
+) {
+    if !matches!(answer, Err(reason) if reason.contains(BUSY_HRESULT)) {
+        probed.push((key, answer.clone()));
+    }
+}
 
 /// What `codec`'s D3D12VA encoder accepts on this device, from the device's
 /// own answers, once a session has encoded a frame on it.
@@ -553,7 +599,7 @@ fn capability_with(encoder: Encoder, extent: &D3D12EncodeExtent) -> HardwareEnco
 /// only once it is encoded and no longer a reference, with up to
 /// `async_depth` (2) in flight, but those are recent frames, still in the
 /// copier's slots. Measured within the copier's retention on an Intel Iris Xe
-/// (8086:9a49, driver 30.0.101.2079) with `FFmpeg` 8.1.3: for `h264_d3d12va`
+/// (8086:9a49, drivers 30.0.101.2079 and 32.0.101.7092) with `FFmpeg` 8.1.3: for `h264_d3d12va`
 /// and `hevc_d3d12va`, at 256x192, 1080p and 4K, at channel depths 0, 1, 2,
 /// 4 and 8, and over 72 frames (past an IDR), the pool never allocated more
 /// than the host's lease peak plus the copier's four slots (exactly four
@@ -576,10 +622,11 @@ const CODEC_RETAINED_SURFACES: usize = 0;
 /// no more, and a caller that must survive it installs a runner
 /// ([`set_d3d12va_test_encode_runner`]) that encodes in another process.
 fn test_encode(shared: &SharedD3D12Context, encoder: Encoder) -> Result<(), String> {
-    if let Some(reason) = TIMED_OUT.get() {
-        return Err(reason.clone());
+    let adapter_key = ProbedAdapter::of(shared);
+    if let Some(reason) = timed_out_on(adapter_key) {
+        return Err(reason);
     }
-    let key = (shared.identity().device, encoder.d3d12);
+    let key = (adapter_key, encoder.d3d12);
     // Held across the encode, so one device and codec is only ever tested once.
     let mut probed = PROBED
         .lock()
@@ -595,7 +642,7 @@ fn test_encode(shared: &SharedD3D12Context, encoder: Encoder) -> Result<(), Stri
                 encoder.name
             )
         });
-        probed.push((key, answer.clone()));
+        keep_answer(&mut probed, key, &answer);
         return accepted(answer, &adapter);
     }
     let (sender, receiver) = std::sync::mpsc::channel();
@@ -626,10 +673,13 @@ fn test_encode(shared: &SharedD3D12Context, encoder: Encoder) -> Result<(), Stri
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
             let reason = format!(
                 "{}'s test encode on {adapter} did not finish within {timeout:?}; the D3D12VA path \
-                 is off for the rest of this process",
+                 is off on this adapter for the rest of this process",
                 encoder.name
             );
-            let _ = TIMED_OUT.set(reason.clone());
+            TIMED_OUT
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(adapter_key, reason.clone());
             return Err(reason);
         }
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(format!(
@@ -637,7 +687,7 @@ fn test_encode(shared: &SharedD3D12Context, encoder: Encoder) -> Result<(), Stri
             encoder.name
         )),
     };
-    probed.push((key, answer.clone()));
+    keep_answer(&mut probed, key, &answer);
     accepted(answer, &adapter)
 }
 
@@ -673,6 +723,10 @@ impl DeviceModes {
     }
 
     fn lists(&self, mode: &str) -> bool {
+        #[cfg(test)]
+        if tests::refuses_rate_control_mode(mode) {
+            return false;
+        }
         self.extent.rate_control_modes.contains(&mode)
     }
 
@@ -768,6 +822,7 @@ pub(super) fn open(
             ),
         })
         .collect();
+    let pool = Arc::new(PoolView::default());
     let input = D3D12EncodeInput {
         copier,
         planes,
@@ -775,6 +830,7 @@ pub(super) fn open(
         size: (width, height),
         time_base,
         color: request.color,
+        pool: pool.clone(),
         stats: EncoderPoolStats::default(),
         textures: HashSet::new(),
         #[cfg(debug_assertions)]
@@ -799,6 +855,10 @@ pub(super) fn open(
             stages: EncodeStageTimings::default(),
             selection,
             generation,
+            shared: shared.clone(),
+            size: (width, height),
+            sent: 0,
+            pool,
         },
         input,
     ))
@@ -985,6 +1045,23 @@ pub(super) struct D3D12EncodeSession {
     stages: EncodeStageTimings,
     selection: crate::NativeVideoEncoderSelection,
     generation: u64,
+    /// The device, asked whether it was removed when a call fails.
+    shared: SharedD3D12Context,
+    size: (u32, u32),
+    /// Frames sent to the encoder so far.
+    sent: u64,
+    /// The input half's pool, as a failure message reports it.
+    pool: Arc<PoolView>,
+}
+
+/// What the input half's pool has done, for the encode half's failure messages: the two halves
+/// run on different threads.
+#[derive(Default)]
+struct PoolView {
+    acquired: AtomicU64,
+    allocated: AtomicU64,
+    /// The copier slot of the last frame copied.
+    slot: AtomicU64,
 }
 
 /// The coordinator's half of a D3D12VA session.
@@ -1008,6 +1085,7 @@ pub(super) struct D3D12EncodeInput {
     size: (u32, u32),
     time_base: AVRational,
     color: ColorMetadata,
+    pool: Arc<PoolView>,
     stats: EncoderPoolStats,
     /// The distinct textures the pool has handed out, which is how many it
     /// allocated: it recycles a texture only once its last reference drops.
@@ -1061,6 +1139,12 @@ impl D3D12EncodeInput {
         self.textures.insert(texture);
         self.stats.acquired = self.stats.acquired.saturating_add(1);
         self.stats.allocated = u64::try_from(self.textures.len()).unwrap_or(u64::MAX);
+        self.pool
+            .acquired
+            .store(self.stats.acquired, Ordering::Relaxed);
+        self.pool
+            .allocated
+            .store(self.stats.allocated, Ordering::Relaxed);
         Ok(D3D12EncoderFrame {
             frame,
             packed: false,
@@ -1102,6 +1186,9 @@ impl D3D12EncodeInput {
             "the D3D12 encode copy must be submitted by the thread that rendered its planes"
         );
         let InputFrame { slot } = frame;
+        self.pool
+            .slot
+            .store(u64::try_from(slot).unwrap_or(u64::MAX), Ordering::Relaxed);
         let pair = &self.planes[slot];
         // `sync_ctx.fence_value` is written only once the copy is queued and fenced, so the encoder
         // waits for exactly the value this copy signals.
@@ -1164,11 +1251,68 @@ impl D3D12EncodeSession {
                 "an encoder surface reached the encoder unpacked".into(),
             ));
         }
-        timed(&mut self.stages.video_send_frame, || {
+        let mark = alpha2_ffmpeg_bridge::log_mark();
+        let index = self.sent;
+        let sent = timed(&mut self.stages.video_send_frame, || {
+            #[cfg(test)]
+            if tests::send_fails_at(index) {
+                return Err(RsmpegError::AVError(-22));
+            }
             self.context.send_frame(Some(&frame.frame))
-        })
-        .map_err(encode_adapter_error)?;
+        });
+        self.sent += 1;
+        if let Err(error) = sent {
+            return Err(self.call_failed("send_frame", index, &error, Some(frame), mark));
+        }
         self.drain()
+    }
+
+    /// The error for `call` failing with `error` on frame `index`: a lost device when the device
+    /// says it was removed, else a frame the encoder rejected on a device still usable, with what
+    /// the session and `FFmpeg` said.
+    fn call_failed(
+        &self,
+        call: &str,
+        index: u64,
+        error: &RsmpegError,
+        frame: Option<&D3D12EncoderFrame>,
+        mark: alpha2_ffmpeg_bridge::LogMark,
+    ) -> EncodeError {
+        let encoder = self.selection.encoder_name.clone();
+        let adapter = self.shared.adapter_label();
+        if let Some(reason) = self.shared.device_removed_reason() {
+            return EncodeError::Gpu {
+                fault: alpha2_media::GpuFault::DeviceLost,
+                message: format!(
+                    "{encoder} {call} on {adapter} failed ({error}): the device was removed ({})",
+                    alpha2_native_gpu::hresult_text(reason)
+                ),
+            };
+        }
+        let fence = frame.map_or_else(
+            || "none".to_owned(),
+            |frame| {
+                alpha2_ffmpeg_bridge::d3d12_frame_fence_value(&frame.frame).map_or_else(
+                    |error| format!("unreadable ({error})"),
+                    |value| value.to_string(),
+                )
+            },
+        );
+        let lines = alpha2_ffmpeg_bridge::log_since(mark, &[encoder.as_str(), "d3d12va"]);
+        EncodeError::EncoderRejected {
+            message: format!(
+                "{encoder} rejected frame {index} ({}x{}) on {adapter} at {call}: {error}; pool \
+                 allocated {}, acquired {}, copier slot {}, frame fence {fence}{}",
+                self.size.0,
+                self.size.1,
+                self.pool.allocated.load(Ordering::Relaxed),
+                self.pool.acquired.load(Ordering::Relaxed),
+                self.pool.slot.load(Ordering::Relaxed),
+                alpha2_ffmpeg_bridge::log_detail(&lines),
+            ),
+            encoder,
+            frame: index,
+        }
     }
 
     pub(super) fn write_audio(
@@ -1181,7 +1325,7 @@ impl D3D12EncodeSession {
     /// Flushes the audio, the encoder and the bitstream filters, then closes
     /// the output. Flushing and closing are one step because only a closed
     /// output renames the partial file into place.
-    pub(super) fn finish(&mut self) -> Result<(), EncodeError> {
+    pub(super) fn finish(&mut self, cancel: &alpha2_media::CancelToken) -> Result<(), EncodeError> {
         // Every audio packet must exist before the muxer decides the final interleave.
         self.muxer.finish_audio()?;
         crate::encode::beat_encode_call();
@@ -1192,7 +1336,11 @@ impl D3D12EncodeSession {
         let tail = self.bitstream.flush()?;
         self.write_video(tail)?;
         self.muxer.write_ready_audio(true, &mut self.stages)?;
-        self.muxer.close()
+        self.muxer.close(cancel)
+    }
+
+    pub(super) fn publish_report(&self) -> Option<crate::PublishReport> {
+        self.muxer.publish_report()
     }
 
     pub(super) fn abort(&mut self) {
@@ -1201,6 +1349,7 @@ impl D3D12EncodeSession {
 
     fn drain(&mut self) -> Result<(), EncodeError> {
         loop {
+            let mark = alpha2_ffmpeg_bridge::log_mark();
             let received = timed(&mut self.stages.video_receive_packet, || {
                 self.context.receive_packet()
             });
@@ -1212,7 +1361,10 @@ impl D3D12EncodeSession {
                 Err(RsmpegError::EncoderDrainError | RsmpegError::EncoderFlushedError) => {
                     return self.muxer.write_ready_audio(false, &mut self.stages);
                 }
-                Err(error) => return Err(encode_adapter_error(error)),
+                Err(error) => {
+                    let last = self.sent.saturating_sub(1);
+                    return Err(self.call_failed("receive_packet", last, &error, None, mark));
+                }
             }
         }
     }

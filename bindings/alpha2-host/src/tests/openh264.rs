@@ -150,7 +150,10 @@ fn openh264_export(directory: &Path, name: &str) -> (Value, String, usize) {
 #[test]
 fn an_openh264_export_reports_its_encoder_and_repeats_byte_for_byte() {
     if alpha2_native::openh264_status().library().is_none() {
-        eprintln!("OpenH264 is not installed: the OpenH264 export did not run");
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::Openh264,
+            "OpenH264 is not installed: the OpenH264 export did not run"
+        );
         return;
     }
     let _gpu = gpu_test_lock();

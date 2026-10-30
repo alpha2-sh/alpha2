@@ -1,0 +1,15 @@
+[package]
+name = "alpha2-test-support"
+version.workspace = true
+description = "The test capability contract: ALPHA2_REQUIRE turns a named capability's skips into failures, and every skip is appended to ALPHA2_SKIP_LOG."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

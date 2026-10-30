@@ -93,7 +93,10 @@ fn software_decode_does_not_decode_on_the_encode_device() {
         host.decode_policy = VideoDecodePolicy::Software;
     }
     let Some(shared) = host.shared_d3d12.clone() else {
-        eprintln!("skipped: no adapter here makes a shared D3D12 device");
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::D3d12Encode,
+            "no adapter here makes a shared D3D12 device"
+        );
         return;
     };
     assert!(host.hardware_encode_device().is_some());
@@ -167,8 +170,9 @@ fn the_d3d12va_test_encode_runs_in_a_child_process() {
     let _gpu = gpu_test_lock();
     let host = create_host(VideoDecodePolicy::Auto).expect("host");
     let Some(shared) = host.shared_d3d12.clone() else {
-        eprintln!(
-            "skipped: no shared D3D12 device here ({})",
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::D3d12Encode,
+            "no shared D3D12 device here ({})",
             host.encode_adapters.no_device.clone().unwrap_or_default()
         );
         return;
@@ -226,8 +230,9 @@ fn every_d3d12va_refusal_falls_back_with_its_reason() {
     let host = create_host(VideoDecodePolicy::Auto).expect("host");
     let unforced_start = started.elapsed();
     let Some(shared) = host.shared_d3d12.clone() else {
-        eprintln!(
-            "skipped: no shared D3D12 device here ({})",
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::D3d12Encode,
+            "no shared D3D12 device here ({})",
             host.encode_adapters.no_device.clone().unwrap_or_default()
         );
         return;

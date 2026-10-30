@@ -31,7 +31,7 @@ impl FrameProvider for Image {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let project = Project::from_json(&std::fs::read_to_string("project.json")?)?;
     let project = EngineProject::new(project)?;
-    let gpu = pollster::block_on(GpuContext::request_high_performance())?;
+    let gpu = pollster::block_on(GpuContext::request_product())?;
     let mut renderer = Renderer::new(gpu);
     // The built-in effects and transitions a project can name.
     renderer.register_builtins().expect("the built-in definitions register");
@@ -72,7 +72,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 - `Project::from_json` reads and checks a document; `EngineProject` is an immutable snapshot of it, indexed for evaluation, which the player and the exporter render.
-- `GpuContext::request_high_performance()` opens a device, preferring a discrete, high-performance adapter. When it fails, `GpuError::step()` says whether no adapter was found or the adapter refused a device (`GpuAcquisitionStep`), and its `source()` gives the platform's reason.
+- `GpuContext::request_product()` opens the device a host renders on: this OS's backend (DX12 on Windows, Metal on macOS, Vulkan then GL on Linux), the adapter `ALPHA2_GPU_ADAPTER` names, else a discrete GPU before an integrated one. When it fails, `GpuError::step()` says why (`GpuAcquisitionStep`: no adapter, a device refused, a backend that did not start, a pin that names no adapter, or no hardware GPU), and its `source()` gives the platform's reason where there is one.
 - A `FrameProvider` lends the renderer a frame for each source at the exact source time the engine asks for. `Renderer::upload_rgba8` makes one from pixels.
 - `register_builtins` registers the built-in effects and transitions, each compiled the first time a frame draws it or `warmup` names it; a frame that draws an effect the renderer has not registered fails.
 - `Player::render_at` renders the frame shown at a time. When a source frame is missing, it names the source (`missing_sources`) and, by the player's missing-frame policy, shows the last frame again (`repeated`) or none.

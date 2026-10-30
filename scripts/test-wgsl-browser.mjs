@@ -2,7 +2,7 @@
 
 // Compile built-in pipelines, effects and transitions with Chrome's WGSL compiler. Browser
 // fragment-uniformity rules can reject shaders accepted by native naga. Missing Chrome skips the
-// run; `--require-browser` or ALPHA2_REQUIRE_BROWSER=1 fails it.
+// run; ALPHA2_REQUIRE naming `browser` fails it.
 //
 // It also times what compiling every built-in costs the browser: one shader module and one render
 // pipeline per built-in effect and transition, created one after another. The renderer makes each
@@ -29,7 +29,7 @@ try {
   process.exit(1);
 }
 if (chrome === null) {
-  reportSkippedBrowser("the WGSL compile check");
+  reportSkippedBrowser("the WGSL compile check", "wgsl-browser");
   process.exit(0);
 }
 await probeRun("wgsl-browser", {

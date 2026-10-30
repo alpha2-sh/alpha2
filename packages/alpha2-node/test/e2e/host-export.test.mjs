@@ -23,6 +23,11 @@ import {
   Alpha2NodeClient,
   Alpha2ProjectValidationError,
 } from "../../dist/index.js";
+import {
+  missingCapability,
+  required,
+  suiteOf,
+} from "../../../../scripts/lib/capabilities.mjs";
 
 const root = resolve(import.meta.dirname, "..", "..", "..", "..");
 const hostPath =
@@ -40,8 +45,8 @@ const client = new Alpha2NodeClient({ hostPath });
 const project = JSON.parse(await readFile(projectPath, "utf8"));
 
 // The pinned LGPL FFmpeg has no software H.264 encoder, so H.264 tests skip on hosts without a
-// platform or GPU encoder. ALPHA2_REQUIRE_H264=1 turns the skip into a failure.
-const requireH264 = process.env.ALPHA2_REQUIRE_H264 === "1";
+// platform or GPU encoder. ALPHA2_REQUIRE=h264 turns the skip into a failure.
+const requireH264 = required("h264");
 const encode = (await client.getCapabilities()).capabilities.encode;
 const h264Available =
   encode.video.some((codec) => codec.id === "h264") ||
@@ -50,8 +55,9 @@ const h264Available =
 const h264Absence = `this host cannot produce H.264: the runtime offers ${encode.video
   .map((codec) => `${codec.id}:${codec.encoder}`)
   .join(", ")} and the GPU path is ${encode.gpuOutputPath?.reason ?? "absent"}`;
-const skipWithoutH264 =
-  h264Available || requireH264 ? false : `skipped: ${h264Absence}`;
+const skipWithoutH264 = h264Available
+  ? false
+  : missingCapability("h264", suiteOf(import.meta.url), h264Absence);
 
 /**
  * Asserts that `performance` has the shapes @alpha2-sh/node declares (`ExportPerformance`): a scalar or
@@ -330,6 +336,11 @@ test("the client exports a project through the host binary", async () => {
     assert.equal(written, output);
     assert.ok(isAbsolute(result.output), result.output);
     assert.equal(result.output, await realpath(output));
+    assert.deepEqual(result.publish, {
+      method: "rename-no-replace",
+      stagedLocally: false,
+      retries: 0,
+    });
     const { size } = await stat(output);
     assert.ok(size > 0, "the export must not be empty");
     // ISO base media files carry `ftyp` at byte four.
@@ -470,6 +481,7 @@ test("a still is the PNG of the frame of the grid that holds its time", async ()
     });
     assert.equal(result.stills[0].frameTime, 60_000);
     assert.equal(result.stills[0].output, await realpath(output));
+    assert.equal(result.stills[0].publish.method, "rename-no-replace");
     const png = await readFile(output);
     assert.equal(png.subarray(1, 4).toString("ascii"), "PNG");
     // IHDR: width and height, then 8-bit RGBA.
@@ -1272,8 +1284,7 @@ const heldImageExport = (output, frames) => ({
   videoCodec: "mpeg4-part2",
   output,
 });
-const partialOf = (output) =>
-  output.replace(/\.([^./\\]+)$/, ".alpha2-partial.$1");
+const partialOf = (output) => output.replace(/\.([^./\\]+)$/, ".a2partial.$1");
 
 test("an export aborted mid-frame leaves neither its output nor its partial file, and the same path exports again", async () => {
   const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-e2e-abort-"));
