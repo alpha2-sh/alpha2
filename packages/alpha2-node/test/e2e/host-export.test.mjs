@@ -725,7 +725,7 @@ test("a second export of the same snapshot takes its frames from the render cach
 });
 
 test(
-  "without a GPU the host still conforms media, and a capability probe is an Alpha2GpuInitializationError",
+  "without a GPU the host still conforms media, auto renders on the CPU, and gpu is an Alpha2GpuInitializationError",
   {
     skip:
       process.platform !== "linux" &&
@@ -741,14 +741,20 @@ test(
     );
     Object.assign(process.env, hidden);
     try {
-      // A client of its own: this one's capability report is not the shared client's.
+      // Clients of their own: their capability reports are not the shared client's.
       const gpuless = new Alpha2NodeClient({ hostPath });
       const conformed = await gpuless.conform({
         project,
         assets: { "image-source": assetPath },
       });
       assert.equal(conformed.report.ready, true);
-      const error = await gpuless.getCapabilities().then(
+      // `auto` never needs a GPU: with none it renders on the CPU and says why.
+      const automatic = await gpuless.getCapabilities();
+      assert.equal(automatic.renderer, "cpu");
+      assert.match(automatic.rendererReason ?? "", /no GPU adapter/);
+      // `gpu` takes whatever adapter there is, and with none the host cannot start.
+      const gpuOnly = new Alpha2NodeClient({ hostPath, renderer: "gpu" });
+      const error = await gpuOnly.getCapabilities().then(
         () => assert.fail("the probe resolved without a GPU"),
         (cause) => cause,
       );

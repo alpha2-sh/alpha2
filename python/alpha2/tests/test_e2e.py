@@ -448,7 +448,7 @@ def test_a_second_export_of_the_same_snapshot_takes_its_frames_from_the_render_c
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="hiding every GPU this way is Linux's")
-def test_without_a_gpu_the_host_still_conforms_and_a_probe_is_a_gpu_initialization_error(
+def test_without_a_gpu_the_host_still_conforms_auto_renders_on_the_cpu_and_gpu_fails_to_start(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("VK_ICD_FILENAMES", "/nonexistent")
@@ -457,8 +457,13 @@ def test_without_a_gpu_the_host_still_conforms_and_a_probe_is_a_gpu_initializati
     gpuless = HostClient(host_path=HOST)
     conformed = gpuless.conform(PROJECT, assets={"image-source": ASSET})
     assert conformed["report"]["ready"] is True
+    # `auto` never needs a GPU: with none it renders on the CPU and says why.
+    automatic = gpuless.capabilities()
+    assert automatic["renderer"] == "cpu"
+    assert "no GPU adapter" in (automatic["rendererReason"] or "")
+    # `gpu` takes whatever adapter there is, and with none the host cannot start.
     with pytest.raises(Alpha2GpuInitializationError) as caught:
-        gpuless.capabilities()
+        gpuless.capabilities(renderer="gpu")
     assert caught.value.code == "GPU_INIT_FAILED"
     assert isinstance(caught.value.stderr, str)
 
