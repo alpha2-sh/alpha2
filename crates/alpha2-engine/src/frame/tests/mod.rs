@@ -30,6 +30,7 @@ mod missing_sources;
 mod player;
 mod shapes;
 mod submissions;
+mod text_look;
 mod timing;
 mod transition_quality;
 
@@ -313,7 +314,7 @@ fn caption_project_with(sources: &str, tracks: CaptionExtraTracks) -> crate::Eng
                 "source_range": { "start": 0, "end": 360000 } } ] }, UNDER_CAPTIONS
             { "id": "subs", "name": "Subtitles", "kind": "caption", "captions": {
               "style": { "font_size": 0.12, "position": { "x": 0.5, "y": 0.95 },
-                "outline": { "color": { "red": 0, "green": 0, "blue": 0, "alpha": 1 }, "width": 0.1 },
+                "strokes": [{ "color": { "red": 0, "green": 0, "blue": 0, "alpha": 1 }, "width": 0.1 }],
                 "background": { "color": { "red": 0, "green": 0, "blue": 0.4, "alpha": 0.6 }, "padding": 0.2 } },
               "cues": [
                 { "timeline_range": { "start": 0, "end": 120000 }, "text": "First cue" },

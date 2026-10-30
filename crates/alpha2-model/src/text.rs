@@ -1,6 +1,6 @@
 //! Styled text: what caption tracks and text generators draw.
 
-use crate::{Rgba, Vec2};
+use crate::{Paint, Rgba, Vec2};
 use serde::{Deserialize, Serialize};
 
 /// Most bytes of text in one caption cue or text generator.
@@ -24,8 +24,22 @@ pub const LETTER_SPACING_RANGE: std::ops::RangeInclusive<f32> = -0.5..=1.0;
 /// The font weights text takes, as CSS `font-weight` numbers.
 pub const FONT_WEIGHT_RANGE: std::ops::RangeInclusive<u16> = 1..=1000;
 
-/// Widest text outline, as a fraction of the font size.
-pub const MAX_TEXT_OUTLINE_WIDTH: f32 = 0.5;
+/// Most strokes around one text.
+pub const MAX_TEXT_STROKES: usize = 4;
+
+/// Widest all of a text's strokes reach together, as a fraction of the font
+/// size: the sum of their widths.
+pub const MAX_TEXT_STROKE_EXTENT: f32 = 0.5;
+
+/// Most shadows under one text.
+pub const MAX_TEXT_SHADOWS: usize = 4;
+
+/// Farthest a text shadow lies from its text on each axis, as a fraction of
+/// the font size.
+pub const MAX_TEXT_SHADOW_OFFSET: f32 = 1.0;
+
+/// Widest text shadow blur, as a fraction of the font size.
+pub const MAX_TEXT_SHADOW_BLUR: f32 = 1.0;
 
 /// Largest text background padding, as a fraction of the font size.
 pub const MAX_TEXT_PADDING: f32 = 2.0;
@@ -35,10 +49,14 @@ pub const MAX_TEXT_PADDING: f32 = 2.0;
 ///
 /// Sizes are resolution-independent: the font size is a fraction of the
 /// canvas's shorter side, as every other length is, the wrapping width a
-/// fraction of the canvas width, and the outline and background padding
-/// fractions of the font size. The engine draws with the fonts its host
-/// registered: those of `font_family` first, then the rest in their
-/// fallback order.
+/// fraction of the canvas width, and the strokes, shadows and background
+/// padding fractions of the font size, so a look follows the font size. The
+/// engine draws with the fonts its host registered: those of `font_family`
+/// first, then the rest in their fallback order.
+///
+/// The look is painted bottom to top as CSS paints text: the background's
+/// boxes, the shadows (the last listed lowest), the strokes (the outermost
+/// lowest), the fill, then color glyphs.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -56,9 +74,12 @@ pub struct TextStyle {
     /// [`MAX_TEXT_GENERATOR_FONT_SIZE`] in a text generator.
     #[serde(default = "default_font_size")]
     pub font_size: f32,
-    /// Text color.
-    #[serde(default = "white")]
-    pub color: Rgba,
+    /// What paints the glyphs; a color reads as a solid paint. A gradient's
+    /// positions are in the text's layout box, `(0, 0)` its top-left and
+    /// `(1, 1)` its bottom-right, and a radial gradient's radius is a
+    /// fraction of the box's shorter side. Default solid white.
+    #[serde(default = "white_paint")]
+    pub fill: Paint,
     /// Baseline-to-baseline distance in font sizes, in `[0.5, 3]`. Each
     /// line's em box, 0.8 of a font size above its baseline and 0.2 below,
     /// is centred in its line when the line is taller than an em.
@@ -91,9 +112,15 @@ pub struct TextStyle {
     /// `position`: `(0.5, 1)` is its bottom centre.
     #[serde(default = "default_anchor")]
     pub anchor: Vec2,
-    /// A band around the glyphs.
-    #[serde(default)]
-    pub outline: Option<TextOutline>,
+    /// Bands around the glyphs, innermost first: each lies outside the one
+    /// before it. At most [`MAX_TEXT_STROKES`], their widths summing to at
+    /// most [`MAX_TEXT_STROKE_EXTENT`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub strokes: Vec<TextStroke>,
+    /// Shadows of the glyphs and their strokes, the first on top, as CSS
+    /// `text-shadow` lists them. At most [`MAX_TEXT_SHADOWS`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shadows: Vec<TextShadow>,
     /// A box behind each line.
     #[serde(default)]
     pub background: Option<TextBackground>,
@@ -104,7 +131,7 @@ impl Default for TextStyle {
         Self {
             font_family: None,
             font_size: default_font_size(),
-            color: white(),
+            fill: white_paint(),
             line_height: default_line_height(),
             letter_spacing: 0.0,
             font_weight: default_font_weight(),
@@ -112,7 +139,8 @@ impl Default for TextStyle {
             max_width: default_max_width(),
             position: default_position(),
             anchor: default_anchor(),
-            outline: None,
+            strokes: Vec::new(),
+            shadows: Vec::new(),
             background: None,
         }
     }
@@ -122,8 +150,10 @@ const fn default_font_size() -> f32 {
     0.05
 }
 
-const fn white() -> Rgba {
-    Rgba::new(1.0, 1.0, 1.0, 1.0)
+const fn white_paint() -> Paint {
+    Paint::Solid {
+        color: Rgba::new(1.0, 1.0, 1.0, 1.0),
+    }
 }
 
 const fn default_line_height() -> f32 {
@@ -160,15 +190,35 @@ pub enum TextAlign {
     End,
 }
 
-/// A band around the glyphs, drawn behind them.
+/// A band around the glyphs, and around the strokes listed before it,
+/// drawn behind them.
 #[derive(Copy, Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
-pub struct TextOutline {
+pub struct TextStroke {
     /// Band color.
     pub color: Rgba,
-    /// Band width as a fraction of the font size, in `(0, 0.5]`.
+    /// Band width as a fraction of the font size, positive; a text's
+    /// strokes sum to at most [`MAX_TEXT_STROKE_EXTENT`].
     pub width: f32,
+}
+
+/// A shadow of a text's glyphs and strokes, behind them.
+#[derive(Copy, Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct TextShadow {
+    /// Shadow color.
+    pub color: Rgba,
+    /// Offset in font sizes, +x right, +y down; each component in
+    /// `[-1, 1]` ([`MAX_TEXT_SHADOW_OFFSET`]).
+    #[serde(default)]
+    pub offset: Vec2,
+    /// Blur radius in font sizes, as CSS `text-shadow` takes it: the
+    /// Gaussian's standard deviation is half of it. In `[0, 1]`
+    /// ([`MAX_TEXT_SHADOW_BLUR`]).
+    #[serde(default)]
+    pub blur: f32,
 }
 
 /// A box behind each line of text.
@@ -194,7 +244,7 @@ impl TextStyle {
             .is_none_or(|family| !family.is_empty() && family.len() <= MAX_FONT_FAMILY_BYTES)
             && self.font_size > 0.0
             && self.font_size <= max_font_size
-            && self.color.is_valid()
+            && self.fill.is_valid()
             && LINE_HEIGHT_RANGE.contains(&self.line_height)
             && LETTER_SPACING_RANGE.contains(&self.letter_spacing)
             && FONT_WEIGHT_RANGE.contains(&self.font_weight)
@@ -202,14 +252,33 @@ impl TextStyle {
             && self.max_width <= 1.0
             && finite(self.position)
             && finite(self.anchor)
-            && self.outline.is_none_or(|outline| {
-                outline.color.is_valid()
-                    && outline.width > 0.0
-                    && outline.width <= MAX_TEXT_OUTLINE_WIDTH
-            })
+            && valid_strokes(&self.strokes)
+            && valid_shadows(&self.shadows)
             && self.background.is_none_or(|background| {
                 background.color.is_valid()
                     && (0.0..=MAX_TEXT_PADDING).contains(&background.padding)
             })
     }
+}
+
+/// Whether `strokes` are at most [`MAX_TEXT_STROKES`] valid bands that reach
+/// at most [`MAX_TEXT_STROKE_EXTENT`] together.
+pub(crate) fn valid_strokes(strokes: &[TextStroke]) -> bool {
+    strokes.len() <= MAX_TEXT_STROKES
+        && strokes
+            .iter()
+            .all(|stroke| stroke.color.is_valid() && stroke.width.is_finite() && stroke.width > 0.0)
+        && strokes.iter().map(|stroke| stroke.width).sum::<f32>() <= MAX_TEXT_STROKE_EXTENT
+}
+
+/// Whether `shadows` are at most [`MAX_TEXT_SHADOWS`] shadows in range.
+pub(crate) fn valid_shadows(shadows: &[TextShadow]) -> bool {
+    let offset = |value: f32| value.is_finite() && value.abs() <= MAX_TEXT_SHADOW_OFFSET;
+    shadows.len() <= MAX_TEXT_SHADOWS
+        && shadows.iter().all(|shadow| {
+            shadow.color.is_valid()
+                && offset(shadow.offset.x)
+                && offset(shadow.offset.y)
+                && (0.0..=MAX_TEXT_SHADOW_BLUR).contains(&shadow.blur)
+        })
 }

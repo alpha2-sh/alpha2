@@ -95,7 +95,8 @@ from .types import (
     Subpath,
     TextAlign,
     TextBackground,
-    TextOutline,
+    TextShadow,
+    TextStroke,
     TextStyle,
     TimeMap,
     TimeRange,
@@ -473,8 +474,14 @@ class NodeText(TypedDict):
     """
     opacity: NotRequired[float | None]
     """Opacity, 0..=1. Default 1."""
-    outline: NotRequired[Rgba | None]
-    """A band of this color around the glyphs."""
+    shadows: NotRequired[list[TextShadow]]
+    """Shadows of the glyphs, the first on top, their lengths fractions of
+    the font size, as a text style's `shadows`.
+    """
+    strokes: NotRequired[list[TextStroke]]
+    """Bands around the glyphs, innermost first, their widths fractions of
+    the font size, as a text style's `strokes`.
+    """
     style: NotRequired[TextRole]
     """The theme style it starts from. Default `body`.
 

@@ -31,12 +31,18 @@ use unicode_script::{Script, UnicodeScript};
 use unicode_segmentation::UnicodeSegmentation;
 
 mod color;
+mod gradient;
 mod unicode_tables;
+
+pub use gradient::{TextGradient, TextGradientKind, TextGradientStop, TextSpread};
 
 const MAX_TEXT_BYTES: usize = 64 * 1024;
 const MAX_FONT_SIZE: f32 = 2_048.0;
 const MAX_LINE_HEIGHT: f32 = 10.0;
-const MAX_OUTLINE_WIDTH: f32 = 64.0;
+/// The widest a request's strokes reach together, in pixels.
+const MAX_STROKE_EXTENT: f32 = 64.0;
+/// Most strokes one request draws.
+const MAX_STROKES: usize = 4;
 const MAX_BACKGROUND_PADDING: f32 = 256.0;
 /// The letter spacing a request takes, in font sizes.
 const LETTER_SPACING_RANGE: std::ops::RangeInclusive<f32> = -0.5..=1.0;
@@ -67,19 +73,27 @@ pub struct TextRasterRequest {
     pub line_height: f32,
     /// Per-line horizontal alignment.
     pub align: TextAlign,
-    /// Straight (not premultiplied), sRGB-encoded RGBA color. The output is
-    /// premultiplied by glyph coverage and this alpha. A color glyph keeps
-    /// its own colors, but for the parts its font draws in the text's
-    /// color, and takes this alpha as its opacity.
-    pub color: [u8; 4],
+    /// What paints the glyphs. The output is premultiplied by glyph coverage
+    /// and the fill's alpha. A color glyph keeps its own colors, but for the
+    /// parts its font draws in the text's color, which is
+    /// [`TextFill::foreground`], and takes that color's alpha as its
+    /// opacity.
+    pub fill: TextFill,
     /// Whether color glyphs are drawn in color, and which fonts emoji take.
     pub emoji_policy: EmojiPolicy,
     /// Caller-managed version. Change it whenever content/style/font inputs change.
     pub content_version: u64,
-    /// A band around the glyphs, drawn behind them.
-    pub outline: Option<TextOutline>,
-    /// A box behind each line, drawn behind the outline.
+    /// Bands around the glyphs, innermost first, each outside the one
+    /// before it and drawn behind it: at most 4, reaching at most 64 pixels
+    /// together.
+    pub strokes: Vec<TextStroke>,
+    /// A box behind each line, drawn behind the strokes.
     pub background: Option<TextBackground>,
+    /// Draws the background's boxes into their own plane,
+    /// [`TextRasterResult::background`], instead of under the glyphs, for a
+    /// caller that draws something between them (a shadow). The two planes
+    /// over each other are the joined raster, give or take a code.
+    pub split_background: bool,
     /// The family drawn first, as [`font_family`] reads it, matched without
     /// regard to ASCII case; the rest of the stack fills in what it lacks.
     /// `None`, or a family no font has, keeps the fallback order.
@@ -97,17 +111,50 @@ pub struct TextRasterRequest {
     pub font_weight: u16,
 }
 
-/// A band of `width` pixels around every glyph, behind it, in a straight
-/// (not premultiplied), sRGB-encoded RGBA color.
+/// What paints a text's glyphs.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TextFill {
+    /// One straight (not premultiplied), sRGB-encoded RGBA color.
+    Solid([u8; 4]),
+    /// A gradient over the layout box.
+    Gradient(TextGradient),
+}
+
+impl TextFill {
+    /// The color a color glyph's "text color" parts take, and whose alpha is
+    /// its opacity: a solid fill's color, a gradient's first stop.
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    pub fn foreground(&self) -> [u8; 4] {
+        match self {
+            Self::Solid(color) => *color,
+            Self::Gradient(gradient) => gradient.stops.first().map_or([0; 4], |stop| {
+                stop.color
+                    .map(|value| (value.clamp(0.0, 1.0) * 255.0).round() as u8)
+            }),
+        }
+    }
+
+    fn is_valid(&self) -> bool {
+        match self {
+            Self::Solid(_) => true,
+            Self::Gradient(gradient) => gradient.is_valid(),
+        }
+    }
+}
+
+/// A band around every glyph, and around the strokes before it, behind
+/// them, in a straight (not premultiplied), sRGB-encoded RGBA color.
 ///
-/// The band is the glyph coverage dilated by a disc: each pixel takes the
-/// highest coverage within `width` of it, weighted down over the disc's last
-/// pixel so the band's edge is antialiased.
+/// Stroke `k` is the glyph coverage dilated by a disc of the radius the
+/// widths up to it sum to: each pixel takes the highest coverage within
+/// that radius, weighted down over the disc's last pixel so the band's edge
+/// is antialiased.
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub struct TextOutline {
+pub struct TextStroke {
     /// Straight, sRGB-encoded RGBA.
     pub color: [u8; 4],
-    /// Radius of the band in pixels, in `(0, 64]`.
+    /// Width of the band in pixels, positive.
     pub width: f32,
 }
 
@@ -129,6 +176,10 @@ pub struct TextRasterResult {
     pub descriptor: TextTexture,
     /// Tightly packed premultiplied RGBA8 pixels.
     pub pixels: HostTexturePixels,
+    /// The background's boxes alone, the size of `pixels`, premultiplied
+    /// RGBA8, when the request split them off
+    /// ([`TextRasterRequest::split_background`]); `pixels` then has none.
+    pub background: Option<Vec<u8>>,
 }
 
 /// Where a request's text lies, without drawing it
@@ -152,7 +203,7 @@ pub struct TextMeasure {
     /// do, not as glyphs with more or less ink are typed.
     pub content: [f32; 4],
     /// What the text draws: each glyph's outline (its curves, not their
-    /// control points) or color form, the outline's band around them, and
+    /// control points) or color form, the strokes' bands around them, and
     /// the background's boxes. Every pixel the raster gives any alpha meets
     /// it, and it reaches at most a pixel past them, or past a COLR glyph's
     /// outlines and clip boxes, which may hold a little more than it paints.
@@ -689,9 +740,9 @@ impl TextRasterizer {
                 }
             },
         );
-        // The band reaches past each pixel with ink by the disc's radius and one more pixel for
-        // the rim taps it weights in part: see `Disc::new`.
-        let band = request.outline.map_or(0.0, |outline| outline.width + 1.0);
+        // The outermost band reaches past each pixel with ink by its disc's radius and one more
+        // pixel for the rim taps it weights in part: see `Disc::new`.
+        let band = stroke_radius(&request.strokes).map_or(0.0, |radius| radius + 1.0);
         ink = ink.map(|bounds| grown(bounds, band));
         let padding = request.background.map(|background| background.padding);
         let mut content = None;
@@ -725,7 +776,7 @@ impl TextRasterizer {
 
     /// Shapes `request`'s text as [`Self::rasterize`] would, for layout: its
     /// lines at any wrapping width come from the result without shaping
-    /// again. The request's `max_width`, color, outline, background and
+    /// again. The request's `max_width`, fill, strokes, background and
     /// content version are ignored.
     ///
     /// # Errors
@@ -737,7 +788,8 @@ impl TextRasterizer {
             text: String::new(),
             max_width: 0.0,
             content_version: 1,
-            outline: None,
+            fill: TextFill::Solid([0; 4]),
+            strokes: Vec::new(),
             background: None,
             ..request.clone()
         })?;
@@ -932,12 +984,13 @@ impl TextRasterizer {
                 ),
             }
         }
-        let rgba8 = compose(
+        let (rgba8, background) = compose(
             request,
             &coverage,
             colors.as_deref(),
             width,
             [margin_x, margin_y],
+            [layout.width, layout.height],
             &line_boxes,
         );
         let texture = HostTexture {
@@ -960,6 +1013,7 @@ impl TextRasterizer {
                 line_count: layout.line_count,
             },
             pixels: HostTexturePixels { texture, rgba8 },
+            background,
         })
     }
 
@@ -1712,7 +1766,7 @@ impl Drawing {
     fn of(faces: &Faces<'_>, font: usize, glyph: u16, request: &TextRasterRequest) -> Self {
         let face = &faces.parsed[font];
         if request.emoji_policy == EmojiPolicy::Color && faces.color[font] {
-            let [red, green, blue, _] = request.color;
+            let [red, green, blue, _] = request.fill.foreground();
             if let Some(painting) = color::Painting::of(face, glyph, [red, green, blue, 255]) {
                 return Self::Painting(painting);
             }
@@ -2006,9 +2060,13 @@ fn validate_request(request: &TextRasterRequest) -> Result<(), TextRasterError> 
         && request.letter_spacing <= LETTER_SPACING_RANGE.end() * request.font_size
         && (1..=1000).contains(&request.font_weight)
         && request.content_version > 0
-        && request.outline.is_none_or(|outline| {
-            outline.width.is_finite() && outline.width > 0.0 && outline.width <= MAX_OUTLINE_WIDTH
-        })
+        && request.fill.is_valid()
+        && request.strokes.len() <= MAX_STROKES
+        && request
+            .strokes
+            .iter()
+            .all(|stroke| stroke.width.is_finite() && stroke.width > 0.0)
+        && stroke_radius(&request.strokes).is_none_or(|radius| radius <= MAX_STROKE_EXTENT)
         && request.background.is_none_or(|background| {
             background.padding.is_finite()
                 && background.padding >= 0.0
@@ -2087,7 +2145,8 @@ fn place_color_glyph(
 
 impl TextRasterRequest {
     /// Pixels the decorations reach past the layout box on every side when
-    /// no ink does: the outline's disc and the background's padding, whole.
+    /// no ink does: the outermost stroke's disc and the background's
+    /// padding, whole.
     /// The texture's margin ([`TextTexture::layout_x`]) is this plus room
     /// for ink past the box.
     #[must_use]
@@ -2098,11 +2157,10 @@ impl TextRasterRequest {
 }
 
 /// Pixels each decoration reaches past what it surrounds, whole: the
-/// outline's disc past the ink, the background's padding past the box.
+/// outermost stroke's disc past the ink, the background's padding past the
+/// box.
 fn decoration_extents(request: &TextRasterRequest) -> (u32, u32) {
-    let outline = request
-        .outline
-        .map_or(0, |outline| disc_extent(outline.width));
+    let outline = stroke_radius(&request.strokes).map_or(0, disc_extent);
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let padding = request
         .background
@@ -2110,7 +2168,17 @@ fn decoration_extents(request: &TextRasterRequest) -> (u32, u32) {
     (outline, padding)
 }
 
-/// Integer radius of the disc an outline of `width` dilates by.
+/// The radius the outermost of `strokes` dilates by, the sum of their
+/// widths, added in order; `None` without strokes.
+fn stroke_radius(strokes: &[TextStroke]) -> Option<f32> {
+    let mut radius = None;
+    for stroke in strokes {
+        radius = Some(radius.unwrap_or(0.0) + stroke.width);
+    }
+    radius
+}
+
+/// Integer radius of the disc a band of radius `width` dilates by.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn disc_extent(width: f32) -> u32 {
     (width + 0.5).ceil() as u32
@@ -2135,15 +2203,19 @@ fn over(source: [u32; 4], destination: [u32; 4]) -> [u32; 4] {
     std::array::from_fn(|channel| source[channel] + (destination[channel] * keep + 127) / 255)
 }
 
-/// The text over its outline over its line boxes, premultiplied RGBA8, all
-/// in integers so every target gives the same bytes. Undecorated text is its
-/// coverage in its color alone, with the color glyphs (`colors`,
-/// premultiplied RGBA8) over it at the color's alpha. The outline surrounds
-/// both: its band dilates the coverage and the color glyphs' alpha.
+/// The text over its strokes over its line boxes, premultiplied RGBA8, all
+/// in integers but a gradient's colors, so every target gives the same
+/// bytes. Undecorated text is its coverage in its fill alone, with the color
+/// glyphs (`colors`, premultiplied RGBA8) over it at the foreground's alpha.
+/// The strokes surround both: each band dilates the coverage and the color
+/// glyphs' alpha, the outermost drawn first. With a split background the
+/// boxes are returned as their own plane and the glyph plane starts
+/// transparent.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
-    clippy::cast_precision_loss
+    clippy::cast_precision_loss,
+    clippy::too_many_lines
 )]
 fn compose(
     request: &TextRasterRequest,
@@ -2151,9 +2223,13 @@ fn compose(
     colors: Option<&[u8]>,
     width: u32,
     margin: [u32; 2],
+    layout_size: [f32; 2],
     line_boxes: &[(f32, f32, f32)],
-) -> Vec<u8> {
-    let outline = request.outline.map(|outline| {
+) -> (Vec<u8>, Option<Vec<u8>>) {
+    let height = u32::try_from(coverage.len() / width.max(1) as usize).unwrap_or(0);
+    let bands = if request.strokes.is_empty() {
+        Vec::new()
+    } else {
         let ink = colors.map(|colors| {
             coverage
                 .iter()
@@ -2161,16 +2237,17 @@ fn compose(
                 .map(|(&text, color)| text.max(color[3]))
                 .collect::<Vec<_>>()
         });
-        (
-            outline.color,
-            dilate(
-                ink.as_deref().unwrap_or(coverage),
-                width,
-                u32::try_from(coverage.len() / width.max(1) as usize).unwrap_or(0),
-                outline.width,
-            ),
-        )
-    });
+        let ink = ink.as_deref().unwrap_or(coverage);
+        let mut radius = 0.0;
+        request
+            .strokes
+            .iter()
+            .map(|stroke| {
+                radius += stroke.width;
+                (stroke.color, dilate(ink, width, height, radius))
+            })
+            .collect::<Vec<_>>()
+    };
     let background = request.background.map(|background| {
         let [margin_x, margin_y] = margin.map(|margin| margin as f32);
         let padding = background.padding;
@@ -2187,15 +2264,23 @@ fn compose(
             .collect::<Vec<_>>();
         (background.color, boxes)
     });
+    let split = request.split_background && background.is_some();
+    let mut split_plane = split.then(|| vec![0_u8; coverage.len() * 4]);
+    let gradient = match &request.fill {
+        TextFill::Solid(_) => None,
+        TextFill::Gradient(gradient) => Some(gradient.prepared(layout_size)),
+    };
+    let foreground = request.fill.foreground();
+    let [margin_x, margin_y] = margin.map(|margin| margin as f32);
     let mut rgba8 = vec![0_u8; coverage.len() * 4];
     // The boxes that may meet the current row, `first..last`; boxes come in line order, so the
     // window only moves down.
     let (mut first, mut last) = (0, 0);
     for (index, text) in coverage.iter().copied().enumerate() {
         let mut pixel = [0_u32; 4];
+        let x = (index % width as usize) as f32;
+        let y = (index / width as usize) as f32;
         if let Some((color, boxes)) = &background {
-            let x = (index % width as usize) as f32;
-            let y = (index / width as usize) as f32;
             if index % width as usize == 0 {
                 while first < boxes.len() && boxes[first].3 <= y {
                     first += 1;
@@ -2213,16 +2298,30 @@ fn compose(
                     across * down
                 })
                 .fold(0.0_f32, f32::max);
-            pixel = premultiplied(*color, (covered * 255.0).round() as u8);
+            let boxed = premultiplied(*color, (covered * 255.0).round() as u8);
+            match &mut split_plane {
+                Some(plane) => {
+                    for (channel, value) in boxed.iter().enumerate() {
+                        plane[index * 4 + channel] = (*value).min(255) as u8;
+                    }
+                }
+                None => pixel = boxed,
+            }
         }
-        if let Some((color, band)) = &outline {
+        for (color, band) in bands.iter().rev() {
             pixel = over(premultiplied(*color, band[index]), pixel);
         }
-        pixel = over(premultiplied(request.color, text), pixel);
+        if text > 0 {
+            // The gradient is sampled at the pixel's centre in the layout box.
+            let fill = gradient.as_ref().map_or(foreground, |gradient| {
+                gradient.rgba8_at([x + 0.5 - margin_x, y + 0.5 - margin_y])
+            });
+            pixel = over(premultiplied(fill, text), pixel);
+        }
         if let Some(colors) = colors {
             let color = &colors[index * 4..][..4];
             if color[3] > 0 {
-                let opacity = u32::from(request.color[3]);
+                let opacity = u32::from(foreground[3]);
                 pixel = over(
                     std::array::from_fn(|channel| u32::from(color[channel]) * opacity / 255),
                     pixel,
@@ -2233,7 +2332,7 @@ fn compose(
             rgba8[index * 4 + channel] = (*value).min(255) as u8;
         }
     }
-    rgba8
+    (rgba8, split_plane)
 }
 
 /// The coverage dilated by a disc of radius `width`: each pixel takes the

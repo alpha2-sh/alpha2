@@ -90,8 +90,12 @@ import {
   MAX_FONT_WEIGHT,
   MAX_LETTER_SPACING,
   MAX_LINE_HEIGHT,
-  MAX_TEXT_OUTLINE_WIDTH,
   MAX_TEXT_PADDING,
+  MAX_TEXT_SHADOW_BLUR,
+  MAX_TEXT_SHADOW_OFFSET,
+  MAX_TEXT_SHADOWS,
+  MAX_TEXT_STROKE_EXTENT,
+  MAX_TEXT_STROKES,
   MAX_CHAIN_EFFECTS,
   MAX_COMPRESSOR_RATIO,
   MAX_ENVELOPE_MS,
@@ -2828,7 +2832,6 @@ function validTextStyle(style: unknown, maxFontSize: number): boolean {
   if (!isRecord(style)) return false;
   const within = (value: unknown, low: number, high: number, open = false) =>
     finiteNumber(value) && (open ? value > low : value >= low) && value <= high;
-  const outline = style.outline;
   const background = style.background;
   const family = style.font_family;
   return (
@@ -2838,22 +2841,69 @@ function validTextStyle(style: unknown, maxFontSize: number): boolean {
         family.length > 0 &&
         new TextEncoder().encode(family).length <= MAX_FONT_FAMILY_BYTES)) &&
     within(style.font_size ?? 0.05, 0, maxFontSize, true) &&
-    (style.color === undefined || validRgba(style.color)) &&
+    (style.fill === undefined || validTextFill(style.fill)) &&
     within(style.line_height ?? 1.2, MIN_LINE_HEIGHT, MAX_LINE_HEIGHT) &&
     within(style.letter_spacing ?? 0, MIN_LETTER_SPACING, MAX_LETTER_SPACING) &&
     validFontWeight(style.font_weight ?? 400) &&
     within(style.max_width ?? 0.9, 0, 1, true) &&
     (style.position === undefined || validVec2(style.position)) &&
     (style.anchor === undefined || validVec2(style.anchor)) &&
-    (outline == null ||
-      (isRecord(outline) &&
-        validRgba(outline.color) &&
-        within(outline.width, 0, MAX_TEXT_OUTLINE_WIDTH, true))) &&
+    (style.strokes === undefined || validTextStrokes(style.strokes)) &&
+    (style.shadows === undefined || validTextShadows(style.shadows)) &&
     (background == null ||
       (isRecord(background) &&
         validRgba(background.color) &&
         within(background.padding ?? 0, 0, MAX_TEXT_PADDING)))
   );
+}
+
+/** A text's fill: a color, or any paint, as `Paint` reads either form. */
+function validTextFill(fill: unknown): boolean {
+  return isRecord(fill) && "type" in fill ? validPaint(fill) : validRgba(fill);
+}
+
+/**
+ * Mirrors `valid_strokes`: at most `MAX_TEXT_STROKES` bands of positive width whose widths,
+ * summed in `f32` as the model sums them, reach at most `MAX_TEXT_STROKE_EXTENT`.
+ */
+function validTextStrokes(strokes: unknown): boolean {
+  if (!Array.isArray(strokes) || strokes.length > MAX_TEXT_STROKES)
+    return false;
+  let extent = 0;
+  for (const stroke of strokes) {
+    if (
+      !isRecord(stroke) ||
+      !validRgba(stroke.color) ||
+      !finiteNumber(stroke.width) ||
+      Math.fround(stroke.width) <= 0
+    ) {
+      return false;
+    }
+    extent = Math.fround(extent + Math.fround(stroke.width));
+  }
+  return extent <= Math.fround(MAX_TEXT_STROKE_EXTENT);
+}
+
+/** Mirrors `valid_shadows`: at most `MAX_TEXT_SHADOWS` shadows with offsets and blur in range. */
+function validTextShadows(shadows: unknown): boolean {
+  if (!Array.isArray(shadows) || shadows.length > MAX_TEXT_SHADOWS)
+    return false;
+  const offset = (value: unknown) =>
+    finiteNumber(value) && Math.abs(value) <= MAX_TEXT_SHADOW_OFFSET;
+  return shadows.every((shadow: unknown) => {
+    if (!isRecord(shadow)) return false;
+    const blur = shadow.blur ?? 0;
+    return (
+      validRgba(shadow.color) &&
+      (shadow.offset === undefined ||
+        (isRecord(shadow.offset) &&
+          offset(shadow.offset.x) &&
+          offset(shadow.offset.y))) &&
+      finiteNumber(blur) &&
+      blur >= 0 &&
+      blur <= MAX_TEXT_SHADOW_BLUR
+    );
+  });
 }
 
 /** A weight `FONT_WEIGHT_RANGE` holds: a whole number from 1 to 1000. */
@@ -3595,8 +3645,8 @@ function layoutStyleIssue(
     },
   );
   if (size) return size;
-  if (present(node.color) && !validRgba(node.color)) {
-    return outOfRange("color");
+  if (present(node.fill) && !validTextFill(node.fill)) {
+    return outOfRange("fill");
   }
   const lineHeight = node.line_height;
   if (
@@ -3623,18 +3673,11 @@ function layoutStyleIssue(
   if (present(node.font_weight) && !validFontWeight(node.font_weight)) {
     return outOfRange("font_weight");
   }
-  const outline = node.outline;
-  if (
-    present(outline) &&
-    !(
-      isRecord(outline) &&
-      validRgba(outline.color) &&
-      finiteNumber(outline.width) &&
-      outline.width > 0 &&
-      outline.width <= MAX_TEXT_OUTLINE_WIDTH
-    )
-  ) {
-    return outOfRange("outline");
+  if (present(node.strokes) && !validTextStrokes(node.strokes)) {
+    return outOfRange("strokes");
+  }
+  if (present(node.shadows) && !validTextShadows(node.shadows)) {
+    return outOfRange("shadows");
   }
   return undefined;
 }

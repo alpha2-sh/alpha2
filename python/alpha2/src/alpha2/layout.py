@@ -22,8 +22,9 @@ canvas, ``"50%"`` a percent of the parent's content box. Strings are not parsed 
 CSS value the engine cannot read is reported by :func:`alpha2.validate_project` with the engine's
 own message (``invalid length "5 px" (write 5px)``), so there is one grammar, in the engine.
 
-Text style (``font_family``, ``font_size``, ``font_weight``, ``color``, ``line_height``,
-``letter_spacing``, ``text_align``, ``outline``) may be set on any box and is inherited. Keyframes
+Text style (``font_family``, ``font_size``, ``font_weight``, ``fill``, ``line_height``,
+``letter_spacing``, ``text_align``, ``strokes``, ``shadows``) may be set on any box and is
+inherited. Keyframes
 in a layout are keyed in picture time (see :func:`alpha2.key`).
 """
 
@@ -49,10 +50,10 @@ if TYPE_CHECKING:
         Overflow,
         Paint,
         Position,
-        Rgba,
         ShapeItem,
         TextAlign,
-        TextOutline,
+        TextShadow,
+        TextStroke,
         Vec2,
     )
 
@@ -90,11 +91,12 @@ class ItemProps(TypedDict, total=False):
     font_family: str
     font_size: Size | Animated[Size]
     font_weight: int
-    color: Rgba
+    fill: Paint
     line_height: float
     letter_spacing: float
     text_align: TextAlign
-    outline: TextOutline
+    strokes: list[TextStroke]
+    shadows: list[TextShadow]
     padding: Sides | Animated[Any]
     background: Paint | Animated[Paint]
     border: Border

@@ -6,10 +6,10 @@
 //! picture's shorter side), `"<n>px"` (pixels of the project canvas), or,
 //! for sizes and insets, `"<n>%"` of the parent's content box, as in CSS
 //! (see [`crate::layout_values`]). Boxes are `border-box`: a width includes
-//! padding and border. Text style (`font_family`, `font_size`, `color`,
-//! `font_weight`, `line_height`, `letter_spacing`, `text_align`, `outline`)
-//! may be set on any box and is inherited by the boxes in it, as CSS
-//! inherits it.
+//! padding and border. Text style (`font_family`, `font_size`, `fill`,
+//! `font_weight`, `line_height`, `letter_spacing`, `text_align`, `strokes`,
+//! `shadows`) may be set on any box and is inherited by the boxes in it, as
+//! CSS inherits it.
 
 use crate::animation::visit_keyed;
 use crate::checks::{
@@ -22,8 +22,8 @@ use crate::layout_values::{
 };
 use crate::{
     Animated, FONT_WEIGHT_RANGE, Interpolation, LETTER_SPACING_RANGE, LINE_HEIGHT_RANGE,
-    MAX_FONT_FAMILY_BYTES, MAX_TEXT_CONTENT_BYTES, MAX_TEXT_OUTLINE_WIDTH, Paint, Rgba, ShapeIssue,
-    ShapeItem, TextAlign, TextOutline, Vec2,
+    MAX_FONT_FAMILY_BYTES, MAX_TEXT_CONTENT_BYTES, Paint, Rgba, ShapeIssue, ShapeItem, TextAlign,
+    TextShadow, TextStroke, Vec2,
 };
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -49,12 +49,15 @@ const MAX_GRID_LINE: i16 = 65;
 pub const LAYOUT_TEXT_DEFAULTS: LayoutTextStyle = LayoutTextStyle {
     font_family: None,
     font_size: 0.05,
-    color: Rgba::new(1.0, 1.0, 1.0, 1.0),
+    fill: Paint::Solid {
+        color: Rgba::new(1.0, 1.0, 1.0, 1.0),
+    },
     line_height: 1.2,
     letter_spacing: 0.0,
     font_weight: 400,
     text_align: TextAlign::Start,
-    outline: None,
+    strokes: Vec::new(),
+    shadows: Vec::new(),
 };
 
 /// A box's text style once inherited: what its text draws with. Lengths are
@@ -65,8 +68,8 @@ pub struct LayoutTextStyle {
     pub font_family: Option<String>,
     /// Font size as a fraction of the picture's shorter side.
     pub font_size: f32,
-    /// Text color.
-    pub color: Rgba,
+    /// What paints the glyphs, a gradient in the text's layout box.
+    pub fill: Paint,
     /// Baseline-to-baseline distance in font sizes.
     pub line_height: f32,
     /// Space after each character, a fraction of the font size.
@@ -75,8 +78,12 @@ pub struct LayoutTextStyle {
     pub font_weight: u16,
     /// How lines align within the content width.
     pub text_align: TextAlign,
-    /// A band around the glyphs; its width a fraction of the font size.
-    pub outline: Option<TextOutline>,
+    /// Bands around the glyphs, innermost first; widths fractions of the
+    /// font size.
+    pub strokes: Vec<TextStroke>,
+    /// Shadows of the glyphs and strokes, the first on top; lengths
+    /// fractions of the font size.
+    pub shadows: Vec<TextShadow>,
 }
 
 /// One box of a layout tree.
@@ -247,9 +254,10 @@ pub struct LayoutNode {
     /// picture's shorter side. Inherited; the root's is 0.05.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_size: Option<Animated<LayoutSize>>,
-    /// Text color. Inherited; the root's is white.
+    /// What paints the text's glyphs, as a text style's `fill`: a color, or
+    /// a gradient in the text's layout box. Inherited; the root's is white.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub color: Option<Rgba>,
+    pub fill: Option<Paint>,
     /// Baseline-to-baseline distance in font sizes, in `[0.5, 3]`. Each
     /// line's em box, 0.8 of a font size above its baseline and 0.2 below,
     /// is centred in its line when the line is taller than an em.
@@ -271,10 +279,15 @@ pub struct LayoutNode {
     /// `start`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_align: Option<TextAlign>,
-    /// A band around the glyphs; its width a fraction of the font size.
-    /// Inherited; the root has none.
+    /// Bands around the glyphs, as a text style's `strokes`. Inherited as a
+    /// whole list; the root has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub outline: Option<TextOutline>,
+    pub strokes: Option<Vec<TextStroke>>,
+    /// Shadows of the glyphs and strokes, as a text style's `shadows`.
+    /// Inherited as a whole list, as CSS inherits `text-shadow`; the root
+    /// has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadows: Option<Vec<TextShadow>>,
 
     /// Opacity of the box and everything in it, as one group, in `0..=1`.
     /// Drawn after layout; it never moves a box.
@@ -973,8 +986,8 @@ fn validate_style(node: &LayoutNode, at: &str, shorter_side: Option<f32>) -> Lay
             value.value().is_finite() && value.value() > 0.0 && fraction <= MAX_LAYOUT_FONT_SIZE
         })
     })?;
-    if node.color.is_some_and(|color| !color.is_valid()) {
-        return out_of_range("color");
+    if node.fill.as_ref().is_some_and(|fill| !fill.is_valid()) {
+        return out_of_range("fill");
     }
     if node
         .line_height
@@ -994,11 +1007,19 @@ fn validate_style(node: &LayoutNode, at: &str, shorter_side: Option<f32>) -> Lay
     {
         return out_of_range("font_weight");
     }
-    let valid_outline = |outline: TextOutline| {
-        outline.color.is_valid() && outline.width > 0.0 && outline.width <= MAX_TEXT_OUTLINE_WIDTH
-    };
-    if node.outline.is_some_and(|outline| !valid_outline(outline)) {
-        return out_of_range("outline");
+    if node
+        .strokes
+        .as_deref()
+        .is_some_and(|strokes| !crate::text::valid_strokes(strokes))
+    {
+        return out_of_range("strokes");
+    }
+    if node
+        .shadows
+        .as_deref()
+        .is_some_and(|shadows| !crate::text::valid_shadows(shadows))
+    {
+        return out_of_range("shadows");
     }
     Ok(())
 }

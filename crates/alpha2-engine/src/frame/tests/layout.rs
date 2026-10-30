@@ -161,12 +161,12 @@ fn title_card() -> String {
         title = text(
             "Title",
             0.14,
-            r#", "color": { "red": 0.1, "green": 0.1, "blue": 0.15, "alpha": 1 }"#
+            r#", "fill": { "red": 0.1, "green": 0.1, "blue": 0.15, "alpha": 1 }"#
         ),
         subtitle = text(
             "a centred subtitle",
             0.07,
-            r#", "color": { "red": 0.3, "green": 0.3, "blue": 0.35, "alpha": 1 }"#
+            r#", "fill": { "red": 0.3, "green": 0.3, "blue": 0.35, "alpha": 1 }"#
         ),
     ))
 }
@@ -213,7 +213,7 @@ fn lower_third() -> String {
         role = text(
             "Wrote the first published algorithm for a machine, 1843",
             0.045,
-            r#", "color": { "red": 0.8, "green": 0.82, "blue": 0.86, "alpha": 1 }"#
+            r#", "fill": { "red": 0.8, "green": 0.82, "blue": 0.86, "alpha": 1 }"#
         ),
     ))
 }
@@ -247,7 +247,7 @@ fn text_panel() -> String {
         paragraph = text(
             "Layout resolves where text is drawn, so a paragraph wraps the same in preview and export.",
             0.06,
-            r#", "color": { "red": 0, "green": 0, "blue": 0, "alpha": 1 }, "text_align": "end", "line_height": 1.1"#
+            r#", "fill": { "red": 0, "green": 0, "blue": 0, "alpha": 1 }, "text_align": "end", "line_height": 1.1"#
         ),
         clip = len(0.4),
         blue = solid(0.1, 0.3, 0.8, 1.0),
@@ -340,11 +340,11 @@ fn grid_dashboard() -> String {
         r##"{{
           "display": "grid", "grid_template_columns": "1fr 2fr 60px",
           "grid_template_rows": "minmax(40px, auto) 1fr", "gap": {gap}, "padding": {padding},
-          "background": {back}, "font_size": {font}, "color": "#f5f5f0", "line_height": 1.1,
+          "background": {back}, "font_size": {font}, "fill": "#f5f5f0", "line_height": 1.1,
           "children": [
             {{ "text": {revenue}, "background": {card}, "padding": {inner}, "border_radius": {radius} }},
             {{ "text": {margin}, "background": {card}, "padding": {inner}, "border_radius": {radius},
-               "color": "#ffb020", "text_align": "end" }},
+               "fill": "#ffb020", "text_align": "end" }},
             {{ "grid_row": "1 / 3", "grid_column": 3, "background": {bar}, "border_radius": {radius} }},
             {{ "grid_column": "1 / span 2", "background": {card}, "border_radius": {radius},
                "display": "grid", "grid_template_columns": "repeat(4, 1fr)", "align_items": "end",

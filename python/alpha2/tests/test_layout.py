@@ -277,7 +277,7 @@ def test_the_helpers_write_the_hand_written_parity_corpus_grid() -> None:
             align_content="start",
             gap="3px",
             padding="4px 6px",
-            color="#0b0d12",
+            fill="#0b0d12",
             text_align="center",
             font_size=keyframes(key(0, "12px"), key(alpha2.ticks(120_000), "18px", "hold")),
         )

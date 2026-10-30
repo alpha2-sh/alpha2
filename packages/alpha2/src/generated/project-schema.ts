@@ -170,11 +170,23 @@ export const MAX_TEXT_CONTENT_BYTES = 4096;
 /** Mirrors `alpha2_model::MAX_TEXT_GENERATOR_FONT_SIZE`. */
 export const MAX_TEXT_GENERATOR_FONT_SIZE = 1;
 
-/** Mirrors `alpha2_model::MAX_TEXT_OUTLINE_WIDTH`. */
-export const MAX_TEXT_OUTLINE_WIDTH = 0.5;
-
 /** Mirrors `alpha2_model::MAX_TEXT_PADDING`. */
 export const MAX_TEXT_PADDING = 2;
+
+/** Mirrors `alpha2_model::MAX_TEXT_SHADOWS`. */
+export const MAX_TEXT_SHADOWS = 4;
+
+/** Mirrors `alpha2_model::MAX_TEXT_SHADOW_BLUR`. */
+export const MAX_TEXT_SHADOW_BLUR = 1;
+
+/** Mirrors `alpha2_model::MAX_TEXT_SHADOW_OFFSET`. */
+export const MAX_TEXT_SHADOW_OFFSET = 1;
+
+/** Mirrors `alpha2_model::MAX_TEXT_STROKES`. */
+export const MAX_TEXT_STROKES = 4;
+
+/** Mirrors `alpha2_model::MAX_TEXT_STROKE_EXTENT`. */
+export const MAX_TEXT_STROKE_EXTENT = 0.5;
 
 /** Mirrors `alpha2_model::MAX_TRACKS`. */
 export const MAX_TRACKS = 256;
@@ -1594,10 +1606,6 @@ export interface LayoutNode {
    */
   readonly children?: readonly LayoutNode[];
   /**
-   * Text color. Inherited; the root's is white.
-   */
-  readonly color?: Rgba | null;
-  /**
    * Space between columns, in place of `gap`. At least 0.
    */
   readonly column_gap?: Animated<LayoutSize> | null;
@@ -1606,6 +1614,11 @@ export interface LayoutNode {
    * text or shape content, as every container field.
    */
   readonly display?: Display | null;
+  /**
+   * What paints the text's glyphs, as a text style's `fill`: a color, or
+   * a gradient in the text's layout box. Inherited; the root's is white.
+   */
+  readonly fill?: Paint | null;
   /**
    * The main size before growing and shrinking. `None` is auto.
    */
@@ -1744,11 +1757,6 @@ export interface LayoutNode {
    */
   readonly opacity?: Animated<number> | null;
   /**
-   * A band around the glyphs; its width a fraction of the font size.
-   * Inherited; the root has none.
-   */
-  readonly outline?: TextOutline | null;
-  /**
    * Whether content past the padding box is drawn. Default `visible`.
    */
   readonly overflow?: Overflow | null;
@@ -1777,10 +1785,21 @@ export interface LayoutNode {
    */
   readonly scale?: Animated<Vec2> | null;
   /**
+   * Shadows of the glyphs and strokes, as a text style's `shadows`.
+   * Inherited as a whole list, as CSS inherits `text-shadow`; the root
+   * has none.
+   */
+  readonly shadows?: readonly TextShadow[] | null;
+  /**
    * Shapes drawn on a picture the size of the box's content box. Not with
    * `children` or `text`.
    */
   readonly shape?: LayoutShape | null;
+  /**
+   * Bands around the glyphs, as a text style's `strokes`. Inherited as a
+   * whole list; the root has none.
+   */
+  readonly strokes?: readonly TextStroke[] | null;
   /**
    * The box's text, wrapped at its content width and drawn in the style
    * it inherits; `\n` starts a line. At most `MAX_TEXT_CONTENT_BYTES`
@@ -3121,15 +3140,42 @@ export interface TextBackground {
 }
 
 /**
- * A band around the glyphs, drawn behind them.
+ * A shadow of a text's glyphs and strokes, behind them.
  */
-export interface TextOutline {
+export interface TextShadow {
+  /**
+   * Blur radius in font sizes, as CSS `text-shadow` takes it: the
+   * Gaussian's standard deviation is half of it. In `[0, 1]`
+   * (`MAX_TEXT_SHADOW_BLUR`).
+   *
+   * @defaultValue `0`
+   */
+  readonly blur?: number;
+  /**
+   * Shadow color.
+   */
+  readonly color: Rgba;
+  /**
+   * Offset in font sizes, +x right, +y down; each component in
+   * `[-1, 1]` (`MAX_TEXT_SHADOW_OFFSET`).
+   *
+   * @defaultValue `{"x":0,"y":0}`
+   */
+  readonly offset?: Vec2;
+}
+
+/**
+ * A band around the glyphs, and around the strokes listed before it,
+ * drawn behind them.
+ */
+export interface TextStroke {
   /**
    * Band color.
    */
   readonly color: Rgba;
   /**
-   * Band width as a fraction of the font size, in `(0, 0.5]`.
+   * Band width as a fraction of the font size, positive; a text's
+   * strokes sum to at most `MAX_TEXT_STROKE_EXTENT`.
    */
   readonly width: number;
 }
@@ -3140,10 +3186,14 @@ export interface TextOutline {
  *
  * Sizes are resolution-independent: the font size is a fraction of the
  * canvas's shorter side, as every other length is, the wrapping width a
- * fraction of the canvas width, and the outline and background padding
- * fractions of the font size. The engine draws with the fonts its host
- * registered: those of `font_family` first, then the rest in their
- * fallback order.
+ * fraction of the canvas width, and the strokes, shadows and background
+ * padding fractions of the font size, so a look follows the font size. The
+ * engine draws with the fonts its host registered: those of `font_family`
+ * first, then the rest in their fallback order.
+ *
+ * The look is painted bottom to top as CSS paints text: the background's
+ * boxes, the shadows (the last listed lowest), the strokes (the outermost
+ * lowest), the fill, then color glyphs.
  */
 export interface TextStyle {
   /**
@@ -3166,11 +3216,14 @@ export interface TextStyle {
    */
   readonly background?: TextBackground | null;
   /**
-   * Text color.
+   * What paints the glyphs; a color reads as a solid paint. A gradient's
+   * positions are in the text's layout box, `(0, 0)` its top-left and
+   * `(1, 1)` its bottom-right, and a radial gradient's radius is a
+   * fraction of the box's shorter side. Default solid white.
    *
-   * @defaultValue `{"alpha":1,"blue":1,"green":1,"red":1}`
+   * @defaultValue `{"color":{"alpha":1,"blue":1,"green":1,"red":1},"type":"solid"}`
    */
-  readonly color?: Rgba;
+  readonly fill?: Paint;
   /**
    * The family the text draws in, as the font's own name table gives it
    * (typographic family, else family), matched without regard to ASCII
@@ -3222,18 +3275,23 @@ export interface TextStyle {
    */
   readonly max_width?: number;
   /**
-   * A band around the glyphs.
-   *
-   * @defaultValue `null`
-   */
-  readonly outline?: TextOutline | null;
-  /**
    * Where on the canvas the text's anchor lies, `(0, 0)` top-left to
    * `(1, 1)` bottom-right.
    *
    * @defaultValue `{"x":0.5,"y":0.92}`
    */
   readonly position?: Vec2;
+  /**
+   * Shadows of the glyphs and their strokes, the first on top, as CSS
+   * `text-shadow` lists them. At most `MAX_TEXT_SHADOWS`.
+   */
+  readonly shadows?: readonly TextShadow[];
+  /**
+   * Bands around the glyphs, innermost first: each lies outside the one
+   * before it. At most `MAX_TEXT_STROKES`, their widths summing to at
+   * most `MAX_TEXT_STROKE_EXTENT`.
+   */
+  readonly strokes?: readonly TextStroke[];
 }
 
 /**

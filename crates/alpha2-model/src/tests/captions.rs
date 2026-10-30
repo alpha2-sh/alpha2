@@ -108,18 +108,7 @@ fn caption_tracks_hold_ordered_cues_and_nothing_else() {
         .style = style.clone();
     assert!(invalid(&project));
     style.font_size = 0.05;
-    style.outline = Some(crate::TextOutline {
-        color: crate::Rgba::new(0.0, 0.0, 0.0, 1.0),
-        width: 0.0,
-    });
-    project.timeline.tracks[1]
-        .captions
-        .as_mut()
-        .expect("captions")
-        .style = style.clone();
-    assert!(invalid(&project));
     // A font family that is empty or too long.
-    style.outline = None;
     for family in [String::new(), "a".repeat(crate::MAX_FONT_FAMILY_BYTES + 1)] {
         style.font_family = Some(family);
         project.timeline.tracks[1]
@@ -135,5 +124,77 @@ fn caption_tracks_hold_ordered_cues_and_nothing_else() {
         .as_mut()
         .expect("captions")
         .style = style;
+    assert!(!invalid(&project));
+}
+
+#[test]
+fn a_caption_look_is_held_to_its_limits() {
+    use crate::{CaptionCue, Captions, TextStyle};
+
+    fn stroke(width: f32) -> crate::TextStroke {
+        crate::TextStroke {
+            color: crate::Rgba::new(0.0, 0.0, 0.0, 1.0),
+            width,
+        }
+    }
+    fn shadow(offset: crate::Vec2, blur: f32) -> crate::TextShadow {
+        crate::TextShadow {
+            color: crate::Rgba::new(0.0, 0.0, 0.0, 1.0),
+            offset,
+            blur,
+        }
+    }
+
+    let mut project = project();
+    let mut track = Track::new(
+        id(TrackId::new, "track-captions"),
+        "Captions",
+        TrackKind::Caption,
+    );
+    track.captions = Some(Captions {
+        style: TextStyle::default(),
+        cues: vec![CaptionCue {
+            timeline_range: TimeRange::new(MediaTime(0), MediaTime(100)).expect("range"),
+            text: "Hello".into(),
+        }],
+    });
+    project.timeline.tracks.push(track);
+    let caption_track = project.timeline.tracks.len() - 1;
+    let invalid = |project: &crate::Project| {
+        matches!(
+            project.validate(),
+            Err(crate::ModelError::InvalidCaptions { .. })
+        )
+    };
+    let style = TextStyle::default();
+    // A stroke of no width, more strokes than allowed, strokes wider together than the extent,
+    // more shadows than allowed, a shadow too far off, and a blur out of range.
+    let looks: [fn(&mut TextStyle); 6] = [
+        |style| style.strokes = vec![stroke(0.0)],
+        |style| style.strokes = vec![stroke(0.05); crate::MAX_TEXT_STROKES + 1],
+        |style| style.strokes = vec![stroke(0.3), stroke(0.25)],
+        |style| style.shadows = vec![shadow(crate::Vec2::default(), 0.1); 5],
+        |style| style.shadows = vec![shadow(crate::Vec2::new(0.0, 1.5), 0.1)],
+        |style| style.shadows = vec![shadow(crate::Vec2::default(), -0.1)],
+    ];
+    for look in looks {
+        let mut invalid_style = style.clone();
+        look(&mut invalid_style);
+        project.timeline.tracks[caption_track]
+            .captions
+            .as_mut()
+            .expect("captions")
+            .style = invalid_style;
+        assert!(invalid(&project));
+    }
+    // Four strokes reaching the whole extent and four shadows at the limits are valid.
+    let mut look = style.clone();
+    look.strokes = vec![stroke(0.125); crate::MAX_TEXT_STROKES];
+    look.shadows = vec![shadow(crate::Vec2::new(-1.0, 1.0), 1.0); crate::MAX_TEXT_SHADOWS];
+    project.timeline.tracks[caption_track]
+        .captions
+        .as_mut()
+        .expect("captions")
+        .style = look;
     assert!(!invalid(&project));
 }

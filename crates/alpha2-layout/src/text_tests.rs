@@ -31,10 +31,10 @@ fn imported_cues_whose_last_line_is_blank_after_markup_are_drawn() {
     for style in [
         TextStyle::default(),
         TextStyle {
-            outline: Some(alpha2_model::TextOutline {
+            strokes: vec![alpha2_model::TextStroke {
                 color: Rgba::new(0.0, 0.0, 0.0, 1.0),
                 width: 0.08,
-            }),
+            }],
             ..TextStyle::default()
         },
     ] {

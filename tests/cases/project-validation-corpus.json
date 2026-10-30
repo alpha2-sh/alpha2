@@ -9090,7 +9090,7 @@
             "style": {
               "font_family": "Inter",
               "font_size": 0.6,
-              "color": {
+              "fill": {
                 "red": 1,
                 "green": 0.8,
                 "blue": 0,
@@ -9107,7 +9107,7 @@
                 "x": 0,
                 "y": 0
               },
-              "outline": {
+              "strokes": [{
                 "color": {
                   "red": 0,
                   "green": 0,
@@ -9115,7 +9115,7 @@
                   "alpha": 1
                 },
                 "width": 0.05
-              },
+              }],
               "background": {
                 "color": {
                   "red": 0,
@@ -9670,7 +9670,7 @@
             "type": "text",
             "text": "Big",
             "style": {
-              "outline": {
+              "strokes": [{
                 "color": {
                   "red": 0,
                   "green": 0,
@@ -9678,7 +9678,7 @@
                   "alpha": 1
                 },
                 "width": 0.6
-              }
+              }]
             }
           }
         }
@@ -10580,10 +10580,10 @@
                 "align": "start",
                 "position": { "x": 0.1, "y": 0.9 },
                 "anchor": { "x": 0, "y": 1 },
-                "outline": {
+                "strokes": [{
                   "color": { "red": 0, "green": 0, "blue": 0, "alpha": 1 },
                   "width": 0.08
-                },
+                }],
                 "background": {
                   "color": { "red": 0, "green": 0, "blue": 0, "alpha": 0.5 },
                   "padding": 0.25
@@ -10671,10 +10671,10 @@
                 "align": "start",
                 "position": { "x": 0.1, "y": 0.9 },
                 "anchor": { "x": 0, "y": 1 },
-                "outline": {
+                "strokes": [{
                   "color": { "red": 0, "green": 0, "blue": 0, "alpha": 1 },
                   "width": 0.08
-                },
+                }],
                 "background": {
                   "color": { "red": 0, "green": 0, "blue": 0, "alpha": 0.5 },
                   "padding": 0.25
@@ -10757,7 +10757,7 @@
                 "align": "start",
                 "position": { "x": 0.1, "y": 0.9 },
                 "anchor": { "x": 0, "y": 1 },
-                "outline": { "color": { "red": 0, "green": 0, "blue": 0, "alpha": 1 }, "width": 0.08 },
+                "strokes": [{ "color": { "red": 0, "green": 0, "blue": 0, "alpha": 1 }, "width": 0.08 }],
                 "background": { "color": { "red": 0, "green": 0, "blue": 0, "alpha": 0.5 }, "padding": 0.25 }
               },
               "cues": [
@@ -10839,10 +10839,10 @@
                 "align": "start",
                 "position": { "x": 0.1, "y": 0.9 },
                 "anchor": { "x": 0, "y": 1 },
-                "outline": {
+                "strokes": [{
                   "color": { "red": 0, "green": 0, "blue": 0, "alpha": 1 },
                   "width": 0.08
-                },
+                }],
                 "background": {
                   "color": { "red": 0, "green": 0, "blue": 0, "alpha": 0.5 },
                   "padding": 0.25
@@ -10933,10 +10933,10 @@
                 "align": "start",
                 "position": { "x": 0.1, "y": 0.9 },
                 "anchor": { "x": 0, "y": 1 },
-                "outline": {
+                "strokes": [{
                   "color": { "red": 0, "green": 0, "blue": 0, "alpha": 1 },
                   "width": 0.08
-                },
+                }],
                 "background": {
                   "color": { "red": 0, "green": 0, "blue": 0, "alpha": 0.5 },
                   "padding": 0.25
@@ -11520,10 +11520,10 @@
             "kind": "caption",
             "captions": {
               "style": {
-                "outline": {
+                "strokes": [{
                   "color": { "red": 0, "green": 0, "blue": 0, "alpha": 1 },
                   "width": 0
-                }
+                }]
               },
               "cues": []
             }
@@ -24651,7 +24651,7 @@
                             "mode": "constant",
                             "value": 0.026
                           },
-                          "color": {
+                          "fill": {
                             "red": 0.8,
                             "green": 0.82,
                             "blue": 0.86,
@@ -24950,7 +24950,7 @@
                                   "mode": "constant",
                                   "value": 0.026
                                 },
-                                "color": {
+                                "fill": {
                                   "red": 0.8,
                                   "green": 0.82,
                                   "blue": 0.86,
@@ -27548,13 +27548,13 @@
                 "mode": "constant",
                 "value": "32px"
               },
-              "color": "#f5f5f0",
+              "fill": "#f5f5f0",
               "line_height": 1.3,
               "text_align": "center",
-              "outline": {
+              "strokes": [{
                 "color": "#000",
                 "width": 0.1
-              },
+              }],
               "children": [
                 {
                   "text": {
@@ -27562,7 +27562,7 @@
                     "value": "Revenue"
                   },
                   "grid_column": 1,
-                  "color": "#ffb020ff"
+                  "fill": "#ffb020ff"
                 },
                 {
                   "text": {
@@ -27739,7 +27739,7 @@
             "type": "text",
             "text": "Title",
             "style": {
-              "color": "#fff"
+              "fill": "#fff"
             }
           }
         },
@@ -29722,5 +29722,12 @@
         ]
       }
     }
-  }
+  },
+  {"name": "text-strokes-too-many", "valid": false, "rejected_by": "model", "problems": ["source g1 has an invalid generator"], "error": "source g1 has an invalid generator", "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}, {"id": "g1", "kind": "generated", "generator": {"type": "text", "text": "Big", "style": {"strokes": [{"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.05}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.05}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.05}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.05}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.05}]}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
+  {"name": "text-stroke-extent-too-wide", "valid": false, "rejected_by": "model", "problems": ["source g1 has an invalid generator"], "error": "source g1 has an invalid generator", "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}, {"id": "g1", "kind": "generated", "generator": {"type": "text", "text": "Big", "style": {"strokes": [{"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.3}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "width": 0.25}]}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
+  {"name": "text-shadows-too-many", "valid": false, "rejected_by": "model", "problems": ["track subs has invalid captions"], "error": "track subs has invalid captions", "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "v2", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "subs", "name": "Subtitles", "kind": "caption", "captions": {"style": {"shadows": [{"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "offset": {"x": 0, "y": 0.1}, "blur": 0.1}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "offset": {"x": 0, "y": 0.1}, "blur": 0.1}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "offset": {"x": 0, "y": 0.1}, "blur": 0.1}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "offset": {"x": 0, "y": 0.1}, "blur": 0.1}, {"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "offset": {"x": 0, "y": 0.1}, "blur": 0.1}]}, "cues": [{"timeline_range": {"start": 0, "end": 1000}, "text": "Hi"}]}}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
+  {"name": "text-shadow-blur-out-of-range", "valid": false, "rejected_by": "model", "problems": ["track subs has invalid captions"], "error": "track subs has invalid captions", "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "v2", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "subs", "name": "Subtitles", "kind": "caption", "captions": {"style": {"shadows": [{"color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}, "blur": 1.5}]}, "cues": [{"timeline_range": {"start": 0, "end": 1000}, "text": "Hi"}]}}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
+  {"name": "text-fill-gradient-one-stop", "valid": false, "rejected_by": "model", "problems": ["source g1 has an invalid generator"], "error": "source g1 has an invalid generator", "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}, {"id": "g1", "kind": "generated", "generator": {"type": "text", "text": "Big", "style": {"fill": {"type": "linear_gradient", "start": {"x": 0, "y": 0}, "end": {"x": 1, "y": 0}, "stops": [{"offset": 0, "color": {"red": 0, "green": 0, "blue": 0, "alpha": 1}}]}}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
+  {"name": "layout-text-inherits-shadows", "valid": true, "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "g1", "kind": "generated", "generator": {"type": "layout", "root": {"shadows": [{"color": "#000000c0", "offset": {"x": 0, "y": 0.08}, "blur": 0.2}], "strokes": [{"color": "#000000", "width": 0.06}], "fill": {"type": "radial_gradient", "center": {"x": 0.5, "y": 0.5}, "radius": 0.5, "stops": [{"offset": 0, "color": "#ffffff"}, {"offset": 1, "color": "#ffb020"}]}, "children": [{"text": {"mode": "constant", "value": "Shadowed"}}]}}}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "g1", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}},
+  {"name": "caption-look-strokes-shadows-gradient-ok", "valid": true, "project": {"schema_version": 1, "id": "p1", "name": "P", "settings": {"width": 1920, "height": 1080, "frame_rate": {"num": 30, "den": 1}, "sample_rate": 48000}, "sources": [{"id": "v1", "kind": "video", "locator": "a.mp4"}, {"id": "v2", "kind": "video", "locator": "b.mp4"}, {"id": "a1", "kind": "audio", "locator": "c.m4a"}, {"id": "i1", "kind": "image", "locator": "d.png"}], "timeline": {"tracks": [{"id": "t1", "name": "T1", "kind": "video", "clips": [{"id": "c1", "source_id": "v1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}, {"id": "c2", "source_id": "v2", "timeline_range": {"start": 120000, "end": 240000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}, {"id": "subs", "name": "Subtitles", "kind": "caption", "captions": {"style": {"fill": {"type": "conic_gradient", "center": {"x": 0.5, "y": 0.5}, "angle_degrees": 45, "stops": [{"offset": 0, "color": "#ff0000"}, {"offset": 1, "color": "#0000ff"}]}, "strokes": [{"color": "#000000", "width": 0.125}, {"color": "#000000", "width": 0.125}, {"color": "#000000", "width": 0.125}, {"color": "#000000", "width": 0.125}], "shadows": [{"color": "#00000099", "offset": {"x": -1, "y": 1}, "blur": 1}, {"color": "#00000099", "offset": {"x": -1, "y": 1}, "blur": 1}, {"color": "#00000099", "offset": {"x": -1, "y": 1}, "blur": 1}, {"color": "#00000099", "offset": {"x": -1, "y": 1}, "blur": 1}], "background": {"color": "#00000080", "padding": 0.2}}, "cues": [{"timeline_range": {"start": 0, "end": 1000}, "text": "Hi"}]}}, {"id": "t2", "name": "T2", "kind": "audio", "clips": [{"id": "c3", "source_id": "a1", "timeline_range": {"start": 0, "end": 120000}, "source_range": {"start": 0, "end": 120000}}], "transitions": []}]}}}
 ]

@@ -10,7 +10,8 @@
 use std::collections::BTreeMap;
 
 use alpha2_model::{
-    Animated, Composition, Easing, EffectValue, LayoutNode, MediaSource, Rgba, Track,
+    Animated, Composition, Easing, EffectValue, LayoutNode, MediaSource, Rgba, TextShadow,
+    TextStroke, Track,
 };
 use serde::{Deserialize, Serialize};
 
@@ -590,9 +591,14 @@ pub struct Text {
     /// A box of this color behind each line.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub background: Option<Rgba>,
-    /// A band of this color around the glyphs.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub outline: Option<Rgba>,
+    /// Bands around the glyphs, innermost first, their widths fractions of
+    /// the font size, as a text style's `strokes`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub strokes: Vec<TextStroke>,
+    /// Shadows of the glyphs, the first on top, their lengths fractions of
+    /// the font size, as a text style's `shadows`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shadows: Vec<TextShadow>,
     /// The most lines it may take: with fonts to measure by, a longer text
     /// shrinks until it fits. Default: no limit.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -82,7 +82,7 @@ def test_the_chat_bubble_centres_its_text_without_padding_compensation(
 ) -> None:
     width, height, font_px = 640, 360, 40
     bubble = box(
-        text("Hello", font_size=f"{font_px}px", line_height=1.4, color="#ffffff"),
+        text("Hello", font_size=f"{font_px}px", line_height=1.4, fill="#ffffff"),
         padding="12px 20px",
         background="#3060c0",
         border_radius="16px",
@@ -118,7 +118,7 @@ def test_the_count_up_is_one_layout_text_whose_frames_equal_static_texts(
     def counter(content: Any) -> Any:
         return layout(
             box(
-                text(content, font_size=0.3, color="#ffffff"),
+                text(content, font_size=0.3, fill="#ffffff"),
                 justify_content="center",
                 align_items="center",
             )
@@ -150,7 +150,7 @@ def test_the_logo_mark_sits_on_the_letters_baseline(client: HostClient, tmp_path
     width, height = 640, 360
     letters = layout(
         box(
-            text("HIH", font_size=0.3, letter_spacing=0.1, font_weight=700, color="#ffffff"),
+            text("HIH", font_size=0.3, letter_spacing=0.1, font_weight=700, fill="#ffffff"),
             justify_content="center",
             align_items="center",
         )
@@ -184,7 +184,7 @@ def test_the_logo_mark_sits_on_the_letters_baseline(client: HostClient, tmp_path
         regular.generated(
             layout(
                 box(
-                    text("HIH", font_size=0.3, letter_spacing=0.1, color="#ffffff"),
+                    text("HIH", font_size=0.3, letter_spacing=0.1, fill="#ffffff"),
                     justify_content="center",
                     align_items="center",
                 )

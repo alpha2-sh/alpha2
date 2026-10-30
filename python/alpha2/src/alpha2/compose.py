@@ -49,7 +49,7 @@ if TYPE_CHECKING:
         TextRole,
         VideoSpec,
     )
-    from .types import Rgba
+    from .types import Rgba, TextShadow, TextStroke
 
 PathLike = str | os.PathLike[str]
 
@@ -230,7 +230,8 @@ def Text(
     font_family: str | None = None,
     color: str | Rgba | None = None,
     background: str | Rgba | None = None,
-    outline: str | Rgba | None = None,
+    strokes: abc.Sequence[TextStroke] | None = None,
+    shadows: abc.Sequence[TextShadow] | None = None,
     max_lines: int | None = None,
     opacity: float | None = None,
     fade: float | None = None,
@@ -250,7 +251,8 @@ def Text(
         font_family=font_family,
         color=color,
         background=background,
-        outline=outline,
+        strokes=None if strokes is None else list(strokes),
+        shadows=None if shadows is None else list(shadows),
         max_lines=max_lines,
         opacity=opacity,
         fade=fade,

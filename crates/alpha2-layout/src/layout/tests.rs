@@ -61,10 +61,11 @@ fn shaped(rasterizer: &TextRasterizer, content: &str, pixels: f32) -> ShapedText
             max_width: 0.0,
             line_height: 1.2,
             align: alpha2_media::TextAlign::Start,
-            color: [255; 4],
+            fill: alpha2_text::TextFill::Solid([255; 4]),
             emoji_policy: EmojiPolicy::Color,
             content_version: 1,
-            outline: None,
+            strokes: Vec::new(),
+            split_background: false,
             background: None,
             font_family: None,
             letter_spacing: 0.0,
@@ -155,7 +156,7 @@ fn a_spaced_text_measures_as_wide_as_its_raster_lines() {
     let evaluated = LayoutPlan::new(&root, (1000, 1000)).evaluate(MediaTime::ZERO);
     let resolved = resolved(&rasterizer, &root, picture);
     let (_, requests) = layout_texts(&evaluated, &resolved, picture);
-    let request = &requests[0].1;
+    let request = &requests[0].1.request;
     assert!(
         (request.letter_spacing - 10.0).abs() < 1e-6,
         "a quarter of 40 px"

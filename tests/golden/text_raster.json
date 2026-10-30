@@ -18,13 +18,13 @@
       "name": "wrapped-centre",
       "request": {
         "align": "center",
-        "color": [
+        "emojiPolicy": "replace",
+        "fill": [
           255,
           100,
           50,
           200
         ],
-        "emojiPolicy": "replace",
         "fontSize": 20,
         "lineHeight": 1.25,
         "maxWidth": 80,
@@ -49,7 +49,7 @@
       "name": "lines-end",
       "request": {
         "align": "end",
-        "color": [
+        "fill": [
           255,
           255,
           255,
@@ -78,13 +78,13 @@
       "name": "emoji-replaced",
       "request": {
         "align": "start",
-        "color": [
+        "emojiPolicy": "replace",
+        "fill": [
           20,
           40,
           220,
           128
         ],
-        "emojiPolicy": "replace",
         "fontSize": 31.5,
         "text": "Sun ☀ © and 0123 🙂"
       }
@@ -116,7 +116,7 @@
           ],
           "padding": 6
         },
-        "color": [
+        "fill": [
           255,
           255,
           255,
@@ -125,15 +125,17 @@
         "fontSize": 24,
         "lineHeight": 1.2,
         "maxWidth": 150,
-        "outline": {
-          "color": [
-            0,
-            0,
-            0,
-            255
-          ],
-          "width": 2.5
-        },
+        "strokes": [
+          {
+            "color": [
+              0,
+              0,
+              0,
+              255
+            ],
+            "width": 2.5
+          }
+        ],
         "text": "Captions wrap\nand stack"
       }
     },
@@ -154,22 +156,24 @@
       },
       "name": "outline-only-fraction",
       "request": {
-        "color": [
+        "fill": [
           255,
           220,
           0,
           255
         ],
         "fontSize": 18,
-        "outline": {
-          "color": [
-            30,
-            0,
-            60,
-            200
-          ],
-          "width": 1.25
-        },
+        "strokes": [
+          {
+            "color": [
+              30,
+              0,
+              60,
+              200
+            ],
+            "width": 1.25
+          }
+        ],
         "text": "Edge"
       }
     },
@@ -191,7 +195,7 @@
       "name": "hangul-and-latin-wrapped",
       "request": {
         "align": "center",
-        "color": [
+        "fill": [
           255,
           255,
           255,
@@ -221,7 +225,7 @@
       "name": "family-first",
       "request": {
         "align": "start",
-        "color": [
+        "fill": [
           255,
           255,
           255,
@@ -252,7 +256,7 @@
       "name": "right-to-left-wrapped",
       "request": {
         "align": "start",
-        "color": [
+        "fill": [
           255,
           255,
           255,
@@ -282,7 +286,7 @@
       "name": "arabic-joined-in-latin",
       "request": {
         "align": "end",
-        "color": [
+        "fill": [
           255,
           255,
           255,
@@ -311,7 +315,7 @@
       },
       "name": "emoji-colr-sequences",
       "request": {
-        "color": [
+        "fill": [
           255,
           255,
           255,
@@ -338,7 +342,7 @@
       },
       "name": "emoji-bitmap-sequences",
       "request": {
-        "color": [
+        "fill": [
           255,
           255,
           255,
@@ -366,7 +370,7 @@
       },
       "name": "emoji-bitmap-enlarged",
       "request": {
-        "color": [
+        "fill": [
           255,
           255,
           255,
@@ -394,7 +398,7 @@
       },
       "name": "emoji-presentation-selectors",
       "request": {
-        "color": [
+        "fill": [
           255,
           200,
           0,
@@ -422,7 +426,7 @@
       "name": "emoji-in-right-to-left",
       "request": {
         "align": "end",
-        "color": [
+        "fill": [
           255,
           255,
           255,
@@ -459,22 +463,24 @@
           ],
           "padding": 4
         },
-        "color": [
+        "fill": [
           40,
           160,
           255,
           160
         ],
         "fontSize": 48,
-        "outline": {
-          "color": [
-            0,
-            0,
-            0,
-            255
-          ],
-          "width": 2.5
-        },
+        "strokes": [
+          {
+            "color": [
+              0,
+              0,
+              0,
+              255
+            ],
+            "width": 2.5
+          }
+        ],
         "text": ""
       }
     },
@@ -495,15 +501,234 @@
       },
       "name": "emoji-monochrome",
       "request": {
-        "color": [
+        "emojiPolicy": "monochrome",
+        "fill": [
           255,
           255,
           255,
           255
         ],
-        "emojiPolicy": "monochrome",
         "fontSize": 32,
         "text": " 😀 A"
+      }
+    },
+    {
+      "contentVersion": 40,
+      "expected": {
+        "ascent": 25.600000381469727,
+        "descent": 6.400000095367432,
+        "firstBaseline": 28.80000114440918,
+        "height": 51,
+        "layoutHeight": 38.400001525878906,
+        "layoutWidth": 185.171875,
+        "layoutX": 7.0,
+        "layoutY": 6.0,
+        "lineCount": 1,
+        "pixelsFnv1a": "aea11d315d0ab9e5",
+        "width": 200
+      },
+      "name": "two-strokes",
+      "request": {
+        "align": "start",
+        "fill": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "fontSize": 32,
+        "lineHeight": 1.2,
+        "strokes": [
+          {
+            "color": [
+              255,
+              200,
+              0,
+              255
+            ],
+            "width": 2
+          },
+          {
+            "color": [
+              0,
+              0,
+              0,
+              255
+            ],
+            "width": 3.5
+          }
+        ],
+        "text": "Two strokes"
+      }
+    },
+    {
+      "contentVersion": 41,
+      "expected": {
+        "ascent": 32.0,
+        "descent": 8.0,
+        "firstBaseline": 36.0,
+        "height": 96,
+        "layoutHeight": 96.0,
+        "layoutWidth": 220.0,
+        "layoutX": 0.0,
+        "layoutY": 0.0,
+        "lineCount": 2,
+        "pixelsFnv1a": "cd1732a1c1d4abcf",
+        "width": 220
+      },
+      "name": "gradient-fill-linear",
+      "request": {
+        "align": "center",
+        "fill": {
+          "end": [
+            1,
+            0
+          ],
+          "spread": "pad",
+          "start": [
+            0,
+            0
+          ],
+          "stops": [
+            {
+              "color": [
+                1,
+                0.2,
+                0.1,
+                1
+              ],
+              "offset": 0
+            },
+            {
+              "color": [
+                0.1,
+                0.3,
+                1,
+                1
+              ],
+              "offset": 1
+            }
+          ],
+          "type": "linear"
+        },
+        "fontSize": 40,
+        "lineHeight": 1.2,
+        "maxWidth": 220,
+        "text": "Gradient fill"
+      }
+    },
+    {
+      "contentVersion": 42,
+      "expected": {
+        "ascent": 25.600000381469727,
+        "descent": 6.400000095367432,
+        "firstBaseline": 28.80000114440918,
+        "height": 116,
+        "layoutHeight": 115.20000457763672,
+        "layoutWidth": 120.0,
+        "layoutX": 0.0,
+        "layoutY": 0.0,
+        "lineCount": 3,
+        "pixelsFnv1a": "798f76f0d523667d",
+        "width": 120
+      },
+      "name": "gradient-fill-in-right-to-left",
+      "request": {
+        "align": "start",
+        "fill": {
+          "center": [
+            0.3,
+            0.4
+          ],
+          "radius": 0.9,
+          "spread": "reflect",
+          "stops": [
+            {
+              "color": [
+                1,
+                1,
+                0.4,
+                1
+              ],
+              "offset": 0
+            },
+            {
+              "color": [
+                1,
+                0.4,
+                0.2,
+                0.8
+              ],
+              "offset": 0.5
+            },
+            {
+              "color": [
+                0.4,
+                0,
+                0.6,
+                1
+              ],
+              "offset": 1
+            }
+          ],
+          "type": "radial"
+        },
+        "fontSize": 32.0,
+        "lineHeight": 1.2,
+        "maxWidth": 120.0,
+        "text": "שלום עולם 123"
+      }
+    },
+    {
+      "contentVersion": 43,
+      "expected": {
+        "ascent": 19.200000762939453,
+        "backgroundFnv1a": "bdd7c8619cb4c21d",
+        "descent": 4.9921875,
+        "firstBaseline": 21.60000228881836,
+        "height": 70,
+        "layoutHeight": 57.60000228881836,
+        "layoutWidth": 150.0,
+        "layoutX": 6.0,
+        "layoutY": 6.0,
+        "lineCount": 2,
+        "pixelsFnv1a": "471e5aaa0d1bebb1",
+        "width": 162
+      },
+      "name": "split-background",
+      "request": {
+        "align": "center",
+        "background": {
+          "color": [
+            20,
+            20,
+            20,
+            160
+          ],
+          "padding": 6
+        },
+        "fill": [
+          255,
+          255,
+          255,
+          255
+        ],
+        "fontSize": 24,
+        "lineHeight": 1.2,
+        "maxWidth": 150,
+        "splitBackground": true,
+        "strokes": [
+          {
+            "color": [
+              0,
+              0,
+              0,
+              255
+            ],
+            "width": 2.5
+          }
+        ],
+        "text": "Split boxes\nand glyphs"
       }
     }
   ],

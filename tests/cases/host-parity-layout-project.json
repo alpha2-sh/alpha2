@@ -223,7 +223,7 @@
                         "mode": "constant",
                         "value": 0.055
                       },
-                      "color": {
+                      "fill": {
                         "red": 0.8,
                         "green": 0.82,
                         "blue": 0.86,
@@ -419,7 +419,7 @@
                         "mode": "constant",
                         "value": 0.06
                       },
-                      "color": {
+                      "fill": {
                         "red": 0.05,
                         "green": 0.05,
                         "blue": 0.1,
@@ -454,7 +454,7 @@
             "mode": "constant",
             "value": "4px 6px"
           },
-          "color": "#0b0d12",
+          "fill": "#0b0d12",
           "text_align": "center",
           "font_size": {
             "mode": "keyframes",

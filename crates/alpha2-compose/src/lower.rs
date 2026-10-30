@@ -2,7 +2,7 @@
 //! the emitter places ([`Prim`]), with the theme's defaults filled in, times
 //! in ticks, and caption files parsed.
 
-use alpha2_model::{CaptionCue, LayoutNode, Rgba, TextOutline, TextStyle};
+use alpha2_model::{CaptionCue, LayoutNode, Paint, Rgba, TextShadow, TextStroke, TextStyle};
 
 use crate::ComposeError;
 use crate::compile::Context;
@@ -113,7 +113,8 @@ pub(crate) struct TextContent {
     pub family: Option<String>,
     pub color: Rgba,
     pub background: Option<Rgba>,
-    pub outline: Option<Rgba>,
+    pub strokes: Vec<TextStroke>,
+    pub shadows: Vec<TextShadow>,
     pub max_lines: Option<u32>,
 }
 
@@ -660,7 +661,8 @@ impl Context<'_> {
                     .or_else(|| self.theme.font_family.clone()),
                 color: text.color.unwrap_or(self.theme.text),
                 background: text.background,
-                outline: text.outline,
+                strokes: text.strokes.clone(),
+                shadows: text.shadows.clone(),
                 max_lines: text.max_lines,
             }),
         })))
@@ -740,13 +742,17 @@ impl Context<'_> {
             }
             position => position,
         };
-        let outline = |width: f32| TextOutline {
-            color: Rgba::new(0.0, 0.0, 0.0, 0.85),
-            width,
+        let outline = |width: f32| {
+            vec![TextStroke {
+                color: Rgba::new(0.0, 0.0, 0.0, 0.85),
+                width,
+            }]
         };
         let mut style = TextStyle {
             font_family: self.theme.font_family.clone(),
-            color: captions.color.unwrap_or(self.theme.text),
+            fill: Paint::Solid {
+                color: captions.color.unwrap_or(self.theme.text),
+            },
             max_width: if vertical { 0.86 } else { 0.8 },
             anchor: alpha2_model::Vec2::new(0.5, 0.5),
             ..TextStyle::default()
@@ -755,7 +761,7 @@ impl Context<'_> {
         let low = if vertical { 0.76 } else { 0.88 };
         let y = match captions.style {
             CaptionStyle::Outline => {
-                style.outline = Some(outline(0.12));
+                style.strokes = outline(0.12);
                 position.unwrap_or(low)
             }
             CaptionStyle::Boxed => {
@@ -773,7 +779,7 @@ impl Context<'_> {
             }
             CaptionStyle::BoldCenter => {
                 font_px *= 1.35;
-                style.outline = Some(outline(0.16));
+                style.strokes = outline(0.16);
                 position.unwrap_or(if vertical { 0.62 } else { 0.7 })
             }
         };
@@ -1032,7 +1038,8 @@ impl Context<'_> {
                 family: self.theme.font_family.clone(),
                 color: self.theme.text,
                 background,
-                outline: None,
+                strokes: Vec::new(),
+                shadows: Vec::new(),
                 max_lines,
             }),
         }))

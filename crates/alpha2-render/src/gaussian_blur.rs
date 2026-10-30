@@ -132,16 +132,14 @@ impl<'a> RenderGraph<'a> {
             libm::cosf(radians) * distance * unit_over_width,
             -libm::sinf(radians) * distance * unit_over_height,
         ];
-        let shadow = self.add_internal_effect(
-            SHADOW_OFFSET_ID,
+        let soft = self.add_shadow_passes(
             source,
-            EffectParams::new()
-                .with("offset", ParamValue::Vec2(offset))
-                .with("color", color)
-                .with("opacity", ParamValue::Float(opacity)),
+            offset,
+            softness * 0.5 * unit,
+            color,
+            opacity,
             runtime,
         )?;
-        let soft = self.add_gaussian(shadow, softness * 0.5, runtime)?;
         self.add_transition(
             EffectId::from_static(SHADOW_COMBINE_ID, 1),
             source,
@@ -152,6 +150,78 @@ impl<'a> RenderGraph<'a> {
                 ..runtime
             },
         )
+    }
+
+    /// The shadow of `source`'s alpha alone, without `source`: moved by
+    /// `offset_pixels` (+x right, +y down), blurred by a Gaussian of standard
+    /// deviation `sigma_pixels`, in the straight, sRGB-encoded `color`, its
+    /// alpha the shadow's opacity. Drawn with the drop-shadow effect's
+    /// passes, so a text shadow and that effect blur alike, on the CPU too.
+    /// A deviation that is not positive leaves the shadow sharp.
+    ///
+    /// # Errors
+    /// Returns [`GraphError::InvalidDependency`] unless `source` is earlier,
+    /// or [`RenderError::InvalidEffectParams`] for a color out of range.
+    #[allow(clippy::cast_precision_loss)]
+    pub fn add_shadow(
+        &mut self,
+        source: RenderNodeId,
+        offset_pixels: [f32; 2],
+        sigma_pixels: f32,
+        color: [f32; 4],
+    ) -> Result<RenderNodeId, GraphError> {
+        if !color.iter().all(|value| (0.0..=1.0).contains(value))
+            || !offset_pixels.iter().all(|value| value.is_finite())
+        {
+            return Err(RenderError::InvalidEffectParams.into());
+        }
+        let offset = [
+            offset_pixels[0] / self.size.width as f32,
+            offset_pixels[1] / self.size.height as f32,
+        ];
+        let runtime = EffectRuntime::default();
+        if sigma_pixels > 0.0 {
+            return self.add_shadow_passes(
+                source,
+                offset,
+                sigma_pixels,
+                ParamValue::Color(color),
+                1.0,
+                runtime,
+            );
+        }
+        self.add_internal_effect(
+            SHADOW_OFFSET_ID,
+            source,
+            EffectParams::new()
+                .with("offset", ParamValue::Vec2(offset))
+                .with("color", ParamValue::Color(color))
+                .with("opacity", ParamValue::Float(1.0)),
+            runtime,
+        )
+    }
+
+    /// The drop-shadow effect's first two passes: `source`'s alpha moved by
+    /// `offset` (uv) in `color` at `opacity`, blurred by `sigma_pixels`.
+    fn add_shadow_passes(
+        &mut self,
+        source: RenderNodeId,
+        offset: [f32; 2],
+        sigma_pixels: f32,
+        color: ParamValue,
+        opacity: f32,
+        runtime: EffectRuntime,
+    ) -> Result<RenderNodeId, GraphError> {
+        let shadow = self.add_internal_effect(
+            SHADOW_OFFSET_ID,
+            source,
+            EffectParams::new()
+                .with("offset", ParamValue::Vec2(offset))
+                .with("color", color)
+                .with("opacity", ParamValue::Float(opacity)),
+            runtime,
+        )?;
+        self.add_gaussian_cascade(shadow, sigma_pixels, runtime)
     }
 
     fn add_glow(

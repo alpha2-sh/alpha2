@@ -88,7 +88,7 @@ dot = project.generated(shapes(circle((0.5, 0.5), 0.2, picture=(1280, 720)), fil
 | Sizes of shapes (`rect`, `ellipse`) | Per axis, as positions: `(0.5, 0.5)` is round only on a square picture |
 | Lengths: corner radii, stroke widths, dashes, blur radii, layout numbers | A fraction of the picture's shorter side |
 | Font sizes (text generators, layouts) | A fraction of the picture's shorter side, or `"40px"` of the canvas in a layout |
-| Letter spacing, outline width | A fraction of the font size |
+| Letter spacing, text stroke widths, text shadow offsets and blur | A fraction of the font size |
 
 `circle(center, diameter, picture=(w, h))` gives a round ellipse: the diameter is a shorter-side
 fraction, and `picture` is the size of what the shapes draw on (the canvas for a shapes generator,

@@ -12,7 +12,7 @@ mod resolve;
 #[cfg(test)]
 mod tests;
 
-use crate::text::{MAX_FONT_PIXELS, MAX_OUTLINE_PIXELS, layout_text_key, rgba8};
+use crate::text::{MAX_FONT_PIXELS, TextDraw, layout_text_key, stroke_pixels, text_fill};
 use crate::{Baselines, CanvasRect, PictureSize};
 use alpha2_eval::{EvaluatedLayout, EvaluatedNode, EvaluatedText, LayoutPlan, NodeContent};
 use alpha2_media::EmojiPolicy;
@@ -116,14 +116,12 @@ pub(crate) fn text_request(
             TextAlign::Center => alpha2_media::TextAlign::Center,
             TextAlign::End => alpha2_media::TextAlign::End,
         },
-        color: rgba8(text.color),
+        fill: text_fill(&text.fill),
         emoji_policy: EmojiPolicy::Color,
         content_version,
-        outline: text.outline.map(|outline| alpha2_text::TextOutline {
-            color: rgba8(outline.color),
-            width: (outline.width * font_size).clamp(f32::MIN_POSITIVE, MAX_OUTLINE_PIXELS),
-        }),
+        strokes: stroke_pixels(&text.strokes, font_size),
         background: None,
+        split_background: false,
         font_family: text.font_family.clone(),
         letter_spacing: text.letter_spacing * font_size,
         font_weight: text.font_weight,
@@ -173,7 +171,7 @@ pub fn layout_texts(
     layout: &EvaluatedLayout,
     resolved: &ResolvedLayout,
     size: PictureSize,
-) -> (Vec<Option<u64>>, Vec<(u64, TextRasterRequest)>) {
+) -> (Vec<Option<u64>>, Vec<(u64, TextDraw)>) {
     fn walk<'a>(
         node: &'a EvaluatedNode,
         index: &mut usize,
@@ -197,7 +195,7 @@ pub fn layout_texts(
     let mut found = Vec::new();
     walk(&layout.root, &mut 0, &mut found);
     let mut keys = Vec::with_capacity(found.len());
-    let mut requests: Vec<(u64, TextRasterRequest)> = Vec::new();
+    let mut requests: Vec<(u64, TextDraw)> = Vec::new();
     for (node, text) in found {
         let Some(text) = text else {
             keys.push(None);
@@ -208,10 +206,11 @@ pub fn layout_texts(
             .get(node)
             .map_or(0.0, |rects| rects.text_width);
         let mut request = text_request(text, unit, wrap(width), 1);
-        let key = layout_text_key(&request);
+        let shadows = crate::text::shadow_pixels(&text.shadows, request.font_size);
+        let key = layout_text_key(&request, &shadows);
         request.content_version = key;
         if !requests.iter().any(|(held, _)| *held == key) {
-            requests.push((key, request));
+            requests.push((key, TextDraw { request, shadows }));
         }
         keys.push(Some(key));
     }

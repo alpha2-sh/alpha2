@@ -141,15 +141,19 @@ fn captions_show_their_cue_between_the_tracks_around_them() {
     );
 }
 
-/// The style every text test draws in: an outline and a box, so the
+/// The style every text test draws in: a stroke and a box, so the
 /// decorations' placement is compared too.
 const TEXT_STYLE: &str = r#"{ "font_size": 0.2, "position": { "x": 0.5, "y": 0.6 },
-    "outline": { "color": { "red": 0, "green": 0, "blue": 0, "alpha": 1 }, "width": 0.1 },
+    "strokes": [{ "color": { "red": 0, "green": 0, "blue": 0, "alpha": 1 }, "width": 0.1 }],
     "background": { "color": { "red": 0, "green": 0, "blue": 0.4, "alpha": 0.6 }, "padding": 0.2 } }"#;
 
 /// A grey backdrop with `tracks` over it, `sources` (each followed by a
 /// comma) and `compositions` added: a 160x90 project two seconds long.
-fn text_project(sources: &str, compositions: &str, tracks: &str) -> crate::EngineProject {
+pub(super) fn text_project(
+    sources: &str,
+    compositions: &str,
+    tracks: &str,
+) -> crate::EngineProject {
     let document = r#"{
           "schema_version": 1, "id": "p", "name": "P",
           "settings": { "width": 160, "height": 90, "frame_rate": { "num": 30, "den": 1 }, "sample_rate": 48000 },
@@ -546,7 +550,7 @@ fn a_text_measure_bounds_the_pixels_a_frame_draws_of_it() {
             0,
         )
         .expect("font");
-    let red = r#""color": { "red": 1, "green": 0, "blue": 0, "alpha": 1 }"#;
+    let red = r#""fill": { "red": 1, "green": 0, "blue": 0, "alpha": 1 }"#;
     let grey = titled_frame(&renderer, &mut texts, size, None);
     let cases = [
         ("default", "Qgjy Title", format!("{{ {red} }}")),
@@ -556,7 +560,7 @@ fn a_text_measure_bounds_the_pixels_a_frame_draws_of_it() {
             format!(
                 r#"{{ {red}, "font_size": 0.12, "align": "start", "position": {{ "x": 0.1, "y": 0.1 }},
                     "anchor": {{ "x": 0, "y": 0 }},
-                    "outline": {{ "color": {{ "red": 0, "green": 0, "blue": 0, "alpha": 1 }}, "width": 0.1 }} }}"#
+                    "strokes": [{{ "color": {{ "red": 0, "green": 0, "blue": 0, "alpha": 1 }}, "width": 0.1 }}] }}"#
             ),
         ),
         (

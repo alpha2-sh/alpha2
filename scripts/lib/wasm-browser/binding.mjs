@@ -264,6 +264,7 @@ for (const fixture of golden.cases) {
     layoutX: raster.layoutX, layoutY: raster.layoutY, layoutWidth: raster.layoutWidth, layoutHeight: raster.layoutHeight,
     firstBaseline: raster.firstBaseline, ascent: raster.ascent, descent: raster.descent, lineCount: raster.lineCount,
     pixelsFnv1a: fnv1a(raster.rgba8),
+    ...(raster.background ? { backgroundFnv1a: fnv1a(raster.background) } : {}),
   };
   const differing = Object.keys(fixture.expected).filter((key) => actual[key] !== fixture.expected[key]);
   if (differing.length) mismatches.push(fixture.name + ": " + differing.map((key) => key + " " + actual[key] + " != " + fixture.expected[key]).join(", "));

@@ -623,21 +623,74 @@ struct PlacedText<'t> {
 }
 
 impl<'t> PlacedText<'t> {
-    /// The generator's picture: the texture, keyed as its store keys it,
-    /// over transparency.
+    /// The generator's picture: the text, keyed as its store keys it, over
+    /// transparency.
     fn add_to(self, graph: &mut RenderGraph<'t>) -> Result<RenderNodeId, RenderError> {
-        let source = match self.texture.cache_key {
-            Some(key) => graph.add_source_with_key(self.texture.texture, key),
-            None => graph.add_source(self.texture.texture),
-        };
+        let layer = text_layer(graph, self.texture, self.visual)?;
         graph
-            .add_composite(vec![GraphLayer {
-                source,
-                visual: self.visual,
-                blend_mode: BlendMode::Normal,
-            }])
+            .add_composite(vec![layer])
             .map_err(GraphError::into_render_error)
     }
+}
+
+/// `view` as a graph source, keyed when its store gave a key.
+fn keyed_source<'t>(
+    graph: &mut RenderGraph<'t>,
+    view: SourceView<'t>,
+    key: Option<RenderCacheKey>,
+) -> RenderNodeId {
+    match key {
+        Some(key) => graph.add_source_with_key(view, key),
+        None => graph.add_source(view),
+    }
+}
+
+/// A prepared text placed on the graph's picture by `visual`, as one layer.
+///
+/// Without shadows the layer is the texture itself, keyed as its store keys
+/// it. With shadows it is a picture of its own: the background's boxes, then
+/// each shadow (the last listed lowest), then the glyphs, the boxes and glyphs
+/// placed by `visual`. A shadow is cast by the placed glyphs, so its offset
+/// and blur are in the picture's pixels, in which the store measured them.
+pub(crate) fn text_layer<'t>(
+    graph: &mut RenderGraph<'t>,
+    texture: TextTexture<'t>,
+    visual: LayerTransform,
+) -> Result<GraphLayer, RenderError> {
+    let glyphs = keyed_source(graph, texture.texture, texture.cache_key);
+    if texture.shadows.is_empty() {
+        return Ok(GraphLayer {
+            source: glyphs,
+            visual,
+            blend_mode: BlendMode::Normal,
+        });
+    }
+    let placed = graph
+        .add_composite(vec![GraphLayer {
+            source: glyphs,
+            visual,
+            blend_mode: BlendMode::Normal,
+        }])
+        .map_err(GraphError::into_render_error)?;
+    let mut layers = Vec::with_capacity(texture.shadows.len() + 2);
+    if let Some((background, key)) = texture.background {
+        layers.push(GraphLayer {
+            source: keyed_source(graph, background, key),
+            visual,
+            blend_mode: BlendMode::Normal,
+        });
+    }
+    for shadow in texture.shadows.iter().rev() {
+        let cast = graph
+            .add_shadow(placed, shadow.offset, shadow.sigma, shadow.color)
+            .map_err(GraphError::into_render_error)?;
+        layers.push(identity_layer(cast));
+    }
+    layers.push(identity_layer(placed));
+    let look = graph
+        .add_composite(layers)
+        .map_err(GraphError::into_render_error)?;
+    Ok(identity_layer(look))
 }
 
 /// What one composition step draws from outside the graph.
@@ -813,18 +866,14 @@ struct CaptionLayer<'a> {
     visual: LayerTransform,
 }
 
-/// A caption's texture as a layer of `graph`: keyed as its store keys it,
-/// so a frame showing the same caption over the same picture is found again.
-fn caption_graph_layer<'a>(graph: &mut RenderGraph<'a>, caption: &CaptionLayer<'a>) -> GraphLayer {
-    let source = match caption.texture.cache_key {
-        Some(key) => graph.add_source_with_key(caption.texture.texture, key),
-        None => graph.add_source(caption.texture.texture),
-    };
-    GraphLayer {
-        source,
-        visual: caption.visual,
-        blend_mode: BlendMode::Normal,
-    }
+/// A caption's text as a layer of `graph` ([`text_layer`]): keyed as its
+/// store keys it, so a frame showing the same caption over the same picture
+/// is found again.
+fn caption_graph_layer<'a>(
+    graph: &mut RenderGraph<'a>,
+    caption: &CaptionLayer<'a>,
+) -> Result<GraphLayer, RenderError> {
+    text_layer(graph, caption.texture, caption.visual)
 }
 
 /// Each caption `frame` shows, from `frames`, placed on the canvas
@@ -944,7 +993,7 @@ fn frame_graph<'a>(
         // drawn (a matte nothing names) does not move them.
         while let Some(caption) = captions.next_if(|caption| caption.layers_below <= textures.layer)
         {
-            layers.push(caption_graph_layer(&mut graph, caption));
+            layers.push(caption_graph_layer(&mut graph, caption)?);
         }
         if clip.is_matte || suppressed.contains(clip.clip_id) {
             continue;
@@ -980,7 +1029,7 @@ fn frame_graph<'a>(
         layers.push(identity_layer(source));
     }
     for caption in captions {
-        layers.push(caption_graph_layer(&mut graph, caption));
+        layers.push(caption_graph_layer(&mut graph, caption)?);
     }
     let output = graph
         .add_composite_over(layers, background)

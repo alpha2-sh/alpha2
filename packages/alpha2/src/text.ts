@@ -27,6 +27,11 @@ export interface BrowserTextTexture {
   readonly lineCount: number;
   /** Tightly packed, premultiplied RGBA8 rows for renderer upload. */
   readonly rgba8: Uint8ClampedArray;
+  /**
+   * The background's boxes alone, packed as `rgba8` is, when a {@link WasmTextRequest} split them
+   * off (`splitBackground`); `rgba8` then holds none of them.
+   */
+  readonly background?: Uint8ClampedArray;
 }
 
 /** Browser-owned text layout and raster style. */
@@ -110,6 +115,7 @@ export interface WasmTextRasterizerHandle {
     contentVersion: bigint,
   ): {
     readonly descriptor: string;
+    takeBackground?(): Uint8Array;
     takePixels(): Uint8Array;
     free?(): void;
   };
@@ -145,16 +151,72 @@ export interface WasmTextRequest {
    */
   readonly fontWeight?: number;
   readonly align?: "start" | "center" | "end";
-  /** Straight (not premultiplied), sRGB-encoded RGBA, each in `0..=255`. */
-  readonly color: readonly [number, number, number, number];
+  /**
+   * What paints the glyphs: straight (not premultiplied), sRGB-encoded RGBA bytes, or a gradient
+   * over the layout box ({@link WasmTextGradient}). A color glyph's text-colored parts take the
+   * color, or a gradient's first stop.
+   */
+  readonly fill: WasmTextColor | WasmTextGradient;
   /**
    * How emoji are drawn (default `color`): a font's color glyphs (COLR, CBDT, sbix) in their own
    * colors, an emoji trying the color fonts first; `monochrome` draws every glyph as an outline in
-   * `color`, an emoji trying the other fonts first; `replace` draws each emoji grapheme as one
+   * the fill, an emoji trying the other fonts first; `replace` draws each emoji grapheme as one
    * U+FFFD.
    */
   readonly emojiPolicy?: "color" | "monochrome" | "replace";
+  /**
+   * Bands around the glyphs, innermost first, each outside the one before: at most 4, their
+   * pixel widths summing to at most 64.
+   */
+  readonly strokes?: readonly {
+    readonly color: WasmTextColor;
+    readonly width: number;
+  }[];
+  /** A box behind each line, grown by `padding` pixels (at most 256). */
+  readonly background?: {
+    readonly color: WasmTextColor;
+    readonly padding: number;
+  };
+  /**
+   * Returns the boxes as their own plane ({@link BrowserTextTexture.background}) instead of under
+   * the glyphs, for a page that draws a shadow between them. The rasterizer draws no shadows.
+   */
+  readonly splitBackground?: boolean;
 }
+
+/** Straight (not premultiplied), sRGB-encoded RGBA, each in `0..=255`. */
+export type WasmTextColor = readonly [number, number, number, number];
+
+/**
+ * A gradient fill over the text's layout box: points and the radius are fractions of the box
+ * (`[0, 0]` its top-left, the radius of its shorter side), the conic angle radians clockwise from
+ * straight up; 2 to 16 stops, colors straight sRGB in `0..=1`, interpolated in linear light as a
+ * shape's paint is.
+ */
+export type WasmTextGradient = (
+  | {
+      readonly type: "linear";
+      readonly start: readonly [number, number];
+      readonly end: readonly [number, number];
+      readonly spread?: "pad" | "repeat" | "reflect";
+    }
+  | {
+      readonly type: "radial";
+      readonly center: readonly [number, number];
+      readonly radius: number;
+      readonly spread?: "pad" | "repeat" | "reflect";
+    }
+  | {
+      readonly type: "conic";
+      readonly center: readonly [number, number];
+      readonly angle?: number;
+    }
+) & {
+  readonly stops: readonly {
+    readonly offset: number;
+    readonly color: readonly [number, number, number, number];
+  }[];
+};
 
 /**
  * The engine's portable text host (`alpha2-text`: Unicode bidirectional
@@ -216,8 +278,10 @@ export class WasmTextRasterizer {
     );
     let descriptor: WasmTextDescriptor;
     let pixels: Uint8Array;
+    let background: Uint8Array | undefined;
     try {
       descriptor = JSON.parse(raster.descriptor) as WasmTextDescriptor;
+      background = raster.takeBackground?.();
       pixels = raster.takePixels();
     } finally {
       raster.free?.();
@@ -243,6 +307,15 @@ export class WasmTextRasterizer {
         pixels.byteOffset,
         pixels.byteLength,
       ),
+      ...(background !== undefined && background.byteLength > 0
+        ? {
+            background: new Uint8ClampedArray(
+              background.buffer,
+              background.byteOffset,
+              background.byteLength,
+            ),
+          }
+        : {}),
     };
   }
 

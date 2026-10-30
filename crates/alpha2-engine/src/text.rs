@@ -17,7 +17,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use alpha2_eval::{FrameDesc, GeneratorPlan, LayoutPlan, StepOp};
-use alpha2_layout::{PictureSize, TextBounds, shaped_key, text_key, text_request};
+use alpha2_layout::{
+    PictureSize, ShadowPixels, TextBounds, TextDraw, shaped_key, text_draw, text_key,
+};
 use alpha2_model::{Generator, TextStyle};
 use alpha2_render::{
     CpuImage, CpuRenderer, CpuSource, RenderCacheKey, RenderError, RenderSize, Renderer,
@@ -126,6 +128,14 @@ pub struct TextTexture<'a> {
     /// for a source: [`TextTextures`] keys each text by its [`text_key`] and
     /// the fonts it was drawn with.
     pub cache_key: Option<RenderCacheKey>,
+    /// The background's boxes, the size of `texture`, when the text has both
+    /// boxes and shadows, which lie between them and the glyphs: `texture`
+    /// then holds no boxes. With the key results drawn from it are cached
+    /// under, as `cache_key` is for `texture`.
+    pub background: Option<(SourceView<'a>, Option<RenderCacheKey>)>,
+    /// The shadows of the glyphs, first on top, in pixels of the picture the
+    /// text is placed on.
+    pub shadows: &'a [ShadowPixels],
 }
 
 /// Why text could not be prepared.
@@ -155,6 +165,8 @@ impl std::error::Error for TextError {}
 
 struct TextEntry {
     texture: TextPixels,
+    background: Option<TextPixels>,
+    shadows: Vec<ShadowPixels>,
     width: u32,
     height: u32,
     margin: [u32; 2],
@@ -167,7 +179,7 @@ struct TextEntry {
 /// rasterize again one the text store has let go.
 struct LayoutEntry {
     prepared: Arc<PreparedLayout>,
-    requests: Vec<(u64, TextRasterRequest)>,
+    requests: Vec<(u64, TextDraw)>,
     last_used: u64,
 }
 
@@ -281,8 +293,8 @@ impl TextTextures {
                 entry.last_used = self.frame;
                 continue;
             }
-            let request = text_request(text, style, picture, key);
-            self.rasterize(renderer, key, &request)?;
+            let draw = text_draw(text, style, picture, key);
+            self.rasterize(renderer, key, &draw)?;
         }
         for (plan, time) in frame_layouts(frame) {
             self.prepare_layout(renderer, plan, time, size)?;
@@ -314,13 +326,14 @@ impl TextTextures {
         Ok(())
     }
 
-    /// Rasterizes `request` and uploads it as the text with `key`.
+    /// Rasterizes `draw` and uploads it as the text with `key`.
     fn rasterize(
         &mut self,
         renderer: &dyn TextUpload,
         key: u64,
-        request: &TextRasterRequest,
+        draw: &TextDraw,
     ) -> Result<(), TextError> {
+        let request = &draw.request;
         let raster = self
             .rasterizer
             .rasterize(request)
@@ -334,17 +347,23 @@ impl TextTextures {
         // The anchor places the decorated text; the margin, which holds only ink reaching past
         // it, takes no part in placement.
         let margin = corner.map(|corner| corner.saturating_sub(request.decoration_margin()));
+        let size =
+            RenderSize::new(texture_size.width, texture_size.height).map_err(TextError::Render)?;
         let texture = renderer
-            .upload_text(
-                RenderSize::new(texture_size.width, texture_size.height)
-                    .map_err(TextError::Render)?,
-                &raster.pixels.rgba8,
-            )
+            .upload_text(size, &raster.pixels.rgba8)
+            .map_err(TextError::Render)?;
+        let background = raster
+            .background
+            .as_deref()
+            .map(|rgba8| renderer.upload_text(size, rgba8))
+            .transpose()
             .map_err(TextError::Render)?;
         self.entries.insert(
             key,
             TextEntry {
                 texture,
+                background,
+                shadows: draw.shadows.clone(),
                 width: texture_size.width,
                 height: texture_size.height,
                 margin,
@@ -391,14 +410,14 @@ impl TextTextures {
             boxes.push(match text {
                 None => None,
                 Some(text_key) => {
-                    let request = &requests
+                    let draw = &requests
                         .iter()
                         .find(|(key, _)| key == text_key)
                         .expect("a request per text")
                         .1;
                     match self.entries.get_mut(text_key) {
                         Some(held) => held.last_used = self.frame,
-                        None => self.rasterize(renderer, *text_key, request)?,
+                        None => self.rasterize(renderer, *text_key, draw)?,
                     }
                     let entry = &self.entries[text_key];
                     Some(crate::layout::paint::TextBox {
@@ -529,6 +548,11 @@ impl TextTextures {
             height: entry.height,
             margin: entry.margin,
             cache_key: Some(self.cache_key(key)),
+            background: entry
+                .background
+                .as_ref()
+                .map(|background| (background.view(), Some(self.background_cache_key(key)))),
+            shadows: &entry.shadows,
         })
     }
 
@@ -538,6 +562,14 @@ impl TextTextures {
     /// with the same fonts.
     fn cache_key(&self, key: u64) -> RenderCacheKey {
         let high = TEXT_CACHE_DOMAIN ^ self.font_set;
+        RenderCacheKey::from_value((u128::from(high) << 64) | u128::from(key))
+    }
+
+    /// The result cache key of the background plane of the text with `key`:
+    /// [`Self::cache_key`] in a domain of its own, so the glyphs and the boxes
+    /// of one text never share a key.
+    fn background_cache_key(&self, key: u64) -> RenderCacheKey {
+        let high = (TEXT_CACHE_DOMAIN ^ self.font_set) ^ (1 << 62);
         RenderCacheKey::from_value((u128::from(high) << 64) | u128::from(key))
     }
 }

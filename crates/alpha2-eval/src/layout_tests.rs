@@ -116,24 +116,35 @@ fn a_gap_on_one_axis_overrides_gap() {
 #[test]
 fn text_inherits_its_ancestors_style_and_overrides_it_where_it_sets_it() {
     let layout = plan(
-        r##"{"font_family":"Inter","color":"#ff0000","font_size":{"mode":"constant","value":"54px"},
+        r##"{"font_family":"Inter","fill":"#ff0000","font_size":{"mode":"constant","value":"54px"},
+            "shadows":[{"color":"#000000","offset":{"x":0,"y":0.1},"blur":0.2}],
             "children":[
               {"text":{"mode":"constant","value":"inherits"}},
               {"line_height":1.5,"text_align":"center","children":[
-                {"text":{"mode":"constant","value":"overrides"},"color":"#00ff00",
+                {"text":{"mode":"constant","value":"overrides"},"fill":"#00ff00","shadows":[],
+                 "strokes":[{"color":"#000000","width":0.1}],
                  "font_size":{"mode":"constant","value":0.1}}]}]}"##,
     )
     .evaluate(MediaTime::ZERO);
     let first = text(child(&layout, 0));
     assert_eq!(first.font_family.as_deref(), Some("Inter"));
     assert_eq!(first.font_size, 0.05);
-    assert_eq!(first.color, Rgba::new(1.0, 0.0, 0.0, 1.0));
+    let solid = |color| alpha2_model::Paint::Solid { color };
+    assert_eq!(first.fill, solid(Rgba::new(1.0, 0.0, 0.0, 1.0)));
+    // Shadows inherit as a whole list, as CSS inherits `text-shadow`.
+    assert_eq!(first.shadows.len(), 1);
+    assert_eq!(first.strokes, []);
     assert_eq!(first.line_height, 1.2);
     assert_eq!(first.text_align, TextAlign::Start);
     let nested = text(&children(child(&layout, 1))[0]);
     assert_eq!(nested.font_family.as_deref(), Some("Inter"));
     assert_eq!(nested.font_size, 0.1);
-    assert_eq!(nested.color, Rgba::new(0.0, 1.0, 0.0, 1.0));
+    assert_eq!(nested.fill, solid(Rgba::new(0.0, 1.0, 0.0, 1.0)));
+    assert!(
+        nested.shadows.is_empty(),
+        "an empty list replaces the inherited one"
+    );
+    assert_eq!(nested.strokes.len(), 1);
     assert_eq!(nested.line_height, 1.5);
     assert_eq!(nested.text_align, TextAlign::Center);
 }
@@ -146,10 +157,11 @@ fn a_text_without_style_draws_in_the_initial_style() {
     let initial = alpha2_model::LAYOUT_TEXT_DEFAULTS;
     assert_eq!(drawn.font_family, initial.font_family);
     assert_eq!(drawn.font_size, initial.font_size);
-    assert_eq!(drawn.color, initial.color);
+    assert_eq!(drawn.fill, initial.fill);
     assert_eq!(drawn.line_height, initial.line_height);
     assert_eq!(drawn.text_align, initial.text_align);
-    assert_eq!(drawn.outline, None);
+    assert_eq!(drawn.strokes, []);
+    assert_eq!(drawn.shadows, []);
 }
 
 #[test]

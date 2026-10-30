@@ -66,7 +66,7 @@ test("props become the document, CSS value strings as written", () => {
       translate: [0, "30px"],
       scale: 1.5,
       font_family: "Inter",
-      color: "#f5f5f0",
+      fill: "#f5f5f0",
       opacity: {
         mode: "keyframes",
         keyframes: [
@@ -75,7 +75,7 @@ test("props become the document, CSS value strings as written", () => {
         ],
       },
     },
-    text("Title", { font_size: "54px", color: red, padding: "8px 16px" }),
+    text("Title", { font_size: "54px", fill: red, padding: "8px 16px" }),
     shape(ellipse, { width: 0.1, aspect_ratio: 1 }),
     box(),
   );
@@ -91,12 +91,12 @@ test("props become the document, CSS value strings as written", () => {
     translate: constant({ x: 0, y: "30px" }),
     scale: constant({ x: 1.5, y: 1.5 }),
     font_family: "Inter",
-    color: "#f5f5f0",
+    fill: "#f5f5f0",
     opacity: root.opacity,
     children: [
       {
         font_size: constant("54px"),
-        color: red,
+        fill: red,
         padding: constant("8px 16px"),
         text: constant("Title"),
       },
@@ -169,10 +169,10 @@ test("a built grid with inherited style is a valid project document", () => {
         gap: "24px",
         padding: "48px 64px",
         font_family: "Inter",
-        color: "#f5f5f0",
+        fill: "#f5f5f0",
       },
       text("Revenue", { font_size: "32px" }),
-      text("Margin", { font_size: "32px", color: "#ffb020" }),
+      text("Margin", { font_size: "32px", fill: "#ffb020" }),
       box({
         background: "#1e2230",
         border_radius: "12px",

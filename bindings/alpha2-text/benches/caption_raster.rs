@@ -9,7 +9,7 @@
 use std::{hint::black_box, time::Instant};
 
 use alpha2_media::{EmojiPolicy, TextAlign};
-use alpha2_text::{TextFont, TextOutline, TextRasterRequest, TextRasterizer};
+use alpha2_text::{TextFill, TextFont, TextRasterRequest, TextRasterizer, TextStroke};
 
 const RUNS: usize = 3;
 
@@ -62,14 +62,18 @@ fn run(
         max_width: 0.9 * width as f32,
         line_height: 1.2,
         align: TextAlign::Center,
-        color: [255, 255, 255, 255],
+        fill: TextFill::Solid([255, 255, 255, 255]),
         emoji_policy: EmojiPolicy::Color,
         content_version: 1,
-        outline: (outline > 0.0).then(|| TextOutline {
-            color: [0, 0, 0, 255],
-            width: (outline * font_size).min(64.0),
-        }),
+        strokes: (outline > 0.0)
+            .then(|| TextStroke {
+                color: [0, 0, 0, 255],
+                width: (outline * font_size).min(64.0),
+            })
+            .into_iter()
+            .collect(),
         background: None,
+        split_background: false,
         font_family: None,
         letter_spacing: 0.0,
         font_weight: 400,

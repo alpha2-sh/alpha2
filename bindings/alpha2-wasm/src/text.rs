@@ -5,7 +5,10 @@
 //! with the same fonts.
 
 use alpha2_media::{EmojiPolicy, TextAlign};
-use alpha2_text::{TextFont, TextRasterRequest, TextRasterResult};
+use alpha2_text::{
+    TextFill, TextFont, TextGradient, TextGradientKind, TextGradientStop, TextRasterRequest,
+    TextRasterResult, TextSpread,
+};
 use serde::Deserialize;
 
 /// The JSON request `WasmTextRasterizer.rasterize` takes (camelCase, as the
@@ -22,13 +25,15 @@ pub(crate) struct TextRequestWire {
     line_height: f32,
     #[serde(default)]
     align: AlignWire,
-    color: [u8; 4],
+    fill: FillWire,
     #[serde(default)]
     emoji_policy: EmojiWire,
     #[serde(default)]
-    outline: Option<OutlineWire>,
+    strokes: Vec<StrokeWire>,
     #[serde(default)]
     background: Option<BackgroundWire>,
+    #[serde(default)]
+    split_background: bool,
     #[serde(default)]
     font_family: Option<String>,
     #[serde(default)]
@@ -39,9 +44,111 @@ pub(crate) struct TextRequestWire {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct OutlineWire {
+struct StrokeWire {
     color: [u8; 4],
     width: f32,
+}
+
+/// A fill: straight sRGB bytes, or a gradient over the layout box (points
+/// and radius fractions of it, the conic angle in radians clockwise from up,
+/// stop colors straight sRGB in `0..=1`).
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum FillWire {
+    Solid([u8; 4]),
+    Gradient(GradientWire),
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
+enum GradientWire {
+    Linear {
+        start: [f32; 2],
+        end: [f32; 2],
+        stops: Vec<StopWire>,
+        #[serde(default)]
+        spread: SpreadWire,
+    },
+    Radial {
+        center: [f32; 2],
+        radius: f32,
+        stops: Vec<StopWire>,
+        #[serde(default)]
+        spread: SpreadWire,
+    },
+    Conic {
+        center: [f32; 2],
+        #[serde(default)]
+        angle: f32,
+        stops: Vec<StopWire>,
+    },
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StopWire {
+    offset: f32,
+    color: [f32; 4],
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum SpreadWire {
+    #[default]
+    Pad,
+    Repeat,
+    Reflect,
+}
+
+impl FillWire {
+    fn into_fill(self) -> TextFill {
+        let stops = |stops: Vec<StopWire>| {
+            stops
+                .into_iter()
+                .map(|stop| TextGradientStop {
+                    offset: stop.offset,
+                    color: stop.color,
+                })
+                .collect()
+        };
+        let spread = |spread: SpreadWire| match spread {
+            SpreadWire::Pad => TextSpread::Pad,
+            SpreadWire::Repeat => TextSpread::Repeat,
+            SpreadWire::Reflect => TextSpread::Reflect,
+        };
+        match self {
+            Self::Solid(color) => TextFill::Solid(color),
+            Self::Gradient(GradientWire::Linear {
+                start,
+                end,
+                stops: list,
+                spread: mode,
+            }) => TextFill::Gradient(TextGradient {
+                kind: TextGradientKind::Linear { start, end },
+                stops: stops(list),
+                spread: spread(mode),
+            }),
+            Self::Gradient(GradientWire::Radial {
+                center,
+                radius,
+                stops: list,
+                spread: mode,
+            }) => TextFill::Gradient(TextGradient {
+                kind: TextGradientKind::Radial { center, radius },
+                stops: stops(list),
+                spread: spread(mode),
+            }),
+            Self::Gradient(GradientWire::Conic {
+                center,
+                angle,
+                stops: list,
+            }) => TextFill::Gradient(TextGradient {
+                kind: TextGradientKind::Conic { center, angle },
+                stops: stops(list),
+                spread: TextSpread::Pad,
+            }),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -89,17 +196,22 @@ impl TextRequestWire {
                 AlignWire::Center => TextAlign::Center,
                 AlignWire::End => TextAlign::End,
             },
-            color: self.color,
+            fill: self.fill.into_fill(),
             emoji_policy: match self.emoji_policy {
                 EmojiWire::Color => EmojiPolicy::Color,
                 EmojiWire::Monochrome => EmojiPolicy::Monochrome,
                 EmojiWire::Replace => EmojiPolicy::Replace,
             },
             content_version,
-            outline: self.outline.map(|outline| alpha2_text::TextOutline {
-                color: outline.color,
-                width: outline.width,
-            }),
+            strokes: self
+                .strokes
+                .into_iter()
+                .map(|stroke| alpha2_text::TextStroke {
+                    color: stroke.color,
+                    width: stroke.width,
+                })
+                .collect(),
+            split_background: self.split_background,
             background: self
                 .background
                 .map(|background| alpha2_text::TextBackground {
@@ -210,8 +322,20 @@ mod web {
             self.descriptor.clone()
         }
 
+        /// Copies out the background's boxes, when the request split them
+        /// off (`splitBackground`), the size of the pixels and packed as they
+        /// are; an empty array when it did not, or after `takePixels`.
+        #[wasm_bindgen(js_name = takeBackground)]
+        pub fn take_background(&mut self) -> Uint8Array {
+            self.raster
+                .as_ref()
+                .and_then(|raster| raster.background.as_deref())
+                .map_or_else(|| Uint8Array::new_with_length(0), Uint8Array::from)
+        }
+
         /// Copies out the pixels, tightly packed premultiplied RGBA8 rows,
-        /// and lets go of them; a second call returns an empty array.
+        /// and lets go of them and of the background; a second call returns
+        /// an empty array.
         #[wasm_bindgen(js_name = takePixels)]
         pub fn take_pixels(&mut self) -> Uint8Array {
             self.raster.take().map_or_else(

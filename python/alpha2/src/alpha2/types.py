@@ -178,11 +178,23 @@ MAX_TEXT_CONTENT_BYTES = 4096
 MAX_TEXT_GENERATOR_FONT_SIZE = 1
 """Mirrors `alpha2_model::MAX_TEXT_GENERATOR_FONT_SIZE`."""
 
-MAX_TEXT_OUTLINE_WIDTH = 0.5
-"""Mirrors `alpha2_model::MAX_TEXT_OUTLINE_WIDTH`."""
-
 MAX_TEXT_PADDING = 2
 """Mirrors `alpha2_model::MAX_TEXT_PADDING`."""
+
+MAX_TEXT_SHADOWS = 4
+"""Mirrors `alpha2_model::MAX_TEXT_SHADOWS`."""
+
+MAX_TEXT_SHADOW_BLUR = 1
+"""Mirrors `alpha2_model::MAX_TEXT_SHADOW_BLUR`."""
+
+MAX_TEXT_SHADOW_OFFSET = 1
+"""Mirrors `alpha2_model::MAX_TEXT_SHADOW_OFFSET`."""
+
+MAX_TEXT_STROKES = 4
+"""Mirrors `alpha2_model::MAX_TEXT_STROKES`."""
+
+MAX_TEXT_STROKE_EXTENT = 0.5
+"""Mirrors `alpha2_model::MAX_TEXT_STROKE_EXTENT`."""
 
 MAX_TRACKS = 256
 """Mirrors `alpha2_model::MAX_TRACKS`."""
@@ -1213,13 +1225,15 @@ class LayoutNode(TypedDict):
     """Boxes laid out in this one, in document (and paint) order. Not with
     `text` or `shape`.
     """
-    color: NotRequired[Rgba | None]
-    """Text color. Inherited; the root's is white."""
     column_gap: NotRequired[Animated[LayoutSize] | None]
     """Space between columns, in place of `gap`. At least 0."""
     display: NotRequired[Display | None]
     """How the box lays its children out. Default `flex`. Not on a box with
     text or shape content, as every container field.
+    """
+    fill: NotRequired[Paint | None]
+    """What paints the text's glyphs, as a text style's `fill`: a color, or
+    a gradient in the text's layout box. Inherited; the root's is white.
     """
     flex_basis: NotRequired[Animated[LayoutLength] | None]
     """The main size before growing and shrinking. `None` is auto."""
@@ -1315,10 +1329,6 @@ class LayoutNode(TypedDict):
     """Opacity of the box and everything in it, as one group, in `0..=1`.
     Drawn after layout; it never moves a box.
     """
-    outline: NotRequired[TextOutline | None]
-    """A band around the glyphs; its width a fraction of the font size.
-    Inherited; the root has none.
-    """
     overflow: NotRequired[Overflow | None]
     """Whether content past the padding box is drawn. Default `visible`."""
     padding: NotRequired[Animated[Insets] | None]
@@ -1339,9 +1349,18 @@ class LayoutNode(TypedDict):
     """Per-axis scale of the box and everything in it about its border-box
     centre, after layout.
     """
+    shadows: NotRequired[list[TextShadow] | None]
+    """Shadows of the glyphs and strokes, as a text style's `shadows`.
+    Inherited as a whole list, as CSS inherits `text-shadow`; the root
+    has none.
+    """
     shape: NotRequired[LayoutShape | None]
     """Shapes drawn on a picture the size of the box's content box. Not with
     `children` or `text`.
+    """
+    strokes: NotRequired[list[TextStroke] | None]
+    """Bands around the glyphs, as a text style's `strokes`. Inherited as a
+    whole list; the root has none.
     """
     text: NotRequired[Animated[str] | None]
     """The box's text, wrapped at its content width and drawn in the style
@@ -2435,13 +2454,37 @@ class TextBackground(TypedDict):
     """
 
 
-class TextOutline(TypedDict):
-    """A band around the glyphs, drawn behind them."""
+class TextShadow(TypedDict):
+    """A shadow of a text's glyphs and strokes, behind them."""
+
+    blur: NotRequired[float]
+    """Blur radius in font sizes, as CSS `text-shadow` takes it: the
+    Gaussian's standard deviation is half of it. In `[0, 1]`
+    (`MAX_TEXT_SHADOW_BLUR`).
+
+    Default: `0`.
+    """
+    color: Rgba
+    """Shadow color."""
+    offset: NotRequired[Vec2]
+    """Offset in font sizes, +x right, +y down; each component in
+    `[-1, 1]` (`MAX_TEXT_SHADOW_OFFSET`).
+
+    Default: `{"x":0,"y":0}`.
+    """
+
+
+class TextStroke(TypedDict):
+    """A band around the glyphs, and around the strokes listed before it,
+    drawn behind them.
+    """
 
     color: Rgba
     """Band color."""
     width: float
-    """Band width as a fraction of the font size, in `(0, 0.5]`."""
+    """Band width as a fraction of the font size, positive; a text's
+    strokes sum to at most `MAX_TEXT_STROKE_EXTENT`.
+    """
 
 
 class TextStyle(TypedDict):
@@ -2450,10 +2493,14 @@ class TextStyle(TypedDict):
 
     Sizes are resolution-independent: the font size is a fraction of the
     canvas's shorter side, as every other length is, the wrapping width a
-    fraction of the canvas width, and the outline and background padding
-    fractions of the font size. The engine draws with the fonts its host
-    registered: those of `font_family` first, then the rest in their
-    fallback order.
+    fraction of the canvas width, and the strokes, shadows and background
+    padding fractions of the font size, so a look follows the font size. The
+    engine draws with the fonts its host registered: those of `font_family`
+    first, then the rest in their fallback order.
+
+    The look is painted bottom to top as CSS paints text: the background's
+    boxes, the shadows (the last listed lowest), the strokes (the outermost
+    lowest), the fill, then color glyphs.
     """
 
     align: NotRequired[TextAlign]
@@ -2472,10 +2519,13 @@ class TextStyle(TypedDict):
 
     Default: `null`.
     """
-    color: NotRequired[Rgba]
-    """Text color.
+    fill: NotRequired[Paint]
+    """What paints the glyphs; a color reads as a solid paint. A gradient's
+    positions are in the text's layout box, `(0, 0)` its top-left and
+    `(1, 1)` its bottom-right, and a radial gradient's radius is a
+    fraction of the box's shorter side. Default solid white.
 
-    Default: `{"alpha":1,"blue":1,"green":1,"red":1}`.
+    Default: `{"color":{"alpha":1,"blue":1,"green":1,"red":1},"type":"solid"}`.
     """
     font_family: NotRequired[str | None]
     """The family the text draws in, as the font's own name table gives it
@@ -2521,16 +2571,20 @@ class TextStyle(TypedDict):
 
     Default: `0.9`.
     """
-    outline: NotRequired[TextOutline | None]
-    """A band around the glyphs.
-
-    Default: `null`.
-    """
     position: NotRequired[Vec2]
     """Where on the canvas the text's anchor lies, `(0, 0)` top-left to
     `(1, 1)` bottom-right.
 
     Default: `{"x":0.5,"y":0.92}`.
+    """
+    shadows: NotRequired[list[TextShadow]]
+    """Shadows of the glyphs and their strokes, the first on top, as CSS
+    `text-shadow` lists them. At most `MAX_TEXT_SHADOWS`.
+    """
+    strokes: NotRequired[list[TextStroke]]
+    """Bands around the glyphs, innermost first: each lies outside the one
+    before it. At most `MAX_TEXT_STROKES`, their widths summing to at
+    most `MAX_TEXT_STROKE_EXTENT`.
     """
 
 

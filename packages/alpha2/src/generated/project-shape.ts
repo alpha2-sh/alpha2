@@ -415,13 +415,15 @@ export const PROJECT_SHAPE: unknown = {
             align: "center",
             anchor: { x: 0.5, y: 1 },
             background: null,
-            color: { alpha: 1, blue: 1, green: 1, red: 1 },
+            fill: {
+              color: { alpha: 1, blue: 1, green: 1, red: 1 },
+              type: "solid",
+            },
             font_size: 0.05,
             font_weight: 400,
             letter_spacing: 0,
             line_height: 1.2,
             max_width: 0.9,
-            outline: null,
             position: { x: 0.5, y: 0.92 },
           },
         },
@@ -882,13 +884,15 @@ export const PROJECT_SHAPE: unknown = {
                 align: "center",
                 anchor: { x: 0.5, y: 1 },
                 background: null,
-                color: { alpha: 1, blue: 1, green: 1, red: 1 },
+                fill: {
+                  color: { alpha: 1, blue: 1, green: 1, red: 1 },
+                  type: "solid",
+                },
                 font_size: 0.05,
                 font_weight: 400,
                 letter_spacing: 0,
                 line_height: 1.2,
                 max_width: 0.9,
-                outline: null,
                 position: { x: 0.5, y: 0.92 },
               },
             },
@@ -1150,11 +1154,11 @@ export const PROJECT_SHAPE: unknown = {
           anyOf: [{ $ref: "#/$defs/Animated_LayoutSize" }, { type: "null" }],
         },
         children: { items: { $ref: "#/$defs/LayoutNode" }, type: "array" },
-        color: { anyOf: [{ $ref: "#/$defs/Rgba" }, { type: "null" }] },
         column_gap: {
           anyOf: [{ $ref: "#/$defs/Animated_LayoutSize" }, { type: "null" }],
         },
         display: { anyOf: [{ $ref: "#/$defs/Display" }, { type: "null" }] },
+        fill: { anyOf: [{ $ref: "#/$defs/Paint" }, { type: "null" }] },
         flex_basis: {
           anyOf: [{ $ref: "#/$defs/Animated_LayoutLength" }, { type: "null" }],
         },
@@ -1235,7 +1239,6 @@ export const PROJECT_SHAPE: unknown = {
         opacity: {
           anyOf: [{ $ref: "#/$defs/Animated_float" }, { type: "null" }],
         },
-        outline: { anyOf: [{ $ref: "#/$defs/TextOutline" }, { type: "null" }] },
         overflow: { anyOf: [{ $ref: "#/$defs/Overflow" }, { type: "null" }] },
         padding: {
           anyOf: [{ $ref: "#/$defs/Animated_Insets" }, { type: "null" }],
@@ -1248,7 +1251,15 @@ export const PROJECT_SHAPE: unknown = {
           anyOf: [{ $ref: "#/$defs/Animated_LayoutSize" }, { type: "null" }],
         },
         scale: { anyOf: [{ $ref: "#/$defs/Animated_Vec2" }, { type: "null" }] },
+        shadows: {
+          items: { $ref: "#/$defs/TextShadow" },
+          type: ["array", "null"],
+        },
         shape: { anyOf: [{ $ref: "#/$defs/LayoutShape" }, { type: "null" }] },
+        strokes: {
+          items: { $ref: "#/$defs/TextStroke" },
+          type: ["array", "null"],
+        },
         text: {
           anyOf: [{ $ref: "#/$defs/Animated_string" }, { type: "null" }],
         },
@@ -2144,7 +2155,17 @@ export const PROJECT_SHAPE: unknown = {
       required: ["color"],
       type: "object",
     },
-    TextOutline: {
+    TextShadow: {
+      additionalProperties: false,
+      properties: {
+        blur: { default: 0, format: "float", type: "number" },
+        color: { $ref: "#/$defs/Rgba" },
+        offset: { $ref: "#/$defs/Vec2", default: { x: 0, y: 0 } },
+      },
+      required: ["color"],
+      type: "object",
+    },
+    TextStroke: {
       additionalProperties: false,
       properties: {
         color: { $ref: "#/$defs/Rgba" },
@@ -2162,9 +2183,12 @@ export const PROJECT_SHAPE: unknown = {
           anyOf: [{ $ref: "#/$defs/TextBackground" }, { type: "null" }],
           default: null,
         },
-        color: {
-          $ref: "#/$defs/Rgba",
-          default: { alpha: 1, blue: 1, green: 1, red: 1 },
+        fill: {
+          $ref: "#/$defs/Paint",
+          default: {
+            color: { alpha: 1, blue: 1, green: 1, red: 1 },
+            type: "solid",
+          },
         },
         font_family: { type: ["string", "null"] },
         font_size: { default: 0.05, format: "float", type: "number" },
@@ -2178,11 +2202,9 @@ export const PROJECT_SHAPE: unknown = {
         letter_spacing: { default: 0, format: "float", type: "number" },
         line_height: { default: 1.2, format: "float", type: "number" },
         max_width: { default: 0.9, format: "float", type: "number" },
-        outline: {
-          anyOf: [{ $ref: "#/$defs/TextOutline" }, { type: "null" }],
-          default: null,
-        },
         position: { $ref: "#/$defs/Vec2", default: { x: 0.5, y: 0.92 } },
+        shadows: { items: { $ref: "#/$defs/TextShadow" }, type: "array" },
+        strokes: { items: { $ref: "#/$defs/TextStroke" }, type: "array" },
       },
       type: "object",
     },

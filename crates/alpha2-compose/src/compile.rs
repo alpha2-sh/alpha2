@@ -10,8 +10,8 @@ use alpha2_model::{
     ClipTransition, Composition, CompositionId, CompositionNode, Ducking, EffectValue, Generator,
     Interpolation, Keyframe, LoopMode, MediaKind as ModelKind, MediaSource, NodeId, NodeOp, Paint,
     Project, ProjectId, ProjectSettings, RectangleGeometry, Rgb, Rgba, ShapeGeometry, ShapeMask,
-    TextAlign, TextBackground, TextOutline, TextStyle, TimeMap, Timeline, Track, TrackId,
-    TrackKind, Vec2, VisualProperties,
+    TextAlign, TextBackground, TextStyle, TimeMap, Timeline, Track, TrackId, TrackKind, Vec2,
+    VisualProperties,
 };
 use alpha2_text::{TextFont, TextRasterizer};
 use alpha2_time::{FrameRate, MediaTime, TICKS_PER_SECOND, TimeRange};
@@ -972,7 +972,7 @@ impl<'a> Context<'a> {
                     font_family: text.family.clone(),
                     font_size: (font_px / self.short_side())
                         .min(alpha2_model::MAX_TEXT_GENERATOR_FONT_SIZE),
-                    color: text.color,
+                    fill: Paint::Solid { color: text.color },
                     align: match x {
                         x if x < 0.25 => TextAlign::Start,
                         x if x > 0.75 => TextAlign::End,
@@ -984,7 +984,8 @@ impl<'a> Context<'a> {
                         (rect.y + y * rect.height) / height,
                     ),
                     anchor: Vec2::new(x, y),
-                    outline: text.outline.map(|color| TextOutline { color, width: 0.1 }),
+                    strokes: text.strokes.clone(),
+                    shadows: text.shadows.clone(),
                     background: text.background.map(|color| TextBackground {
                         color,
                         padding: 0.3,

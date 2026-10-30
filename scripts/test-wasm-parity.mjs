@@ -55,6 +55,7 @@ for (const fixture of golden.cases) {
     descent: raster.descent,
     lineCount: raster.lineCount,
     pixelsFnv1a: fnv1a(raster.rgba8),
+    ...(raster.background ? { backgroundFnv1a: fnv1a(raster.background) } : {}),
   };
   assert.deepEqual(actual, fixture.expected, fixture.name);
   assert.equal(raster.texture.premultiplication, "premultiplied");
@@ -80,7 +81,7 @@ const bold = (host) =>
     host.rasterize({
       text: "HI",
       fontSize: 50,
-      color: [255, 255, 255, 255],
+      fill: [255, 255, 255, 255],
       fontWeight: 700,
       contentVersion: 1n,
     }).rgba8,

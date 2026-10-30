@@ -96,8 +96,9 @@ pub use shapes::{
 pub use source::{MediaKind, MediaSource};
 pub use text::{
     FONT_WEIGHT_RANGE, LETTER_SPACING_RANGE, LINE_HEIGHT_RANGE, MAX_FONT_FAMILY_BYTES,
-    MAX_TEXT_CONTENT_BYTES, MAX_TEXT_GENERATOR_FONT_SIZE, MAX_TEXT_OUTLINE_WIDTH, MAX_TEXT_PADDING,
-    TextAlign, TextBackground, TextOutline, TextStyle,
+    MAX_TEXT_CONTENT_BYTES, MAX_TEXT_GENERATOR_FONT_SIZE, MAX_TEXT_PADDING, MAX_TEXT_SHADOW_BLUR,
+    MAX_TEXT_SHADOW_OFFSET, MAX_TEXT_SHADOWS, MAX_TEXT_STROKE_EXTENT, MAX_TEXT_STROKES, TextAlign,
+    TextBackground, TextShadow, TextStroke, TextStyle,
 };
 pub use time_map::{LOOP_FADE_SECONDS, LoopMode, TimeMap};
 pub use timeline::{CacheIntent, Clip, ClipTransition, Timeline, Track, TrackKind};

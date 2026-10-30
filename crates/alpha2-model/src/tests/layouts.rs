@@ -77,7 +77,7 @@ fn a_layout_reads_with_css_defaults_and_writes_back_only_what_was_written() {
 fn lengths_colors_and_style_read_as_css_writes_them_and_write_back_canonically() {
     let generator = layout(&format!(
         r##"{{"display":"grid","grid_template_columns":"1fr repeat(2, 120px)","gap":{},
-            "padding":{},"font_family":"Inter","color":"#f5f5f0","font_size":{},
+            "padding":{},"font_family":"Inter","fill":"#f5f5f0","font_size":{},
             "background":{},
             "children":[{{"text":{},"grid_column":"1 / 3","width":{},"translate":{}}}]}}"##,
         constant(r#""24px""#),
@@ -119,7 +119,7 @@ fn lengths_colors_and_style_read_as_css_writes_them_and_write_back_canonically()
         serde_json::json!({ "top": "48px", "right": "64px", "bottom": "48px", "left": "64px" })
     );
     assert_eq!(root_json["background"]["value"]["type"], "solid");
-    assert!(root_json["color"].is_object());
+    assert_eq!(root_json["fill"]["type"], "solid");
     assert_eq!(root_json["grid_template_columns"], "1fr repeat(2, 120px)");
     assert_eq!(root_json["children"][0]["grid_column"], "1 / 3");
     assert!(

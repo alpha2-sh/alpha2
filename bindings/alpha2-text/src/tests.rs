@@ -30,7 +30,11 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 /// reproduce bit for bit (`npm run test:wasm-parity`). Run with
 /// `ALPHA2_UPDATE_GOLDENS=1` to re-pin after an intended change.
 #[test]
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::too_many_lines
+)]
 fn fixture_requests_match_the_pinned_rasters() {
     let path = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -61,6 +65,16 @@ fn fixture_requests_match_the_pinned_rasters() {
     // Only `1` re-pins, as for the image goldens: `0` or an empty value compares.
     let update =
         std::env::var_os("ALPHA2_UPDATE_GOLDENS").as_deref() == Some(std::ffi::OsStr::new("1"));
+    // The rasterizer caches by content version: a version two cases share would pin the first's
+    // pixels for both.
+    let mut versions = std::collections::HashSet::new();
+    for case in golden["cases"].as_array().expect("cases") {
+        assert!(
+            versions.insert(case["contentVersion"].as_u64()),
+            "{} reuses a content version",
+            case["name"]
+        );
+    }
     for case in golden["cases"].as_array_mut().expect("cases") {
         let request = &case["request"];
         let number = |key: &str, default: f64| request[key].as_f64().unwrap_or(default) as f32;
@@ -79,17 +93,25 @@ fn fixture_requests_match_the_pinned_rasters() {
                     "end" => TextAlign::End,
                     _ => TextAlign::Start,
                 },
-                color: rgba(&request["color"]),
+                fill: fill(&request["fill"]),
                 emoji_policy: match request["emojiPolicy"].as_str() {
                     Some("replace") => EmojiPolicy::Replace,
                     Some("monochrome") => EmojiPolicy::Monochrome,
                     _ => EmojiPolicy::Color,
                 },
                 content_version: case["contentVersion"].as_u64().expect("version"),
-                outline: request.get("outline").map(|outline| TextOutline {
-                    color: rgba(&outline["color"]),
-                    width: outline["width"].as_f64().expect("width") as f32,
+                strokes: request.get("strokes").map_or_else(Vec::new, |strokes| {
+                    strokes
+                        .as_array()
+                        .expect("strokes")
+                        .iter()
+                        .map(|stroke| TextStroke {
+                            color: rgba(&stroke["color"]),
+                            width: stroke["width"].as_f64().expect("width") as f32,
+                        })
+                        .collect()
                 }),
+                split_background: request["splitBackground"].as_bool().unwrap_or(false),
                 background: request.get("background").map(|background| TextBackground {
                     color: rgba(&background["color"]),
                     padding: background["padding"].as_f64().expect("padding") as f32,
@@ -100,7 +122,7 @@ fn fixture_requests_match_the_pinned_rasters() {
             })
             .expect("fixture rasterizes");
         let descriptor = &result.descriptor;
-        let actual = serde_json::json!({
+        let mut actual = serde_json::json!({
             "width": descriptor.texture.width,
             "height": descriptor.texture.height,
             "layoutX": descriptor.layout_x,
@@ -113,6 +135,9 @@ fn fixture_requests_match_the_pinned_rasters() {
             "lineCount": descriptor.line_count,
             "pixelsFnv1a": format!("{:016x}", fnv1a(&result.pixels.rgba8)),
         });
+        if let Some(background) = &result.background {
+            actual["backgroundFnv1a"] = format!("{:016x}", fnv1a(background)).into();
+        }
         if update {
             case["expected"] = actual;
         } else {
@@ -175,10 +200,11 @@ fn metrics_pixels_cache_and_invalidation_are_stable() {
         max_width: 80.0,
         line_height: 1.25,
         align: TextAlign::Center,
-        color: [255, 100, 50, 200],
+        fill: TextFill::Solid([255, 100, 50, 200]),
         emoji_policy: EmojiPolicy::Replace,
         content_version: 7,
-        outline: None,
+        strokes: Vec::new(),
+        split_background: false,
         background: None,
         font_family: None,
         letter_spacing: 0.0,
@@ -394,17 +420,18 @@ fn a_paragraph_splits_into_runs_by_font_script_and_direction() {
 
 /// A 1080p caption as the engine asks for one: 54 px, wrapped at 1728,
 /// centred.
-fn caption(text: &str, outline: Option<TextOutline>, version: u64) -> TextRasterRequest {
+fn caption(text: &str, outline: Option<TextStroke>, version: u64) -> TextRasterRequest {
     TextRasterRequest {
         text: text.into(),
         font_size: 54.0,
         max_width: 1_728.0,
         line_height: 1.2,
         align: TextAlign::Center,
-        color: [255, 255, 255, 255],
+        fill: TextFill::Solid([255, 255, 255, 255]),
         emoji_policy: EmojiPolicy::Color,
         content_version: version,
-        outline,
+        strokes: outline.into_iter().collect(),
+        split_background: false,
         background: Some(TextBackground {
             color: [0, 0, 0, 160],
             padding: 8.0,
@@ -418,7 +445,7 @@ fn caption(text: &str, outline: Option<TextOutline>, version: u64) -> TextRaster
 #[test]
 fn a_last_line_with_glyphs_but_no_ink_keeps_its_place() {
     let mut rasterizer = fixture();
-    let outline = TextOutline {
+    let outline = TextStroke {
         color: [0, 0, 0, 255],
         width: 4.3,
     };
@@ -672,7 +699,7 @@ fn an_outline_costs_what_its_ink_does_not_what_its_texture_does() {
         max_width: 3_456.0,
         ..caption(
             "Hi",
-            Some(TextOutline {
+            Some(TextStroke {
                 color: [0, 0, 0, 255],
                 width: 64.0,
             }),
@@ -718,10 +745,11 @@ fn plain(
             max_width: 0.0,
             line_height,
             align: TextAlign::Start,
-            color: [255, 255, 255, 255],
+            fill: TextFill::Solid([255, 255, 255, 255]),
             emoji_policy: EmojiPolicy::Color,
             content_version: 1,
-            outline: None,
+            strokes: Vec::new(),
+            split_background: false,
             background: None,
             font_family: None,
             letter_spacing: 0.0,
@@ -1008,10 +1036,11 @@ fn request(text: &str, size: f32) -> TextRasterRequest {
         max_width: 0.0,
         line_height: 1.2,
         align: TextAlign::Start,
-        color: [255, 255, 255, 255],
+        fill: TextFill::Solid([255, 255, 255, 255]),
         emoji_policy: EmojiPolicy::Color,
         content_version: 1,
-        outline: None,
+        strokes: Vec::new(),
+        split_background: false,
         background: None,
         font_family: None,
         letter_spacing: 0.0,
@@ -1259,8 +1288,8 @@ fn replace_follows_the_shared_emoji_corpus() {
 #[test]
 fn requests_outside_the_limits_are_refused() {
     type Change = fn(&mut TextRasterRequest);
-    fn outline(width: f32) -> TextOutline {
-        TextOutline {
+    fn outline(width: f32) -> TextStroke {
+        TextStroke {
             color: [0; 4],
             width,
         }
@@ -1278,7 +1307,7 @@ fn requests_outside_the_limits_are_refused() {
         rasterizer.clear();
         rasterizer.rasterize(&request).map(|_| ())
     };
-    let refused: [(&str, Change); 15] = [
+    let refused: [(&str, Change); 20] = [
         ("font size NaN", |r| r.font_size = f32::NAN),
         ("font size 0", |r| r.font_size = 0.0),
         ("font size 2049", |r| r.font_size = 2_049.0),
@@ -1288,9 +1317,31 @@ fn requests_outside_the_limits_are_refused() {
         ("version 0", |r| r.content_version = 0),
         ("max width NaN", |r| r.max_width = f32::NAN),
         ("max width 16385", |r| r.max_width = 16_385.0),
-        ("outline 0", |r| r.outline = Some(outline(0.0))),
-        ("outline NaN", |r| r.outline = Some(outline(f32::NAN))),
-        ("outline 65", |r| r.outline = Some(outline(65.0))),
+        ("stroke 0", |r| r.strokes = vec![outline(0.0)]),
+        ("stroke NaN", |r| r.strokes = vec![outline(f32::NAN)]),
+        ("stroke 65", |r| r.strokes = vec![outline(65.0)]),
+        ("strokes 40 + 25", |r| {
+            r.strokes = vec![outline(40.0), outline(25.0)];
+        }),
+        ("five strokes", |r| r.strokes = vec![outline(1.0); 5]),
+        ("a gradient with one stop", |r| {
+            r.fill = TextFill::Gradient(linear_gradient(vec![stop(0.0, [1.0; 4])]));
+        }),
+        ("a gradient's stops out of order", |r| {
+            r.fill = TextFill::Gradient(linear_gradient(vec![
+                stop(0.6, [1.0; 4]),
+                stop(0.4, [0.0; 4]),
+            ]));
+        }),
+        ("a radial gradient of no radius", |r| {
+            r.fill = TextFill::Gradient(TextGradient {
+                kind: TextGradientKind::Radial {
+                    center: [0.0, 0.0],
+                    radius: 0.0,
+                },
+                ..linear_gradient(vec![stop(0.0, [1.0; 4]), stop(1.0, [0.0; 4])])
+            });
+        }),
         ("padding -1", |r| r.background = Some(background(-1.0))),
         ("padding NaN", |r| r.background = Some(background(f32::NAN))),
         ("padding 257", |r| r.background = Some(background(257.0))),
@@ -1302,13 +1353,20 @@ fn requests_outside_the_limits_are_refused() {
             "{what}"
         );
     }
-    let accepted: [(&str, Change); 5] = [
+    let accepted: [(&str, Change); 7] = [
         ("font size 2048", |r| r.font_size = 2_048.0),
         ("64 KiB of text", |r| {
             (r.text, r.font_size, r.max_width) = ("a".repeat(64 * 1024), 1.0, 16_000.0);
         }),
         ("line height 10", |r| r.line_height = 10.0),
-        ("outline 64", |r| r.outline = Some(outline(64.0))),
+        ("stroke 64", |r| r.strokes = vec![outline(64.0)]),
+        ("four strokes of 16", |r| r.strokes = vec![outline(16.0); 4]),
+        ("a two-stop gradient", |r| {
+            r.fill = TextFill::Gradient(linear_gradient(vec![
+                stop(0.0, [1.0; 4]),
+                stop(1.0, [0.0; 4]),
+            ]));
+        }),
         ("padding 256", |r| r.background = Some(background(256.0))),
     ];
     for (what, change) in accepted {
@@ -1493,7 +1551,7 @@ fn background_box_by_box(
             })
             .fold(0.0_f32, f32::max);
         let pixel = over(
-            premultiplied(request.color, 0),
+            premultiplied([255; 4], 0),
             premultiplied(background.color, (covered * 255.0).round() as u8),
         );
         for (channel, value) in pixel.iter().enumerate() {
@@ -1546,8 +1604,10 @@ fn the_background_is_every_line_box_byte_for_byte() {
                 None,
                 width,
                 [margin, margin],
+                [90.0, advance * 5.0],
                 &line_boxes
-            ),
+            )
+            .0,
             background_box_by_box(&request, pixels, width, [margin, margin], &line_boxes),
             "padding {padding}, line height {line_height}"
         );
@@ -1667,7 +1727,7 @@ fn a_color_glyph_keeps_its_colors_and_takes_the_text_color_where_asked() {
         rasterizer.clear();
         rasterizer
             .rasterize(&TextRasterRequest {
-                color,
+                fill: TextFill::Solid(color),
                 emoji_policy,
                 line_height: 1.0,
                 ..request("\u{e000}", 100.0)
@@ -1706,10 +1766,10 @@ fn an_outline_surrounds_a_color_glyph() {
     let outlined = rasterizer
         .rasterize(&TextRasterRequest {
             content_version: 2,
-            outline: Some(TextOutline {
+            strokes: vec![TextStroke {
                 color: [0, 0, 0, 255],
                 width: 4.0,
-            }),
+            }],
             ..em.clone()
         })
         .expect("draws");
@@ -1786,7 +1846,7 @@ fn assert_ink_fits(label: &str, measure: &TextMeasure, result: &TextRasterResult
 fn a_measure_holds_the_ink_the_raster_draws_and_no_more() {
     let mut rasterizer = color_stack();
     rasterizer.add_font(hangul()).expect("hangul");
-    let outline = Some(TextOutline {
+    let outline = Some(TextStroke {
         color: [0, 0, 0, 255],
         width: 6.0,
     });
@@ -1803,7 +1863,8 @@ fn a_measure_holds_the_ink_the_raster_draws_and_no_more() {
         (
             "outlined",
             TextRasterRequest {
-                outline,
+                strokes: outline.into_iter().collect(),
+                split_background: false,
                 ..request("Outlined Qg", 56.0)
             },
         ),
@@ -2345,4 +2406,287 @@ fn a_weight_outside_one_to_a_thousand_is_refused() {
             TextRasterError::InvalidRequest
         );
     }
+}
+
+/// A linear gradient across the box with `stops`.
+fn linear_gradient(stops: Vec<TextGradientStop>) -> TextGradient {
+    TextGradient {
+        kind: TextGradientKind::Linear {
+            start: [0.0, 0.0],
+            end: [1.0, 0.0],
+        },
+        stops,
+        spread: TextSpread::Pad,
+    }
+}
+
+fn stop(offset: f32, color: [f32; 4]) -> TextGradientStop {
+    TextGradientStop { offset, color }
+}
+
+/// A pinned request's `fill`, as `WasmTextRasterizer` reads it: a byte color,
+/// or a gradient object.
+#[allow(clippy::cast_possible_truncation)]
+fn fill(value: &serde_json::Value) -> TextFill {
+    let point = |value: &serde_json::Value| -> [f32; 2] {
+        let pair = value.as_array().expect("point");
+        [0, 1].map(|index| pair[index].as_f64().expect("coordinate") as f32)
+    };
+    if let Some(channels) = value.as_array() {
+        return TextFill::Solid(std::array::from_fn(|index| {
+            u8::try_from(channels[index].as_u64().expect("u8")).expect("u8")
+        }));
+    }
+    let kind = match value["type"].as_str().expect("gradient type") {
+        "linear" => TextGradientKind::Linear {
+            start: point(&value["start"]),
+            end: point(&value["end"]),
+        },
+        "radial" => TextGradientKind::Radial {
+            center: point(&value["center"]),
+            radius: value["radius"].as_f64().expect("radius") as f32,
+        },
+        _ => TextGradientKind::Conic {
+            center: point(&value["center"]),
+            angle: value["angle"].as_f64().unwrap_or(0.0) as f32,
+        },
+    };
+    TextFill::Gradient(TextGradient {
+        kind,
+        stops: value["stops"]
+            .as_array()
+            .expect("stops")
+            .iter()
+            .map(|stop| TextGradientStop {
+                offset: stop["offset"].as_f64().expect("offset") as f32,
+                color: {
+                    let channels = stop["color"].as_array().expect("color");
+                    std::array::from_fn(|index| channels[index].as_f64().expect("component") as f32)
+                },
+            })
+            .collect(),
+        spread: match value["spread"].as_str() {
+            Some("repeat") => TextSpread::Repeat,
+            Some("reflect") => TextSpread::Reflect,
+            _ => TextSpread::Pad,
+        },
+    })
+}
+
+#[test]
+fn strokes_stack_outward_in_list_order() {
+    let mut rasterizer = fixture();
+    let (inner, outer) = ([255, 0, 0, 255], [0, 0, 255, 255]);
+    let result = rasterizer
+        .rasterize(&TextRasterRequest {
+            strokes: vec![
+                TextStroke {
+                    color: inner,
+                    width: 3.0,
+                },
+                TextStroke {
+                    color: outer,
+                    width: 3.0,
+                },
+            ],
+            line_height: 1.0,
+            ..request("I", 60.0)
+        })
+        .expect("draws");
+    // Walk left from the stem's middle: white fill, then the inner band, then the outer one.
+    let y = 30;
+    let stem = (0..60)
+        .find(|&x| pixel_at(&result, x, y) == [255, 255, 255, 255])
+        .expect("the stem");
+    assert_eq!(pixel_at(&result, stem - 2, y), inner);
+    assert_eq!(pixel_at(&result, stem - 5, y), outer);
+    assert_eq!(pixel_at(&result, stem - 8, y), [0, 0, 0, 0]);
+}
+
+#[test]
+fn stroke_widths_accumulate() {
+    let mut rasterizer = fixture();
+    let ink = |rasterizer: &mut TextRasterizer, strokes: Vec<TextStroke>| {
+        rasterizer.clear();
+        let measure = rasterizer
+            .measure(&TextRasterRequest {
+                strokes,
+                ..request("Ink", 40.0)
+            })
+            .expect("measures");
+        measure.ink.expect("ink")
+    };
+    let band = |width| TextStroke {
+        color: [0, 0, 0, 255],
+        width,
+    };
+    let bare = ink(&mut rasterizer, Vec::new());
+    let two = ink(&mut rasterizer, vec![band(2.0), band(3.5)]);
+    let one = ink(&mut rasterizer, vec![band(5.5)]);
+    // The bands together reach as far as one band of their summed width: 5.5 and the rim pixel.
+    assert_eq!(two, one);
+    assert!((bare[0] - two[0] - 6.5).abs() < 1e-4, "{bare:?} {two:?}");
+}
+
+#[test]
+fn one_stroke_of_the_whole_extent_is_the_outline_band() {
+    // Four strokes of one color draw exactly the band of their summed width: each inner band is
+    // painted over by the same color and lies inside the outer one.
+    let mut rasterizer = fixture();
+    let black = [0, 0, 0, 255];
+    let draw = |rasterizer: &mut TextRasterizer, strokes: Vec<TextStroke>, version| {
+        rasterizer
+            .rasterize(&TextRasterRequest {
+                strokes,
+                content_version: version,
+                ..request("Band", 36.0)
+            })
+            .expect("draws")
+    };
+    let band = |width| TextStroke {
+        color: black,
+        width,
+    };
+    let four = draw(&mut rasterizer, vec![band(4.0); 4], 1);
+    let one = draw(&mut rasterizer, vec![band(16.0)], 2);
+    assert_eq!(four.pixels.rgba8, one.pixels.rgba8);
+}
+
+#[test]
+fn a_linear_fill_meets_its_stops_at_the_box_edges() {
+    let mut rasterizer = fixture();
+    let width = 300.0;
+    let result = rasterizer
+        .rasterize(&TextRasterRequest {
+            fill: TextFill::Gradient(TextGradient {
+                kind: TextGradientKind::Linear {
+                    start: [0.0, 0.0],
+                    end: [1.0, 0.0],
+                },
+                stops: vec![
+                    stop(0.0, [1.0, 0.0, 0.0, 1.0]),
+                    stop(1.0, [0.0, 0.0, 1.0, 1.0]),
+                ],
+                spread: TextSpread::Pad,
+            }),
+            max_width: width,
+            line_height: 1.0,
+            ..request("IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII", 60.0)
+        })
+        .expect("draws");
+    // Fully covered pixels of the first and last stems: red at the left edge, blue at the right,
+    // and the middle of the box in between.
+    let row = 30;
+    let opaque = (0..300)
+        .filter(|&x| pixel_at(&result, x, row)[3] == 255)
+        .collect::<Vec<_>>();
+    let (first, last) = (opaque[0], opaque[opaque.len() - 1]);
+    let left = pixel_at(&result, first, row);
+    let right = pixel_at(&result, last, row);
+    assert!(left[0] > 230 && left[2] < 100, "{left:?} at {first}");
+    assert!(right[2] > 230 && right[0] < 100, "{right:?} at {last}");
+    // Red falls and blue rises along the row.
+    let (mut red, mut blue) = (256, 0);
+    for &x in &opaque {
+        let [r, _, b, _] = pixel_at(&result, x, row);
+        assert!(u16::from(r) <= red && u16::from(b) >= blue, "at {x}");
+        (red, blue) = (u16::from(r), u16::from(b));
+    }
+    let middle = opaque[opaque.len() / 2];
+    let mid = pixel_at(&result, middle, row);
+    assert!(mid[0] > 100 && mid[2] > 100, "{mid:?} at {middle}");
+}
+
+#[test]
+fn a_radial_fill_is_centred_on_the_box() {
+    let mut rasterizer = fixture();
+    let size = 120.0;
+    let result = rasterizer
+        .rasterize(&TextRasterRequest {
+            fill: TextFill::Gradient(TextGradient {
+                kind: TextGradientKind::Radial {
+                    center: [0.5, 0.5],
+                    radius: 0.5,
+                },
+                stops: vec![
+                    stop(0.0, [1.0, 1.0, 1.0, 1.0]),
+                    stop(1.0, [0.0, 0.0, 0.0, 1.0]),
+                ],
+                spread: TextSpread::Pad,
+            }),
+            max_width: size,
+            line_height: 1.0,
+            align: TextAlign::Center,
+            ..request("I", size)
+        })
+        .expect("draws");
+    // The stem runs down the box's middle: brightest near the centre, darker towards the top
+    // and bottom, alike above and below.
+    let column = (0..120)
+        .find(|&x| pixel_at(&result, x, 60)[3] == 255)
+        .expect("the stem")
+        + 2;
+    let centre = pixel_at(&result, column, 60)[0];
+    // Pixel centres 30.5 above and below the box's centre.
+    let upper = pixel_at(&result, column, 29)[0];
+    let lower = pixel_at(&result, column, 90)[0];
+    assert!(centre > upper && centre > lower, "{centre} {upper} {lower}");
+    assert!(upper.abs_diff(lower) <= 1, "{upper} {lower}");
+}
+
+#[test]
+fn a_split_background_and_glyph_plane_over_each_other_equal_the_joined_raster() {
+    let mut rasterizer = fixture();
+    let looked = TextRasterRequest {
+        background: Some(TextBackground {
+            color: [20, 40, 60, 180],
+            padding: 5.0,
+        }),
+        strokes: vec![TextStroke {
+            color: [0, 0, 0, 255],
+            width: 2.0,
+        }],
+        fill: TextFill::Solid([250, 240, 200, 230]),
+        ..request("Boxed\ntext", 30.0)
+    };
+    let joined = rasterizer.rasterize(&looked).expect("draws");
+    assert!(joined.background.is_none());
+    let split = rasterizer
+        .rasterize(&TextRasterRequest {
+            split_background: true,
+            content_version: 2,
+            ..looked.clone()
+        })
+        .expect("draws");
+    let background = split.background.as_ref().expect("a background plane");
+    assert_eq!(background.len(), joined.pixels.rgba8.len());
+    // Glyphs over boxes, premultiplied, against the raster that drew them together: integer
+    // rounding at each step may differ by a code.
+    for ((glyph, boxed), whole) in split
+        .pixels
+        .rgba8
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(background.as_chunks::<4>().0)
+        .zip(joined.pixels.rgba8.as_chunks::<4>().0)
+    {
+        let over = over(glyph.map(u32::from), boxed.map(u32::from));
+        for channel in 0..4 {
+            assert!(
+                over[channel].abs_diff(u32::from(whole[channel])) <= 1,
+                "{glyph:?} over {boxed:?} is {over:?}, joined {whole:?}"
+            );
+        }
+    }
+    // Without a background there is nothing to split.
+    let bare = rasterizer
+        .rasterize(&TextRasterRequest {
+            background: None,
+            split_background: true,
+            content_version: 3,
+            ..looked
+        })
+        .expect("draws");
+    assert!(bare.background.is_none());
 }

@@ -24,7 +24,7 @@ Every node of the tree is one kind of box. A box is a container when it has `chi
 | Item | `width`, `height`, `min_width`, `min_height`, `max_width`, `max_height`, `aspect_ratio`, `margin`, `align_self`, `position` (`relative`, `absolute`), `inset` | Not on the root. Absent sizes are `auto`; `min_*` auto is the CSS automatic minimum size. No `auto` margins. |
 | Flex item | `flex_grow`, `flex_shrink`, `flex_basis` | In a flex container only. |
 | Grid item | `grid_column`, `grid_row`, `justify_self` | In a grid only. |
-| Text style | `font_family`, `font_size`, `color`, `line_height`, `text_align`, `outline` | On any box; inherited. See [Text](#text). |
+| Text style | `font_family`, `font_size`, `fill`, `line_height`, `text_align`, `strokes`, `shadows` | On any box; inherited. See [Text](#text). |
 | Drawn after layout | `opacity`, `translate`, `scale`, `rotation_degrees` | About the border box's centre; they never move other boxes. A box with any of them, or with hidden overflow, is drawn as one group: its opacity is group opacity. |
 
 The root is the picture: its border box is the canvas, so it takes no size, margin or item field. Place its content with its own `justify_content`, `align_items` and `padding`, as with Remotion's `AbsoluteFill`.
@@ -57,7 +57,7 @@ Field names are CSS property names in snake_case, and keyword values CSS keyword
 
 A box's `text` is its content: one paragraph, wrapped at the box's content width, drawn in the style the box sets or inherits. `\n` starts a line. Lines are aligned in the content width; there is no vertical alignment inside a text box, so align it from its parent. In a row a text box is as wide as its text, up to the room it has; in a column it takes the column's width.
 
-The text style is inherited, as CSS inherits it: `font_family`, `font_size`, `font_weight`, `color`, `line_height`, `letter_spacing`, `text_align` and `outline` may be set on any box and apply to every text in it that does not set its own. The root's are the initial values: the host's first font, `0.05`, `400`, white, `1.2`, `0`, `start` (as in CSS) and no outline. An animated `font_size` on a container animates every text that inherits it. A `font_size` is at most the picture's shorter side; in pixels, it is held to that on the project canvas.
+The text style is inherited, as CSS inherits it: `font_family`, `font_size`, `font_weight`, `fill`, `line_height`, `letter_spacing`, `text_align`, `strokes` and `shadows` may be set on any box and apply to every text in it that does not set its own (`strokes` and `shadows` as whole lists, as CSS inherits `text-shadow`). The root's are the initial values: the host's first font, `0.05`, `400`, white, `1.2`, `0`, `start` (as in CSS), no strokes and no shadows. A `fill` is a color or a gradient over the text's layout box. An animated `font_size` on a container animates every text that inherits it. A `font_size` is at most the picture's shorter side; in pixels, it is held to that on the project canvas.
 
 Lines are `line_height` font sizes apart, baseline to baseline. Each line's em box, 0.8 of a font size above its baseline and 0.2 below, is centred in its line when the line is taller than an em, as CSS splits the leading in half above and below. Unlike CSS, the em box is these nominal metrics, not the font's own ascent and descent, so a line's place does not depend on which font in the stack draws it. When lines are closer than an em, the first line's em box is flush with the box's top and the box grows to hold the last one's.
 
@@ -68,11 +68,11 @@ Lines are `line_height` font sizes apart, baseline to baseline. Each line's em b
 ```json
 {
   "font_family": "Inter",
-  "color": "#f5f5f0",
+  "fill": "#f5f5f0",
   "font_size": { "mode": "constant", "value": "32px" },
   "children": [
     { "text": { "mode": "constant", "value": "Revenue" } },
-    { "text": { "mode": "constant", "value": "Margin" }, "color": "#ffb020" }
+    { "text": { "mode": "constant", "value": "Margin" }, "fill": "#ffb020" }
   ]
 }
 ```
@@ -99,10 +99,10 @@ Named lines and `grid_template_areas` are not supported. A grid cell's text is m
     "gap": { "mode": "constant", "value": "24px" },
     "padding": { "mode": "constant", "value": "48px 64px" },
     "font_family": "Inter",
-    "color": "#f5f5f0",
+    "fill": "#f5f5f0",
     "children": [
       { "text": { "mode": "constant", "value": "Revenue" }, "font_size": { "mode": "constant", "value": "32px" } },
-      { "text": { "mode": "constant", "value": "Margin" }, "font_size": { "mode": "constant", "value": "32px" }, "color": "#ffb020" },
+      { "text": { "mode": "constant", "value": "Margin" }, "font_size": { "mode": "constant", "value": "32px" }, "fill": "#ffb020" },
       {
         "grid_column": "1 / -1",
         "height": { "mode": "constant", "value": "50%" },
@@ -247,7 +247,7 @@ A card that sizes to its text up to 60% of the picture's content width, where th
               {
                 "text": { "mode": "constant", "value": "Wrote the first published algorithm for a machine, 1843" },
                 "font_size": { "mode": "constant", "value": 0.045 },
-                "color": { "red": 0.8, "green": 0.82, "blue": 0.86, "alpha": 1.0 }
+                "fill": { "red": 0.8, "green": 0.82, "blue": 0.86, "alpha": 1.0 }
               }
             ]
           }
@@ -300,13 +300,13 @@ Two text cards, a bar column spanning both rows, and a bar chart that is itself 
     "display": "grid", "grid_template_columns": "1fr 2fr 60px", "grid_template_rows": "minmax(40px, auto) 1fr",
     "gap": { "mode": "constant", "value": "8px" }, "padding": { "mode": "constant", "value": "12px 16px" },
     "background": { "mode": "constant", "value": "#101418" },
-    "font_size": { "mode": "constant", "value": "14px" }, "color": "#f5f5f0", "line_height": 1.1,
+    "font_size": { "mode": "constant", "value": "14px" }, "fill": "#f5f5f0", "line_height": 1.1,
     "children": [
       { "text": { "mode": "constant", "value": "Revenue 4.2M" }, "background": { "mode": "constant", "value": "#1e2230" },
         "padding": { "mode": "constant", "value": "6px 8px" }, "border_radius": { "mode": "constant", "value": "6px" } },
       { "text": { "mode": "constant", "value": "Margin up four points" }, "background": { "mode": "constant", "value": "#1e2230" },
         "padding": { "mode": "constant", "value": "6px 8px" }, "border_radius": { "mode": "constant", "value": "6px" },
-        "color": "#ffb020", "text_align": "end" },
+        "fill": "#ffb020", "text_align": "end" },
       { "grid_row": "1 / 3", "grid_column": 3, "background": { "mode": "constant", "value": "#2b5c3a" },
         "border_radius": { "mode": "constant", "value": "6px" } },
       { "grid_column": "1 / span 2", "background": { "mode": "constant", "value": "#1e2230" },

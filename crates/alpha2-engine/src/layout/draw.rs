@@ -73,11 +73,9 @@ impl<'t> LaidOut<'t> {
                         .copied()
                         .flatten()
                         .ok_or(RenderError::MissingText)?;
-                    let source = match texture.cache_key {
-                        Some(key) => graph.add_source_with_key(texture.texture, key),
-                        None => graph.add_source(texture.texture),
-                    };
-                    (source, *place, [texture.width, texture.height])
+                    let visual = layer_transform(*place, [texture.width, texture.height], size);
+                    layers.push(crate::frame::text_layer(graph, texture, visual)?);
+                    continue;
                 }
                 PaintItem::Group { items, clip, place } => {
                     let inner = self.layers(graph, items)?;

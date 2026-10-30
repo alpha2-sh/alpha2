@@ -16,7 +16,7 @@ use alpha2_geometry::StableHash;
 use alpha2_model::{
     AlignContent, AlignItems, Animated, Display, FlexDirection, FlexWrap, GridAutoFlow,
     GridPlacement, JustifyContent, LAYOUT_TEXT_DEFAULTS, LayoutLength, LayoutNode, LayoutTextStyle,
-    Overflow, Paint, Position, Rgba, TextAlign, TextOutline, TrackList, Vec2,
+    Overflow, Paint, Position, Rgba, TextAlign, TextShadow, TextStroke, TrackList, Vec2,
 };
 use alpha2_time::MediaTime;
 use std::sync::Arc;
@@ -262,8 +262,8 @@ pub struct EvaluatedText {
     pub font_family: Option<String>,
     /// Font size, a fraction of the picture's shorter side; positive.
     pub font_size: f32,
-    /// Text color.
-    pub color: Rgba,
+    /// What paints the glyphs, a gradient over the text's layout box.
+    pub fill: Paint,
     /// Baseline-to-baseline distance in font sizes.
     pub line_height: f32,
     /// Space after each character, a fraction of the font size.
@@ -272,8 +272,10 @@ pub struct EvaluatedText {
     pub font_weight: u16,
     /// How lines align in the content width.
     pub text_align: TextAlign,
-    /// A band around the glyphs.
-    pub outline: Option<TextOutline>,
+    /// Bands around the glyphs, innermost first.
+    pub strokes: Vec<TextStroke>,
+    /// Shadows of the glyphs and strokes, the first on top.
+    pub shadows: Vec<TextShadow>,
 }
 
 fn non_negative(animation: Option<&Animated<f32>>, time: MediaTime, default: f32) -> f32 {
@@ -367,12 +369,19 @@ fn text_style(node: &LayoutNode, time: MediaTime, inherited: &LayoutTextStyle) -
         font_size: node.font_size.as_ref().map_or(inherited.font_size, |size| {
             sample_size(size, time).max(f32::MIN_POSITIVE)
         }),
-        color: node.color.unwrap_or(inherited.color),
+        fill: node.fill.clone().unwrap_or_else(|| inherited.fill.clone()),
         line_height: node.line_height.unwrap_or(inherited.line_height),
         letter_spacing: node.letter_spacing.unwrap_or(inherited.letter_spacing),
         font_weight: node.font_weight.unwrap_or(inherited.font_weight),
         text_align: node.text_align.unwrap_or(inherited.text_align),
-        outline: node.outline.or(inherited.outline),
+        strokes: node
+            .strokes
+            .clone()
+            .unwrap_or_else(|| inherited.strokes.clone()),
+        shadows: node
+            .shadows
+            .clone()
+            .unwrap_or_else(|| inherited.shadows.clone()),
     }
 }
 
@@ -421,12 +430,13 @@ fn evaluate_node<'a>(
             content: sample_hold(text, time),
             font_family: style.font_family,
             font_size: style.font_size,
-            color: style.color,
+            fill: style.fill.clone(),
             line_height: style.line_height,
             letter_spacing: style.letter_spacing,
             font_weight: style.font_weight,
             text_align: style.text_align,
-            outline: style.outline,
+            strokes: style.strokes.clone(),
+            shadows: style.shadows.clone(),
         })
     } else if node.shape.is_some() {
         let (plan, _) = shapes.next().expect("one plan per shape node");
@@ -656,18 +666,22 @@ fn hash_node_in(
                 }
             }
             hash.f32(text.font_size);
-            hash_color(hash, text.color);
+            hash_paint(hash, Some(&text.fill));
             hash.f32(text.line_height);
             hash.f32(text.letter_spacing);
             hash.u32(u32::from(text.font_weight));
             hash.u32(text.text_align as u32);
-            match text.outline {
-                None => hash.u32(0),
-                Some(outline) => {
-                    hash.u32(1);
-                    hash_color(hash, outline.color);
-                    hash.f32(outline.width);
-                }
+            hash.u64(text.strokes.len() as u64);
+            for stroke in &text.strokes {
+                hash_color(hash, stroke.color);
+                hash.f32(stroke.width);
+            }
+            hash.u64(text.shadows.len() as u64);
+            for shadow in &text.shadows {
+                hash_color(hash, shadow.color);
+                hash.f32(shadow.offset.x);
+                hash.f32(shadow.offset.y);
+                hash.f32(shadow.blur);
             }
         }
         NodeContent::Shape(_) => {

@@ -1083,7 +1083,7 @@ test("canonicalProject shares what it does not change and leaves what it cannot 
         kind: "generated",
         generator: {
           type: "layout",
-          root: { color: "#0f0", children: [{ text: constant("a") }] },
+          root: { fill: "#0f0", children: [{ text: constant("a") }] },
         },
       },
     ],
@@ -1098,11 +1098,9 @@ test("canonicalProject shares what it does not change and leaves what it cannot 
     type: "solid",
     color: { red: 1, green: 0, blue: 0, alpha: 1 },
   });
-  assert.deepEqual(canonical.sources[2].generator.root.color, {
-    red: 0,
-    green: 1,
-    blue: 0,
-    alpha: 1,
+  assert.deepEqual(canonical.sources[2].generator.root.fill, {
+    type: "solid",
+    color: { red: 0, green: 1, blue: 0, alpha: 1 },
   });
   assert.equal(
     canonical.sources[2].generator.root.children,

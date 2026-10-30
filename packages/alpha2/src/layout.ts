@@ -9,8 +9,8 @@
  * tuple the sides object, an `[x, y]` tuple a vector. Lengths are written as the document writes
  * them: a number is a fraction of the picture's shorter side, `"12px"` pixels of the project
  * canvas, `"50%"` a percent of the parent's content box. Text style (`font_family`, `font_size`,
- * `font_weight`, `color`, `line_height`, `letter_spacing`, `text_align`, `outline`) may be set on
- * any box and is inherited. Its
+ * `font_weight`, `fill`, `line_height`, `letter_spacing`, `text_align`, `strokes`, `shadows`) may
+ * be set on any box and is inherited. Its
  * output is a plain document that `validateProject` accepts; a CSS value string it cannot read
  * throws, with the parser's message.
  */
@@ -43,7 +43,8 @@ import type {
   Rgba,
   ShapeItem,
   TextAlign,
-  TextOutline,
+  TextShadow,
+  TextStroke,
   Ticks,
   Vec2,
 } from "./project.js";
@@ -175,12 +176,16 @@ export interface TextStyleProps {
   readonly font_size?: Value<Size>;
   /** The weight the family's faces are matched by, in `[1, 1000]`. Not animated. */
   readonly font_weight?: number;
-  readonly color?: Color;
+  /** What paints the glyphs: a color, or a gradient over the text's layout box. Not animated. */
+  readonly fill?: Fill;
   readonly line_height?: number;
   /** Space after each character, as a fraction of the font size, in `[-0.5, 1]`. Not animated. */
   readonly letter_spacing?: number;
   readonly text_align?: TextAlign;
-  readonly outline?: TextOutline;
+  /** Bands around the glyphs, innermost first; widths are fractions of the font size. */
+  readonly strokes?: readonly TextStroke[];
+  /** Shadows of the glyphs, the first on top; lengths are fractions of the font size. */
+  readonly shadows?: readonly TextShadow[];
 }
 
 /** A box's CSS fields, with shorthands. */
@@ -436,8 +441,20 @@ function boxFields(props: BoxProps): LayoutNode {
       case "grid_row":
         fields[name] = checked(value, parsePlacement(value as number | string));
         break;
-      case "color":
-        fields[name] = fillValue(value as Color);
+      case "fill":
+        fields[name] = fillValue(value as Fill);
+        break;
+      case "strokes":
+        fields[name] = (value as readonly TextStroke[]).map((stroke) => ({
+          ...stroke,
+          color: fillValue(stroke.color),
+        }));
+        break;
+      case "shadows":
+        fields[name] = (value as readonly TextShadow[]).map((shadow) => ({
+          ...shadow,
+          color: fillValue(shadow.color),
+        }));
         break;
       case "translate":
         fields[name] = field(value as Value<Offset>, offsetValue);

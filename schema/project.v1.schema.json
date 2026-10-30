@@ -825,18 +825,20 @@
               "y": 1.0
             },
             "background": null,
-            "color": {
-              "alpha": 1.0,
-              "blue": 1.0,
-              "green": 1.0,
-              "red": 1.0
+            "fill": {
+              "color": {
+                "alpha": 1.0,
+                "blue": 1.0,
+                "green": 1.0,
+                "red": 1.0
+              },
+              "type": "solid"
             },
             "font_size": 0.05,
             "font_weight": 400,
             "letter_spacing": 0.0,
             "line_height": 1.2,
             "max_width": 0.9,
-            "outline": null,
             "position": {
               "x": 0.5,
               "y": 0.92
@@ -1915,18 +1917,20 @@
                   "y": 1.0
                 },
                 "background": null,
-                "color": {
-                  "alpha": 1.0,
-                  "blue": 1.0,
-                  "green": 1.0,
-                  "red": 1.0
+                "fill": {
+                  "color": {
+                    "alpha": 1.0,
+                    "blue": 1.0,
+                    "green": 1.0,
+                    "red": 1.0
+                  },
+                  "type": "solid"
                 },
                 "font_size": 0.05,
                 "font_weight": 400,
                 "letter_spacing": 0.0,
                 "line_height": 1.2,
                 "max_width": 0.9,
-                "outline": null,
                 "position": {
                   "x": 0.5,
                   "y": 0.92
@@ -2589,17 +2593,6 @@
           },
           "type": "array"
         },
-        "color": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Rgba"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Text color. Inherited; the root's is white."
-        },
         "column_gap": {
           "anyOf": [
             {
@@ -2621,6 +2614,17 @@
             }
           ],
           "description": "How the box lays its children out. Default `flex`. Not on a box with\ntext or shape content, as every container field."
+        },
+        "fill": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Paint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What paints the text's glyphs, as a text style's `fill`: a color, or\na gradient in the text's layout box. Inherited; the root's is white."
         },
         "flex_basis": {
           "anyOf": [
@@ -2930,17 +2934,6 @@
           ],
           "description": "Opacity of the box and everything in it, as one group, in `0..=1`.\nDrawn after layout; it never moves a box."
         },
-        "outline": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TextOutline"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "A band around the glyphs; its width a fraction of the font size.\nInherited; the root has none."
-        },
         "overflow": {
           "anyOf": [
             {
@@ -3007,6 +3000,16 @@
           ],
           "description": "Per-axis scale of the box and everything in it about its border-box\ncentre, after layout."
         },
+        "shadows": {
+          "description": "Shadows of the glyphs and strokes, as a text style's `shadows`.\nInherited as a whole list, as CSS inherits `text-shadow`; the root\nhas none.",
+          "items": {
+            "$ref": "#/$defs/TextShadow"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "shape": {
           "anyOf": [
             {
@@ -3017,6 +3020,16 @@
             }
           ],
           "description": "Shapes drawn on a picture the size of the box's content box. Not with\n`children` or `text`."
+        },
+        "strokes": {
+          "description": "Bands around the glyphs, as a text style's `strokes`. Inherited as a\nwhole list; the root has none.",
+          "items": {
+            "$ref": "#/$defs/TextStroke"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "text": {
           "anyOf": [
@@ -5188,16 +5201,44 @@
       ],
       "type": "object"
     },
-    "TextOutline": {
+    "TextShadow": {
       "additionalProperties": false,
-      "description": "A band around the glyphs, drawn behind them.",
+      "description": "A shadow of a text's glyphs and strokes, behind them.",
+      "properties": {
+        "blur": {
+          "default": 0.0,
+          "description": "Blur radius in font sizes, as CSS `text-shadow` takes it: the\nGaussian's standard deviation is half of it. In `[0, 1]`\n([`MAX_TEXT_SHADOW_BLUR`]).",
+          "format": "float",
+          "type": "number"
+        },
+        "color": {
+          "$ref": "#/$defs/Rgba",
+          "description": "Shadow color."
+        },
+        "offset": {
+          "$ref": "#/$defs/Vec2",
+          "default": {
+            "x": 0.0,
+            "y": 0.0
+          },
+          "description": "Offset in font sizes, +x right, +y down; each component in\n`[-1, 1]` ([`MAX_TEXT_SHADOW_OFFSET`])."
+        }
+      },
+      "required": [
+        "color"
+      ],
+      "type": "object"
+    },
+    "TextStroke": {
+      "additionalProperties": false,
+      "description": "A band around the glyphs, and around the strokes listed before it,\ndrawn behind them.",
       "properties": {
         "color": {
           "$ref": "#/$defs/Rgba",
           "description": "Band color."
         },
         "width": {
-          "description": "Band width as a fraction of the font size, in `(0, 0.5]`.",
+          "description": "Band width as a fraction of the font size, positive; a text's\nstrokes sum to at most [`MAX_TEXT_STROKE_EXTENT`].",
           "format": "float",
           "type": "number"
         }
@@ -5210,7 +5251,7 @@
     },
     "TextStyle": {
       "additionalProperties": false,
-      "description": "How text looks and where it lies: a caption track's cues, or a text\n[`crate::Generator`].\n\nSizes are resolution-independent: the font size is a fraction of the\ncanvas's shorter side, as every other length is, the wrapping width a\nfraction of the canvas width, and the outline and background padding\nfractions of the font size. The engine draws with the fonts its host\nregistered: those of `font_family` first, then the rest in their\nfallback order.",
+      "description": "How text looks and where it lies: a caption track's cues, or a text\n[`crate::Generator`].\n\nSizes are resolution-independent: the font size is a fraction of the\ncanvas's shorter side, as every other length is, the wrapping width a\nfraction of the canvas width, and the strokes, shadows and background\npadding fractions of the font size, so a look follows the font size. The\nengine draws with the fonts its host registered: those of `font_family`\nfirst, then the rest in their fallback order.\n\nThe look is painted bottom to top as CSS paints text: the background's\nboxes, the shadows (the last listed lowest), the strokes (the outermost\nlowest), the fill, then color glyphs.",
       "properties": {
         "align": {
           "$ref": "#/$defs/TextAlign",
@@ -5237,15 +5278,18 @@
           "default": null,
           "description": "A box behind each line."
         },
-        "color": {
-          "$ref": "#/$defs/Rgba",
+        "fill": {
+          "$ref": "#/$defs/Paint",
           "default": {
-            "alpha": 1.0,
-            "blue": 1.0,
-            "green": 1.0,
-            "red": 1.0
+            "color": {
+              "alpha": 1.0,
+              "blue": 1.0,
+              "green": 1.0,
+              "red": 1.0
+            },
+            "type": "solid"
           },
-          "description": "Text color."
+          "description": "What paints the glyphs; a color reads as a solid paint. A gradient's\npositions are in the text's layout box, `(0, 0)` its top-left and\n`(1, 1)` its bottom-right, and a radial gradient's radius is a\nfraction of the box's shorter side. Default solid white."
         },
         "font_family": {
           "description": "The family the text draws in, as the font's own name table gives it\n(typographic family, else family), matched without regard to ASCII\ncase. Glyphs its fonts lack, and a family no registered font has,\ndraw from the other fonts in fallback order. `None` draws from the\nfallback order alone. Non-empty, at most [`MAX_FONT_FAMILY_BYTES`]\nbytes.",
@@ -5286,18 +5330,6 @@
           "format": "float",
           "type": "number"
         },
-        "outline": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TextOutline"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "A band around the glyphs."
-        },
         "position": {
           "$ref": "#/$defs/Vec2",
           "default": {
@@ -5305,6 +5337,20 @@
             "y": 0.92
           },
           "description": "Where on the canvas the text's anchor lies, `(0, 0)` top-left to\n`(1, 1)` bottom-right."
+        },
+        "shadows": {
+          "description": "Shadows of the glyphs and their strokes, the first on top, as CSS\n`text-shadow` lists them. At most [`MAX_TEXT_SHADOWS`].",
+          "items": {
+            "$ref": "#/$defs/TextShadow"
+          },
+          "type": "array"
+        },
+        "strokes": {
+          "description": "Bands around the glyphs, innermost first: each lies outside the one\nbefore it. At most [`MAX_TEXT_STROKES`], their widths summing to at\nmost [`MAX_TEXT_STROKE_EXTENT`].",
+          "items": {
+            "$ref": "#/$defs/TextStroke"
+          },
+          "type": "array"
         }
       },
       "type": "object"
