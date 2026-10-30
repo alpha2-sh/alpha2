@@ -647,6 +647,14 @@ impl NativeAvEncodeSink {
     }
 
     pub(crate) fn write_video(&mut self, frame: &DecodedVideoFrame) -> Result<(), EncodeError> {
+        // Decoded and RGBA frames are converted to YUV420P; any other output takes frames the
+        // caller packed ([`Self::write_prepared_video`]).
+        if !self.video_selection.pixels.is_yuv420p() {
+            return Err(EncodeError::Adapter(format!(
+                "this encoder takes packed {} frames",
+                self.video_selection.pixels.ffmpeg_name()
+            )));
+        }
         if frame.visible_rect.width != u32::try_from(self.width).unwrap_or(0)
             || frame.visible_rect.height != u32::try_from(self.height).unwrap_or(0)
         {

@@ -366,6 +366,7 @@ fn open_encoder(
         rate_control: applied,
         quantizer_refused,
         software_threads: None,
+        pixels: alpha2_media::PixelLayout::YUV420P,
     };
     Ok((frames, context, selection))
 }

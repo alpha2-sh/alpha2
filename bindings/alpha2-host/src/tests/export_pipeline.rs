@@ -401,6 +401,7 @@ fn an_odd_export_size_is_refused_before_an_encoder_opens() {
                 container: alpha2_media::Container::Mp4,
                 video: NativeVideoCodec::Mpeg4Part2,
                 audio: NativeAudioCodec::Aac,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
             None,
             VideoQualityRequest::Level(QualityLevel::High),

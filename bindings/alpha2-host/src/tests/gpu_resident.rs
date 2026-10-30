@@ -66,6 +66,7 @@ fn an_export_survives_a_hardware_session_that_fails_on_its_first_packet() {
                     container: alpha2_media::Container::Mp4,
                     video: NativeVideoCodec::Mpeg4Part2,
                     audio: NativeAudioCodec::Aac,
+                    pixels: alpha2_media::PixelLayout::YUV420P,
                 },
                 None,
                 VideoQualityRequest::Level(QualityLevel::High),
@@ -149,6 +150,7 @@ fn imported_frames_reuse_their_vulkan_import_tickets() {
                     container: alpha2_media::Container::Mp4,
                     video: codec,
                     audio: NativeAudioCodec::Aac,
+                    pixels: alpha2_media::PixelLayout::YUV420P,
                 },
                 None,
                 VideoQualityRequest::Level(QualityLevel::High),
@@ -236,6 +238,7 @@ fn a_resident_host_exports_again_after_a_gpu_resident_export_fails_midway() {
                 container: alpha2_media::Container::Mp4,
                 video: NativeVideoCodec::H264,
                 audio: NativeAudioCodec::Aac,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
             None,
             VideoQualityRequest::Level(QualityLevel::High),
@@ -348,6 +351,7 @@ fn a_software_decoded_export_still_encodes_on_the_gpu() {
                 container: alpha2_media::Container::Mp4,
                 video: NativeVideoCodec::H264,
                 audio: NativeAudioCodec::Aac,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
             None,
             VideoQualityRequest::Level(QualityLevel::High),
@@ -430,6 +434,7 @@ fn a_generated_source_exports_without_an_asset() {
                 container: alpha2_media::Container::Mp4,
                 video: NativeVideoCodec::Mpeg4Part2,
                 audio: NativeAudioCodec::Aac,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
             None,
             VideoQualityRequest::Level(QualityLevel::High),
@@ -535,6 +540,7 @@ fn an_untouched_clip_is_transcoded_from_its_decoded_planes() {
                     container: alpha2_media::Container::Mp4,
                     video: NativeVideoCodec::H264,
                     audio: NativeAudioCodec::Aac,
+                    pixels: alpha2_media::PixelLayout::YUV420P,
                 },
                 None,
                 VideoQualityRequest::Level(QualityLevel::VeryHigh),
@@ -743,6 +749,7 @@ fn a_rendered_gpu_resident_export_carries_each_frames_colors_into_its_chroma() {
                 container: alpha2_media::Container::Mp4,
                 video: NativeVideoCodec::H264,
                 audio: NativeAudioCodec::Aac,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
             None,
             VideoQualityRequest::Level(QualityLevel::VeryHigh),
@@ -1067,6 +1074,7 @@ fn a_d3d12va_decoded_export_renders_copies_of_its_surfaces_as_software_decode_wo
                     container: alpha2_media::Container::Mp4,
                     video: NativeVideoCodec::Mpeg4Part2,
                     audio: NativeAudioCodec::Aac,
+                    pixels: alpha2_media::PixelLayout::YUV420P,
                 },
                 None,
                 VideoQualityRequest::Level(QualityLevel::VeryHigh),
@@ -1122,6 +1130,7 @@ fn a_d3d12va_decoded_export_renders_copies_of_its_surfaces_as_software_decode_wo
     feature = "hwencode"
 ))]
 #[test]
+#[allow(clippy::too_many_lines)]
 fn a_gpu_resident_export_writes_every_container_that_offers_its_codec() {
     use alpha2_media::Container;
     let _gpu = gpu_test_lock();
@@ -1195,6 +1204,7 @@ fn a_gpu_resident_export_writes_every_container_that_offers_its_codec() {
                     container,
                     video,
                     audio,
+                    pixels: alpha2_media::PixelLayout::YUV420P,
                 },
                 None,
                 VideoQualityRequest::Level(QualityLevel::High),

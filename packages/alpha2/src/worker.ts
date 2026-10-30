@@ -77,6 +77,8 @@ export type RenderWorkerRequest =
       readonly codec: EngineVideoCodec;
       /** The frame's time in the output, which its `VideoFrame.timestamp` is stamped with. */
       readonly outputTimeTicks: bigint;
+      /** The output pictures by FFmpeg pixel format name; absent, I420. */
+      readonly pixels?: string;
     }
   | { readonly id: number; readonly type: "recover" }
   | { readonly id: number; readonly type: "dispose" };
@@ -132,6 +134,7 @@ export interface RenderWorkerHost {
     timeTicks: bigint,
     codec: EngineVideoCodec,
     outputTimeTicks: bigint,
+    pixels?: string,
   ): ExportTicket;
   /**
    * The renderer the host draws with; `initialize` answers it. Absent for a host that does not
@@ -267,6 +270,7 @@ export function installRenderWorker(
               request.timeTicks,
               request.codec,
               request.outputTimeTicks,
+              request.pixels,
             );
             reportDeviceLoss();
             if (ticket.kind === "waiting") {
@@ -601,8 +605,9 @@ class WasmRenderWorkerHost implements RenderWorkerHost {
     timeTicks: bigint,
     codec: EngineVideoCodec,
     outputTimeTicks: bigint,
+    pixels?: string,
   ): ExportTicket {
-    const ticket = this.#wasm.beginExportAt(timeTicks, codec);
+    const ticket = this.#wasm.beginExportAt(timeTicks, codec, pixels);
     if (ticket.kind === "waiting")
       return {
         kind: "waiting",
@@ -612,7 +617,9 @@ class WasmRenderWorkerHost implements RenderWorkerHost {
     this.#retirePendingUploads();
     const readback = ticket.readback.then((result) =>
       videoFrameFromI420(result.pixels, {
-        format: "I420",
+        // The 10-bit formats are newer than the DOM types this package builds with. A binding
+        // that names no format answers I420.
+        format: (result.format ?? "I420") as VideoPixelFormat,
         codedWidth: result.width,
         codedHeight: result.height,
         // The output's time, as `ExportedFrame.timeTicks` counts it, not the timeline's: a host
@@ -913,6 +920,7 @@ export class WorkerRenderBackend implements RenderBackend {
     timeTicks: bigint,
     codec: EngineVideoCodec,
     outputTimeTicks: bigint,
+    pixels?: string,
   ): Promise<ExportTicket> {
     if (this.#disposed) {
       return Promise.reject(new Error("render backend disposed"));
@@ -939,6 +947,7 @@ export class WorkerRenderBackend implements RenderBackend {
           timeTicks,
           codec,
           outputTimeTicks,
+          ...(pixels === undefined ? {} : { pixels }),
         });
       } catch (error) {
         const failure =
@@ -1098,12 +1107,22 @@ function lostRenderer(): Alpha2WasmError {
 export class WorkerExportBackend implements ExportBackend {
   readonly #renderer: WorkerRenderBackend;
   readonly #codec: EngineVideoCodec;
+  readonly #pixels?: string;
   #aborted?: Error;
 
-  /** Exports through `renderer`, packing frames for the `codec` the sink encodes. */
-  constructor(renderer: WorkerRenderBackend, codec: EngineVideoCodec) {
+  /**
+   * Exports through `renderer`, packing frames for the `codec` the sink encodes, in `pixels`
+   * (`resolvePixels(...).format` from `alpha2/containers`; absent, I420). Pictures with alpha are
+   * drawn without the project background.
+   */
+  constructor(
+    renderer: WorkerRenderBackend,
+    codec: EngineVideoCodec,
+    pixels?: string,
+  ) {
     this.#renderer = renderer;
     this.#codec = codec;
+    if (pixels !== undefined && pixels !== "yuv420p") this.#pixels = pixels;
   }
 
   async begin(
@@ -1111,7 +1130,12 @@ export class WorkerExportBackend implements ExportBackend {
     outputTimeTicks: bigint,
   ): Promise<ExportTicket> {
     if (this.#aborted !== undefined) throw this.#aborted;
-    return this.#renderer.beginExport(timeTicks, this.#codec, outputTimeTicks);
+    return this.#renderer.beginExport(
+      timeTicks,
+      this.#codec,
+      outputTimeTicks,
+      this.#pixels,
+    );
   }
 
   isDeviceLost(): boolean {

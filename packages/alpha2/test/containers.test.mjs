@@ -12,6 +12,7 @@ import {
   offeredAudioCodecs,
   resolveEngineExportFormat,
   resolveExportFormat,
+  resolvePixels,
 } from "../dist/containers.js";
 
 const corpus = JSON.parse(
@@ -133,4 +134,27 @@ test("refusals name what the container offers", () => {
     () => resolveExportFormat({ container: "mov", audioCodec: "opus" }),
     { message: "mov does not offer audio codec opus; it offers aac" },
   );
+});
+
+test("the pixel policy matches the shared corpus", () => {
+  for (const entry of corpus.pixels) {
+    const request = {
+      ...(entry.bitDepth === null ? {} : { bitDepth: entry.bitDepth }),
+      alpha: entry.alpha,
+    };
+    if (entry.ok !== undefined) {
+      assert.equal(
+        resolvePixels(entry.codec, entry.container, request).format,
+        entry.ok,
+        JSON.stringify(entry),
+      );
+    } else {
+      assert.throws(
+        () => resolvePixels(entry.codec, entry.container, request),
+        (error) =>
+          error instanceof ExportFormatError && error.reason === entry.error,
+        JSON.stringify(entry),
+      );
+    }
+  }
 });

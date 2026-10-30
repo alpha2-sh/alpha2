@@ -1498,6 +1498,16 @@ export interface MediabunnySinkOptions {
    * default mediabunny's own (H.264 High at a level for the frame size and bitrate).
    */
   readonly videoCodecString?: string;
+  /**
+   * Keep the frames' alpha (`I420A` frames, from an export in `yuva420p`): VP9 in WebM or Matroska.
+   * Check {@link canEncodePixels} first: a browser can claim alpha and drop it.
+   */
+  readonly videoAlpha?: boolean;
+  /**
+   * 10 encodes `I420P10` frames (an export in `yuv420p10le`) with the codec's 10-bit profile
+   * ({@link tenBitCodecString}) unless `videoCodecString` names one. Default 8.
+   */
+  readonly videoBitDepth?: 8 | 10;
   /** The video encoder's latency mode; by default the one {@link videoEncoderLatencyMode} measures. */
   readonly videoLatencyMode?: VideoEncoderLatencyMode;
   /**
@@ -1697,6 +1707,118 @@ export async function canEncodeVideoTrack(
     });
   }
   return null;
+}
+
+/**
+ * The WebCodecs codec string a 10-bit 4:2:0 export opens with: VP9 profile 2, AV1 Main, HEVC Main
+ * 10, each at 10 bits. `undefined` for H.264, which a browser does not encode at 10 bits.
+ */
+export function tenBitCodecString(
+  codec: "avc" | "hevc" | "vp9" | "av1",
+): string | undefined {
+  switch (codec) {
+    case "vp9":
+      return "vp09.02.10.10";
+    case "av1":
+      return "av01.0.04M.10";
+    case "hevc":
+      return "hvc1.2.4.L123.B0";
+    default:
+      return undefined;
+  }
+}
+
+const PIXEL_PROBE_WIDTH = 64;
+const PIXEL_PROBE_HEIGHT = 64;
+const PIXEL_PROBE_TIMEOUT_MS = 3_000;
+
+/**
+ * Whether this browser encodes `codec` in `pixels` (`resolvePixels(...)` from `alpha2/containers`):
+ * alpha, 10 bits, or both. `VideoEncoder.isConfigSupported` is not enough to say: a browser can
+ * report alpha as supported and then encode no alpha at all (Firefox 158 does). So this encodes one
+ * real frame in that format and requires an output chunk, and for alpha the chunk's alpha side
+ * data. 8-bit I420 answers `true` without probing; {@link canEncodeVideoTrack} covers it.
+ */
+export async function canEncodePixels(
+  codec: "avc" | "hevc" | "vp9" | "av1",
+  pixels: { readonly bitDepth: 8 | 10; readonly alpha: boolean },
+): Promise<boolean> {
+  if (pixels.bitDepth === 8 && !pixels.alpha) return true;
+  if (typeof VideoEncoder === "undefined" || typeof VideoFrame === "undefined")
+    return false;
+  const codecString =
+    pixels.bitDepth === 10
+      ? tenBitCodecString(codec)
+      : LATENCY_PROBE_CODECS[codec];
+  if (codecString === undefined) return false;
+  const config: VideoEncoderConfig = {
+    codec: codecString,
+    width: PIXEL_PROBE_WIDTH,
+    height: PIXEL_PROBE_HEIGHT,
+    bitrate: 500_000,
+    framerate: 30,
+    ...(pixels.alpha ? { alpha: "keep" as const } : {}),
+  };
+  try {
+    if (!(await VideoEncoder.isConfigSupported(config)).supported) return false;
+  } catch {
+    return false;
+  }
+  const format = `I420${pixels.alpha ? "A" : ""}${pixels.bitDepth === 10 ? "P10" : ""}`;
+  const samples = PIXEL_PROBE_WIDTH * PIXEL_PROBE_HEIGHT;
+  const bytes = pixels.bitDepth === 10 ? 2 : 1;
+  const planes = (1.5 + (pixels.alpha ? 1 : 0)) * samples * bytes;
+  let encoder: VideoEncoder | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    let kept = false;
+    let failed = false;
+    let settle = () => {};
+    const output = new Promise<void>((resolve) => (settle = resolve));
+    encoder = new VideoEncoder({
+      output: (_chunk, metadata) => {
+        // A chunk without alpha side data is a picture whose alpha was dropped.
+        // `alphaSideData` is newer than the DOM types this package builds with.
+        const alpha = (metadata as { alphaSideData?: unknown } | undefined)
+          ?.alphaSideData;
+        kept = !pixels.alpha || alpha !== undefined;
+        settle();
+      },
+      error: () => {
+        failed = true;
+        settle();
+      },
+    });
+    encoder.configure(config);
+    const frame = new VideoFrame(new Uint8Array(planes), {
+      format: format as VideoPixelFormat,
+      codedWidth: PIXEL_PROBE_WIDTH,
+      codedHeight: PIXEL_PROBE_HEIGHT,
+      timestamp: 0,
+    });
+    try {
+      encoder.encode(frame, { keyFrame: true });
+    } finally {
+      frame.close();
+    }
+    await Promise.race([
+      output,
+      encoder.flush().catch(() => (failed = true)),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, PIXEL_PROBE_TIMEOUT_MS);
+      }),
+    ]);
+    return kept && !failed;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+    try {
+      if (encoder?.state !== "closed") encoder?.close();
+    } catch {
+      // Already closed by its own failure.
+    }
+  }
 }
 
 /** How a browser's video encoder is opened: see {@link videoEncoderLatencyMode}. */
@@ -2430,13 +2552,15 @@ export class MediabunnySink
         options.videoLatencyMode ?? (await videoEncoderLatencyMode(codec));
       if (this.#output.state === "canceled") return;
       this.#latencyMode = latencyMode;
+      const codecString =
+        options.videoCodecString ??
+        (options.videoBitDepth === 10 ? tenBitCodecString(codec) : undefined);
       this.#video = new VideoSampleSource({
         codec,
         quality: videoEncoderQuality(rate),
         latencyMode,
-        ...(options.videoCodecString === undefined
-          ? {}
-          : { fullCodecString: options.videoCodecString }),
+        ...(options.videoAlpha === true ? { alpha: "keep" as const } : {}),
+        ...(codecString === undefined ? {} : { fullCodecString: codecString }),
         // mediabunny reports each candidate config before it asks the browser whether it is
         // supported and stops at the first that is, so the last one reported is the one that runs.
         onEncoderConfig: (config) => {

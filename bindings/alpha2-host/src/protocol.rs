@@ -117,6 +117,14 @@ pub struct ExportRequest {
     /// Absent: the container's default.
     #[serde(rename = "videoCodec", default)]
     pub video_codec: Option<VideoCodec>,
+    /// Keep alpha: the frames are drawn without the project background and
+    /// written with an alpha plane (VP9 in `WebM` or Matroska, `ProRes` 4444).
+    #[serde(default)]
+    pub alpha: bool,
+    /// Bits per component, 8 or 10; absent: the codec's own (10 for
+    /// `ProRes`, else 8).
+    #[serde(rename = "bitDepth", default)]
+    pub bit_depth: Option<u8>,
     #[serde(rename = "videoEncoder", default)]
     pub video_encoder: Option<String>,
     /// Whether the encoder may, must, or must not take its frames on the GPU.
@@ -175,12 +183,24 @@ impl ExportRequest {
     /// # Errors
     /// `INVALID_INPUT` naming what does not resolve.
     pub fn format(&self) -> Result<ResolvedFormat, HostError> {
+        let bit_depth = self
+            .bit_depth
+            .map(|bits| {
+                alpha2_media::BitDepth::from_bits(bits).ok_or_else(|| {
+                    HostError::invalid_input(format!("bitDepth: {bits} is not 8 or 10"))
+                })
+            })
+            .transpose()?;
         ResolvedFormat::resolve(
             self.container,
             &self.output,
             self.video_codec,
             self.audio_codec,
-        )
+        )?
+        .with_pixels(alpha2_media::OutputPixels {
+            bit_depth,
+            alpha: self.alpha,
+        })
     }
 }
 
@@ -191,6 +211,8 @@ pub struct ResolvedFormat {
     pub container: Container,
     pub video: NativeVideoCodec,
     pub audio: NativeAudioCodec,
+    /// The pictures the video is written in ([`alpha2_media::resolve_pixels`]).
+    pub pixels: alpha2_media::PixelLayout,
 }
 
 impl ResolvedFormat {
@@ -216,6 +238,32 @@ impl ResolvedFormat {
             container,
             video: NativeVideoCodec::from_model(video),
             audio: NativeAudioCodec::from_model(audio),
+            pixels: alpha2_media::resolve_pixels(
+                video,
+                container,
+                alpha2_media::OutputPixels::default(),
+            )
+            .map_err(|error| HostError::invalid_input(format!("videoCodec: {error}")))?,
+        })
+    }
+
+    /// This format with its video written in `pixels`.
+    ///
+    /// # Errors
+    /// `INVALID_INPUT` naming `alpha` or `bitDepth` when the codec cannot be
+    /// written so in the container.
+    pub fn with_pixels(self, pixels: alpha2_media::OutputPixels) -> Result<Self, HostError> {
+        let layout = alpha2_media::resolve_pixels(self.video.model(), self.container, pixels)
+            .map_err(|error| {
+                let field = match error {
+                    alpha2_media::OutputPixelsError::BitDepthUnsupported { .. } => "bitDepth",
+                    _ => "alpha",
+                };
+                HostError::invalid_input(format!("{field}: {error}"))
+            })?;
+        Ok(Self {
+            pixels: layout,
+            ..self
         })
     }
 }
@@ -254,6 +302,20 @@ fn check_export_settings(
         LoudnessRequest::from_json(&loudness).map_err(HostError::invalid_input)?;
     }
     // A budget the caller sets is its input too: a misspelled or mistyped field names itself.
+    if let Some(alpha) = setting("alpha")?
+        && !alpha.is_boolean()
+    {
+        return Err(HostError::invalid_input(format!(
+            "alpha: {alpha} is not true or false"
+        )));
+    }
+    if let Some(bits) = setting("bitDepth")?.filter(|value| !value.is_null())
+        && !matches!(bits.as_u64(), Some(8 | 10))
+    {
+        return Err(HostError::invalid_input(format!(
+            "bitDepth: {bits} is not 8 or 10"
+        )));
+    }
     if let Some(memory) = setting("memory")? {
         serde_json::from_value::<crate::memory::MemoryRequest>(memory)
             .map_err(|error| HostError::invalid_input(format!("memory: {error}")))?;
@@ -276,7 +338,7 @@ fn check_format_names(
         })?;
     }
     for (field, names) in [
-        ("videoCodec", "h264, hevc, vp9, av1, mpeg4-part2"),
+        ("videoCodec", "h264, hevc, vp9, av1, mpeg4-part2, prores"),
         ("audioCodec", "aac, opus"),
     ] {
         if let Some(codec) = setting(field)?.filter(|value| !value.is_null()) {
@@ -347,6 +409,10 @@ pub struct StillRequest {
     pub size: Option<StillSize>,
     /// The frames to render, 1 to [`MAX_STILLS`], each to its own file.
     pub stills: Vec<StillEntry>,
+    /// Keep alpha: each still is drawn without the project background, its
+    /// layers over transparent pixels.
+    #[serde(default)]
+    pub alpha: bool,
     /// Replace a regular file at an output once it is whole.
     #[serde(default)]
     pub overwrite: bool,
@@ -1307,12 +1373,47 @@ pub fn encoder_library_json(name: &str) -> Value {
         })
 }
 
+/// The codecs this runtime writes with alpha and at 10 bits: each one the
+/// policy allows ([`alpha2_media::resolve_pixels`]) whose encoder here takes
+/// the pictures. A 10-bit export also needs the `rgba16float` intermediate,
+/// which the host's `features` report.
+fn output_pixels_json(capabilities: &alpha2_native::NativeCodecCapabilities) -> Value {
+    let codecs = |pixels: alpha2_media::OutputPixels| {
+        alpha2_media::VideoCodec::ALL
+            .into_iter()
+            .filter(|&codec| {
+                Container::ALL.into_iter().any(|container| {
+                    container.offers_video(codec)
+                        && alpha2_media::resolve_pixels(codec, container, pixels).is_ok_and(
+                            |layout| {
+                                alpha2_native::encodes_pixels(
+                                    capabilities,
+                                    NativeVideoCodec::from_model(codec),
+                                    layout,
+                                )
+                            },
+                        )
+                })
+            })
+            .map(alpha2_media::VideoCodec::as_str)
+            .collect::<Vec<_>>()
+    };
+    json!({
+        "alpha": codecs(alpha2_media::OutputPixels { bit_depth: None, alpha: true }),
+        "tenBit": codecs(alpha2_media::OutputPixels {
+            bit_depth: Some(alpha2_media::BitDepth::Ten),
+            alpha: false,
+        }),
+    })
+}
+
 /// Reports the containers an export can write, which codecs each offers,
 /// and the video and audio encoders this runtime registers, for the
 /// `capabilities` answer. The containers are the engine's policy, the same
 /// on every runtime; the encoders say which of those codecs this one encodes.
 pub fn codec_capabilities_json() -> Value {
     let capabilities = codec_capabilities();
+    let output = output_pixels_json(&capabilities);
     json!({
         "containers": Container::ALL.into_iter().map(|container| json!({
             "id": container.as_str(),
@@ -1342,6 +1443,7 @@ pub fn codec_capabilities_json() -> Value {
             })
         }).collect::<Vec<_>>(),
         "openh264": openh264_json(),
+        "output": output,
         "audio": capabilities.audio.into_iter().map(|capability| json!({
             "id": capability.codec.as_str(),
             "encoder": capability.encoder_name,

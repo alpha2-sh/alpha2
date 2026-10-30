@@ -5,9 +5,9 @@
 //! ([`Exporter::still`], [`Exporter::render_next_texture`]), from sources the
 //! export's decode pool decoded and its frame supply installed. The picture
 //! is read before any conversion to YUV: the renderer's display-encoded RGBA,
-//! with its premultiplied alpha divided out for PNG's straight alpha (every
-//! frame is opaque over the project's background, so this changes nothing
-//! today). The export's readback loop pipelines readback, encode and render
+//! with its premultiplied alpha divided out for PNG's straight alpha. A
+//! frame is opaque over the project's background unless the request asks for
+//! alpha, which draws it without the background. The export's readback loop pipelines readback, encode and render
 //! cache around the same steps, so the still runs its own loop beside it;
 //! the host tests check the two draw the same pixels.
 
@@ -37,7 +37,7 @@ impl Host {
     /// Renders each of `stills` of `project` to its PNG, in time order, so
     /// every decoder only moves forward, and answers each one's file, frame
     /// time and size in the order they were asked for.
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     pub(crate) fn render_stills(
         &mut self,
         project: &str,
@@ -45,6 +45,7 @@ impl Host {
         effect_assets: &HashMap<String, PathBuf>,
         effects: Vec<EffectRequest>,
         stills: &[StillEntry],
+        alpha: bool,
         existing: ExistingOutput,
     ) -> Result<Value, String> {
         let started = Instant::now();
@@ -63,6 +64,7 @@ impl Host {
                     rate,
                     QualityProfile::export(),
                 )
+                .map(|exporter| exporter.with_background(!alpha))
                 .map_err(error_message)
             })
             .collect::<Result<Vec<_>, _>>()?;

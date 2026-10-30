@@ -30,16 +30,20 @@ pub enum VideoCodec {
     Av1,
     /// MPEG-4 Part 2.
     Mpeg4Part2,
+    /// Apple `ProRes`: 422 HQ, or 4444 with alpha. Intra-only, 10-bit.
+    #[serde(rename = "prores")]
+    ProRes,
 }
 
 impl VideoCodec {
     /// Every codec, in the order the engine lists them.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::H264,
         Self::Hevc,
         Self::Vp9,
         Self::Av1,
         Self::Mpeg4Part2,
+        Self::ProRes,
     ];
 
     /// Stable identifier used by every protocol and binding.
@@ -51,6 +55,7 @@ impl VideoCodec {
             Self::Vp9 => "vp9",
             Self::Av1 => "av1",
             Self::Mpeg4Part2 => "mpeg4-part2",
+            Self::ProRes => "prores",
         }
     }
 
@@ -61,13 +66,16 @@ impl VideoCodec {
     /// H.264, HEVC, and MPEG-4 Part 2 imply H.273 chroma location type 0,
     /// co-sited with the even luma columns ([`ChromaLocation::Left`]), as
     /// decoders report them and alpha2 imports them. VP9 and AV1 streams
-    /// leave it unspecified, which alpha2 reads as centred.
+    /// leave it unspecified, which alpha2 reads as centred. `ProRes` 4:2:2
+    /// sites chroma with the even luma columns, as BT.709 4:2:2 does.
     ///
     /// [`ChromaLocation::Left`]: crate::ChromaLocation::Left
     #[must_use]
     pub const fn chroma_location(self) -> crate::ChromaLocation {
         match self {
-            Self::H264 | Self::Hevc | Self::Mpeg4Part2 => crate::ChromaLocation::Left,
+            Self::H264 | Self::Hevc | Self::Mpeg4Part2 | Self::ProRes => {
+                crate::ChromaLocation::Left
+            }
             Self::Vp9 | Self::Av1 => crate::ChromaLocation::Center,
         }
     }
@@ -313,7 +321,9 @@ pub const MIN_VIDEO_BITRATE: u64 = 250_000;
 /// one AV1 factor serves both encoders, so it is the higher of their middles, 0.70, which
 /// gives `av1_nvenc` more than it needs rather than `libsvtav1` far less. The same runs put HEVC
 /// at 0.60x to 0.73x, in line with its factor. A browser's `WebCodecs` VP9 and AV1
-/// encoders take the same factors.
+/// encoders take the same factors. `ProRes` takes no rate: its profile fixes it (422 HQ is
+/// about 220 Mbit/s at 1080p30, 22 times H.264's `high` rate there), and 22 states that only
+/// so a resolved rate estimates the output's size.
 #[must_use]
 pub const fn codec_factor(codec: VideoCodec) -> f64 {
     match codec {
@@ -322,6 +332,7 @@ pub const fn codec_factor(codec: VideoCodec) -> f64 {
         VideoCodec::Vp9 => 0.75,
         VideoCodec::Av1 => 0.70,
         VideoCodec::Mpeg4Part2 => 2.7,
+        VideoCodec::ProRes => 22.0,
     }
 }
 
@@ -349,7 +360,11 @@ pub const fn level_quantizer(codec: VideoCodec, level: QualityLevel) -> Option<u
             QualityLevel::High => 27,
             QualityLevel::VeryHigh => 23,
         }),
-        VideoCodec::Hevc | VideoCodec::Vp9 | VideoCodec::Av1 | VideoCodec::Mpeg4Part2 => None,
+        VideoCodec::Hevc
+        | VideoCodec::Vp9
+        | VideoCodec::Av1
+        | VideoCodec::Mpeg4Part2
+        | VideoCodec::ProRes => None,
     }
 }
 

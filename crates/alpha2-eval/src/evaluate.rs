@@ -95,7 +95,7 @@ pub fn evaluate<'a>(
     }));
     Ok(FrameDesc {
         time,
-        background: project.settings.background,
+        background: Some(project.settings.background),
         blend_space: project.settings.blend_space,
         visual,
         audio,

@@ -53,6 +53,7 @@ import {
 import {
   exportAacPriming,
   exportEveryContainer,
+  exportPixels,
   exportEveryProjectRate,
   exportSchedule,
   exportWaitingFrames,
@@ -115,6 +116,7 @@ export const cases = {
   "fixed-audio-mix": fixedAudioMix,
   "export-every-project-rate": exportEveryProjectRate,
   "export-every-container": exportEveryContainer,
+  "export-pixels": exportPixels,
   "export-aac-priming": exportAacPriming,
   "loudness-under-limiter": loudnessUnderLimiter,
   "text-raster-parity": textRasterParity,

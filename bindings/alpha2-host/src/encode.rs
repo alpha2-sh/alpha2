@@ -79,6 +79,8 @@ impl Drop for PooledFrame {
 /// is cheaper than a stalled coordinator.
 #[derive(Debug)]
 pub struct FramePool {
+    /// The pictures its frames hold.
+    pixels: alpha2_media::PixelLayout,
     idle: Mutex<Vec<Yuv420pFrameBuffer>>,
     width: i32,
     height: i32,
@@ -86,9 +88,14 @@ pub struct FramePool {
 }
 
 impl FramePool {
-    /// Creates a pool for frames of one coded size.
-    pub fn new(width: u32, height: u32) -> Result<Arc<Self>, String> {
+    /// Creates a pool for frames of one coded size, in `pixels`.
+    pub fn new(
+        width: u32,
+        height: u32,
+        pixels: alpha2_media::PixelLayout,
+    ) -> Result<Arc<Self>, String> {
         Ok(Arc::new(Self {
+            pixels,
             idle: Mutex::new(Vec::new()),
             width: i32::try_from(width).map_err(|_| "output width does not fit".to_owned())?,
             height: i32::try_from(height).map_err(|_| "output height does not fit".to_owned())?,
@@ -110,9 +117,12 @@ impl FramePool {
             frame
         } else {
             self.allocated.fetch_add(1, Ordering::Relaxed);
-            Yuv420pFrameBuffer::new(self.width, self.height).map_err(|error| {
-                encode_error(format!("cannot allocate an encoder frame: {error}"))
-            })?
+            alpha2_native::packed_frame(
+                self.width.unsigned_abs(),
+                self.height.unsigned_abs(),
+                self.pixels,
+            )
+            .map_err(|error| encode_error(format!("cannot allocate an encoder frame: {error}")))?
         };
         Ok(PooledFrame {
             frame: Some(frame),

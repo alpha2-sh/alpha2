@@ -44,6 +44,9 @@ pub struct VideoEncodeConfig {
     pub display: VideoDisplay,
     /// The file format the output is written in, which must offer `codec`.
     pub container: Container,
+    /// The pictures the output is written in ([`alpha2_media::resolve_pixels`]):
+    /// 8-bit 4:2:0 unless the export asked for alpha or 10 bits.
+    pub pixels: alpha2_media::PixelLayout,
 }
 
 /// How encoded pictures are shown: what a container records beside them
@@ -378,6 +381,14 @@ impl NativeVideoEncodeSink {
     }
 
     pub(crate) fn write_video(&mut self, frame: &DecodedVideoFrame) -> Result<(), EncodeError> {
+        // Decoded and RGBA frames are converted to YUV420P; any other output takes frames the
+        // caller packed ([`Self::write_prepared_video`]).
+        if !self.selection.pixels.is_yuv420p() {
+            return Err(EncodeError::Adapter(format!(
+                "this encoder takes packed {} frames",
+                self.selection.pixels.ffmpeg_name()
+            )));
+        }
         if frame.visible_rect.width != u32::try_from(self.width).unwrap_or(0)
             || frame.visible_rect.height != u32::try_from(self.height).unwrap_or(0)
         {

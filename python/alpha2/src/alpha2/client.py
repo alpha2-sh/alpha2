@@ -775,6 +775,8 @@ class HostClient:
         include_audio: bool = True,
         container: Literal["mp4", "mov", "mkv", "webm"] | None = None,
         video_codec: str | None = None,
+        alpha: bool = False,
+        bit_depth: Literal[8, 10] | None = None,
         video_encoder: str | None = None,
         input_policy: Literal["auto", "gpu-required", "cpu-readback"] = "auto",
         strategy: Literal["render", "prefer-copy", "require-copy"] = "render",
@@ -798,7 +800,9 @@ class HostClient:
         ``end_ticks`` (default: where the project ends), widened to the grid of ``frame_rate``
         (default: the project's). ``output``'s extension (``.mp4``, ``.m4v``, ``.mov``, ``.mkv``
         or ``.webm``) names the container, which must agree with ``container`` when both are given;
-        absent codecs are the container's defaults.
+        absent codecs are the container's defaults. ``alpha`` keeps transparency, drawing no project
+        background (VP9 in WebM or Matroska, ``prores`` 4444 in MOV); ``bit_depth`` 10 writes
+        10-bit pictures (HEVC, AV1, VP9, and ``prores``, which is 10-bit by default).
 
         A file already at ``output`` is refused unless ``overwrite`` is true; then a regular file
         there is replaced once the export is whole, so a failed or cancelled export leaves it as it
@@ -868,10 +872,15 @@ class HostClient:
             ("audio_codec", audio_codec),
         ):
             _optional_name(field, value)
+        if not isinstance(alpha, bool):
+            raise _invalid("alpha must be true or false")
+        if bit_depth is not None and bit_depth not in (8, 10):
+            raise _invalid(f"bit_depth: {bit_depth!r} is not 8 or 10")
         try:
-            _native.resolve_export_format(
+            resolved_container, resolved_codec, _ = _native.resolve_export_format(
                 container, os.path.splitext(output_text)[1][1:], video_codec, audio_codec
             )
+            _native.resolve_pixels(resolved_codec, resolved_container, bit_depth, alpha)
         except ValueError as error:
             raise _invalid(str(error)) from None
         if video_encoder is not None and (not isinstance(video_encoder, str) or not video_encoder):
@@ -900,6 +909,8 @@ class HostClient:
         named: tuple[tuple[str, object], ...] = (
             ("container", container),
             ("videoCodec", video_codec),
+            ("alpha", alpha or None),
+            ("bitDepth", bit_depth),
             ("videoEncoder", video_encoder),
             ("videoQuality", video_rate),
             ("audioCodec", audio_codec),
@@ -964,6 +975,7 @@ class HostClient:
         fonts: Sequence[PathLike] | None = None,
         effects: Sequence[Mapping[str, Any]] | None = None,
         size: tuple[int, int] | None = None,
+        alpha: bool = False,
         overwrite: bool = False,
         video_decode: VideoDecodeMode | None = None,
         renderer: RendererMode | None = None,
@@ -978,6 +990,7 @@ class HostClient:
         encoding. ``size`` (width, height) renders the project at that canvas size instead of its
         own; any size from 1 to 16384 pixels each way. An existing file is refused unless
         ``overwrite`` is true, and an output that is one of the request's inputs always is.
+        ``alpha`` draws each still without the project background, over transparent pixels.
 
         The other options are :meth:`export`'s. Returns the host's result: ``stills`` (each one's
         ``output``, ``frameTime``, ``width`` and ``height``, in the order asked for), ``renderer``
@@ -1021,6 +1034,7 @@ class HostClient:
                 project, assets, proxies, frames, resources, media, effect_assets, fonts, effects
             ),
             "stills": entries,
+            "alpha": _flag("alpha", alpha),
             "overwrite": _flag("overwrite", overwrite),
         }
         if size is not None:

@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 
 /// The command-line synopsis, returned as the error for an unrecognized command line or `--help`.
 pub fn usage() -> String {
-    "usage: alpha2-host serve\n       alpha2-host conform --project <project.json> --asset <source-id>=<path> [--proxy <source-id>=<path>]... [--purpose preview|preview-proxy|thumbnail|remote-edit|export-original|export-proxy]\n       alpha2-host export --project <project.json> --asset <source-id>=<path> [--proxy <source-id>=<path>]... [--frames <source-id>=<path>,...]... [--resource <source-id> <locator> <path>]... [--media original|proxies] --effect-asset <resource-id>=<path> [--font <font-file>]... --out <output.mp4|.mov|.mkv|.webm> [--overwrite] [--container mp4|mov|mkv|webm] [--effects <effects.json>] [--start-ticks <ticks>] [--end-ticks <ticks>] [--frame-rate <num>/<den>] [--no-audio] [--video-codec <id>] [--video-encoder <ffmpeg-name>] [--input-policy auto|gpu-required|cpu-readback] [--strategy render|prefer-copy|require-copy] [--video-quality very-low|low|medium|high|very-high|<bits-per-second>] [--video-quantizer <n>] [--audio-codec aac|opus] [--audio-quality very-low|low|medium|high|very-high|<bits-per-second>] [--loudness-target <LUFS> [--true-peak-ceiling <dBTP>]] [--video-decode software|auto|hardware-required] [--renderer auto|gpu|cpu] [--render-cache <dir> [--render-cache-quota <bytes>] [--render-cache-backlog skip|wait]]".to_owned()
+    "usage: alpha2-host serve\n       alpha2-host conform --project <project.json> --asset <source-id>=<path> [--proxy <source-id>=<path>]... [--purpose preview|preview-proxy|thumbnail|remote-edit|export-original|export-proxy]\n       alpha2-host export --project <project.json> --asset <source-id>=<path> [--proxy <source-id>=<path>]... [--frames <source-id>=<path>,...]... [--resource <source-id> <locator> <path>]... [--media original|proxies] --effect-asset <resource-id>=<path> [--font <font-file>]... --out <output.mp4|.mov|.mkv|.webm> [--overwrite] [--container mp4|mov|mkv|webm] [--effects <effects.json>] [--start-ticks <ticks>] [--end-ticks <ticks>] [--frame-rate <num>/<den>] [--no-audio] [--video-codec <id>] [--alpha] [--bit-depth 8|10] [--video-encoder <ffmpeg-name>] [--input-policy auto|gpu-required|cpu-readback] [--strategy render|prefer-copy|require-copy] [--video-quality very-low|low|medium|high|very-high|<bits-per-second>] [--video-quantizer <n>] [--audio-codec aac|opus] [--audio-quality very-low|low|medium|high|very-high|<bits-per-second>] [--loudness-target <LUFS> [--true-peak-ceiling <dBTP>]] [--video-decode software|auto|hardware-required] [--renderer auto|gpu|cpu] [--render-cache <dir> [--render-cache-quota <bytes>] [--render-cache-backlog skip|wait]]".to_owned()
 }
 
 /// The flags shared by `conform` and `export`, as parsed. `include_audio` is true unless
@@ -44,6 +44,8 @@ pub struct ExportCliOptions {
     pub include_audio: bool,
     pub container: Option<Container>,
     pub video_codec: Option<VideoCodec>,
+    pub alpha: bool,
+    pub bit_depth: Option<u8>,
     pub video_encoder: Option<String>,
     pub input_policy: crate::config::VideoInputPolicy,
     pub strategy: crate::config::ExportStrategy,
@@ -186,6 +188,8 @@ pub fn export_request(options: ExportCliOptions) -> Result<(Request, PathBuf), H
         include_audio: options.include_audio,
         container: options.container,
         video_codec: options.video_codec,
+        alpha: options.alpha,
+        bit_depth: options.bit_depth,
         video_encoder: options.video_encoder,
         input_policy: options.input_policy,
         strategy: options.strategy,
@@ -401,6 +405,12 @@ pub fn parse_export_args(args: Vec<String>) -> Result<ExportCliOptions, HostErro
             "--video-codec" => {
                 options.video_codec = Some(value(&mut args)?.parse().map_err(|error| {
                     HostError::invalid_input(format!("--video-codec: {error}"))
+                })?);
+            }
+            "--alpha" => options.alpha = true,
+            "--bit-depth" => {
+                options.bit_depth = Some(value(&mut args)?.parse().map_err(|_| {
+                    HostError::invalid_input("--bit-depth: expected 8 or 10".to_owned())
                 })?);
             }
             "--video-encoder" => options.video_encoder = Some(value(&mut args)?),

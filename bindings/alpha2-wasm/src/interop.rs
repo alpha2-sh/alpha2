@@ -436,21 +436,32 @@ pub(crate) fn export_readback_promise(
         if let Err((stage, message)) = mapping_outcome(result) {
             return Err(failure("READBACK_FAILED", stage, &message));
         }
-        let layout = plane_layout_js(&readback)?;
-        // The planes stay as the GPU copied them, rows padded, and the caller reads them through
-        // `layout`: one copy out of the mapping instead of a repack.
-        let pixels = readback
-            .finish_mapped(|mapped| {
-                if browser_webgpu {
-                    // The mapping is a JS `ArrayBuffer`; reading it from Rust (even its `len`)
-                    // would first copy it into the wasm heap.
-                    let mapping = mapped.as_uint8array();
-                    mapping.slice(0, mapping.length())
-                } else {
-                    web_sys::js_sys::Uint8Array::from(&mapped[..])
-                }
-            })
-            .map_err(|error| finish_failure(&health, error, &failure))?;
+        let format = readback.pixel_layout().map_or("I420", webcodecs_format);
+        let (layout, pixels) = if let Some(pixels) = readback.pixel_layout() {
+            // Another layout is packed on the CPU, into tight planes.
+            let (mut memory, layout, offsets) = tight_planes(pixels, size)?;
+            readback
+                .finish_into_planes(&mut plane_targets(&mut memory, &offsets))
+                .map_err(|error| finish_failure(&health, error, &failure))?;
+            (layout, web_sys::js_sys::Uint8Array::from(&memory[..]))
+        } else {
+            let layout = plane_layout_js(&readback)?;
+            // The planes stay as the GPU copied them, rows padded, and the caller reads them
+            // through `layout`: one copy out of the mapping instead of a repack.
+            let pixels = readback
+                .finish_mapped(|mapped| {
+                    if browser_webgpu {
+                        // The mapping is a JS `ArrayBuffer`; reading it from Rust (even its `len`)
+                        // would first copy it into the wasm heap.
+                        let mapping = mapped.as_uint8array();
+                        mapping.slice(0, mapping.length())
+                    } else {
+                        web_sys::js_sys::Uint8Array::from(&mapped[..])
+                    }
+                })
+                .map_err(|error| finish_failure(&health, error, &failure))?;
+            (layout, pixels)
+        };
         let result = web_sys::js_sys::Object::new();
         set(&result, "kind", &JsValue::from_str("rendered"))?;
         if let Some(index) = index {
@@ -468,7 +479,7 @@ pub(crate) fn export_readback_promise(
             "height",
             &JsValue::from_f64(f64::from(size.height)),
         )?;
-        set(&result, "format", &JsValue::from_str("I420"))?;
+        set(&result, "format", &JsValue::from_str(format))?;
         set(
             &result,
             "colorSpace",
@@ -533,6 +544,88 @@ const fn readback_stage(error: RenderError) -> &'static str {
 }
 
 /// Each plane's offset and stride in the mapped staging buffer.
+/// The output pictures an export asks for by `FFmpeg` name (`yuva420p`,
+/// `yuv420p10le`), 8-bit 4:2:0 when it names none. A browser encodes 4:2:0
+/// only, so any other layout is refused.
+///
+/// # Errors
+/// `INVALID_INPUT` for a name that is no layout, or one a browser cannot
+/// encode.
+pub(crate) fn parse_pixels(name: Option<&str>) -> Result<alpha2_media::PixelLayout, JsValue> {
+    let Some(name) = name else {
+        return Ok(alpha2_media::PixelLayout::YUV420P);
+    };
+    let layout = alpha2_media::PixelLayout::from_ffmpeg_name(name)
+        .ok_or_else(|| invalid_input(format!("unknown pixel format {name:?}")))?;
+    if layout.chroma != alpha2_media::Chroma::Yuv420
+        || layout.planes != alpha2_media::PlaneLayout::Planar
+    {
+        return Err(invalid_input(format!(
+            "a browser encodes 4:2:0 planar pictures, not {name}"
+        )));
+    }
+    Ok(layout)
+}
+
+/// The `WebCodecs` `VideoPixelFormat` of a 4:2:0 `layout`.
+pub(crate) fn webcodecs_format(layout: alpha2_media::PixelLayout) -> &'static str {
+    match (layout.bit_depth, layout.alpha) {
+        (alpha2_media::BitDepth::Eight, false) => "I420",
+        (alpha2_media::BitDepth::Eight, true) => "I420A",
+        (alpha2_media::BitDepth::Ten, false) => "I420P10",
+        (alpha2_media::BitDepth::Ten, true) => "I420AP10",
+    }
+}
+
+/// Tight plane memory for a picture, the planes' `{ offset, stride }` as a
+/// JS array, and the same as `(offset, stride)` pairs, in storage order.
+pub(crate) type TightPlanes = (Vec<u8>, web_sys::js_sys::Array, Vec<(usize, usize)>);
+
+/// [`TightPlanes`] for a `size` picture of `layout`.
+pub(crate) fn tight_planes(
+    layout: alpha2_media::PixelLayout,
+    size: RenderSize,
+) -> Result<TightPlanes, JsValue> {
+    let mut offsets = Vec::new();
+    let mut total = 0_usize;
+    let js = web_sys::js_sys::Array::new();
+    for (width, rows, bytes) in layout.planes(size.width, size.height) {
+        let stride = (width * bytes) as usize;
+        let entry = web_sys::js_sys::Object::new();
+        set(
+            &entry,
+            "offset",
+            &js_safe_integer(total as u64, "plane offset")?,
+        )?;
+        #[allow(clippy::cast_precision_loss)]
+        set(&entry, "stride", &JsValue::from_f64(stride as f64))?;
+        js.push(&entry);
+        offsets.push((total, stride));
+        total += stride * rows as usize;
+    }
+    Ok((vec![0; total], js, offsets))
+}
+
+/// `memory` split at `offsets` into one target per plane.
+pub(crate) fn plane_targets<'a>(
+    memory: &'a mut [u8],
+    offsets: &[(usize, usize)],
+) -> Vec<alpha2_render::PlaneTarget<'a>> {
+    let mut targets = Vec::with_capacity(offsets.len());
+    let mut rest = memory;
+    let mut consumed = 0;
+    for (index, &(offset, stride)) in offsets.iter().enumerate() {
+        let end = offsets
+            .get(index + 1)
+            .map_or(consumed + rest.len(), |next| next.0);
+        let (plane, tail) = std::mem::take(&mut rest).split_at_mut(end - offset);
+        targets.push(alpha2_render::PlaneTarget::new(plane, stride));
+        rest = tail;
+        consumed = end;
+    }
+    targets
+}
+
 fn plane_layout_js(
     readback: &alpha2_render::Yuv420pReadback,
 ) -> Result<web_sys::js_sys::Array, JsValue> {

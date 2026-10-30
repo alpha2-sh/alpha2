@@ -10,7 +10,7 @@ use crate::{
     uniform::{UniformArenaLease, f32_bytes},
 };
 use alpha2_gpu::GpuContext;
-use alpha2_media::{ChromaLocation, ColorMatrix, YuvEncoding};
+use alpha2_media::{ChromaLocation, ColorMatrix, PixelLayout, YuvEncoding};
 use alpha2_shaders::{READBACK_PACK_WGSL, RGB_TO_YUV420_WGSL};
 
 const RGBA8_BYTES_PER_PIXEL: u32 = 4;
@@ -418,6 +418,118 @@ impl Renderer {
         ))
     }
 
+    /// Reads a render result back as stored and packs it into `layout` on
+    /// the CPU when it finishes ([`Yuv420pReadback::finish_into_planes`]),
+    /// for an output other than 8-bit 4:2:0, which
+    /// [`Self::begin_yuv420p_readback`] packs on the GPU.
+    ///
+    /// 10-bit output needs the `rgba16float` intermediate: an `rgba8unorm`
+    /// one holds 8-bit values, which would only pretend to be 10-bit.
+    ///
+    /// # Errors
+    /// Returns [`RenderError::TextureReadback`] for an unsupported target
+    /// format, a 10-bit layout over an 8-bit target, or a row layout that
+    /// cannot be represented.
+    pub fn begin_layout_readback(
+        &self,
+        target: &RenderedTexture,
+        encoding: YuvEncoding,
+        layout: PixelLayout,
+    ) -> Result<Yuv420pReadback, RenderError> {
+        self.ensure_gpu_runs_work()?;
+        self.validate_size(target.size)?;
+        let texel_bytes = match target.format {
+            wgpu::TextureFormat::Rgba16Float => 8,
+            wgpu::TextureFormat::Rgba8Unorm
+                if layout.bit_depth == alpha2_media::BitDepth::Eight =>
+            {
+                4
+            }
+            _ => {
+                return Err(RenderError::TextureReadback(
+                    ReadbackFailure::UnsupportedTarget,
+                ));
+            }
+        };
+        let row_bytes = target
+            .size
+            .width
+            .checked_mul(texel_bytes)
+            .ok_or(RenderError::TextureReadback(ReadbackFailure::Layout))?;
+        let pitch = aligned_copy_row(row_bytes)?;
+        let image_bytes = u64::from(pitch)
+            .checked_mul(u64::from(target.size.height))
+            .ok_or(RenderError::TextureReadback(ReadbackFailure::Layout))?;
+        let buffer_size = image_bytes
+            .checked_add(CANARY_BYTES)
+            .ok_or(RenderError::TextureReadback(ReadbackFailure::Layout))?;
+        let mut encoder = self.command_encoder("alpha2 texel readback encoder");
+        let buffer =
+            self.readback_buffers
+                .acquire(self.gpu.device(), buffer_size, "alpha2 texel readback");
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: buffer.buffer(),
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(pitch),
+                    rows_per_image: Some(target.size.height),
+                },
+            },
+            wgpu::Extent3d {
+                width: target.size.width,
+                height: target.size.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        let canary = self
+            .canaries
+            .encode(&self.gpu, &mut encoder, buffer.buffer(), image_bytes)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        let submission = self.submit([encoder.finish()])?;
+        #[cfg(target_arch = "wasm32")]
+        self.submit([encoder.finish()])?;
+        crate::diagnostics::record_readback_work(
+            &self.diagnostics,
+            0,
+            1,
+            u64::from(row_bytes).saturating_mul(u64::from(target.size.height)),
+            true,
+        );
+        Ok(Yuv420pReadback {
+            buffer,
+            gpu: self.gpu.clone(),
+            size: target.size,
+            layout: Yuv420StagingLayout {
+                luma_pitch: 0,
+                chroma_pitch: 0,
+                u_offset: 0,
+                v_offset: 0,
+                bytes: 0,
+            },
+            texels: Some(Box::new(TexelStaging {
+                format: target.format,
+                pitch,
+                bytes: image_bytes,
+                layout,
+                encoding,
+            })),
+            #[cfg(not(target_arch = "wasm32"))]
+            submission,
+            #[cfg(not(target_arch = "wasm32"))]
+            timeout: self.gpu_wait_timeout,
+            staging_bytes: buffer_size,
+            canary,
+            mapping_requested: AtomicBool::new(false),
+        })
+    }
+
     pub(crate) fn encode_yuv420p_readback(
         &self,
         target: &RenderedTexture,
@@ -554,6 +666,7 @@ impl Renderer {
             gpu: self.gpu.clone(),
             size,
             layout,
+            texels: None,
             #[cfg(not(target_arch = "wasm32"))]
             submission,
             #[cfg(not(target_arch = "wasm32"))]
@@ -1112,6 +1225,14 @@ impl<'a> PlaneTarget<'a> {
         self.bytes
     }
 
+    /// The same plane memory, borrowed for a shorter while.
+    pub fn reborrow(&mut self) -> PlaneTarget<'_> {
+        PlaneTarget {
+            bytes: self.bytes,
+            stride: self.stride,
+        }
+    }
+
     pub(crate) fn fits(&self, width: usize, height: usize) -> Result<(), RenderError> {
         if self.stride < width {
             return Err(RenderError::TextureReadback(
@@ -1183,6 +1304,9 @@ pub struct Yuv420pReadback {
     gpu: GpuContext,
     size: RenderSize,
     layout: Yuv420StagingLayout,
+    /// Set for a readback of the picture's texels, packed on the CPU when it
+    /// finishes ([`Renderer::begin_layout_readback`]); `layout` is unused then.
+    texels: Option<Box<TexelStaging>>,
     #[cfg(not(target_arch = "wasm32"))]
     submission: wgpu::SubmissionIndex,
     #[cfg(not(target_arch = "wasm32"))]
@@ -1280,6 +1404,9 @@ impl Yuv420pReadback {
     /// buffer holds no frame of this readback, so it is not recycled, and the
     /// renderer refuses further work.
     pub fn finish_into(self, targets: &mut Yuv420pTargets<'_>) -> Result<(), RenderError> {
+        if self.texels.is_some() {
+            return Err(RenderError::TextureReadback(ReadbackFailure::Layout));
+        }
         let Ok(mapped) = self.buffer.buffer().slice(..).get_mapped_range() else {
             // Not mapped: nothing to unmap (see `Rgba8Readback::finish`).
             return Err(RenderError::TextureReadback(ReadbackFailure::NotMapped));
@@ -1352,7 +1479,7 @@ impl Yuv420pReadback {
         let Ok(canary) = self
             .buffer
             .buffer()
-            .slice(self.layout.bytes..)
+            .slice(self.image_bytes()..)
             .get_mapped_range()
         else {
             // Not mapped: nothing to unmap (see `Rgba8Readback::finish`).
@@ -1367,7 +1494,7 @@ impl Yuv420pReadback {
         let Ok(mapped) = self
             .buffer
             .buffer()
-            .slice(..self.layout.bytes)
+            .slice(..self.image_bytes())
             .get_mapped_range()
         else {
             self.buffer.buffer().unmap();
@@ -1383,6 +1510,9 @@ impl Yuv420pReadback {
     /// Copies the three planes out of the mapped staging buffer, tightly
     /// packed, and hands them to `pack`.
     fn unpack<T>(self, pack: impl FnOnce([Vec<u8>; 3]) -> T) -> Result<T, RenderError> {
+        if self.texels.is_some() {
+            return Err(RenderError::TextureReadback(ReadbackFailure::Layout));
+        }
         let Ok(mapped) = self.buffer.buffer().slice(..).get_mapped_range() else {
             // Not mapped: nothing to unmap (see `Rgba8Readback::finish`).
             return Err(RenderError::TextureReadback(ReadbackFailure::NotMapped));
@@ -1415,11 +1545,75 @@ impl Yuv420pReadback {
         Ok(pack(planes))
     }
 
+    /// The bytes before the canary: the packed planes, or the texel rows.
+    fn image_bytes(&self) -> u64 {
+        self.texels
+            .as_ref()
+            .map_or(self.layout.bytes, |texels| texels.bytes)
+    }
+
+    /// The layout a texel readback packs into, `None` for a readback the GPU
+    /// packed as 8-bit 4:2:0.
+    #[must_use]
+    pub fn pixel_layout(&self) -> Option<PixelLayout> {
+        self.texels.as_ref().map(|texels| texels.layout)
+    }
+
+    /// Packs the mapped frame into `targets`, one per plane of its layout in
+    /// storage order ([`PixelLayout::planes`]): Y, U and V for a readback the
+    /// GPU packed, or the planes of [`Self::pixel_layout`] for a texel
+    /// readback, packed here.
+    ///
+    /// # Errors
+    /// As [`Self::finish_into`], and [`RenderError::TextureReadback`] for the
+    /// wrong number of targets.
+    pub fn finish_into_planes(self, targets: &mut [PlaneTarget<'_>]) -> Result<(), RenderError> {
+        let Some(texels) = self.texels.as_deref().cloned() else {
+            let [y, u, v] = targets else {
+                return Err(RenderError::TextureReadback(ReadbackFailure::Layout));
+            };
+            let mut planes = Yuv420pTargets {
+                y: PlaneTarget::new(y.bytes, y.stride),
+                u: PlaneTarget::new(u.bytes, u.stride),
+                v: PlaneTarget::new(v.bytes, v.stride),
+            };
+            return self.finish_into(&mut planes);
+        };
+        let Ok(mapped) = self.buffer.buffer().slice(..).get_mapped_range() else {
+            // Not mapped: nothing to unmap (see `Rgba8Readback::finish`).
+            return Err(RenderError::TextureReadback(ReadbackFailure::NotMapped));
+        };
+        let result = (|| {
+            self.check_canary(&mapped)?;
+            let (width, height) = (self.size.width as usize, self.size.height as usize);
+            let pitch = texels.pitch as usize;
+            let rows = mapped
+                .get(..pitch * height)
+                .ok_or(RenderError::TextureReadback(ReadbackFailure::Layout))?;
+            let row = |y: usize, out: &mut [[f32; 4]]| {
+                let texels_row = &rows[y * pitch..];
+                decode_texels(texels.format, texels_row, &mut out[..width]);
+            };
+            let picture = crate::layout_pack::Picture {
+                width,
+                height,
+                row: &row,
+            };
+            crate::layout_pack::pack(&picture, texels.encoding, texels.layout, targets)
+        })();
+        drop(mapped);
+        self.buffer.buffer().unmap();
+        if result.is_ok() {
+            self.buffer.recycle();
+        }
+        result
+    }
+
     /// Checks that the mapped staging buffer ends in this readback's canary.
     /// A buffer that fails is not recycled: it holds no frame of this
     /// readback, and the device that should have written it is done.
     fn check_canary(&self, mapped: &[u8]) -> Result<(), RenderError> {
-        let start = usize::try_from(self.layout.bytes)
+        let start = usize::try_from(self.image_bytes())
             .map_err(|_| RenderError::TextureReadback(ReadbackFailure::Layout))?;
         let found = mapped
             .get(start..)
@@ -1450,6 +1644,37 @@ fn map_staging(
             on_ready(result.map_err(|_| RenderError::TextureReadback(ReadbackFailure::MapFailed)));
         },
     );
+}
+
+/// A picture's texels as staged, and how they are packed when they finish.
+#[derive(Clone, Debug)]
+struct TexelStaging {
+    format: wgpu::TextureFormat,
+    pitch: u32,
+    bytes: u64,
+    layout: PixelLayout,
+    encoding: YuvEncoding,
+}
+
+/// One row of staged `format` texels as RGBA values.
+fn decode_texels(format: wgpu::TextureFormat, row: &[u8], out: &mut [[f32; 4]]) {
+    match format {
+        wgpu::TextureFormat::Rgba16Float => {
+            for (texel, bytes) in out.iter_mut().zip(row.as_chunks::<8>().0) {
+                *texel = std::array::from_fn(|channel| {
+                    crate::cpu::half_value(u16::from_le_bytes([
+                        bytes[channel * 2],
+                        bytes[channel * 2 + 1],
+                    ]))
+                });
+            }
+        }
+        _ => {
+            for (texel, bytes) in out.iter_mut().zip(row.as_chunks::<4>().0) {
+                *texel = std::array::from_fn(|channel| crate::cpu::unorm8_value(bytes[channel]));
+            }
+        }
+    }
 }
 
 /// Where one plane sits in a mapped readback staging buffer.

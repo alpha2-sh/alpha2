@@ -323,6 +323,7 @@ fn the_input_policy_and_a_pinned_encoder_choose_the_output_path() {
                 container: alpha2_media::Container::Mp4,
                 video: codec,
                 audio: NativeAudioCodec::Aac,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
             pinned,
             VideoQualityRequest::Level(QualityLevel::High),

@@ -133,6 +133,7 @@ fn openh264_export(directory: &Path, name: &str) -> (Value, String, usize) {
                 container: alpha2_media::Container::Mp4,
                 video: NativeVideoCodec::H264,
                 audio: NativeAudioCodec::Aac,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
             Some(alpha2_native::OPENH264_ENCODER_NAME),
             VideoQualityRequest::Level(QualityLevel::High),

@@ -16,6 +16,7 @@ import type { CapabilityReport } from "alpha2";
 import {
   ExportFormatError,
   resolveEngineExportFormat,
+  resolvePixels,
 } from "alpha2/containers";
 import type { ExportFailure, ExportPhase } from "alpha2/export-failure";
 import { failureForCode } from "alpha2/export-failure";
@@ -614,8 +615,16 @@ export interface ExportProjectRequest {
    * `INVALID_INPUT` before it opens a device.
    */
   readonly container?: ExportContainer;
-  /** Defaults to the container's: `h264`, or `vp9` for WebM. */
-  readonly videoCodec?: "h264" | "hevc" | "vp9" | "av1" | "mpeg4-part2";
+  /** Defaults to the container's: `h264`, or `vp9` for WebM. `prores` is MOV only. */
+  readonly videoCodec?:
+    "h264" | "hevc" | "vp9" | "av1" | "mpeg4-part2" | "prores";
+  /**
+   * Keep alpha: the frames are drawn without the project background and written with an alpha
+   * plane. VP9 in WebM or Matroska (8-bit), or ProRes 4444 in MOV.
+   */
+  readonly alpha?: boolean;
+  /** 8 or 10; defaults to the codec's own (10 for ProRes, else 8). 10 needs HEVC, AV1, VP9 or ProRes. */
+  readonly bitDepth?: 8 | 10;
   /**
    * Concrete FFmpeg encoder short name: one of `capabilities.encode.video`, or the GPU path's
    * `capabilities.encode.gpuOutputPath.encoder`. Pinning the GPU path's encoder asks for the
@@ -1213,6 +1222,11 @@ export interface StillsRequest extends RenderInputs {
    * existing output is refused. An output that is one of the inputs is refused either way.
    */
   readonly overwrite?: boolean;
+  /**
+   * Keeps transparency: each still is drawn without the project background, its layers over
+   * transparent pixels. Defaults to `false`.
+   */
+  readonly alpha?: boolean;
   /** Overrides the client's decode mode for this request. */
   readonly videoDecode?: VideoDecodeMode;
   /** Overrides the client's renderer for this request. */
@@ -1444,6 +1458,10 @@ export class Alpha2NodeClient {
             ...(request.videoCodec === undefined
               ? {}
               : { videoCodec: request.videoCodec }),
+            ...(request.alpha === true ? { alpha: true } : {}),
+            ...(request.bitDepth === undefined
+              ? {}
+              : { bitDepth: request.bitDepth }),
             videoEncoder: request.videoEncoder,
             inputPolicy: request.inputPolicy ?? "auto",
             strategy: request.strategy ?? "render",
@@ -1512,6 +1530,7 @@ export class Alpha2NodeClient {
           ...renderInputsPayload(request),
           stills: request.stills.map(({ time, output }) => ({ time, output })),
           overwrite: request.overwrite ?? false,
+          ...(request.alpha === true ? { alpha: true } : {}),
           ...(request.size === undefined
             ? {}
             : {
@@ -1878,8 +1897,10 @@ function validateExportRequest(request: ExportProjectRequest): void {
         `${field} must be a non-empty string`,
       );
   }
+  if (request.alpha !== undefined && typeof request.alpha !== "boolean")
+    throw new Alpha2HostError("INVALID_INPUT", "alpha must be true or false");
   try {
-    resolveEngineExportFormat({
+    const format = resolveEngineExportFormat({
       extension: extname(request.output).slice(1),
       ...(request.container === undefined
         ? {}
@@ -1890,6 +1911,10 @@ function validateExportRequest(request: ExportProjectRequest): void {
       ...(request.audioCodec === undefined
         ? {}
         : { audioCodec: request.audioCodec }),
+    });
+    resolvePixels(format.videoCodec, format.container, {
+      ...(request.bitDepth === undefined ? {} : { bitDepth: request.bitDepth }),
+      alpha: request.alpha === true,
     });
   } catch (error) {
     if (error instanceof ExportFormatError)

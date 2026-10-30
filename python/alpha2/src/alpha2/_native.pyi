@@ -33,6 +33,17 @@ def resolve_export_format(
     Raises ValueError with the engine's message for a request it refuses.
     """
 
+def resolve_pixels(
+    video_codec: str,
+    container: str,
+    bit_depth: int | None = None,
+    alpha: bool = False,
+) -> str:
+    """The FFmpeg pixel format ``video_codec`` writes in ``container``, as the host resolves it.
+
+    Raises ValueError with the engine's message for pictures the codec cannot write.
+    """
+
 def compose_requirements(spec: str) -> str:
     """The files a compose spec (JSON text) names, as JSON text: ``{"media", "texts"}``.
 

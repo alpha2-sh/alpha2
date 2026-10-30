@@ -45,6 +45,8 @@ pub enum NativeVideoCodec {
     Av1,
     /// MPEG-4 Part 2, retained for compatibility with existing alpha2 hosts.
     Mpeg4Part2,
+    /// Apple `ProRes`, through `prores_ks`: 422 HQ, or 4444 with alpha.
+    ProRes,
 }
 
 impl NativeVideoCodec {
@@ -57,6 +59,22 @@ impl NativeVideoCodec {
             Self::Vp9 => "vp9",
             Self::Av1 => "av1",
             Self::Mpeg4Part2 => "mpeg4-part2",
+            Self::ProRes => "prores",
+        }
+    }
+
+    /// The pictures an encoder of this codec must take to be offered at all:
+    /// 10-bit 4:2:2 for `ProRes`, 8-bit 4:2:0 for every other codec.
+    #[must_use]
+    pub const fn base_layout(self) -> alpha2_media::PixelLayout {
+        match self {
+            Self::ProRes => alpha2_media::PixelLayout {
+                chroma: alpha2_media::Chroma::Yuv422,
+                bit_depth: alpha2_media::BitDepth::Ten,
+                alpha: false,
+                planes: alpha2_media::PlaneLayout::Planar,
+            },
+            _ => alpha2_media::PixelLayout::YUV420P,
         }
     }
 
@@ -72,6 +90,7 @@ impl NativeVideoCodec {
             Self::Vp9 => alpha2_media::VideoCodec::Vp9,
             Self::Av1 => alpha2_media::VideoCodec::Av1,
             Self::Mpeg4Part2 => alpha2_media::VideoCodec::Mpeg4Part2,
+            Self::ProRes => alpha2_media::VideoCodec::ProRes,
         }
     }
 
@@ -84,6 +103,7 @@ impl NativeVideoCodec {
             alpha2_media::VideoCodec::Vp9 => Self::Vp9,
             alpha2_media::VideoCodec::Av1 => Self::Av1,
             alpha2_media::VideoCodec::Mpeg4Part2 => Self::Mpeg4Part2,
+            alpha2_media::VideoCodec::ProRes => Self::ProRes,
         }
     }
 
@@ -94,6 +114,7 @@ impl NativeVideoCodec {
             Self::Vp9 => ffi::AV_CODEC_ID_VP9,
             Self::Av1 => ffi::AV_CODEC_ID_AV1,
             Self::Mpeg4Part2 => ffi::AV_CODEC_ID_MPEG4,
+            Self::ProRes => ffi::AV_CODEC_ID_PRORES,
         }
     }
 }
@@ -217,6 +238,21 @@ impl VideoEncoderCandidate {
     pub(crate) fn name(&self) -> String {
         self.encoder.name().to_string_lossy().into_owned()
     }
+
+    /// The codec this encoder writes.
+    pub(crate) fn codec(&self) -> NativeVideoCodec {
+        [
+            NativeVideoCodec::H264,
+            NativeVideoCodec::Hevc,
+            NativeVideoCodec::Vp9,
+            NativeVideoCodec::Av1,
+            NativeVideoCodec::Mpeg4Part2,
+            NativeVideoCodec::ProRes,
+        ]
+        .into_iter()
+        .find(|codec| codec.codec_id() == self.encoder.id)
+        .unwrap_or(NativeVideoCodec::H264)
+    }
 }
 
 /// Whether hybrid encoders are configured to run on the GPU.
@@ -244,6 +280,9 @@ pub enum NativeEncoderRejection {
     OpenFailed,
     /// The encoder silently ignored an option alpha2 requires it to honour.
     OptionsIgnored,
+    /// The encoder takes none of the pixel formats the output can be
+    /// written in.
+    PixelFormat,
 }
 
 impl NativeEncoderRejection {
@@ -254,6 +293,7 @@ impl NativeEncoderRejection {
             Self::Dimensions => "dimensions",
             Self::OpenFailed => "open-failed",
             Self::OptionsIgnored => "options-ignored",
+            Self::PixelFormat => "pixel-format",
         }
     }
 }
@@ -294,6 +334,9 @@ pub struct NativeVideoEncoderSelection {
     /// `FFmpeg` workers the encoder was opened with when it runs on the CPU;
     /// `None` on the GPU, which takes no share of the software budget.
     pub software_threads: Option<i64>,
+    /// The pictures it takes: the output's layout, or its `P010` form for
+    /// an encoder that takes 10-bit 4:2:0 only as that.
+    pub pixels: alpha2_media::PixelLayout,
 }
 
 /// One linked video encoder available to the native sinks.
@@ -383,6 +426,7 @@ pub fn codec_capabilities() -> NativeCodecCapabilities {
         NativeVideoCodec::Vp9,
         NativeVideoCodec::Av1,
         NativeVideoCodec::Mpeg4Part2,
+        NativeVideoCodec::ProRes,
     ]
     .into_iter()
     .flat_map(video_encoder_capabilities)
@@ -391,6 +435,28 @@ pub fn codec_capabilities() -> NativeCodecCapabilities {
         video,
         audio: audio_encoder_capabilities(),
     }
+}
+
+/// Whether one of `capabilities`' encoders of `codec` takes `layout`'s
+/// pictures, or their `P010` form: whether this runtime can write the codec
+/// so.
+#[must_use]
+pub fn encodes_pixels(
+    capabilities: &NativeCodecCapabilities,
+    codec: NativeVideoCodec,
+    layout: alpha2_media::PixelLayout,
+) -> bool {
+    capabilities
+        .video
+        .iter()
+        .filter(|capability| capability.codec == codec)
+        .any(|capability| {
+            capability.encoder_name == crate::OPENH264_ENCODER_NAME && layout.is_yuv420p()
+                || std::ffi::CString::new(capability.encoder_name.as_str())
+                    .ok()
+                    .and_then(|name| AVCodec::find_encoder_by_name(&name))
+                    .is_some_and(|encoder| encoder_layout(&encoder, layout).is_some())
+        })
 }
 
 /// The audio encoders [`codec_capabilities`] lists, without looking at any
@@ -634,6 +700,9 @@ pub(crate) fn registered_video_encoders(codec: NativeVideoCodec) -> Vec<VideoEnc
     let mut candidates = AVCodec::iterate()
         .filter(|encoder| {
             encoder.id == codec.codec_id()
+                // `prores_ks` is the `ProRes` encoder whose 4444 alpha and vendor options alpha2
+                // sets; `FFmpeg`'s other two take neither the same way.
+                && (codec != NativeVideoCodec::ProRes || encoder.name() == c"prores_ks")
                 && !test_skips_encoder(encoder.name())
                 && AVCodec::find_encoder_by_name(encoder.name())
                     .is_some_and(|found| found.as_ptr() == encoder.as_ptr())
@@ -696,19 +765,32 @@ pub(crate) fn encoder_is_compatible(candidate: &VideoEncoderCandidate) -> bool {
     registration_is_compatible(candidate, &name) && encoder_runs_here(candidate, &name)
 }
 
-/// What the registration alone rules out: an encoder the YUV420P sink cannot
-/// feed, and a hardware one whose device has no node here.
+/// What the registration alone rules out: an encoder the sink cannot feed
+/// its codec's base pictures ([`NativeVideoCodec::base_layout`]: YUV420P but
+/// for `ProRes`), and a hardware one whose device has no node here.
 fn registration_is_compatible(candidate: &VideoEncoderCandidate, name: &str) -> bool {
-    // The native sink submits software YUV420P frames directly. Hardware wrappers
-    // requiring an AVHWFramesContext must not be advertised.
-    if candidate
-        .encoder
-        .pix_fmts()
-        .is_some_and(|formats| !formats.contains(&ffi::AV_PIX_FMT_YUV420P))
-    {
+    // The native sink submits software frames directly. Hardware wrappers requiring an
+    // AVHWFramesContext must not be advertised.
+    let codec = candidate.codec();
+    if encoder_layout(&candidate.encoder, codec.base_layout()).is_none() {
         return false;
     }
     !candidate.on_hardware || hardware_device_node(name) != Some(false)
+}
+
+/// The pictures `encoder` takes for an output of `layout`: `layout` itself,
+/// or its `P010` form for an encoder that takes 10-bit 4:2:0 only as that
+/// (NVENC); `None` when it takes neither.
+pub(crate) fn encoder_layout(
+    encoder: &AVCodec,
+    layout: alpha2_media::PixelLayout,
+) -> Option<alpha2_media::PixelLayout> {
+    let Some(formats) = encoder.pix_fmts() else {
+        return Some(layout);
+    };
+    [layout, layout.as_p010()]
+        .into_iter()
+        .find(|candidate| formats.contains(&crate::convert::pixel_format(*candidate)))
 }
 
 /// Whether the encoder `name`, run on the GPU when `on_hardware` is set, is
@@ -802,6 +884,7 @@ pub fn video_encoders_without_probing() -> (Vec<NativeVideoEncoderCapability>, V
         NativeVideoCodec::Vp9,
         NativeVideoCodec::Av1,
         NativeVideoCodec::Mpeg4Part2,
+        NativeVideoCodec::ProRes,
     ] {
         for candidate in registered_video_encoders(codec) {
             let name = candidate.name();
@@ -1120,6 +1203,7 @@ struct OpenedVideoEncoder {
     rate_control: crate::AppliedRateControl,
     quantizer_refused: Option<String>,
     software_threads: Option<i64>,
+    pixels: alpha2_media::PixelLayout,
 }
 
 /// Opens the first of `candidates` that runs, recording why each one before
@@ -1142,11 +1226,12 @@ pub(crate) fn open_first_video_encoder(
         let opened = match &candidate {
             VideoEncoderChoice::Ffmpeg(candidate) => {
                 open_one_video_encoder(request, candidate, &name).map(
-                    |(encoder, rate_control, quantizer_refused)| OpenedVideoEncoder {
+                    |(encoder, rate_control, quantizer_refused, pixels)| OpenedVideoEncoder {
                         backend: crate::video_backend::VideoEncoderBackend::Ffmpeg(encoder),
                         rate_control,
                         quantizer_refused,
                         software_threads: (!candidate.on_hardware).then(|| request.threads.get()),
+                        pixels,
                     },
                 )
             }
@@ -1164,6 +1249,7 @@ pub(crate) fn open_first_video_encoder(
                         rate_control: opened.rate_control,
                         quantizer_refused: opened.quantizer_refused,
                         software_threads: opened.software_threads,
+                        pixels: opened.pixels,
                     },
                 ));
             }
@@ -1222,6 +1308,15 @@ fn open_openh264(
     library: &crate::OpenH264Library,
 ) -> Result<OpenedVideoEncoder, (NativeEncoderRejection, EncodeError)> {
     let config = request.config;
+    if !config.pixels.is_yuv420p() {
+        return Err((
+            NativeEncoderRejection::PixelFormat,
+            EncodeError::Adapter(format!(
+                "OpenH264 writes 8-bit 4:2:0 only, not {}",
+                config.pixels.ffmpeg_name()
+            )),
+        ));
+    }
     validate_encoder_dimensions(crate::OPENH264_ENCODER_NAME, config.width, config.height)
         .map_err(|error| (NativeEncoderRejection::Dimensions, error))?;
     let open_failed = |message: String| {
@@ -1261,8 +1356,18 @@ fn open_openh264(
         rate_control,
         quantizer_refused: None,
         software_threads: Some(threads),
+        pixels: alpha2_media::PixelLayout::YUV420P,
     })
 }
+
+/// An opened encoder context, how it runs the rate control, why a quantizer
+/// asked for was refused, and the pictures it takes.
+type OpenedContext = (
+    EncoderContext,
+    crate::AppliedRateControl,
+    Option<String>,
+    alpha2_media::PixelLayout,
+);
 
 /// Opens `candidate`, on the rate control's quantizer when it has one and the
 /// encoder accepts it, otherwise on its bitrate.
@@ -1274,18 +1379,26 @@ fn open_one_video_encoder(
     request: &VideoEncoderOpenRequest<'_>,
     candidate: &VideoEncoderCandidate,
     name: &str,
-) -> Result<
-    (EncoderContext, crate::AppliedRateControl, Option<String>),
-    (NativeEncoderRejection, EncodeError),
-> {
+) -> Result<OpenedContext, (NativeEncoderRejection, EncodeError)> {
+    let pixels = encoder_layout(&candidate.encoder, request.config.pixels).ok_or_else(|| {
+        (
+            NativeEncoderRejection::PixelFormat,
+            EncodeError::Adapter(format!(
+                "{name} does not take {} pictures",
+                request.config.pixels.ffmpeg_name()
+            )),
+        )
+    })?;
     validate_encoder_dimensions(name, request.config.width, request.config.height)
         .map_err(|error| (NativeEncoderRejection::Dimensions, error))?;
     let refused = match crate::rate_control::quantizer_request(name, request.config.rate_control) {
         None => None,
         Some(Err(reason)) => Some(reason),
         Some(Ok(quantized)) => {
-            match open_video_encoder_context(request, candidate, name, Some(&quantized)) {
-                Ok(encoder) => return Ok((encoder, crate::AppliedRateControl::Quantizer, None)),
+            match open_video_encoder_context(request, candidate, name, Some(&quantized), pixels) {
+                Ok(encoder) => {
+                    return Ok((encoder, crate::AppliedRateControl::Quantizer, None, pixels));
+                }
                 Err((_, error)) => Some(format!("{} refused: {error}", quantized.describe())),
             }
         }
@@ -1293,8 +1406,8 @@ fn open_one_video_encoder(
     if let Some(reason) = &refused {
         alpha2_os::diagnostic!("alpha2 native export: {name} runs the bitrate fallback: {reason}");
     }
-    open_video_encoder_context(request, candidate, name, None)
-        .map(|encoder| (encoder, crate::AppliedRateControl::Bitrate, refused))
+    open_video_encoder_context(request, candidate, name, None, pixels)
+        .map(|encoder| (encoder, crate::AppliedRateControl::Bitrate, refused, pixels))
 }
 
 fn open_video_encoder_context(
@@ -1302,11 +1415,12 @@ fn open_video_encoder_context(
     candidate: &VideoEncoderCandidate,
     name: &str,
     quantized: Option<&crate::rate_control::MechanismRequest>,
+    pixels: alpha2_media::PixelLayout,
 ) -> Result<EncoderContext, (NativeEncoderRejection, EncodeError)> {
     let mut encoder = EncoderContext::from(AVCodecContext::new(&candidate.encoder));
     encoder.set_width(request.width);
     encoder.set_height(request.height);
-    encoder.set_pix_fmt(ffi::AV_PIX_FMT_YUV420P);
+    encoder.set_pix_fmt(crate::convert::pixel_format(pixels));
     let rate = request.config.frame_rate;
     let time_base = encoder_time_base(rate, max_time_base_denominator(candidate.encoder.id))
         .map_err(|error| (NativeEncoderRejection::OpenFailed, error))?;
@@ -1340,13 +1454,18 @@ fn open_video_encoder_context(
     } else {
         request.threads.get()
     };
-    let base = video_encoder_options(
+    let mut base = video_encoder_options(
         request.config.color,
         &candidate.encoder,
         candidate.on_hardware,
         threads,
         request.config.width,
     );
+    if candidate.codec() == NativeVideoCodec::ProRes {
+        for (key, value) in crate::convert::prores_options(pixels) {
+            base = crate::convert::set_encoder_option(base, key, &value);
+        }
+    }
     let options = match quantized {
         Some(quantized) => quantized.dictionary(base),
         None => crate::rate_control::rate_control_options(name, request.config.rate_control, base),
@@ -1577,6 +1696,8 @@ pub(crate) const fn probe_quantizer(codec: NativeVideoCodec, software: bool) -> 
             }
         }
         NativeVideoCodec::Mpeg4Part2 => 4,
+        // Never asked: `ProRes` has no quantizer mode alpha2 opens.
+        NativeVideoCodec::ProRes => 0,
     }
 }
 
@@ -1599,6 +1720,7 @@ pub fn probe_video_encoders(width: u32, height: u32) -> Vec<NativeVideoEncoderPr
         NativeVideoCodec::Vp9,
         NativeVideoCodec::Av1,
         NativeVideoCodec::Mpeg4Part2,
+        NativeVideoCodec::ProRes,
     ]
     .into_iter()
     .flat_map(|codec| {
@@ -1773,10 +1895,13 @@ fn probe_software_encode(
         return (Some(error.to_string()), 0);
     }
     let encoder = &candidate.encoder;
+    let base = candidate.codec().base_layout();
+    let format =
+        encoder_layout(encoder, base).map_or(ffi::AV_PIX_FMT_YUV420P, crate::convert::pixel_format);
     let mut context = EncoderContext::from(AVCodecContext::new(encoder));
     context.set_width(coded_width);
     context.set_height(coded_height);
-    context.set_pix_fmt(ffi::AV_PIX_FMT_YUV420P);
+    context.set_pix_fmt(format);
     let time_base = rsmpeg::avutil::ra(1, 30);
     context.set_time_base(time_base);
     context.set_framerate(rsmpeg::avutil::ra(30, 1));
@@ -1802,9 +1927,7 @@ fn probe_software_encode(
             }
         }
     }
-    let Some(image) =
-        rsmpeg::avutil::AVImage::new(ffi::AV_PIX_FMT_YUV420P, coded_width, coded_height, 1)
-    else {
+    let Some(image) = rsmpeg::avutil::AVImage::new(format, coded_width, coded_height, 1) else {
         return (Some("cannot allocate a probe frame".to_owned()), 0);
     };
     let mut frame = rsmpeg::avutil::AVFrameWithImage::new(image);

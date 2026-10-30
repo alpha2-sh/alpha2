@@ -517,6 +517,17 @@ impl Host {
         report.decode = self.decode_capabilities();
         report.encode = encode;
         let cpu = self.renderer.cpu().is_some();
+        let ten_bit = self.renderer.intermediate_format() == wgpu::TextureFormat::Rgba16Float;
+        report.features.insert(
+            "output.tenBit".to_owned(),
+            if ten_bit {
+                alpha2_engine::Feature::available()
+            } else {
+                alpha2_engine::Feature::unavailable(
+                    "10-bit output needs the rgba16float intermediate; this renderer stores 8 bits",
+                )
+            },
+        );
         report.features.insert(
             "renderer.gpu".to_owned(),
             if cpu {
@@ -826,6 +837,7 @@ impl Host {
             size,
             stills,
             overwrite,
+            alpha,
             ..
         } = request;
         let project = still_project(project.text(), size)?;
@@ -863,6 +875,7 @@ impl Host {
                     &effect_assets,
                     effects,
                     &stills,
+                    alpha,
                     existing_output(overwrite),
                 )
             })
@@ -1530,6 +1543,7 @@ impl Host {
             container,
             video: video_codec,
             audio: audio_codec,
+            pixels,
         } = format;
         let (project, snapshot) = self.prepare(project, effect_assets, effects)?;
         let parked_leases = ParkedLeaseGuard {
@@ -1541,16 +1555,27 @@ impl Host {
             MediaTime::from_ticks(end_ticks),
         )
         .map_err(error_message)?;
-        let mut exporter = Exporter::new(
+        let exporter = Exporter::new(
             &snapshot,
             range,
             rate,
             QualityProfile::export(),
             video_codec.model(),
         )
-        .map_err(error_message)?;
+        .map_err(error_message)?
+        .with_pixels(pixels);
         let size = RenderSize::new(project.settings.width, project.settings.height)
             .map_err(error_message)?;
+        // A 10-bit output packs from the picture as stored, which an 8-bit intermediate holds at 8
+        // bits only: refused rather than written as 10-bit data that is not.
+        if pixels.bit_depth == alpha2_media::BitDepth::Ten
+            && self.renderer.intermediate_format() == wgpu::TextureFormat::Rgba8Unorm
+        {
+            return Err(code_tag(
+                "UNSUPPORTED",
+                "10-bit output needs the rgba16float intermediate; this renderer stores 8 bits",
+            ));
+        }
         // This export's source keys (`export_source_key`) mean something else in any other.
         self.renderer.clear_result_cache();
         self.renderer.set_result_cache_budget(result_cache_budget(
@@ -1600,8 +1625,16 @@ impl Host {
         // A copy is taken only when asked for, and only when both the project and the file prove
         // the copied packets decode into exactly the frames a render would show.
         let strategy = self.strategy;
+        if !pixels.is_yuv420p() && strategy == crate::config::ExportStrategy::RequireCopy {
+            return Err(format!(
+                "{}the export cannot be a copy: alpha and 10-bit pictures are rendered",
+                crate::protocol::copy_ineligible_tag()
+            ));
+        }
         let copy_ineligible = if strategy == crate::config::ExportStrategy::Render {
             None
+        } else if !pixels.is_yuv420p() {
+            Some("alpha and 10-bit pictures are rendered".to_owned())
         } else {
             // A plan whose reading of the sources stalled fails the export: rendering would read
             // the same sources.
@@ -1676,6 +1709,11 @@ impl Host {
         let candidate = if self.renderer.cpu().is_some() {
             Err(crate::gpu_output::GpuOutputRefusal::unavailable(
                 "the CPU renderer draws frames in memory; the GPU-resident path needs a GPU",
+            ))
+        } else if !pixels.is_yuv420p() {
+            Err(crate::gpu_output::GpuOutputRefusal::unavailable(
+                "alpha and 10-bit pictures are packed on the CPU; the GPU-resident path writes \
+                 8-bit 4:2:0",
             ))
         } else {
             candidate
@@ -1776,29 +1814,36 @@ impl Host {
                 "ALPHA2_EXPORT_PIPELINE is off, which runs the synchronous comparison path; that path renders on a GPU only",
             ));
         }
+        // The capture and the render cache hold 8-bit 4:2:0 frames.
         let mut frame_capture = configured_frame_capture()
+            .filter(|_| pixels.is_yuv420p())
             .map(|path| FrameCapture::create(&path, size, rate, exporter.encoding().chroma))
             .transpose()?;
         // A cache problem never fails an export: one that cannot be opened is not used, and the
         // result says why.
-        let mut render_cache_unavailable = None;
-        let mut render_cache = self.render_cache.as_ref().and_then(|(request, identity)| {
-            crate::render_cache::RenderCache::open(
-                request,
-                *identity,
-                crate::render_cache::FrameFormat {
-                    width: size.width,
-                    height: size.height,
-                    encoding: exporter.encoding(),
-                },
-                &cancel,
-            )
-            .map_err(|reason| {
-                alpha2_os::diagnostic!("alpha2 native export: render cache unused ({reason})");
-                render_cache_unavailable = Some(reason);
-            })
-            .ok()
-        });
+        let mut render_cache_unavailable = (!pixels.is_yuv420p() && self.render_cache.is_some())
+            .then(|| "the render cache holds 8-bit 4:2:0 frames".to_owned());
+        let mut render_cache = self
+            .render_cache
+            .as_ref()
+            .filter(|_| pixels.is_yuv420p())
+            .and_then(|(request, identity)| {
+                crate::render_cache::RenderCache::open(
+                    request,
+                    *identity,
+                    crate::render_cache::FrameFormat {
+                        width: size.width,
+                        height: size.height,
+                        encoding: exporter.encoding(),
+                    },
+                    &cancel,
+                )
+                .map_err(|reason| {
+                    alpha2_os::diagnostic!("alpha2 native export: render cache unused ({reason})");
+                    render_cache_unavailable = Some(reason);
+                })
+                .ok()
+            });
         let mut cache_reads = CacheReads::default();
         // Only this codec's encoders, and only now that the GPU-resident path was not taken: an
         // encoder that must be opened to prove it runs here (NVENC) is opened for an export that
@@ -1848,7 +1893,6 @@ impl Host {
         let mut gpu_frames = self.export_gpu_frames(size, &project);
         let mut cpu_frames = crate::cpu_frames::NativeCpuFrames::new(size);
         cpu_frames.color = gpu_frames.color;
-        let frame_pool = FramePool::new(size.width, size.height)?;
         let packed_bytes_per_frame = packed_yuv420_bytes(size);
         let mut decode_scheduler = DecodeScheduler::new(decode_lookahead, &project);
         let mut audio_sources = has_audio
@@ -1879,6 +1923,7 @@ impl Host {
             codec: video_codec,
             display: alpha2_native::VideoDisplay::default(),
             container,
+            pixels,
         };
         // The split follows the encoder that opens: a hardware encoder can fail `avcodec_open2` and
         // fall through to a software one, which needs a software encoder's share of the CPU.
@@ -1938,6 +1983,9 @@ impl Host {
             .transpose()?;
         // What opened, not what was advertised: a candidate can register and still fail to open.
         let selection = sink.video_selection().clone();
+        // Frames in the pictures the encoder takes, which for 10-bit 4:2:0 can be `P010`.
+        let frame_pool = FramePool::new(size.width, size.height, selection.pixels)?;
+        let mut exporter = exporter.with_pixels(selection.pixels);
         self.failure
             .note("videoPipeline", json!(VideoPipeline::Readback.as_str()));
         self.failure
@@ -2286,15 +2334,15 @@ impl Host {
                         let mut frame = frame_pool.take()?;
                         let step = {
                             let buffer = frame.buffer_mut();
-                            let planes = buffer.begin_write().map_err(error_message)?;
-                            let (y_stride, chroma_stride) = (planes.y_stride, planes.chroma_stride);
-                            let mut targets = alpha2_render::Yuv420pTargets {
-                                y: alpha2_render::PlaneTarget::new(planes.y, y_stride),
-                                u: alpha2_render::PlaneTarget::new(planes.u, chroma_stride),
-                                v: alpha2_render::PlaneTarget::new(planes.v, chroma_stride),
-                            };
+                            let mut planes = buffer.begin_write_planes().map_err(error_message)?;
+                            let mut targets: Vec<alpha2_render::PlaneTarget<'_>> = planes
+                                .iter_mut()
+                                .map(|(bytes, stride)| {
+                                    alpha2_render::PlaneTarget::new(bytes, *stride)
+                                })
+                                .collect();
                             exporter
-                                .render_next_into_yuv420p(
+                                .render_next_into_planes(
                                     &snapshot,
                                     &**renderer,
                                     &frame_provider,

@@ -66,7 +66,9 @@ Renders a range of a project and encodes it into an MP4, MOV, Matroska or WebM f
 | `fonts` | `["<path>", ...]` | `[]` | Font files for captions, text and SVG text, in fallback order. A project that shows text needs them. |
 | `effects` | effect definitions | `[]` | Runtime effects the project uses besides the built-in ones (`EffectDefinition` in `alpha2/effects`). An effect's `inputs` names the images it samples besides its source, which an effect node connects under `inputs`. |
 | `includeAudio` | boolean | `true` | Whether the output has an audio track. |
-| `videoCodec` | `h264`, `hevc`, `vp9`, `av1`, `mpeg4-part2` | the container's | One the container offers (below). |
+| `videoCodec` | `h264`, `hevc`, `vp9`, `av1`, `mpeg4-part2`, `prores` | the container's | One the container offers (below). `prores` is 422 HQ, or 4444 with `alpha`. |
+| `alpha` | boolean | `false` | Keep transparency: frames are drawn without the project background and written with an alpha plane. `vp9` in `webm` or `mkv` (8-bit), or `prores` 4444; any other codec, or VP9 in MP4, is refused with `INVALID_INPUT`. |
+| `bitDepth` | `8`, `10` | `10` for `prores`, else `8` | 10-bit pictures, for `hevc`, `av1`, `vp9` (profile 2) and `prores`. Refused with `UNSUPPORTED` on a host whose renderer stores 8 bits (`features["output.tenBit"]`). |
 | `videoEncoder` | FFmpeg encoder name | chosen by the host | An encoder `capabilities` reports for the codec, in `encode.video` or as the GPU-resident path's. |
 | `videoQuality` | a level, or `{ "bitrate", "mode"?, "quantizer"? }` | `high` | Levels are `very-low`, `low`, `medium`, `high`, `very-high`; the host turns a level into a rate for the codec, size and frame rate. `bitrate` is in bits per second, `mode` is `constant` or `variable`. |
 | `audioCodec` | `aac`, `opus` | the container's | One the container offers (below). |
@@ -82,11 +84,11 @@ Each container offers only the codecs its mainstream players decode there; the f
 | Container | Video | Audio |
 | --- | --- | --- |
 | `mp4` | `h264`, `hevc`, `vp9`, `av1`, `mpeg4-part2` | `aac`, `opus` |
-| `mov` | `h264`, `hevc`, `mpeg4-part2` | `aac` |
+| `mov` | `h264`, `hevc`, `mpeg4-part2`, `prores` | `aac` |
 | `mkv` | `h264`, `hevc`, `vp9`, `av1`, `mpeg4-part2` | `aac`, `opus` |
 | `webm` | `vp9`, `av1` | `opus` |
 
-An unknown container, an extension that names none or disagrees with `container`, and a codec the container does not offer are refused with `INVALID_INPUT` before anything opens, as is a codec this host's FFmpeg cannot encode. `capabilities` reports the same table as `encode.containers` (`[{ "id", "extensions", "video", "audio", "defaultVideoCodec", "defaultAudioCodec" }]`), beside the encoders this host has (`encode.video`, `encode.audio`). Matroska and WebM store each frame's time to the millisecond, so their frames sit on the frame grid only to within half a millisecond.
+An unknown container, an extension that names none or disagrees with `container`, and a codec the container does not offer are refused with `INVALID_INPUT` before anything opens, as is a codec this host's FFmpeg cannot encode. `capabilities` reports the same table as `encode.containers` (`[{ "id", "extensions", "video", "audio", "defaultVideoCodec", "defaultAudioCodec" }]`), beside the encoders this host has (`encode.video`, `encode.audio`) and the codecs it writes with alpha and at 10 bits (`encode.output`: `{ "alpha", "tenBit" }`). Matroska and WebM store each frame's time to the millisecond, so their frames sit on the frame grid only to within half a millisecond.
 
 The fields and the result are typed and described one by one in `@alpha2-sh/node` (`ExportProjectRequest`, `NativeExportResult`). The result reports, among others, the frames, the encoder and rate control used, how frames reached the encoder (`videoPipeline`: `readback`, `gpu-resident` or `packet-copy`), the absolute path of the file written (`output`), what each source read (`media`) and timing (`renderMs`, `fps`).
 
@@ -105,6 +107,7 @@ Renders frames of a project to PNG files, each the frame an export of it draws t
 | `stills` | `[{ "time": <ticks>, "output": "<path>" }, ...]` | required | 1 to 256 frames, each to its own file. `time` is an integer tick count from 0; the frame drawn is the one of the project's frame grid that holds it, as an export snaps its range. They are rendered in time order whatever order they are given in. |
 | `size` | `{ "width", "height" }` | the canvas | Renders the project at this canvas size, 1 to 16384 pixels each way; odd sizes too, since nothing is encoded. |
 | `overwrite` | boolean | `false` | As for `export`, for every output. |
+| `alpha` | boolean | `false` | Draws each still without the project background, its layers over transparent pixels. |
 | `proxies`, `frames`, `media`, `resources`, `effectAssets`, `fonts`, `effects` | as for `export` | | |
 
 Each PNG is 8-bit RGBA: the renderer's picture before any video encoding, display-encoded (sRGB) with straight alpha. Every frame is opaque over the project's `background`. Every output is SDR BT.709. The PNG is written beside its output as a partial file and renamed into place, like an export's file. An output that is one of the request's inputs is refused with `INVALID_REQUEST`, and an empty list, more than 256 frames, two frames to one file, a negative time or a size out of range with `INVALID_INPUT`, before anything renders.

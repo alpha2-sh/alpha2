@@ -80,10 +80,11 @@ pub use capabilities::{
     NativeHardwareDecodeCapabilities, NativeHardwareDecodeCapability, NativeRateControlProbe,
     NativeVideoCodec, NativeVideoEncoderCapability, NativeVideoEncoderFallback,
     NativeVideoEncoderProbe, NativeVideoEncoderSelection, audio_encoder_capabilities,
-    codec_capabilities, h264_encoder_remedy, hardware_decode_backend, hardware_decode_capabilities,
-    hybrid_encoders_use_hardware, no_video_encoder_message, probe_video_encoders,
-    video_encoder_capabilities, video_encoders_without_probing,
+    codec_capabilities, encodes_pixels, h264_encoder_remedy, hardware_decode_backend,
+    hardware_decode_capabilities, hybrid_encoders_use_hardware, no_video_encoder_message,
+    probe_video_encoders, video_encoder_capabilities, video_encoders_without_probing,
 };
+pub use convert::packed_frame;
 pub use convert::{
     CodecThreadAllocation, CodecThreadRequest, HARDWARE_DECODER_THREADS, codec_thread_allocation,
     codec_thread_budget, codec_thread_override, configured_codec_thread_override,

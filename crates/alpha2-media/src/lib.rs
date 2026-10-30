@@ -10,6 +10,7 @@ mod color;
 mod container;
 mod ids;
 mod io;
+mod pixels;
 mod rate_control;
 
 pub use color::{
@@ -26,6 +27,9 @@ pub use io::{
     Orientation, PixelFormat, Plane, Premultiplication, RasterColorSpace, Rect, Rotation,
     SampleAspectRatio, Speaker, SpeakerLayout, StreamInfo, StreamKind, TextAlign, TextTexture,
     YuvFormat, frame_size_supported, sample_ticks_floor,
+};
+pub use pixels::{
+    BitDepth, Chroma, OutputPixels, OutputPixelsError, PixelLayout, PlaneLayout, resolve_pixels,
 };
 pub use rate_control::{
     AudioCodec, BitrateMode, FRAME_RATE_EXPONENT, MIN_VIDEO_BITRATE, QualityLevel, REFERENCE_FPS,

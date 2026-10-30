@@ -6,7 +6,7 @@
  * or starts a host. Both copies are pinned by the shared corpus
  * `tests/cases/export-container-corpus.json`. A container offers only the codecs its mainstream
  * players decode in it, which is narrower than what mediabunny writes: QuickTime does not play
- * VP9, AV1 or Opus in a MOV.
+ * VP9, AV1 or Opus in a MOV. ProRes is a QuickTime codec, offered in MOV only.
  */
 
 import {
@@ -46,7 +46,7 @@ export const EXPORT_CONTAINERS: readonly ContainerPolicy[] = [
     id: "mov",
     extensions: ["mov"],
     mimeType: "video/quicktime",
-    video: ["h264", "hevc", "mpeg4-part2"],
+    video: ["h264", "hevc", "mpeg4-part2", "prores"],
     audio: ["aac"],
   },
   {
@@ -71,7 +71,10 @@ export type ExportFormatErrorReason =
   | "unknown-extension"
   | "extension-mismatch"
   | "video-codec-not-offered"
-  | "audio-codec-not-offered";
+  | "audio-codec-not-offered"
+  | "alpha-unsupported"
+  | "alpha-unsupported-in-container"
+  | "bit-depth-unsupported";
 
 /** A container or codec request the policy refuses. */
 export class ExportFormatError extends RangeError {
@@ -236,10 +239,73 @@ function dotted(extensions: readonly string[]): string {
 
 function browserVideoCodec(codec: EngineVideoCodec): BrowserVideoCodec {
   if (codec === "h264") return "avc";
-  if (codec === "mpeg4-part2")
+  if (codec === "mpeg4-part2" || codec === "prores")
     throw new ExportFormatError(
       "video-codec-not-offered",
-      "the browser has no mpeg4-part2 encoder",
+      `the browser has no ${codec} encoder`,
     );
   return codec;
+}
+
+/** The pictures an export writes: the engine's `PixelLayout`. */
+export interface PixelLayout {
+  readonly chroma: "420" | "422" | "444";
+  readonly bitDepth: 8 | 10;
+  readonly alpha: boolean;
+  /** The FFmpeg pixel format name, such as `yuv420p` or `yuva444p10le`. */
+  readonly format: string;
+}
+
+/**
+ * The pictures `codec` writes in `container` for a request of `bitDepth` (absent: the codec's own,
+ * 10 for ProRes, else 8) and `alpha`: the engine's `resolve_pixels`, pinned to it by the shared
+ * corpus. H.264 and MPEG-4 Part 2 write 8-bit 4:2:0; HEVC and AV1 also 10-bit; VP9 also 10-bit,
+ * and 8-bit alpha outside MP4; ProRes is 10-bit 4:2:2 (422 HQ), or 4:4:4 with alpha (4444).
+ * The container must offer the codec ({@link resolveEngineExportFormat} checks that first).
+ *
+ * @throws ExportFormatError When the codec cannot be written so.
+ */
+export function resolvePixels(
+  codec: EngineVideoCodec,
+  container: ExportContainer,
+  request: { readonly bitDepth?: number; readonly alpha?: boolean } = {},
+): PixelLayout {
+  const bitDepth = request.bitDepth ?? (codec === "prores" ? 10 : 8);
+  if (bitDepth !== 8 && bitDepth !== 10)
+    throw new ExportFormatError(
+      "bit-depth-unsupported",
+      `bitDepth: ${bitDepth} is not 8 or 10`,
+    );
+  const alpha = request.alpha === true;
+  const refuseDepth = () =>
+    new ExportFormatError(
+      "bit-depth-unsupported",
+      `video codec ${codec} cannot be written at ${bitDepth} bits${alpha ? " with alpha" : ""}`,
+    );
+  let chroma: PixelLayout["chroma"] = "420";
+  if (codec === "prores") {
+    if (bitDepth === 8) throw refuseDepth();
+    chroma = alpha ? "444" : "422";
+  } else if (codec === "vp9") {
+    if (alpha && container === "mp4")
+      throw new ExportFormatError(
+        "alpha-unsupported-in-container",
+        `${container} cannot carry vp9 alpha; use webm or mkv`,
+      );
+    if (alpha && bitDepth === 10) throw refuseDepth();
+  } else {
+    if (alpha)
+      throw new ExportFormatError(
+        "alpha-unsupported",
+        `video codec ${codec} cannot keep alpha; use vp9 (webm, mkv) or prores (mov)`,
+      );
+    if (bitDepth === 10 && codec !== "hevc" && codec !== "av1")
+      throw refuseDepth();
+  }
+  return {
+    chroma,
+    bitDepth,
+    alpha,
+    format: `yuv${alpha ? "a" : ""}${chroma}p${bitDepth === 10 ? "10le" : ""}`,
+  };
 }

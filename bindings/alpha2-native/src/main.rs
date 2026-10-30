@@ -740,6 +740,7 @@ fn transcode(
                 sample_aspect_ratio: stream.sample_aspect_ratio,
             },
             container,
+            pixels: alpha2_media::PixelLayout::YUV420P,
         },
     )
     .map_err(|error| format!("{error:?}"))?;

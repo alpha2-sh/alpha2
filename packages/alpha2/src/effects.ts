@@ -409,9 +409,15 @@ export interface WasmCanvasRenderer extends WasmEffectRegistry {
    * Starts one exact timestamp, packed for `codec`, and exposes its readback separately. It belongs
    * to no export, so neither its frame nor a readback failure carries a frame index: the caller
    * numbers it. An odd 4:2:0 size is refused with `INVALID_INPUT` naming the nearest even size,
-   * before anything renders.
+   * before anything renders. `pixels` names the output pictures by their FFmpeg pixel format
+   * (`yuva420p` keeps alpha and draws no background, `yuv420p10le` is 10-bit); absent, I420. Such a
+   * frame's planes are tight, and its `format` is the `WebCodecs` one (`I420A`, `I420P10`).
    */
-  beginExportAt(timeTicks: bigint, codec: EngineVideoCodec): ExportAtTicket;
+  beginExportAt(
+    timeTicks: bigint,
+    codec: EngineVideoCodec,
+    pixels?: string,
+  ): ExportAtTicket;
   /**
    * JSON `{ completed, total, effectiveRange: { startTicks, endTicks }, audioWindow: { startSample,
    * frames } }` for the running export. Ticks and `startSample` are decimal strings.
@@ -466,7 +472,8 @@ export type ExportFrameResult =
       readonly timeTicks: string;
       readonly width: number;
       readonly height: number;
-      readonly format: "I420";
+      /** `I420`, or for an export in other pictures `I420A` or `I420P10`, with tight planes. */
+      readonly format: "I420" | "I420A" | "I420P10" | "I420AP10";
       /**
        * What the planes are coded as: the engine's export coding (BT.709, limited range), which a
        * `VideoFrame` built from them carries so the encoder tags it, as the native encoder does.
@@ -477,12 +484,8 @@ export type ExportFrameResult =
        * as a `VideoFrame` given it as its `layout` does, never as if the planes were tightly
        * packed.
        */
-      readonly layout: readonly [
-        ExportPlaneLayout,
-        ExportPlaneLayout,
-        ExportPlaneLayout,
-      ];
-      /** Planar I420 at the offsets and strides of `layout`. */
+      readonly layout: readonly ExportPlaneLayout[];
+      /** The planes, at the offsets and strides of `layout`: Y, U, V, then alpha. */
       readonly pixels: Uint8Array;
     };
 

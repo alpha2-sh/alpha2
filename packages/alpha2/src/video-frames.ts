@@ -83,6 +83,8 @@ export async function videoFrameFromI420(
   pixels: Uint8Array,
   init: VideoFrameBufferInit,
 ): Promise<VideoFrame> {
+  // Alpha and 10-bit frames arrive with tight planes, which are the default layout.
+  if (init.format !== "I420") return ownedVideoFrame(pixels, init);
   const layout = init.layout ? [...init.layout] : undefined;
   if (
     layout === undefined ||

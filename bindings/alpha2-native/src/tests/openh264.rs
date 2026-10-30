@@ -34,6 +34,7 @@ fn h264_config(
         codec: NativeVideoCodec::H264,
         display: crate::VideoDisplay::default(),
         container,
+        pixels: alpha2_media::PixelLayout::YUV420P,
     }
 }
 

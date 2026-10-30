@@ -207,3 +207,29 @@ pub(crate) fn pack_yuv420p(
     });
     Ok(())
 }
+
+/// Packs `picture` into `layout` in `targets`, one per plane in storage order
+/// ([`alpha2_media::PixelLayout::planes`]), as the GPU renderer's texel
+/// readback packs its picture ([`crate::Yuv420pReadback::finish_into_planes`]).
+///
+/// # Errors
+/// Returns [`RenderError::TextureReadback`] for a picture its chroma cannot
+/// subsample, the wrong number of targets, or a target too small.
+pub fn pack_cpu_image(
+    picture: &CpuImage,
+    encoding: YuvEncoding,
+    layout: alpha2_media::PixelLayout,
+    targets: &mut [crate::PlaneTarget<'_>],
+) -> Result<(), RenderError> {
+    let size = picture.size();
+    let row = |y: usize, out: &mut [[f32; 4]]| {
+        #[allow(clippy::cast_possible_truncation)]
+        picture.decode_row(y as u32, 0, out);
+    };
+    let rows = crate::layout_pack::Picture {
+        width: size.width as usize,
+        height: size.height as usize,
+        row: &row,
+    };
+    crate::layout_pack::pack(&rows, encoding, layout, targets)
+}

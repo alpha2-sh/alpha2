@@ -31,6 +31,7 @@ mod graph_execute;
 mod graph_plan;
 mod graph_submit;
 pub mod hdr;
+mod layout_pack;
 mod loop_bound;
 mod masking;
 mod paint_wgsl;
@@ -77,7 +78,9 @@ pub use color::{
     convert_yuv_to_linear_rgba, encode_linear_rgb, is_hdr,
 };
 pub use composite::{CompositeLayer, LayerTransform};
-pub use cpu::{CpuImage, CpuRenderStats, CpuRenderer, CpuSource, RgbaPixels, YuvPlanes};
+pub use cpu::{
+    CpuImage, CpuRenderStats, CpuRenderer, CpuSource, RgbaPixels, YuvPlanes, pack_cpu_image,
+};
 pub use diagnostics::{
     AdapterDiagnostics, BenchmarkMetadata, PassTiming, RenderDiagnostics, TimingSource,
 };

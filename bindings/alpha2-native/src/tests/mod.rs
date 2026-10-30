@@ -36,6 +36,7 @@ mod hardware_decode;
 mod muxing;
 mod openh264;
 mod outputs;
+mod pixel_outputs;
 mod seeking;
 
 /// A scratch file named for `label` and the running test. libtest names a
@@ -289,6 +290,7 @@ fn av_config(audio_sample_rate: u32) -> AvEncodeConfig {
             codec: NativeVideoCodec::Mpeg4Part2,
             display: crate::VideoDisplay::default(),
             container: alpha2_media::Container::Mp4,
+            pixels: alpha2_media::PixelLayout::YUV420P,
         },
         audio_sample_rate,
         audio_channels: 2,

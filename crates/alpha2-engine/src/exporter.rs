@@ -1,5 +1,5 @@
 use alpha2_eval::FrameNeed;
-use alpha2_media::{SourceId, VideoCodec, YuvEncoding};
+use alpha2_media::{PixelLayout, SourceId, VideoCodec, YuvEncoding};
 use alpha2_render::{FrameSubmitTimings, Renderer, Yuv420pReadback, Yuv420pTargets};
 use alpha2_time::{FrameRate, MediaTime, TICKS_PER_SECOND, TimeRange};
 use std::time::Duration;
@@ -50,6 +50,9 @@ impl ExportProgress {
 
 /// Outcome of one non-blocking exporter step.
 #[derive(Debug)]
+// Almost every step renders a frame: boxing its readback would allocate once a frame to shrink
+// the variants that rarely occur.
+#[allow(clippy::large_enum_variant)]
 pub enum ExportStep {
     /// Required decoded frames are not available; retry without advancing.
     Waiting {
@@ -153,6 +156,10 @@ pub struct Exporter {
     snapshot: u64,
     quality: QualityProfile,
     encoding: YuvEncoding,
+    pixels: PixelLayout,
+    /// Whether frames are drawn over the project background, unless the
+    /// layout keeps alpha.
+    background: bool,
     frame_rate: FrameRate,
     effective_range: TimeRange,
     next_frame: i64,
@@ -262,6 +269,8 @@ impl Exporter {
             snapshot: snapshot.generation(),
             quality,
             encoding,
+            pixels: PixelLayout::YUV420P,
+            background: true,
             frame_rate,
             effective_range,
             next_frame,
@@ -275,6 +284,48 @@ impl Exporter {
     #[must_use]
     pub const fn encoding(&self) -> YuvEncoding {
         self.encoding
+    }
+
+    /// This exporter writing its frames in `pixels`
+    /// ([`alpha2_media::resolve_pixels`]) instead of 8-bit 4:2:0. A layout
+    /// with alpha draws every frame without the project background: the
+    /// layers alone, over transparent black. [`Self::new`]'s even-size rule
+    /// holds for every layout, 4:4:4 included.
+    #[must_use]
+    pub const fn with_pixels(mut self, pixels: PixelLayout) -> Self {
+        self.pixels = pixels;
+        self
+    }
+
+    /// The layout this export's frames are packed in.
+    #[must_use]
+    pub const fn pixels(&self) -> PixelLayout {
+        self.pixels
+    }
+
+    /// This exporter drawing its frames over the project background, or,
+    /// with `drawn` false, without it: the layers over transparent black, as
+    /// an output with alpha draws them ([`Self::with_pixels`]). For a host
+    /// that takes the picture itself ([`Self::render_next_texture`]), such as
+    /// a still.
+    #[must_use]
+    pub const fn with_background(mut self, drawn: bool) -> Self {
+        self.background = drawn;
+        self
+    }
+
+    /// The frame at `time`, without its background when the output keeps
+    /// alpha.
+    fn evaluate<'a>(
+        &self,
+        project: &'a EngineProject,
+        time: MediaTime,
+    ) -> Result<alpha2_eval::FrameDesc<'a>, EngineError> {
+        let mut frame = project.evaluate(time)?;
+        if self.pixels.alpha || !self.background {
+            frame.background = None;
+        }
+        Ok(frame)
     }
 
     /// The timeline range this export covers: the requested range widened to
@@ -524,7 +575,7 @@ impl Exporter {
             return Ok(ExportPlaneStep::Complete);
         };
         let evaluate_started = Instant::now();
-        let frame = project.evaluate(time)?;
+        let frame = self.evaluate(project, time)?;
         crate::frame::check_frame_effects(renderer, &frame)?;
         let prepare_started = Instant::now();
         let evaluate = prepare_started.duration_since(evaluate_started);
@@ -588,7 +639,7 @@ impl Exporter {
             return Ok(ExportPlaneStep::Complete);
         };
         let evaluate_started = Instant::now();
-        let frame = project.evaluate(time)?;
+        let frame = self.evaluate(project, time)?;
         crate::frame::check_frame_effects(renderer, &frame)?;
         let prepare_started = Instant::now();
         let evaluate = prepare_started.duration_since(evaluate_started);
@@ -602,6 +653,86 @@ impl Exporter {
         let prepare = draw_started.duration_since(prepare_started);
         let report =
             renderer.render_frame_into_yuv420p(size, &frame, frames, self.encoding, targets)?;
+        if let Some(timings) = timings {
+            *timings = ExportStepTimings {
+                evaluate,
+                prepare,
+                submit: FrameSubmitTimings {
+                    command_encode: draw_started.elapsed(),
+                    ..FrameSubmitTimings::default()
+                },
+            };
+        }
+        if !report.is_complete() {
+            return Ok(ExportPlaneStep::Waiting {
+                time,
+                missing_sources: report.missing_sources,
+            });
+        }
+        let index = self.completed;
+        self.next_frame = self
+            .next_frame
+            .checked_add(1)
+            .ok_or(EngineError::OutOfRange)?;
+        self.completed += 1;
+        Ok(ExportPlaneStep::Rendered { index, time })
+    }
+
+    /// Renders the next frame straight into caller-owned planes of this
+    /// export's layout ([`Self::pixels`]), one per plane in storage order
+    /// ([`PixelLayout::planes`]), on whichever renderer draws it: what
+    /// [`Self::render_next_into_yuv420p`] does for 8-bit 4:2:0.
+    ///
+    /// # Errors
+    /// As [`Self::render_next_into_yuv420p`].
+    pub fn render_next_into_planes<R: FrameRenderer + ?Sized>(
+        &mut self,
+        project: &EngineProject,
+        renderer: &R,
+        frames: &dyn FrameProvider,
+        targets: &mut [alpha2_render::PlaneTarget<'_>],
+        timings: Option<&mut ExportStepTimings>,
+    ) -> Result<ExportPlaneStep, EngineError> {
+        if self.pixels.is_yuv420p() {
+            let [y, u, v] = targets else {
+                return Err(EngineError::Render(
+                    alpha2_render::RenderError::TextureReadback(
+                        alpha2_render::ReadbackFailure::Layout,
+                    ),
+                ));
+            };
+            let mut planes = Yuv420pTargets {
+                y: y.reborrow(),
+                u: u.reborrow(),
+                v: v.reborrow(),
+            };
+            return self.render_next_into_yuv420p(project, renderer, frames, &mut planes, timings);
+        }
+        self.check(project)?;
+        let Some(time) = self.pending_time() else {
+            return Ok(ExportPlaneStep::Complete);
+        };
+        let evaluate_started = Instant::now();
+        let frame = self.evaluate(project, time)?;
+        crate::frame::check_frame_effects(renderer, &frame)?;
+        let prepare_started = Instant::now();
+        let evaluate = prepare_started.duration_since(evaluate_started);
+        let size = self.quality.render_size(&project.project().settings)?;
+        renderer.set_texture_budget_bytes(self.quality.texture_budget_bytes);
+        renderer.set_quality_controls(
+            self.quality.max_filter_samples,
+            self.quality.motion_blur_subframes,
+        );
+        let draw_started = Instant::now();
+        let prepare = draw_started.duration_since(prepare_started);
+        let report = renderer.render_frame_into_planes(
+            size,
+            &frame,
+            frames,
+            self.encoding,
+            self.pixels,
+            targets,
+        )?;
         if let Some(timings) = timings {
             *timings = ExportStepTimings {
                 evaluate,
@@ -646,7 +777,7 @@ impl Exporter {
         let Some(time) = self.pending_time() else {
             return Ok(ExportTextureStep::Complete);
         };
-        let frame = project.evaluate(time)?;
+        let frame = self.evaluate(project, time)?;
         crate::frame::check_frame_effects(renderer, &frame)?;
         let size = self.quality.render_size(&project.project().settings)?;
         renderer.set_texture_budget_bytes(self.quality.texture_budget_bytes);
@@ -686,7 +817,7 @@ impl Exporter {
             return Ok(ExportStep::Complete);
         };
         let evaluate_started = timings.as_ref().map(|_| Instant::now());
-        let frame = project.evaluate(time)?;
+        let frame = self.evaluate(project, time)?;
         crate::frame::check_frame_effects(renderer, &frame)?;
         let prepare_started = evaluate_started.map(|_| Instant::now());
         let evaluate = evaluate_started
@@ -701,6 +832,29 @@ impl Exporter {
             self.quality.motion_blur_subframes,
         );
         let prepare = prepare_started.map_or(Duration::ZERO, |started| started.elapsed());
+        if !self.pixels.is_yuv420p() {
+            // Read back as stored and packed on the CPU when the readback finishes.
+            let submit_started = Instant::now();
+            let render = crate::FrameRenderer::render_frame(renderer, size, &frame, frames)?;
+            let Some(texture) = render.texture else {
+                return Ok(ExportStep::Waiting {
+                    time,
+                    missing_sources: render.report.missing_sources,
+                });
+            };
+            let readback = renderer.begin_layout_readback(&texture, self.encoding, self.pixels)?;
+            if let Some(timings) = timings {
+                *timings = ExportStepTimings {
+                    evaluate,
+                    prepare,
+                    submit: FrameSubmitTimings {
+                        command_encode: submit_started.elapsed(),
+                        ..FrameSubmitTimings::default()
+                    },
+                };
+            }
+            return self.rendered(time, readback);
+        }
         let attempt = match timings {
             Some(timings) => {
                 let mut submit = FrameSubmitTimings::default();
@@ -726,6 +880,15 @@ impl Exporter {
                 missing_sources: attempt.report.missing_sources,
             });
         };
+        self.rendered(time, readback)
+    }
+
+    /// Advances past the frame at `time`, whose `readback` was submitted.
+    fn rendered(
+        &mut self,
+        time: MediaTime,
+        readback: alpha2_render::Yuv420pReadback,
+    ) -> Result<ExportStep, EngineError> {
         let index = self.completed;
         self.next_frame = self
             .next_frame

@@ -36,7 +36,7 @@ impl FrameProvider for Source<'_> {
 
 fn frame(source: &SourceId, cache: CacheIntent, opacity: f32) -> FrameDesc<'static> {
     FrameDesc {
-        background: alpha2_model::Rgb::BLACK,
+        background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {

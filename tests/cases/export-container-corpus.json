@@ -2,54 +2,869 @@
   "containers": [
     {
       "id": "mp4",
-      "extensions": ["mp4", "m4v"],
+      "extensions": [
+        "mp4",
+        "m4v"
+      ],
       "mime": "video/mp4",
-      "video": ["h264", "hevc", "vp9", "av1", "mpeg4-part2"],
-      "audio": ["aac", "opus"],
+      "video": [
+        "h264",
+        "hevc",
+        "vp9",
+        "av1",
+        "mpeg4-part2"
+      ],
+      "audio": [
+        "aac",
+        "opus"
+      ],
       "defaultVideoCodec": "h264",
       "defaultAudioCodec": "aac"
     },
     {
       "id": "mov",
-      "extensions": ["mov"],
+      "extensions": [
+        "mov"
+      ],
       "mime": "video/quicktime",
-      "video": ["h264", "hevc", "mpeg4-part2"],
-      "audio": ["aac"],
+      "video": [
+        "h264",
+        "hevc",
+        "mpeg4-part2",
+        "prores"
+      ],
+      "audio": [
+        "aac"
+      ],
       "defaultVideoCodec": "h264",
       "defaultAudioCodec": "aac"
     },
     {
       "id": "mkv",
-      "extensions": ["mkv"],
+      "extensions": [
+        "mkv"
+      ],
       "mime": "video/x-matroska",
-      "video": ["h264", "hevc", "vp9", "av1", "mpeg4-part2"],
-      "audio": ["aac", "opus"],
+      "video": [
+        "h264",
+        "hevc",
+        "vp9",
+        "av1",
+        "mpeg4-part2"
+      ],
+      "audio": [
+        "aac",
+        "opus"
+      ],
       "defaultVideoCodec": "h264",
       "defaultAudioCodec": "aac"
     },
     {
       "id": "webm",
-      "extensions": ["webm"],
+      "extensions": [
+        "webm"
+      ],
       "mime": "video/webm",
-      "video": ["vp9", "av1"],
-      "audio": ["opus"],
+      "video": [
+        "vp9",
+        "av1"
+      ],
+      "audio": [
+        "opus"
+      ],
       "defaultVideoCodec": "vp9",
       "defaultAudioCodec": "opus"
     }
   ],
   "resolve": [
-    { "container": null, "extension": "webm", "video": null, "audio": null, "ok": ["webm", "vp9", "opus"] },
-    { "container": null, "extension": "MOV", "video": null, "audio": null, "ok": ["mov", "h264", "aac"] },
-    { "container": null, "extension": "m4v", "video": "av1", "audio": "opus", "ok": ["mp4", "av1", "opus"] },
-    { "container": "mkv", "extension": "mkv", "video": "hevc", "audio": null, "ok": ["mkv", "hevc", "aac"] },
-    { "container": "webm", "extension": null, "video": "av1", "audio": null, "ok": ["webm", "av1", "opus"] },
-    { "container": "webm", "extension": "mp4", "video": null, "audio": null, "error": "extension-mismatch" },
-    { "container": "mp4", "extension": "", "video": null, "audio": null, "error": "extension-mismatch" },
-    { "container": "webm", "extension": "webm", "video": "h264", "audio": null, "error": "video-codec-not-offered" },
-    { "container": "mov", "extension": "mov", "video": "vp9", "audio": null, "error": "video-codec-not-offered" },
-    { "container": "mov", "extension": null, "video": null, "audio": "opus", "error": "audio-codec-not-offered" },
-    { "container": null, "extension": "avi", "video": null, "audio": null, "error": "unknown-extension" },
-    { "container": null, "extension": "", "video": null, "audio": null, "error": "unknown-extension" },
-    { "container": null, "extension": null, "video": null, "audio": null, "ok": ["mp4", "h264", "aac"] }
+    {
+      "container": null,
+      "extension": "webm",
+      "video": null,
+      "audio": null,
+      "ok": [
+        "webm",
+        "vp9",
+        "opus"
+      ]
+    },
+    {
+      "container": null,
+      "extension": "MOV",
+      "video": null,
+      "audio": null,
+      "ok": [
+        "mov",
+        "h264",
+        "aac"
+      ]
+    },
+    {
+      "container": null,
+      "extension": "m4v",
+      "video": "av1",
+      "audio": "opus",
+      "ok": [
+        "mp4",
+        "av1",
+        "opus"
+      ]
+    },
+    {
+      "container": "mkv",
+      "extension": "mkv",
+      "video": "hevc",
+      "audio": null,
+      "ok": [
+        "mkv",
+        "hevc",
+        "aac"
+      ]
+    },
+    {
+      "container": "webm",
+      "extension": null,
+      "video": "av1",
+      "audio": null,
+      "ok": [
+        "webm",
+        "av1",
+        "opus"
+      ]
+    },
+    {
+      "container": "webm",
+      "extension": "mp4",
+      "video": null,
+      "audio": null,
+      "error": "extension-mismatch"
+    },
+    {
+      "container": "mp4",
+      "extension": "",
+      "video": null,
+      "audio": null,
+      "error": "extension-mismatch"
+    },
+    {
+      "container": "webm",
+      "extension": "webm",
+      "video": "h264",
+      "audio": null,
+      "error": "video-codec-not-offered"
+    },
+    {
+      "container": "mov",
+      "extension": "mov",
+      "video": "vp9",
+      "audio": null,
+      "error": "video-codec-not-offered"
+    },
+    {
+      "container": "mov",
+      "extension": null,
+      "video": null,
+      "audio": "opus",
+      "error": "audio-codec-not-offered"
+    },
+    {
+      "container": null,
+      "extension": "avi",
+      "video": null,
+      "audio": null,
+      "error": "unknown-extension"
+    },
+    {
+      "container": null,
+      "extension": "",
+      "video": null,
+      "audio": null,
+      "error": "unknown-extension"
+    },
+    {
+      "container": null,
+      "extension": null,
+      "video": null,
+      "audio": null,
+      "ok": [
+        "mp4",
+        "h264",
+        "aac"
+      ]
+    }
+  ],
+  "pixels": [
+    {
+      "codec": "h264",
+      "container": "mp4",
+      "bitDepth": null,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "h264",
+      "container": "mp4",
+      "bitDepth": null,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "h264",
+      "container": "mp4",
+      "bitDepth": 8,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "h264",
+      "container": "mp4",
+      "bitDepth": 8,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "h264",
+      "container": "mp4",
+      "bitDepth": 10,
+      "alpha": false,
+      "error": "bit-depth-unsupported"
+    },
+    {
+      "codec": "h264",
+      "container": "mp4",
+      "bitDepth": 10,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "hevc",
+      "container": "mp4",
+      "bitDepth": null,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "hevc",
+      "container": "mp4",
+      "bitDepth": null,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "hevc",
+      "container": "mp4",
+      "bitDepth": 8,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "hevc",
+      "container": "mp4",
+      "bitDepth": 8,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "hevc",
+      "container": "mp4",
+      "bitDepth": 10,
+      "alpha": false,
+      "ok": "yuv420p10le"
+    },
+    {
+      "codec": "hevc",
+      "container": "mp4",
+      "bitDepth": 10,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "vp9",
+      "container": "mp4",
+      "bitDepth": null,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "vp9",
+      "container": "mp4",
+      "bitDepth": null,
+      "alpha": true,
+      "error": "alpha-unsupported-in-container"
+    },
+    {
+      "codec": "vp9",
+      "container": "mp4",
+      "bitDepth": 8,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "vp9",
+      "container": "mp4",
+      "bitDepth": 8,
+      "alpha": true,
+      "error": "alpha-unsupported-in-container"
+    },
+    {
+      "codec": "vp9",
+      "container": "mp4",
+      "bitDepth": 10,
+      "alpha": false,
+      "ok": "yuv420p10le"
+    },
+    {
+      "codec": "vp9",
+      "container": "mp4",
+      "bitDepth": 10,
+      "alpha": true,
+      "error": "alpha-unsupported-in-container"
+    },
+    {
+      "codec": "av1",
+      "container": "mp4",
+      "bitDepth": null,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "av1",
+      "container": "mp4",
+      "bitDepth": null,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "av1",
+      "container": "mp4",
+      "bitDepth": 8,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "av1",
+      "container": "mp4",
+      "bitDepth": 8,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "av1",
+      "container": "mp4",
+      "bitDepth": 10,
+      "alpha": false,
+      "ok": "yuv420p10le"
+    },
+    {
+      "codec": "av1",
+      "container": "mp4",
+      "bitDepth": 10,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "mpeg4-part2",
+      "container": "mp4",
+      "bitDepth": null,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "mpeg4-part2",
+      "container": "mp4",
+      "bitDepth": null,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "mpeg4-part2",
+      "container": "mp4",
+      "bitDepth": 8,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "mpeg4-part2",
+      "container": "mp4",
+      "bitDepth": 8,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "mpeg4-part2",
+      "container": "mp4",
+      "bitDepth": 10,
+      "alpha": false,
+      "error": "bit-depth-unsupported"
+    },
+    {
+      "codec": "mpeg4-part2",
+      "container": "mp4",
+      "bitDepth": 10,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "h264",
+      "container": "mov",
+      "bitDepth": null,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "h264",
+      "container": "mov",
+      "bitDepth": null,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "h264",
+      "container": "mov",
+      "bitDepth": 8,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "h264",
+      "container": "mov",
+      "bitDepth": 8,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "h264",
+      "container": "mov",
+      "bitDepth": 10,
+      "alpha": false,
+      "error": "bit-depth-unsupported"
+    },
+    {
+      "codec": "h264",
+      "container": "mov",
+      "bitDepth": 10,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "hevc",
+      "container": "mov",
+      "bitDepth": null,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "hevc",
+      "container": "mov",
+      "bitDepth": null,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "hevc",
+      "container": "mov",
+      "bitDepth": 8,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "hevc",
+      "container": "mov",
+      "bitDepth": 8,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "hevc",
+      "container": "mov",
+      "bitDepth": 10,
+      "alpha": false,
+      "ok": "yuv420p10le"
+    },
+    {
+      "codec": "hevc",
+      "container": "mov",
+      "bitDepth": 10,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "mpeg4-part2",
+      "container": "mov",
+      "bitDepth": null,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "mpeg4-part2",
+      "container": "mov",
+      "bitDepth": null,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "mpeg4-part2",
+      "container": "mov",
+      "bitDepth": 8,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "mpeg4-part2",
+      "container": "mov",
+      "bitDepth": 8,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "mpeg4-part2",
+      "container": "mov",
+      "bitDepth": 10,
+      "alpha": false,
+      "error": "bit-depth-unsupported"
+    },
+    {
+      "codec": "mpeg4-part2",
+      "container": "mov",
+      "bitDepth": 10,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "prores",
+      "container": "mov",
+      "bitDepth": null,
+      "alpha": false,
+      "ok": "yuv422p10le"
+    },
+    {
+      "codec": "prores",
+      "container": "mov",
+      "bitDepth": null,
+      "alpha": true,
+      "ok": "yuva444p10le"
+    },
+    {
+      "codec": "prores",
+      "container": "mov",
+      "bitDepth": 8,
+      "alpha": false,
+      "error": "bit-depth-unsupported"
+    },
+    {
+      "codec": "prores",
+      "container": "mov",
+      "bitDepth": 8,
+      "alpha": true,
+      "error": "bit-depth-unsupported"
+    },
+    {
+      "codec": "prores",
+      "container": "mov",
+      "bitDepth": 10,
+      "alpha": false,
+      "ok": "yuv422p10le"
+    },
+    {
+      "codec": "prores",
+      "container": "mov",
+      "bitDepth": 10,
+      "alpha": true,
+      "ok": "yuva444p10le"
+    },
+    {
+      "codec": "h264",
+      "container": "mkv",
+      "bitDepth": null,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "h264",
+      "container": "mkv",
+      "bitDepth": null,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "h264",
+      "container": "mkv",
+      "bitDepth": 8,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "h264",
+      "container": "mkv",
+      "bitDepth": 8,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "h264",
+      "container": "mkv",
+      "bitDepth": 10,
+      "alpha": false,
+      "error": "bit-depth-unsupported"
+    },
+    {
+      "codec": "h264",
+      "container": "mkv",
+      "bitDepth": 10,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "hevc",
+      "container": "mkv",
+      "bitDepth": null,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "hevc",
+      "container": "mkv",
+      "bitDepth": null,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "hevc",
+      "container": "mkv",
+      "bitDepth": 8,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "hevc",
+      "container": "mkv",
+      "bitDepth": 8,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "hevc",
+      "container": "mkv",
+      "bitDepth": 10,
+      "alpha": false,
+      "ok": "yuv420p10le"
+    },
+    {
+      "codec": "hevc",
+      "container": "mkv",
+      "bitDepth": 10,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "vp9",
+      "container": "mkv",
+      "bitDepth": null,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "vp9",
+      "container": "mkv",
+      "bitDepth": null,
+      "alpha": true,
+      "ok": "yuva420p"
+    },
+    {
+      "codec": "vp9",
+      "container": "mkv",
+      "bitDepth": 8,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "vp9",
+      "container": "mkv",
+      "bitDepth": 8,
+      "alpha": true,
+      "ok": "yuva420p"
+    },
+    {
+      "codec": "vp9",
+      "container": "mkv",
+      "bitDepth": 10,
+      "alpha": false,
+      "ok": "yuv420p10le"
+    },
+    {
+      "codec": "vp9",
+      "container": "mkv",
+      "bitDepth": 10,
+      "alpha": true,
+      "error": "bit-depth-unsupported"
+    },
+    {
+      "codec": "av1",
+      "container": "mkv",
+      "bitDepth": null,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "av1",
+      "container": "mkv",
+      "bitDepth": null,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "av1",
+      "container": "mkv",
+      "bitDepth": 8,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "av1",
+      "container": "mkv",
+      "bitDepth": 8,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "av1",
+      "container": "mkv",
+      "bitDepth": 10,
+      "alpha": false,
+      "ok": "yuv420p10le"
+    },
+    {
+      "codec": "av1",
+      "container": "mkv",
+      "bitDepth": 10,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "mpeg4-part2",
+      "container": "mkv",
+      "bitDepth": null,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "mpeg4-part2",
+      "container": "mkv",
+      "bitDepth": null,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "mpeg4-part2",
+      "container": "mkv",
+      "bitDepth": 8,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "mpeg4-part2",
+      "container": "mkv",
+      "bitDepth": 8,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "mpeg4-part2",
+      "container": "mkv",
+      "bitDepth": 10,
+      "alpha": false,
+      "error": "bit-depth-unsupported"
+    },
+    {
+      "codec": "mpeg4-part2",
+      "container": "mkv",
+      "bitDepth": 10,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "vp9",
+      "container": "webm",
+      "bitDepth": null,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "vp9",
+      "container": "webm",
+      "bitDepth": null,
+      "alpha": true,
+      "ok": "yuva420p"
+    },
+    {
+      "codec": "vp9",
+      "container": "webm",
+      "bitDepth": 8,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "vp9",
+      "container": "webm",
+      "bitDepth": 8,
+      "alpha": true,
+      "ok": "yuva420p"
+    },
+    {
+      "codec": "vp9",
+      "container": "webm",
+      "bitDepth": 10,
+      "alpha": false,
+      "ok": "yuv420p10le"
+    },
+    {
+      "codec": "vp9",
+      "container": "webm",
+      "bitDepth": 10,
+      "alpha": true,
+      "error": "bit-depth-unsupported"
+    },
+    {
+      "codec": "av1",
+      "container": "webm",
+      "bitDepth": null,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "av1",
+      "container": "webm",
+      "bitDepth": null,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "av1",
+      "container": "webm",
+      "bitDepth": 8,
+      "alpha": false,
+      "ok": "yuv420p"
+    },
+    {
+      "codec": "av1",
+      "container": "webm",
+      "bitDepth": 8,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    },
+    {
+      "codec": "av1",
+      "container": "webm",
+      "bitDepth": 10,
+      "alpha": false,
+      "ok": "yuv420p10le"
+    },
+    {
+      "codec": "av1",
+      "container": "webm",
+      "bitDepth": 10,
+      "alpha": true,
+      "error": "alpha-unsupported"
+    }
   ]
 }

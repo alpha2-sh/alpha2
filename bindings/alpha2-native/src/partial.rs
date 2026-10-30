@@ -427,6 +427,9 @@ pub fn write_png(
         let mut encoder = png::Encoder::new(&mut buffered, width, height);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
+        // The pixels are display-encoded sRGB; the chunk says so rather than leaving viewers to
+        // assume it.
+        encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
         let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
         writer
             .write_image_data(rgba)

@@ -24,7 +24,7 @@ fn availability_pass_deduplicates_missing_sources() {
         source_composition: None,
     };
     let frame = FrameDesc {
-        background: alpha2_model::Rgb::BLACK,
+        background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
         time: MediaTime(0),
         visual: vec![item, item],
@@ -42,7 +42,7 @@ fn evaluated_frame_render_is_atomic_on_missing_inputs() {
     let renderer = Renderer::new(gpu());
     let source = SourceId::new("source").expect("valid ID");
     let frame = FrameDesc {
-        background: alpha2_model::Rgb::BLACK,
+        background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {

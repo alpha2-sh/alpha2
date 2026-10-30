@@ -129,6 +129,18 @@ impl PendingVideoReadback {
         capture: Option<&mut FrameCapture>,
         bake: Option<&mut BakedFrame>,
     ) -> Result<(), String> {
+        // A texel readback packs another layout here, which nothing captures or bakes.
+        if self.readback.pixel_layout().is_some() {
+            let mut planes = frame.begin_write_planes().map_err(error_message)?;
+            let mut targets: Vec<PlaneTarget<'_>> = planes
+                .iter_mut()
+                .map(|(bytes, stride)| PlaneTarget::new(bytes, *stride))
+                .collect();
+            return self
+                .readback
+                .finish_into_planes(&mut targets)
+                .map_err(error_message);
+        }
         let (width, height) = frame.dimensions();
         let planes = frame.begin_write().map_err(error_message)?;
         let (y_stride, chroma_stride) = (planes.y_stride, planes.chroma_stride);

@@ -830,6 +830,86 @@ pub(crate) fn video_decoder_options(threads: i64) -> AVDictionary {
 
 /// Options every export sends `codec`, run on the GPU when `on_hardware`, for
 /// frames `width` wide.
+/// The `FFmpeg` pixel format of `layout`.
+pub(crate) fn pixel_format(layout: alpha2_media::PixelLayout) -> ffi::AVPixelFormat {
+    match layout.ffmpeg_name() {
+        "yuva420p" => ffi::AV_PIX_FMT_YUVA420P,
+        "yuv420p10le" => ffi::AV_PIX_FMT_YUV420P10LE,
+        "yuva420p10le" => ffi::AV_PIX_FMT_YUVA420P10LE,
+        "yuv422p" => ffi::AV_PIX_FMT_YUV422P,
+        "yuva422p" => ffi::AV_PIX_FMT_YUVA422P,
+        "yuv422p10le" => ffi::AV_PIX_FMT_YUV422P10LE,
+        "yuva422p10le" => ffi::AV_PIX_FMT_YUVA422P10LE,
+        "yuv444p" => ffi::AV_PIX_FMT_YUV444P,
+        "yuva444p" => ffi::AV_PIX_FMT_YUVA444P,
+        "yuv444p10le" => ffi::AV_PIX_FMT_YUV444P10LE,
+        "yuva444p10le" => ffi::AV_PIX_FMT_YUVA444P10LE,
+        "p010le" => ffi::AV_PIX_FMT_P010LE,
+        _ => ffi::AV_PIX_FMT_YUV420P,
+    }
+}
+
+/// Each plane of a `width` x `height` frame of `layout` as its visible bytes
+/// per row and rows, in `FFmpeg`'s plane order.
+#[must_use]
+pub(crate) fn frame_planes(
+    layout: alpha2_media::PixelLayout,
+    width: u32,
+    height: u32,
+) -> Vec<(usize, usize)> {
+    layout
+        .planes(width, height)
+        .into_iter()
+        .map(|(plane_width, rows, bytes)| ((plane_width * bytes) as usize, rows as usize))
+        .collect()
+}
+
+/// The options `prores_ks` writes `layout` with: 422 HQ, or 4444 with a
+/// 16-bit alpha channel, tagged with Apple's vendor code so players treat
+/// the stream as Apple `ProRes`.
+/// A reusable encoder frame for `width` x `height` pictures of `layout`:
+/// the planes [`alpha2_ffmpeg_bridge::Yuv420pFrameBuffer::begin_write_planes`]
+/// hands out are the layout's, in its storage order.
+///
+/// # Errors
+/// Returns an error for a size that does not fit a frame or a failed
+/// allocation.
+pub fn packed_frame(
+    width: u32,
+    height: u32,
+    layout: alpha2_media::PixelLayout,
+) -> Result<alpha2_ffmpeg_bridge::Yuv420pFrameBuffer, alpha2_ffmpeg_bridge::BridgeError> {
+    let (coded_width, coded_height) = (
+        i32::try_from(width)
+            .map_err(|_| alpha2_ffmpeg_bridge::BridgeError::InvalidInput("width"))?,
+        i32::try_from(height)
+            .map_err(|_| alpha2_ffmpeg_bridge::BridgeError::InvalidInput("height"))?,
+    );
+    if layout.is_yuv420p() {
+        return alpha2_ffmpeg_bridge::Yuv420pFrameBuffer::new(coded_width, coded_height);
+    }
+    alpha2_ffmpeg_bridge::Yuv420pFrameBuffer::with_format(
+        coded_width,
+        coded_height,
+        pixel_format(layout),
+        &frame_planes(layout, width, height),
+    )
+}
+
+pub(crate) fn prores_options(layout: alpha2_media::PixelLayout) -> Vec<(&'static CStr, String)> {
+    let mut options = vec![
+        (
+            c"profile",
+            if layout.alpha { "4444" } else { "hq" }.to_owned(),
+        ),
+        (c"vendor", "apl0".to_owned()),
+    ];
+    if layout.alpha {
+        options.push((c"alpha_bits", "16".to_owned()));
+    }
+    options
+}
+
 pub(crate) fn video_encoder_options(
     color: ColorMetadata,
     codec: &AVCodec,

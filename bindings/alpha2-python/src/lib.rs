@@ -86,6 +86,35 @@ fn resolve_export_format(
     Ok((container.as_str(), video.as_str(), audio.as_str()))
 }
 
+/// The pictures `video_codec` writes in `container` at `bit_depth` (8 or 10; `None` for the codec's
+/// own) with or without `alpha`, as the host resolves them: the `FFmpeg` pixel format name, such as
+/// `yuva420p`. Raises `ValueError` with the engine's message for pictures the codec cannot write.
+#[pyfunction]
+#[pyo3(signature = (video_codec, container, bit_depth=None, alpha=false))]
+fn resolve_pixels(
+    video_codec: &str,
+    container: &str,
+    bit_depth: Option<u8>,
+    alpha: bool,
+) -> PyResult<&'static str> {
+    let invalid = |error: &dyn std::fmt::Display| PyValueError::new_err(error.to_string());
+    let codec = VideoCodec::from_str(video_codec).map_err(|error| invalid(&error))?;
+    let container = Container::from_str(container).map_err(|error| invalid(&error))?;
+    let bit_depth = bit_depth
+        .map(|bits| {
+            alpha2_media::BitDepth::from_bits(bits)
+                .ok_or_else(|| PyValueError::new_err(format!("bit_depth: {bits} is not 8 or 10")))
+        })
+        .transpose()?;
+    alpha2_media::resolve_pixels(
+        codec,
+        container,
+        alpha2_media::OutputPixels { bit_depth, alpha },
+    )
+    .map(alpha2_media::PixelLayout::ffmpeg_name)
+    .map_err(|error| invalid(&error))
+}
+
 /// A compose error as `ValueError(message, path, problem)`: the whole message, where in the spec,
 /// and what is wrong there.
 fn compose_error(error: &alpha2_compose::ComposeError) -> PyErr {
@@ -205,6 +234,7 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(project_end_ticks, module)?)?;
     module.add_function(wrap_pyfunction!(lint_project_json, module)?)?;
     module.add_function(wrap_pyfunction!(resolve_export_format, module)?)?;
+    module.add_function(wrap_pyfunction!(resolve_pixels, module)?)?;
     module.add("COMPOSE_VERSION", alpha2_compose::COMPOSE_VERSION)?;
     module.add("COMPOSE_THEMES", alpha2_compose::THEMES.to_vec())?;
     module.add_function(wrap_pyfunction!(compose_requirements, module)?)?;

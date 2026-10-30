@@ -2350,13 +2350,24 @@ impl WebEffectRegistry {
     ///
     /// A rendered result exposes its readback promise separately so the worker
     /// can submit later frames while earlier mappings remain in flight. The
-    /// frame is packed for `codec`, as [`Self::begin_export`] packs it.
+    /// frame is packed for `codec`, as [`Self::begin_export`] packs it, in
+    /// `pixels` (an `FFmpeg` pixel format name: `yuva420p` keeps alpha and
+    /// draws no background, `yuv420p10le` is 10-bit; I420 when absent). A
+    /// layout other than I420 is read back as stored and packed into tight
+    /// planes, its `format` the `WebCodecs` one (`I420A`, `I420P10`).
     ///
     /// # Errors
-    /// Returns an error without a loaded project, for an unknown codec, or
-    /// when rendering/submission fails.
+    /// Returns an error without a loaded project, for an unknown codec or
+    /// pixel format, or when rendering/submission fails.
     #[wasm_bindgen(js_name = beginExportAt)]
-    pub fn begin_export_at(&mut self, time_ticks: i64, codec: &str) -> Result<JsValue, JsValue> {
+    #[allow(clippy::needless_pass_by_value)] // wasm-bindgen hands an optional string over owned.
+    pub fn begin_export_at(
+        &mut self,
+        time_ticks: i64,
+        codec: &str,
+        pixels: Option<String>,
+    ) -> Result<JsValue, JsValue> {
+        let pixels = crate::interop::parse_pixels(pixels.as_deref())?;
         let codec: VideoCodec =
             codec
                 .parse()
@@ -2368,9 +2379,12 @@ impl WebEffectRegistry {
             .as_ref()
             .ok_or_else(|| invalid_state("no project is loaded"))?;
         let time = MediaTime(time_ticks);
-        let frame = project
+        let mut frame = project
             .evaluate(time)
             .map_err(|error| typed_error(&error))?;
+        if pixels.alpha {
+            frame.background = None;
+        }
         let quality = QualityProfile::export();
         // An odd 4:2:0 size is refused before anything renders, as `beginExport` refuses it,
         // naming the nearest even size.
@@ -2384,18 +2398,33 @@ impl WebEffectRegistry {
         self.texts
             .prepare(&self.renderer, &frame, size)
             .map_err(|error| typed_error(&error))?;
-        let attempt = self
-            .renderer
-            .render_frame_yuv420p(
-                size,
-                &frame,
-                &FramesWithText::new(&self.frames, &self.texts),
-                YuvEncoding::export(codec),
-            )
-            .map_err(|error| typed_error(&error))?;
-        let Some(readback_handle) = attempt.readback else {
+        let provider = FramesWithText::new(&self.frames, &self.texts);
+        let (readback, missing) = if pixels.is_yuv420p() {
+            let attempt = self
+                .renderer
+                .render_frame_yuv420p(size, &frame, &provider, YuvEncoding::export(codec))
+                .map_err(|error| typed_error(&error))?;
+            (attempt.readback, attempt.report.missing_sources)
+        } else {
+            let render =
+                alpha2_engine::FrameRenderer::render_frame(&self.renderer, size, &frame, &provider)
+                    .map_err(|error| typed_error(&error))?;
+            let readback = render
+                .texture
+                .map(|texture| {
+                    self.renderer.begin_layout_readback(
+                        &texture,
+                        YuvEncoding::export(codec),
+                        pixels,
+                    )
+                })
+                .transpose()
+                .map_err(|error| typed_error(&error))?;
+            (readback, render.report.missing_sources)
+        };
+        let Some(readback_handle) = readback else {
             pin_export_frame(&mut self.frames, project, time)?;
-            return export_waiting(project, time, &attempt.report.missing_sources);
+            return export_waiting(project, time, &missing);
         };
         self.frames.unpin();
         let (readback, retained_bytes) = export_readback_promise(

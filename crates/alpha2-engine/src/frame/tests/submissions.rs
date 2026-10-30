@@ -149,7 +149,7 @@ fn evaluated_frame_and_yuv_readback_share_one_submission() {
     let renderer = Renderer::new(gpu());
     let source = SourceId::new("source").expect("valid ID");
     let frame = FrameDesc {
-        background: alpha2_model::Rgb::BLACK,
+        background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
@@ -233,7 +233,7 @@ fn pending_source_presentation_joins_the_export_submission() {
     let source = SourceId::new("source").expect("valid ID");
     let size = RenderSize::new(2, 2).expect("even size");
     let frame = FrameDesc {
-        background: alpha2_model::Rgb::BLACK,
+        background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
@@ -347,7 +347,7 @@ fn export_submission_stages_external_source_synchronization() {
         pending: pending.expect("conversion remains pending"),
     };
     let frame = FrameDesc {
-        background: alpha2_model::Rgb::BLACK,
+        background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
@@ -431,7 +431,7 @@ fn a_failed_source_synchronization_fails_the_frame_with_what_the_device_said() {
             pending: pending.expect("conversion remains pending"),
         };
         let frame = FrameDesc {
-            background: alpha2_model::Rgb::BLACK,
+            background: Some(alpha2_model::Rgb::BLACK),
             blend_space: alpha2_model::BlendSpace::LinearLight,
             time: MediaTime::ZERO,
             visual: vec![ActiveClip {
@@ -477,7 +477,7 @@ fn failed_frame_encoding_restores_pending_source_work() {
     let source = SourceId::new("source").expect("valid ID");
     let size = RenderSize::new(3, 3).expect("odd size");
     let frame = FrameDesc {
-        background: alpha2_model::Rgb::BLACK,
+        background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {
@@ -541,7 +541,7 @@ fn pending_source_presentation_joins_the_preview_graph_submission() {
     let source = SourceId::new("source").expect("valid ID");
     let size = RenderSize::new(2, 2).expect("size");
     let frame = FrameDesc {
-        background: alpha2_model::Rgb::BLACK,
+        background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {

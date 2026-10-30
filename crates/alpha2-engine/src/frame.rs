@@ -9,7 +9,7 @@ use alpha2_eval::{
     ActiveClip, ActiveComposition, ActiveEffect, ActiveTransition, EvaluatedVisual, FrameDesc,
     GeneratorPlan, ShapesPlan, StepOp, sample_scalar, sample_visual,
 };
-use alpha2_media::{SourceId, YuvEncoding};
+use alpha2_media::{PixelLayout, SourceId, YuvEncoding};
 use alpha2_model::{
     ClipBlendMode, EffectValue, Generator, MaskMode, MatteMode, Rgb, ShapeMask, TextStyle,
 };
@@ -17,9 +17,10 @@ use alpha2_render::{
     BlendMode, CacheIntent, Color, CpuImage, CpuRenderer, EffectCatalog, EffectId, EffectInputs,
     EffectParams, EffectResources, EffectRuntime, FrameSubmitTimings, GENERATOR_EFFECT_ID,
     GraphError, GraphLayer, LayerTransform, MASK_COMBINE_EFFECT_IDS, MASK_COMBINE_NAMES,
-    MAX_SHAPE_MASKS, Nv12PlaneTargets, ParamSpec, ParamValue, PendingSourceWork, RenderCacheKey,
-    RenderControls, RenderError, RenderGraph, RenderNodeId, RenderNodeKind, RenderSize,
-    RenderedTexture, Renderer, SourceView, TRACK_MATTE_EFFECT_ID, Yuv420pReadback, Yuv420pTargets,
+    MAX_SHAPE_MASKS, Nv12PlaneTargets, ParamSpec, ParamValue, PendingSourceWork, PlaneTarget,
+    RenderCacheKey, RenderControls, RenderError, RenderGraph, RenderNodeId, RenderNodeKind,
+    RenderSize, RenderedTexture, Renderer, SourceView, TRACK_MATTE_EFFECT_ID, Yuv420pReadback,
+    Yuv420pTargets,
 };
 use alpha2_time::MediaTime;
 
@@ -251,6 +252,40 @@ pub trait FrameRenderer: EffectCatalog + RenderControls {
         encoding: YuvEncoding,
         targets: &mut Yuv420pTargets<'_>,
     ) -> Result<RenderReport, RenderError>;
+
+    /// Renders one evaluator result and packs it into `layout` in `targets`,
+    /// one per plane in storage order ([`PixelLayout::planes`]): the
+    /// counterpart of [`Self::render_frame_into_yuv420p`] for any output
+    /// layout, which it is for 8-bit 4:2:0.
+    ///
+    /// # Errors
+    /// Returns [`RenderError`] for an invalid graph, a picture the layout
+    /// cannot subsample, or a target too small.
+    fn render_frame_into_planes(
+        &self,
+        size: RenderSize,
+        frame: &FrameDesc,
+        frames: &dyn FrameProvider,
+        encoding: YuvEncoding,
+        layout: PixelLayout,
+        targets: &mut [PlaneTarget<'_>],
+    ) -> Result<RenderReport, RenderError>;
+}
+
+/// `targets` as the three planes of 8-bit 4:2:0.
+fn yuv420p_targets<'a>(
+    targets: &'a mut [PlaneTarget<'_>],
+) -> Result<Yuv420pTargets<'a>, RenderError> {
+    let [y, u, v] = targets else {
+        return Err(RenderError::TextureReadback(
+            alpha2_render::ReadbackFailure::Layout,
+        ));
+    };
+    Ok(Yuv420pTargets {
+        y: y.reborrow(),
+        u: u.reborrow(),
+        v: v.reborrow(),
+    })
 }
 
 /// The GPU renderer's frame paths that end on the GPU: a YUV420 readback
@@ -386,6 +421,39 @@ impl FrameRenderer for Renderer {
         }
         Ok(render.report)
     }
+
+    fn render_frame_into_planes(
+        &self,
+        size: RenderSize,
+        frame: &FrameDesc,
+        frames: &dyn FrameProvider,
+        encoding: YuvEncoding,
+        layout: PixelLayout,
+        targets: &mut [PlaneTarget<'_>],
+    ) -> Result<RenderReport, RenderError> {
+        if layout.is_yuv420p() {
+            let mut planes = yuv420p_targets(targets)?;
+            return self.render_frame_into_yuv420p(size, frame, frames, encoding, &mut planes);
+        }
+        let render = self.render_frame(size, frame, frames)?;
+        if let Some(texture) = render.texture {
+            let readback = self.begin_layout_readback(&texture, encoding, layout)?;
+            // As `render_frame_into_yuv420p`: a browser cannot block on a mapping.
+            #[cfg(target_arch = "wasm32")]
+            {
+                drop((readback, targets));
+                return Err(RenderError::TextureReadback(
+                    alpha2_render::ReadbackFailure::NotMapped,
+                ));
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                readback.wait_ready()?;
+                readback.finish_into_planes(targets)?;
+            }
+        }
+        Ok(render.report)
+    }
 }
 
 impl FrameRenderer for CpuRenderer {
@@ -422,6 +490,26 @@ impl FrameRenderer for CpuRenderer {
             self.render_graph_into_yuv420p(&graph, encoding, targets)?;
         }
         Ok(report)
+    }
+
+    fn render_frame_into_planes(
+        &self,
+        size: RenderSize,
+        frame: &FrameDesc,
+        frames: &dyn FrameProvider,
+        encoding: YuvEncoding,
+        layout: PixelLayout,
+        targets: &mut [PlaneTarget<'_>],
+    ) -> Result<RenderReport, RenderError> {
+        if layout.is_yuv420p() {
+            let mut planes = yuv420p_targets(targets)?;
+            return self.render_frame_into_yuv420p(size, frame, frames, encoding, &mut planes);
+        }
+        let render = self.render_frame(size, frame, frames)?;
+        if let Some(image) = render.texture {
+            alpha2_render::pack_cpu_image(&image, encoding, layout, targets)?;
+        }
+        Ok(render.report)
     }
 }
 
@@ -1096,14 +1184,17 @@ fn apply_matte<'a, 'c>(
     Ok(layer)
 }
 
-/// The project background as an opaque, sRGB-encoded storage value.
-fn background_color(background: Rgb) -> Color {
-    Color::rgba(
-        f64::from(background.red),
-        f64::from(background.green),
-        f64::from(background.blue),
-        1.0,
-    )
+/// The project background as an opaque, sRGB-encoded storage value, or
+/// transparent black for a frame drawn without it.
+fn background_color(background: Option<Rgb>) -> Color {
+    background.map_or(Color::rgba(0.0, 0.0, 0.0, 0.0), |background| {
+        Color::rgba(
+            f64::from(background.red),
+            f64::from(background.green),
+            f64::from(background.blue),
+            1.0,
+        )
+    })
 }
 
 struct FrameInput<'a> {

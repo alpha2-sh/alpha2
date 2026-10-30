@@ -360,3 +360,74 @@ report({
 });
 `;
 }
+
+// Alpha and 10-bit export pictures: the engine draws `yuva420p` frames without the background and
+// `yuv420p10le` frames as 10-bit codes; a 10-bit VP9 file is encoded and read back where this
+// browser encodes it, and alpha is offered only where a real one-frame encode keeps it.
+export function exportPixels() {
+  return `
+const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+await init();
+const { canEncodePixels, MediabunnySink } = await import("/packages/alpha2/dist/mediabunny.js");
+const mb = await import("mediabunny");
+const engine = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(64, 32));
+engine.loadProject(JSON.stringify({
+  schema_version: 1, id: "pixels", name: "Pixels",
+  settings: { width: 64, height: 32, frame_rate: { num: 30, den: 1 }, sample_rate: 48000,
+    background: { red: 0.2, green: 0.4, blue: 0.8 } },
+  sources: [{ id: "red", kind: "generated", generator: { type: "fill", paint: { type: "solid",
+    color: { red: 1, green: 0.1, blue: 0.1, alpha: 1 } } } }],
+  timeline: { tracks: [{ id: "v", name: "V", kind: "video", clips: [{ id: "c", source_id: "red",
+    timeline_range: { start: 0, end: 120000 }, source_range: { start: 0, end: 120000 },
+    visual: { scale: { mode: "constant", value: { x: 0.5, y: 1 } } } }] }] },
+}));
+const frameOf = async (pixels) => {
+  const ticket = engine.beginExportAt(0n, "vp9", pixels);
+  if (ticket.kind !== "rendered") throw new Error("the frame waits: " + JSON.stringify(ticket));
+  return await ticket.readback;
+};
+const alpha = await frameOf("yuva420p");
+const ten = await frameOf("yuv420p10le");
+const at = (frame, plane, x, y, bytes) => {
+  const { offset, stride } = frame.layout[plane];
+  const index = offset + y * stride + x * bytes;
+  return bytes === 1 ? frame.pixels[index] : frame.pixels[index] | (frame.pixels[index + 1] << 8);
+};
+// The corner is outside the half-width clip: transparent with alpha, the blue background without.
+const alphaOk = alpha.format === "I420A" && alpha.layout.length === 4
+  && at(alpha, 3, 2, 16, 1) === 0 && at(alpha, 3, 32, 16, 1) === 255 && at(alpha, 0, 2, 16, 1) === 16;
+const background = Math.round(64 + 876 * (0.2126 * 0.2 + 0.7152 * 0.4 + 0.0722 * 0.8));
+const tenOk = ten.format === "I420P10" && Math.abs(at(ten, 0, 2, 16, 2) - background) <= 1;
+const probes = {
+  vp9Alpha: await canEncodePixels("vp9", { bitDepth: 8, alpha: true }),
+  vp9Ten: await canEncodePixels("vp9", { bitDepth: 10, alpha: false }),
+  av1Ten: await canEncodePixels("av1", { bitDepth: 10, alpha: false }),
+};
+let encoded = null;
+if (probes.vp9Ten) {
+  const sink = new MediabunnySink({
+    container: "webm", videoCodec: "vp9", videoBitDepth: 10, frameRate: { num: 30, den: 1 },
+    videoRateControl: { bitrate: 1000000, bitrateMode: "variable" },
+    destination: { kind: "memory", maxBytes: 1 << 22 },
+  });
+  for (let index = 0; index < 3; index += 1) {
+    const plane = await frameOf("yuv420p10le");
+    const frame = new VideoFrame(plane.pixels, { format: plane.format, codedWidth: 64, codedHeight: 32,
+      layout: plane.layout, timestamp: Math.round((index * 1e6) / 30), duration: Math.round(1e6 / 30),
+      colorSpace: plane.colorSpace });
+    await sink.videoTrack.writeVideo({ index: BigInt(index), timeTicks: BigInt(index * 4000), frame });
+  }
+  await sink.videoTrack.finish();
+  const input = new mb.Input({ source: new mb.BufferSource(sink.output.buffer), formats: mb.ALL_FORMATS });
+  try {
+    const video = await input.getPrimaryVideoTrack();
+    encoded = { codec: video.codec, codecString: await video.getCodecParameterString() };
+  } finally {
+    input.dispose();
+  }
+}
+const encodedOk = encoded === null || (encoded.codec === "vp9" && encoded.codecString.startsWith("vp09.02.10"));
+report({ ok: alphaOk && tenOk && encodedOk, alphaOk, tenOk, probes, encoded,
+  alphaFormat: alpha.format, tenFormat: ten.format });
+`;
+}

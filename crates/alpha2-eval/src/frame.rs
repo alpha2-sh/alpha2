@@ -15,8 +15,10 @@ use alpha2_time::MediaTime;
 pub struct FrameDesc<'a> {
     /// Timestamp evaluated on the project timeline.
     pub time: MediaTime,
-    /// Opaque color under every visual layer.
-    pub background: Rgb,
+    /// Opaque color under every visual layer, or `None` for a frame drawn
+    /// without one: its layers over transparent black, for an output with
+    /// alpha.
+    pub background: Option<Rgb>,
     /// The space in which blend modes are evaluated.
     pub blend_space: BlendSpace,
     /// Active visual clips in composition order.

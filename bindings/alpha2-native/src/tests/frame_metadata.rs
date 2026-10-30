@@ -256,6 +256,7 @@ fn an_encode_sink_converts_red_green_and_blue_planes_into_its_matrix() {
                 codec: NativeVideoCodec::Mpeg4Part2,
                 display: crate::VideoDisplay::default(),
                 container: alpha2_media::Container::Mp4,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
         )
         .expect("encoder");

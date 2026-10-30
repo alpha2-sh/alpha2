@@ -1466,16 +1466,26 @@ impl WebCpuRenderer {
     /// odd size, an effect that does not draw on the CPU (`EFFECT_ERROR`),
     /// or when the frame cannot be drawn.
     #[wasm_bindgen(js_name = beginExportAt)]
-    pub fn begin_export_at(&mut self, time_ticks: i64, codec: &str) -> Result<JsValue, JsValue> {
+    #[allow(clippy::needless_pass_by_value)] // wasm-bindgen hands an optional string over owned.
+    pub fn begin_export_at(
+        &mut self,
+        time_ticks: i64,
+        codec: &str,
+        pixels: Option<String>,
+    ) -> Result<JsValue, JsValue> {
         let codec = parse_codec(codec)?;
+        let pixels = crate::interop::parse_pixels(pixels.as_deref())?;
         let project = self
             .project
             .as_ref()
             .ok_or_else(|| invalid_state("no project is loaded"))?;
         let time = MediaTime(time_ticks);
-        let frame = project
+        let mut frame = project
             .evaluate(time)
             .map_err(|error| typed_error(&error))?;
+        if pixels.alpha {
+            frame.background = None;
+        }
         alpha2_engine::check_frame_effects(&self.renderer, &frame)
             .map_err(|error| cpu_engine_error(&error))?;
         let quality = QualityProfile::export();
@@ -1490,6 +1500,33 @@ impl WebCpuRenderer {
         self.texts
             .prepare(&self.renderer, &frame, size)
             .map_err(|error| typed_error(&error))?;
+        if !pixels.is_yuv420p() {
+            let (mut memory, layout, offsets) = crate::interop::tight_planes(pixels, size)?;
+            let report = self
+                .renderer
+                .render_frame_into_planes(
+                    size,
+                    &frame,
+                    &FramesWithText::new(&self.frames, &self.texts),
+                    YuvEncoding::export(codec),
+                    pixels,
+                    &mut crate::interop::plane_targets(&mut memory, &offsets),
+                )
+                .map_err(|error| typed_error(&error))?;
+            if !report.is_complete() {
+                pin_export_frame(&mut self.frames, project, time)?;
+                return export_waiting(project, time, &report.missing_sources);
+            }
+            self.frames.unpin();
+            let rendered = Self::rendered_frame(&memory, size, None, time)?;
+            set(
+                &rendered,
+                "format",
+                &JsValue::from_str(crate::interop::webcodecs_format(pixels)),
+            )?;
+            set(&rendered, "layout", &layout)?;
+            return ticket(None, time, memory.len() as u64, &rendered);
+        }
         let mut planes = i420_buffer(size);
         let report = {
             let mut targets = i420_targets(&mut planes, size);

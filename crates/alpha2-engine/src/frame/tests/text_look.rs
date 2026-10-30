@@ -6,7 +6,7 @@ use super::*;
 
 /// A caption track whose one cue shows `text` in `style` for the whole
 /// project, as a track slot of [`text_project`].
-fn caption_track(style: &str, text: &str) -> String {
+pub(super) fn caption_track(style: &str, text: &str) -> String {
     format!(
         r#", {{ "id": "subs", "name": "Subtitles", "kind": "caption", "captions": {{
             "style": {style},
@@ -19,7 +19,7 @@ fn caption_track(style: &str, text: &str) -> String {
 /// pixels at 160x90, so the hard shadow lies a whole 9 pixels off: a
 /// fractional offset resamples its edge a second time, which software
 /// rasterizers filter a code or more apart.
-const LOOK: &str = r##"{ "font_size": 0.25, "position": { "x": 0.5, "y": 0.55 }, "anchor": { "x": 0.5, "y": 0.5 },
+pub(super) const LOOK: &str = r##"{ "font_size": 0.25, "position": { "x": 0.5, "y": 0.55 }, "anchor": { "x": 0.5, "y": 0.5 },
     "fill": { "type": "linear_gradient", "start": { "x": 0, "y": 0 }, "end": { "x": 1, "y": 0 },
               "stops": [ { "offset": 0, "color": "#ff3020" }, { "offset": 1, "color": "#2040ff" } ] },
     "strokes": [ { "color": "#000000", "width": 0.06 }, { "color": "#ffffff", "width": 0.08 } ],
@@ -27,7 +27,7 @@ const LOOK: &str = r##"{ "font_size": 0.25, "position": { "x": 0.5, "y": 0.55 },
                  { "color": "#000000c0", "offset": { "x": 0, "y": 0.2 }, "blur": 0.3 } ],
     "background": { "color": "#2040a060", "padding": 0.1 } }"##;
 
-fn fixture_texts() -> crate::TextTextures {
+pub(super) fn fixture_texts() -> crate::TextTextures {
     let mut texts = crate::TextTextures::new();
     texts
         .add_font(
@@ -75,7 +75,7 @@ fn cpu_pixels(
         .read_rgba8()
 }
 
-fn look_renderer() -> Renderer {
+pub(super) fn look_renderer() -> Renderer {
     let mut renderer = Renderer::new(gpu());
     renderer.register_builtins().expect("built-ins compile");
     renderer

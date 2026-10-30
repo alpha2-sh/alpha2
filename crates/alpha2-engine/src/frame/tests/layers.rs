@@ -49,7 +49,7 @@ fn the_project_blend_space_decides_how_a_frame_blends() {
     let render_with = |blend_space, mode| {
         let frame = FrameDesc {
             time: MediaTime::ZERO,
-            background: alpha2_model::Rgb::BLACK,
+            background: Some(alpha2_model::Rgb::BLACK),
             blend_space,
             visual: vec![clip(0, ClipBlendMode::Normal), clip(1, mode)],
             audio: Vec::new(),
@@ -140,7 +140,7 @@ fn a_track_matte_keeps_its_clip_where_the_matte_says_and_is_never_drawn() {
         }
         let frame = FrameDesc {
             time: MediaTime::ZERO,
-            background: alpha2_model::Rgb::BLACK,
+            background: Some(alpha2_model::Rgb::BLACK),
             blend_space: alpha2_model::BlendSpace::LinearLight,
             visual: visual_clips,
             audio: Vec::new(),
@@ -206,7 +206,7 @@ fn clip_masks_are_applied_after_its_effects_in_source_space() {
     }]);
     let frame = FrameDesc {
         time: MediaTime::ZERO,
-        background: alpha2_model::Rgb::BLACK,
+        background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
         visual: vec![ActiveClip {
             clip_id: leak(ClipId::new("clip").expect("id")),
@@ -288,7 +288,7 @@ fn stacked_clips_keep_their_own_source_across_repeated_frames() {
     };
     // Layer 0 fills the frame; layers 1 and 2 are rotated and shrunk.
     let frame = FrameDesc {
-        background: alpha2_model::Rgb::BLACK,
+        background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
         time: MediaTime::ZERO,
         visual: [(1.0, 0.0), (0.5, 30.0), (0.25, -20.0)]
@@ -420,7 +420,7 @@ fn a_transformed_top_layer_never_samples_another_track_across_many_frames() {
         params: constant_params([("tint", EffectValue::Color([1.0, 1.0, 1.0, 1.0]))]),
     };
     let frame = FrameDesc {
-        background: alpha2_model::Rgb::BLACK,
+        background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
         time: MediaTime::ZERO,
         visual: vec![
@@ -528,7 +528,7 @@ fn two_effected_clips_do_not_share_an_intermediate_texture() {
     // Both the top clip and the one directly beneath it carry an effect, so two pooled
     // intermediates feed adjacent composite layers.
     let frame = FrameDesc {
-        background: alpha2_model::Rgb::BLACK,
+        background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
         time: MediaTime::ZERO,
         visual: vec![
@@ -601,7 +601,7 @@ fn stacked_effect_frame(sources: &[SourceId]) -> FrameDesc<'static> {
         source_composition: None,
     };
     FrameDesc {
-        background: alpha2_model::Rgb::BLACK,
+        background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
         time: MediaTime::ZERO,
         visual: vec![
@@ -769,7 +769,7 @@ fn a_matte_is_drawn_once_where_it_is_named_and_mask_and_matte_keep_their_cache_k
     };
     let frame = |time: i64, visual: Vec<ActiveClip<'static>>| FrameDesc {
         time: MediaTime(time),
-        background: alpha2_model::Rgb::BLACK,
+        background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
         visual,
         audio: Vec::new(),

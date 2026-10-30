@@ -68,6 +68,7 @@ fn every_policy_pair_matches_the_muxer() {
         alpha2_media::VideoCodec::Vp9 => ffi::AV_CODEC_ID_VP9,
         alpha2_media::VideoCodec::Av1 => ffi::AV_CODEC_ID_AV1,
         alpha2_media::VideoCodec::Mpeg4Part2 => ffi::AV_CODEC_ID_MPEG4,
+        alpha2_media::VideoCodec::ProRes => ffi::AV_CODEC_ID_PRORES,
     };
     let audio_id = |codec: AudioCodec| match codec {
         AudioCodec::Aac => ffi::AV_CODEC_ID_AAC,
@@ -137,6 +138,7 @@ fn export_case(path: &Path, case: &Case) -> (u64, u64) {
                 codec: case.video,
                 display: crate::VideoDisplay::default(),
                 container: case.container,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
             audio_sample_rate: case.audio_rate,
             audio_channels: 2,
@@ -367,9 +369,12 @@ fn exports_every_container_codec_pair_and_reads_it_back() {
             .iter()
             .filter_map(|codec| encodes_audio(*codec))
             .collect::<Vec<_>>();
+        // These cases write RGBA frames, which the sink converts to YUV420P; `ProRes` takes packed
+        // 10-bit frames only (`pixel_outputs`).
         let video_codecs = container
             .video_codecs()
             .iter()
+            .filter(|codec| **codec != alpha2_media::VideoCodec::ProRes)
             .filter_map(|codec| encodes_video(*codec))
             .collect::<Vec<_>>();
         let (Some(first_video), Some(first_audio)) = (video_codecs.first(), audio_codecs.first())
@@ -743,6 +748,7 @@ fn a_turned_picture_reads_back_turned_from_every_container() {
                     sample_aspect_ratio: alpha2_media::SampleAspectRatio::default(),
                 },
                 container,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
         )
         .expect("sink");

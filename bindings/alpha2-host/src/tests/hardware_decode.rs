@@ -405,6 +405,7 @@ fn import_parity_child() {
                 container: alpha2_media::Container::Mp4,
                 video: NativeVideoCodec::Mpeg4Part2,
                 audio: NativeAudioCodec::Aac,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
             None,
             VideoQualityRequest::Level(QualityLevel::High),

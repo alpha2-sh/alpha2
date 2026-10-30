@@ -6,7 +6,8 @@
 //! capabilities a host reports are copied from it. It is narrower than what
 //! the muxers accept: a container offers only the codecs its mainstream
 //! players decode there. `QuickTime` does not play VP9, AV1 or Opus in a MOV,
-//! and `WebM` is VP8/VP9/AV1 with Opus/Vorbis by definition. Whether a runtime
+//! and `WebM` is VP8/VP9/AV1 with Opus/Vorbis by definition. `ProRes` is a
+//! `QuickTime` codec and is offered in MOV only. Whether a runtime
 //! can encode an offered codec is a separate question each host answers.
 
 use std::fmt;
@@ -79,7 +80,12 @@ impl Container {
                 VideoCodec::Av1,
                 VideoCodec::Mpeg4Part2,
             ],
-            Self::Mov => &[VideoCodec::H264, VideoCodec::Hevc, VideoCodec::Mpeg4Part2],
+            Self::Mov => &[
+                VideoCodec::H264,
+                VideoCodec::Hevc,
+                VideoCodec::Mpeg4Part2,
+                VideoCodec::ProRes,
+            ],
             // VP9 first: it has a fast software encoder and every browser decodes it.
             Self::Webm => &[VideoCodec::Vp9, VideoCodec::Av1],
         }

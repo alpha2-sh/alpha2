@@ -838,7 +838,7 @@ struct Nv12PlanePair {
 }
 
 /// Opens `encoder` on `device` with an NV12 encoder-input pool.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn open_encoder(
     device: &AVHWDeviceContext,
     encoder: Encoder,
@@ -970,6 +970,7 @@ fn open_encoder(
         rate_control: applied,
         quantizer_refused,
         software_threads: None,
+        pixels: alpha2_media::PixelLayout::YUV420P,
     };
     Ok((frames, context, selection))
 }

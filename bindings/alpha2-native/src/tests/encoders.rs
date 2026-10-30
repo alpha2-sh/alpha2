@@ -103,6 +103,7 @@ fn codec_capabilities_report_stable_logical_ids_and_concrete_encoders() {
                 codec: NativeVideoCodec::H264,
                 display: crate::VideoDisplay::default(),
                 container: alpha2_media::Container::Mp4,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
         ) {
             Ok(sink) => {
@@ -148,6 +149,7 @@ fn a_rejected_candidate_falls_through_to_the_next_one() {
             codec: NativeVideoCodec::H264,
             display: crate::VideoDisplay::default(),
             container: alpha2_media::Container::Mp4,
+            pixels: alpha2_media::PixelLayout::YUV420P,
         },
     )
     .expect("a candidate behind the rejected one must open");
@@ -415,6 +417,7 @@ fn an_encode_sink_reports_each_encoder_and_muxer_call_to_its_thread_watch() {
             codec: NativeVideoCodec::Mpeg4Part2,
             display: crate::VideoDisplay::default(),
             container: alpha2_media::Container::Mp4,
+            pixels: alpha2_media::PixelLayout::YUV420P,
         },
     )
     .expect("encoder");
@@ -457,6 +460,7 @@ fn video_encode_mux_round_trip_and_cleanup_are_transactional() {
             codec: NativeVideoCodec::Mpeg4Part2,
             display: crate::VideoDisplay::default(),
             container: alpha2_media::Container::Mp4,
+            pixels: alpha2_media::PixelLayout::YUV420P,
         },
     )
     .expect("encoder");
@@ -525,6 +529,7 @@ fn video_encode_mux_round_trip_and_cleanup_are_transactional() {
             codec: NativeVideoCodec::Mpeg4Part2,
             display: crate::VideoDisplay::default(),
             container: alpha2_media::Container::Mp4,
+            pixels: alpha2_media::PixelLayout::YUV420P,
         },
     )
     .expect("encoder");
@@ -569,6 +574,7 @@ fn encode_one_frame(
                 codec: capability.codec,
                 display: crate::VideoDisplay::default(),
                 container: alpha2_media::Container::Mp4,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
             &capability.encoder_name,
         )
@@ -866,6 +872,7 @@ fn a_quantizer_the_encoder_cannot_hold_falls_back_to_the_bitrate_and_says_so() {
             codec: NativeVideoCodec::Mpeg4Part2,
             display: crate::VideoDisplay::default(),
             container: alpha2_media::Container::Mp4,
+            pixels: alpha2_media::PixelLayout::YUV420P,
         },
     )
     .expect("encoder");
@@ -931,6 +938,7 @@ fn the_encoders_take_every_yuv_layout_the_decoders_give() {
                 codec: NativeVideoCodec::Mpeg4Part2,
                 display: crate::VideoDisplay::default(),
                 container: alpha2_media::Container::Mp4,
+                pixels: alpha2_media::PixelLayout::YUV420P,
             },
         )
         .expect("sink");
@@ -1120,7 +1128,8 @@ fn both_mp4_sinks_write_mpeg4_at_119_88_fps() {
 
 /// The fallback through an export's encoder candidates. Every pinned SDK
 /// offers one encoder per codec, so encoders that refuse 4:2:0 input (PNG
-/// and BMP take only RGB) stand in for ones that do not open here.
+/// and BMP take only RGB) stand in for ones that do not open here: they are
+/// passed over for their pixel format, before anything opens.
 #[test]
 fn encoder_candidates_fall_through_in_order_and_say_why() {
     let config = av_config(48_000).video;
@@ -1147,11 +1156,11 @@ fn encoder_candidates_fall_through_in_order_and_say_why() {
         [
             (
                 "png",
-                crate::capabilities::NativeEncoderRejection::OpenFailed
+                crate::capabilities::NativeEncoderRejection::PixelFormat
             ),
             (
                 "bmp",
-                crate::capabilities::NativeEncoderRejection::OpenFailed
+                crate::capabilities::NativeEncoderRejection::PixelFormat
             ),
         ]
     );

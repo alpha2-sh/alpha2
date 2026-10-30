@@ -3251,6 +3251,9 @@ pub struct Yuv420pFrameBuffer {
     frame: AVFrame,
     width: usize,
     height: usize,
+    /// Each plane's visible bytes per row and rows, for a frame of another
+    /// format ([`Self::with_format`]); empty for YUV420P.
+    planes: Vec<(usize, usize)>,
 }
 
 /// Writable plane memory for one reusable frame.
@@ -3281,10 +3284,103 @@ impl Yuv420pFrameBuffer {
             return Err(BridgeError::InvalidInput("empty YUV frame"));
         }
         Ok(Self {
-            frame: zeroed_yuv420p_frame(width, height)?,
+            frame: zeroed_frame(width, height, ffi::AV_PIX_FMT_YUV420P)?,
             width: coded_width,
             height: coded_height,
+            planes: Vec::new(),
         })
+    }
+
+    /// Allocates one reusable frame of `format` for this exact coded size,
+    /// whose planes are `planes`: each one's visible bytes per row and rows,
+    /// in `FFmpeg`'s plane order. [`Self::begin_write_planes`] writes it.
+    ///
+    /// # Errors
+    /// Returns an error for a non-positive size, a failed allocation, or
+    /// planes the format does not have.
+    pub fn with_format(
+        width: i32,
+        height: i32,
+        format: ffi::AVPixelFormat,
+        planes: &[(usize, usize)],
+    ) -> Result<Self, BridgeError> {
+        let coded_width = usize::try_from(width)
+            .map_err(|_| BridgeError::InvalidInput("negative frame width"))?;
+        let coded_height = usize::try_from(height)
+            .map_err(|_| BridgeError::InvalidInput("negative frame height"))?;
+        if coded_width == 0 || coded_height == 0 || planes.is_empty() || planes.len() > 4 {
+            return Err(BridgeError::InvalidInput("empty frame"));
+        }
+        let frame = zeroed_frame(width, height, format)?;
+        for (index, &(row_bytes, _)) in planes.iter().enumerate() {
+            if frame.data[index].is_null()
+                || plane_stride(frame.linesize[index], row_bytes).is_err()
+            {
+                return Err(BridgeError::InvalidInput(
+                    "the frame's planes are not the ones described",
+                ));
+            }
+        }
+        Ok(Self {
+            frame,
+            width: coded_width,
+            height: coded_height,
+            planes: planes.to_vec(),
+        })
+    }
+
+    /// Each plane's memory to overwrite and its stride, after making the
+    /// frame unshared, for a frame of any format: Y, U and V for YUV420P.
+    ///
+    /// # Errors
+    /// As [`Self::begin_write`].
+    pub fn begin_write_planes(&mut self) -> Result<Vec<(&mut [u8], usize)>, BridgeError> {
+        if self.planes.is_empty() {
+            let planes = self.begin_write()?;
+            let chroma = planes.chroma_stride;
+            return Ok(vec![
+                (planes.y, planes.y_stride),
+                (planes.u, chroma),
+                (planes.v, chroma),
+            ]);
+        }
+        self.make_writable()?;
+        let mut written = Vec::with_capacity(self.planes.len());
+        for (index, &(row_bytes, rows)) in self.planes.iter().enumerate() {
+            let stride = plane_stride(self.frame.linesize[index], row_bytes)?;
+            // SAFETY: `zeroed_frame` allocated each plane `rows` rows of `linesize` bytes, checked
+            // against the described planes when the buffer was made; `make_writable` left this
+            // frame the only owner of that memory.
+            let plane = unsafe { writable_plane(self.frame.data[index], stride, row_bytes, rows)? };
+            written.push((plane, stride));
+        }
+        Ok(written)
+    }
+
+    /// Makes the frame the only owner of its memory, copying it away from
+    /// `FFmpeg` if it is still shared.
+    fn make_writable(&mut self) -> Result<(), BridgeError> {
+        // `av_frame_make_writable` would copy into rows padded for SIMD and leave that padding
+        // unwritten, under slices that span it. The copy goes to a frame allocated as this one was,
+        // written through.
+        if !self.frame.is_writable().map_err(BridgeError::Ffmpeg)? {
+            let mut copy = zeroed_frame(self.frame.width, self.frame.height, self.frame.format)?;
+            // SAFETY: both frames are live frames of one size and format; `copy` is uniquely
+            // owned, and both calls only read `self.frame`.
+            let status = unsafe {
+                let copied = ffi::av_frame_copy(copy.as_mut_ptr(), self.frame.as_ptr());
+                if copied < 0 {
+                    copied
+                } else {
+                    ffi::av_frame_copy_props(copy.as_mut_ptr(), self.frame.as_ptr())
+                }
+            };
+            if status < 0 {
+                return Err(BridgeError::FfmpegCode(status));
+            }
+            self.frame = copy;
+        }
+        Ok(())
     }
 
     /// Luma width and height in pixels.
@@ -3299,26 +3395,10 @@ impl Yuv420pFrameBuffer {
     /// Returns an error when `FFmpeg` cannot make the buffer writable or its
     /// planes are not laid out as this frame was allocated.
     pub fn begin_write(&mut self) -> Result<Yuv420pFramePlanes<'_>, BridgeError> {
-        // `av_frame_make_writable` would copy into rows padded for SIMD and leave that padding
-        // unwritten, under slices that span it. The copy goes to a frame allocated as this one was,
-        // written through.
-        if !self.frame.is_writable().map_err(BridgeError::Ffmpeg)? {
-            let mut copy = zeroed_yuv420p_frame(self.frame.width, self.frame.height)?;
-            // SAFETY: both frames are live YUV420P frames of one size; `copy` is uniquely owned,
-            // and both calls only read `self.frame`.
-            let status = unsafe {
-                let copied = ffi::av_frame_copy(copy.as_mut_ptr(), self.frame.as_ptr());
-                if copied < 0 {
-                    copied
-                } else {
-                    ffi::av_frame_copy_props(copy.as_mut_ptr(), self.frame.as_ptr())
-                }
-            };
-            if status < 0 {
-                return Err(BridgeError::FfmpegCode(status));
-            }
-            self.frame = copy;
+        if !self.planes.is_empty() {
+            return Err(BridgeError::InvalidInput("the frame is not YUV420P"));
         }
+        self.make_writable()?;
         let chroma_width = self.width.div_ceil(2);
         let chroma_height = self.height.div_ceil(2);
         let y_stride = plane_stride(self.frame.linesize[0], self.width)?;
@@ -3327,7 +3407,7 @@ impl Yuv420pFrameBuffer {
         if u_stride != v_stride {
             return Err(BridgeError::InvalidInput("mismatched chroma strides"));
         }
-        // SAFETY: `zeroed_yuv420p_frame` allocated and wrote each plane, `height` rows of
+        // SAFETY: `zeroed_frame` allocated and wrote each plane, `height` rows of
         // `linesize` bytes, so the last row's visible width is the furthest byte any caller may
         // touch; the writability check above guarantees this frame is the only owner of that
         // memory.
@@ -3366,10 +3446,14 @@ impl Yuv420pFrameBuffer {
     }
 }
 
-/// A YUV420P frame with tightly packed rows, every byte of it zero.
-fn zeroed_yuv420p_frame(width: i32, height: i32) -> Result<AVFrame, BridgeError> {
+/// A frame of `format` with tightly packed rows, every byte of it zero.
+fn zeroed_frame(
+    width: i32,
+    height: i32,
+    format: ffi::AVPixelFormat,
+) -> Result<AVFrame, BridgeError> {
     let mut frame = AVFrame::new();
-    frame.set_format(ffi::AV_PIX_FMT_YUV420P);
+    frame.set_format(format);
     frame.set_width(width);
     frame.set_height(height);
     frame.get_buffer(1)?;

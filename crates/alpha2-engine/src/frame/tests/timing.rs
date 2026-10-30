@@ -29,7 +29,7 @@ fn effect_timing_instrumentation_never_changes_the_rendered_result() {
     let frame = |iteration: u8| {
         let level = f32::from(iteration + 1) / 33.0;
         FrameDesc {
-            background: alpha2_model::Rgb::BLACK,
+            background: Some(alpha2_model::Rgb::BLACK),
             blend_space: alpha2_model::BlendSpace::LinearLight,
             time: MediaTime::ZERO,
             visual: vec![ActiveClip {
@@ -115,7 +115,7 @@ fn pass_timing_is_off_by_default_and_never_alters_the_result() {
         texture: &view,
     };
     let frame = FrameDesc {
-        background: alpha2_model::Rgb::BLACK,
+        background: Some(alpha2_model::Rgb::BLACK),
         blend_space: alpha2_model::BlendSpace::LinearLight,
         time: MediaTime::ZERO,
         visual: vec![ActiveClip {

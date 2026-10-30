@@ -24,7 +24,8 @@ export interface RateControlBinding {
 }
 
 /** The engine's spellings of the video codecs it resolves a rate for. */
-export type EngineVideoCodec = "h264" | "hevc" | "vp9" | "av1" | "mpeg4-part2";
+export type EngineVideoCodec =
+  "h264" | "hevc" | "vp9" | "av1" | "mpeg4-part2" | "prores";
 
 /** The WebCodecs/mediabunny spellings of the same codecs. */
 export type BrowserVideoCodec = "avc" | "hevc" | "vp9" | "av1";
