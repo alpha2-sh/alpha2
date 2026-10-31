@@ -37,6 +37,7 @@ export class FakeCanvas {
   }
 }
 globalThis.OffscreenCanvas ??= FakeCanvas;
+globalThis.createImageBitmap ??= async () => ({ close() {} });
 globalThis.requestAnimationFrame ??= (fn) =>
   setTimeout(() => fn(performance.now()), 4);
 globalThis.cancelAnimationFrame ??= (id) => clearTimeout(id);

@@ -1384,11 +1384,13 @@ export function createBrowserBridge(options) {
       context: context(project, library),
     });
     degradedShown = degradedSources;
-    // An unchanged frame was not presented: the bound canvas still shows the last copy.
+    // An unchanged frame was not presented: the bound canvas still shows the last copy. A copy of
+    // the frame, not a transfer of the renderer's canvas: Chrome on macOS crashes the page when a
+    // WebGL2 canvas the engine draws on gives up its buffer with `transferToImageBitmap`.
     if (rendered && !unchanged && copySurface) {
       boundCanvas
         .getContext("bitmaprenderer")
-        .transferFromImageBitmap(engine.canvas.transferToImageBitmap());
+        .transferFromImageBitmap(await createImageBitmap(engine.canvas));
       bitmapTransfers += 1;
     }
     return rendered;

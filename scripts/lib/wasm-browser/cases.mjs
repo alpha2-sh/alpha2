@@ -236,6 +236,9 @@ export const caseLaunch = {
     gpuProcessExits: 2,
     timeoutMs: 120_000,
   },
+  // A 1080p export on the CPU renderer takes about a minute on a two-core machine.
+  "cpu-worker-host-1080p": { timeoutMs: 180_000 },
+  "cpu-grid-1080p": { timeoutMs: 180_000 },
 };
 
 // Cases run only when `--case` names them: they need inputs the default run does not make.
