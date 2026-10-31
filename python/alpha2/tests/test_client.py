@@ -439,7 +439,8 @@ def test_an_export_cancelled_while_it_waits_for_a_slot_never_starts(
     tmp_path: Path, fake_host: FakeHost
 ) -> None:
     log = tmp_path / "log"
-    client = HostClient(host_path=fake_host(tmp_path, queue_host(log, answer_seconds=0.4)))
+    # The first export outlasts the cancel by seconds, so a slow runner cannot reorder them.
+    client = HostClient(host_path=fake_host(tmp_path, queue_host(log, answer_seconds=3)))
     cancel = threading.Event()
     with ThreadPoolExecutor(3) as pool:
         first = pool.submit(client.export, **export_args("a.mp4"))
