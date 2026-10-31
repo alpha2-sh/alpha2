@@ -266,6 +266,28 @@ EOF
           exit 1
         fi
       done
+      # The archive runs on the glibc the SDK manifest names for this target only when no program
+      # or library in it needs a newer symbol version: a toolchain on a newer system binds newer
+      # versions of the same functions (hypot moved to GLIBC_2.35).
+      minimum_os=$(awk -F ' *= *' -v section="[assets.$target]" '
+        $0 == section { active = 1; next }
+        active && /^\[/ { exit }
+        active && $1 == "minimum_os" { gsub(/"/, "", $2); print $2; exit }
+      ' "$manifest")
+      # Every glibc is 2.x, so the minor versions are compared.
+      floor_minor=$(printf '%s\n' "$minimum_os" | sed -n 's/^glibc 2\.\([0-9][0-9]*\)$/\1/p')
+      test -n "$floor_minor" || {
+        echo "the FFmpeg lock file names no glibc minimum_os for $target: '$minimum_os'" >&2
+        exit 1
+      }
+      for elf in "$package"/bin/* "$package"/lib/*.so.*[0-9]; do
+        test -L "$elf" && continue
+        newest=$(readelf -V "$elf" | sed -n 's/.*GLIBC_2\.\([0-9][0-9]*\).*/\1/p' | sort -n | tail -1)
+        if [ -n "$newest" ] && [ "$newest" -gt "$floor_minor" ]; then
+          echo "${elf#"$package"/} needs GLIBC_2.$newest, newer than the $minimum_os the FFmpeg lock file promises for $target" >&2
+          exit 1
+        fi
+      done
       ;;
     macos)
       : > "$package/compliance/DYNAMIC-LIBRARIES.txt"

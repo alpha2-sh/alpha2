@@ -71,8 +71,8 @@ engine.renderAt(0n); // draws the frame at time 0
 
 Native export runs `alpha2-host`, which renders on the GPU and decodes and encodes with FFmpeg 8: MP4 with H.264 video and AAC audio by default, and MOV, Matroska or WebM (VP9 or AV1 with Opus) when the output's extension or `container` says so. Get it one of four ways:
 
-- **Fetch** it for Node.js with `npx @alpha2-sh/node install`, which unpacks the release archive of the package's version into a cache where `@alpha2-sh/node` finds it.
-- **Download** an archive from the [Releases page](https://github.com/alpha2-sh/alpha2/releases). `alpha2-<version>-<target>-bundled` carries its FFmpeg. On macOS a browser download is quarantined and the clients refuse it: run `xattr -dr com.apple.quarantine <unpacked dir>`, or download with `curl -LO`. To use a system FFmpeg 8 instead, build the host from source (`cargo install alpha2-host`).
+- **Fetch** it for Node.js with `npx @alpha2-sh/node install`, which unpacks the release archive of the package's version into a cache where `@alpha2-sh/node` finds it. It checks the archive against the SHA-256 the published package pins for it, so a mirror cannot substitute one.
+- **Download** an archive from the [Releases page](https://github.com/alpha2-sh/alpha2/releases). `alpha2-<version>-<target>-bundled` carries its FFmpeg. Each archive has a build provenance attestation: `gh attestation verify <archive> --repo alpha2-sh/alpha2` checks it. On macOS a browser download is quarantined and the clients refuse it: run `xattr -dr com.apple.quarantine <unpacked dir>`, or download with `curl -LO`. To use a system FFmpeg 8 instead, build the host from source (`cargo install alpha2-host`).
 - **Build** the same archive from a clone, on the target platform (Git Bash on Windows). The script fetches the pinned FFmpeg build and writes the archives to `target/alpha2-native-release/archives/`.
 
   ```sh

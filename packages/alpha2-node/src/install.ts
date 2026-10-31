@@ -23,6 +23,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { setTimeout as sleep } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 
 import { extractArchive } from "./archive.js";
 import { bunzip2 } from "./bzip2.js";
@@ -280,15 +281,81 @@ export interface InstallHostResult {
   readonly directory: string;
   /** Whether it was downloaded now; `false` when it was already installed. */
   readonly downloaded: boolean;
+  /**
+   * What the downloaded archive was checked against: the SHA-256 the published package pins
+   * (`"release-pin"`), or the release's `checksums.sha256` when the package pins none for this
+   * version and platform, as in a source checkout (`"checksums"`). Absent when nothing was
+   * downloaded.
+   */
+  readonly verifiedBy?: HostArchiveVerification;
+}
+
+/** What {@link installHost} checked a downloaded archive against. */
+export type HostArchiveVerification = "release-pin" | "checksums";
+
+/**
+ * The SHA-256 of `version`'s `target` archive as the published package pins it in
+ * `host-archives.json` beside this module, or `undefined` when the package pins none for them: a
+ * source checkout or a CI build has no such file. A file that is there but unreadable is an
+ * error, so a damaged package never falls back to the checksums the mirror serves.
+ */
+function pinnedArchiveSha256(
+  version: string,
+  target: string,
+): string | undefined {
+  const file = new URL("./host-archives.json", import.meta.url);
+  let text: string;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw pinsError(file, (error as Error).message, error);
+  }
+  let pins: unknown;
+  try {
+    pins = JSON.parse(text);
+  } catch (error) {
+    throw pinsError(file, (error as Error).message, error);
+  }
+  const { version: pinnedVersion, archives } = (pins ?? {}) as {
+    version?: unknown;
+    archives?: unknown;
+  };
+  if (
+    typeof pinnedVersion !== "string" ||
+    typeof archives !== "object" ||
+    archives === null
+  )
+    throw pinsError(file, "it has no version and archives");
+  if (pinnedVersion !== version) return undefined;
+  const pinned = (archives as Record<string, unknown>)[target];
+  if (pinned === undefined) return undefined;
+  if (typeof pinned !== "string" || !/^[0-9a-f]{64}$/.test(pinned))
+    throw pinsError(file, `its ${target} entry is not a SHA-256`);
+  return pinned;
+}
+
+function pinsError(
+  file: URL,
+  reason: string,
+  cause?: unknown,
+): Alpha2HostInstallError {
+  return new Alpha2HostInstallError(
+    "CHECKSUM_MISMATCH",
+    `cannot read the release pins in ${fileURLToPath(file)} (${reason}); reinstall @alpha2-sh/node`,
+    cause === undefined ? undefined : { cause },
+  );
 }
 
 /**
  * Downloads the native archive of this package's version for this platform from the GitHub
- * release, checks it against the release's `checksums.sha256`, and unpacks it into the cache,
- * where `resolveHostBinary` finds it. An archive already installed is not downloaded again unless
- * `force` is set. The archive appears in the cache whole or not at all, so installs running at the
- * same time do not see each other's partial work, and `force` over a copy that is in use leaves
- * that copy as it was. Downloads go through `HTTPS_PROXY`/`HTTP_PROXY` (with `NO_PROXY`) when they
+ * release (or a mirror), checks it against the SHA-256 the published package pins for it, or
+ * against the release's `checksums.sha256` when the package pins none (a source checkout), and
+ * unpacks it into the cache, where `resolveHostBinary` finds it. With a pin, `checksums.sha256` is
+ * not fetched, so a mirror cannot substitute an archive. An archive already installed is not
+ * downloaded again unless `force` is set. The archive appears in the cache whole or not at all, so
+ * installs running at the same time do not see each other's partial work, and `force` over a copy
+ * that is in use leaves that copy as it was. Downloads go through `HTTPS_PROXY`/`HTTP_PROXY` (with `NO_PROXY`) when they
  * are set and trust the system's certificate store as well as Node's own. Linux systems need
  * glibc {@link LINUX_GLIBC_FLOOR} or later; musl systems are refused before anything is
  * downloaded.
@@ -314,6 +381,7 @@ export async function installHost(
   if (!options.force && (await installed()))
     return { hostPath, directory, downloaded: false };
 
+  const pinned = pinnedArchiveSha256(version, target);
   const archive = `${base}.${target === "win-x64" ? "zip" : "tar.gz"}`;
   const fromEnvironment = process.env.ALPHA2_HOST_DOWNLOAD_URL;
   const downloadUrl = (
@@ -327,17 +395,20 @@ export async function installHost(
   // Staged in the cache itself, so the finished directory moves into place with one rename.
   const staging = await mkdtemp(join(cacheDirectory, ".install-"));
   try {
-    const checksums = await downloadText(
-      `${releaseUrl}/checksums.sha256`,
-      "host",
-      options.signal,
-    );
-    const expected = checksumOf(checksums, archive);
-    if (expected === undefined)
-      throw new Alpha2HostInstallError(
-        "DOWNLOAD_FAILED",
-        `${releaseUrl}/checksums.sha256 lists no ${archive}`,
+    let expected = pinned;
+    if (expected === undefined) {
+      const checksums = await downloadText(
+        `${releaseUrl}/checksums.sha256`,
+        "host",
+        options.signal,
       );
+      expected = checksumOf(checksums, archive);
+      if (expected === undefined)
+        throw new Alpha2HostInstallError(
+          "DOWNLOAD_FAILED",
+          `${releaseUrl}/checksums.sha256 lists no ${archive}`,
+        );
+    }
 
     const archivePath = join(staging, archive);
     const actual = await downloadFile(
@@ -349,7 +420,10 @@ export async function installHost(
     if (actual !== expected)
       throw new Alpha2HostInstallError(
         "CHECKSUM_MISMATCH",
-        `${archive} has SHA-256 ${actual}; checksums.sha256 says ${expected}`,
+        `${archive} has SHA-256 ${actual}; ` +
+          (pinned === undefined
+            ? `checksums.sha256 says ${expected}`
+            : `the release pins ${expected}`),
       );
 
     const unpacked = join(staging, "unpacked");
@@ -378,7 +452,13 @@ export async function installHost(
       force: options.force === true,
       isInstalled: installed,
     });
-    return { hostPath, directory, downloaded };
+    if (!downloaded) return { hostPath, directory, downloaded };
+    return {
+      hostPath,
+      directory,
+      downloaded,
+      verifiedBy: pinned === undefined ? "checksums" : "release-pin",
+    };
   } finally {
     await rm(staging, { recursive: true, force: true });
   }

@@ -7,6 +7,7 @@ import dataclasses
 import hashlib
 import http.server
 import io
+import json
 import os
 import select
 import socket
@@ -14,6 +15,7 @@ import ssl
 import sys
 import tarfile
 import threading
+import tomllib
 import warnings
 import zipfile
 from collections.abc import Iterator
@@ -21,6 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
+from conftest import ROOT
 
 import alpha2
 import alpha2.install as install_module
@@ -32,7 +35,7 @@ from alpha2 import (
     install_openh264,
 )
 from alpha2.client import resolve_host_binary
-from alpha2.install import host_executable_name
+from alpha2.install import LINUX_GLIBC_FLOOR, host_executable_name
 
 supported = pytest.mark.skipif(host_target() is None, reason="no archive is published here")
 
@@ -41,6 +44,8 @@ supported = pytest.mark.skipif(host_target() is None, reason="no archive is publ
 class Release:
     base: str
     download_url: str
+    archive: str
+    archive_sha256: str
     requests: list[str] = field(default_factory=list)
 
 
@@ -67,7 +72,8 @@ def serve_release(tmp_path: Path) -> Iterator[object]:
             with tarfile.open(archive, "w:gz") as bundle:
                 bundle.add(root / base, arcname=base)
         data = archive.read_bytes()
-        digest = checksum or hashlib.sha256(data).hexdigest()
+        archive_sha256 = hashlib.sha256(data).hexdigest()
+        digest = checksum or archive_sha256
         files = {
             f"/v{alpha2.__version__}/{archive.name}": data,
             f"/v{alpha2.__version__}/checksums.sha256": (
@@ -78,7 +84,13 @@ def serve_release(tmp_path: Path) -> Iterator[object]:
         server = _serve(files, requests, tls=tls)
         servers.append(server)
         scheme = "https" if tls else "http"
-        return Release(base, f"{scheme}://127.0.0.1:{server.server_address[1]}", requests)
+        return Release(
+            base,
+            f"{scheme}://127.0.0.1:{server.server_address[1]}",
+            archive.name,
+            archive_sha256,
+            requests,
+        )
 
     yield serve
     for server in servers:
@@ -211,19 +223,21 @@ def test_musl_and_old_glibc_are_refused_before_any_download_naming_the_floor(
     release: Release = serve_release()  # type: ignore[operator]
     cache = tmp_path / "cache"
     monkeypatch.setattr(install_module, "_this_machine", lambda: ("linux", "x86_64"))
+    floor = LINUX_GLIBC_FLOOR
+    older = f"2.{int(floor.split('.')[1]) - 1}"
     cases = [
         (
             ("musl", None),
-            "alpha2-host is built for glibc 2.35 or later; this system's C library is musl "
+            f"alpha2-host is built for glibc {floor} or later; this system's C library is musl "
             "(Alpine and other musl distributions are not supported)",
         ),
         (("unknown", None), "this system's C library is not glibc"),
         (
-            ("glibc", "2.34"),
-            "needs glibc 2.35 or later; this system has glibc 2.34. Build it from source "
+            ("glibc", older),
+            f"needs glibc {floor} or later; this system has glibc {older}. Build it from source "
             "(cargo install alpha2-host with FFmpeg 8 development files) and set ALPHA2_HOST_PATH",
         ),
-        # Compared as numbers: 9 is less than 35.
+        # Compared as numbers: 2.9 sorts after the floor as text but is older.
         (("glibc", "2.9"), "this system has glibc 2.9."),
     ]
     for libc, message in cases:
@@ -235,6 +249,19 @@ def test_musl_and_old_glibc_are_refused_before_any_download_naming_the_floor(
             assert message in caught.value.message
     assert release.requests == []
     assert not cache.exists()
+
+
+def test_the_glibc_floor_is_the_minimum_os_the_ffmpeg_lock_file_names_for_linux() -> None:
+    lock = tomllib.loads((ROOT / "release" / "ffmpeg-lgpl" / "manifest.toml").read_text("utf-8"))
+    floors = {
+        target: asset["minimum_os"]
+        for target, asset in lock["assets"].items()
+        if target.startswith("linux-")
+    }
+    assert floors == {
+        "linux-x64": f"glibc {LINUX_GLIBC_FLOOR}",
+        "linux-arm64": f"glibc {LINUX_GLIBC_FLOOR}",
+    }
 
 
 @supported
@@ -292,7 +319,9 @@ def test_an_installed_archive_is_found_and_is_not_downloaded_again(
         on_progress=lambda received, total: progress.append((received, total)),
     )
     host_path = cache / release.base / "bin" / host_executable_name()
-    assert result == alpha2.InstallResult(host_path, cache / release.base, downloaded=True)
+    assert result == alpha2.InstallResult(
+        host_path, cache / release.base, downloaded=True, verified_by="checksums"
+    )
     assert progress[-1][0] == progress[-1][1]
     assert [path.name for path in cache.iterdir()] == [release.base]
     if sys.platform != "win32":
@@ -304,7 +333,9 @@ def test_an_installed_archive_is_found_and_is_not_downloaded_again(
 
     requests = len(release.requests)
     again = install_host(cache_directory=cache, download_url=release.download_url)
-    assert again.downloaded is False
+    assert again == alpha2.InstallResult(
+        host_path, cache / release.base, downloaded=False, verified_by=None
+    )
     assert len(release.requests) == requests
     forced = install_host(cache_directory=cache, download_url=release.download_url, force=True)
     assert forced.downloaded is True
@@ -321,6 +352,126 @@ def test_an_archive_whose_checksum_does_not_match_leaves_nothing_in_the_cache(
         install_host(cache_directory=cache, download_url=release.download_url)
     assert caught.value.code == "CHECKSUM_MISMATCH"
     assert list(cache.iterdir()) == []
+
+
+@pytest.fixture
+def pins_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Where the installer reads its release pins in this test, as a published wheel carries them
+    in ``alpha2/_host_archives.json``; nothing is written there until the test writes it."""
+    path = tmp_path / "pins" / "_host_archives.json"
+    path.parent.mkdir()
+    monkeypatch.setattr(install_module, "_pins_file", lambda: path)
+    return path
+
+
+def _checksums_requests(release: Release) -> list[str]:
+    return [path for path in release.requests if path.endswith("/checksums.sha256")]
+
+
+@supported
+def test_a_release_pin_wins_over_checksums_and_over_a_mirror(
+    tmp_path: Path,
+    serve_release: object,
+    pins_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from alpha2.__main__ import main
+
+    # The mirror serves an archive and a checksums file that agree with each other.
+    release: Release = serve_release()  # type: ignore[operator]
+    other = "b" * 64
+    pins_file.write_text(
+        json.dumps({"version": alpha2.__version__, "archives": {host_target(): other}})
+    )
+    cache = tmp_path / "cache"
+    with pytest.raises(Alpha2HostInstallError) as caught:
+        install_host(cache_directory=cache, download_url=release.download_url)
+    assert caught.value.code == "CHECKSUM_MISMATCH"
+    assert str(caught.value) == (
+        f"{release.archive} has SHA-256 {release.archive_sha256}; the release pins {other}"
+    )
+    assert list(cache.iterdir()) == []
+
+    pins_file.write_text(
+        json.dumps(
+            {
+                "version": alpha2.__version__,
+                "archives": {"linux-x64": other, host_target(): release.archive_sha256},
+            }
+        )
+    )
+    result = install_host(cache_directory=cache, download_url=release.download_url)
+    assert result.downloaded is True
+    assert result.verified_by == "release-pin"
+    assert _checksums_requests(release) == []
+
+    monkeypatch.setenv("ALPHA2_HOST_CACHE_DIR", str(tmp_path / "cli-cache"))
+    monkeypatch.setenv("ALPHA2_HOST_DOWNLOAD_URL", release.download_url)
+    assert main(["install"]) == 0
+    assert capsys.readouterr().out.endswith("(checked against the SHA-256 this package pins)\n")
+    assert _checksums_requests(release) == []
+
+
+@supported
+def test_without_a_pin_the_release_checksums_are_used(
+    tmp_path: Path,
+    serve_release: object,
+    pins_file: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from alpha2.__main__ import main
+
+    release: Release = serve_release()  # type: ignore[operator]
+    unpinned = install_host(cache_directory=tmp_path / "cache", download_url=release.download_url)
+    assert unpinned.verified_by == "checksums"
+    assert len(_checksums_requests(release)) == 1
+
+    # Pins of another version, or without this platform, do not apply.
+    for index, pins in enumerate(
+        [
+            {"version": "0.0.1", "archives": {host_target(): "b" * 64}},
+            {"version": alpha2.__version__, "archives": {}},
+        ]
+    ):
+        pins_file.write_text(json.dumps(pins))
+        result = install_host(
+            cache_directory=tmp_path / f"cache-{index}", download_url=release.download_url
+        )
+        assert result.verified_by == "checksums"
+    assert len(_checksums_requests(release)) == 3
+
+    monkeypatch.setenv("ALPHA2_HOST_CACHE_DIR", str(tmp_path / "cli-cache"))
+    monkeypatch.setenv("ALPHA2_HOST_DOWNLOAD_URL", release.download_url)
+    assert main(["install"]) == 0
+    assert capsys.readouterr().out == (
+        f"installed {tmp_path / 'cli-cache' / release.base / 'bin' / host_executable_name()} "
+        "(checked against the release's checksums.sha256)\n"
+    )
+
+
+@supported
+@pytest.mark.parametrize(
+    ("pins", "reason"),
+    [
+        ("{", r"cannot read the release pins in .*_host_archives\.json \("),
+        ('{"archives": {}}', r"\(it has no version and archives\)"),
+        (None, r"entry is not a SHA-256\); reinstall the alpha2 package$"),
+    ],
+)
+def test_a_damaged_pins_file_is_refused_before_anything_is_downloaded(
+    tmp_path: Path, serve_release: object, pins_file: Path, pins: str | None, reason: str
+) -> None:
+    release: Release = serve_release()  # type: ignore[operator]
+    if pins is None:
+        pins = json.dumps({"version": alpha2.__version__, "archives": {host_target(): "ABC"}})
+    pins_file.write_text(pins)
+    with pytest.raises(Alpha2HostInstallError, match=reason) as caught:
+        install_host(cache_directory=tmp_path / "cache", download_url=release.download_url)
+    assert caught.value.code == "CHECKSUM_MISMATCH"
+    assert not (tmp_path / "cache").exists()
+    assert release.requests == []
 
 
 @supported

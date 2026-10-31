@@ -60,9 +60,14 @@ run_case() {
 node_client='mkdir -p /client && tar -xzf /artifacts/alpha2-sh-node-*.tgz -C /client'
 cli=/client/package/dist/cli.js
 
-# The bundled host installs as root, its files are root's, and it exports on the CPU renderer.
+# The bundled host installs as root, its files are root's, and it exports on the CPU renderer. A
+# release tarball carries the archive pins and checks against them, a CI build the checksums.
 run_case node22-slim node:22-slim "set -e; $node_client
-ALPHA2_HOST_CACHE_DIR=/cache ALPHA2_HOST_DOWNLOAD_URL=\$MIRROR node $cli install
+checked=\"the release's checksums.sha256\"
+[ -f /client/package/dist/host-archives.json ] && checked='the SHA-256 this package pins'
+ALPHA2_HOST_CACHE_DIR=/cache ALPHA2_HOST_DOWNLOAD_URL=\$MIRROR node $cli install > /tmp/install
+cat /tmp/install
+grep -qF \"(checked against \$checked)\" /tmp/install
 host=/cache/alpha2-\$VERSION-linux-x64-bundled/bin/alpha2-host
 test \"\$(stat -c %u:%g \$host)\" = 0:0
 cd /workspace && \$host export --renderer cpu --project tests/cases/host-parity-complex-project.json \\
@@ -98,20 +103,55 @@ if [ "$before" != "$after" ]; then
   failed=1
 fi
 
-# glibc 2.34: pip refuses the manylinux_2_35 host wheel, and the client refuses naming the floor.
-run_case almalinux9 almalinux:9 "set -e
+# pip installs the wheels on a glibc above the floor, and the client installs the archive, checked
+# against the pin a release's alpha2 wheel carries (a CI build's has none: the checksums).
+run_case python312-slim python:3.12-slim "set -e
+python -m venv /v
+/v/bin/pip install -q certifi
+/v/bin/pip install -q --no-index --find-links /artifacts alpha2
+checked=\$(/v/bin/python -c 'import importlib.resources as r
+pinned = (r.files(\"alpha2\") / \"_host_archives.json\").is_file()
+print(\"the SHA-256 this package pins\" if pinned else \"the release\x27s checksums.sha256\")')
+ALPHA2_HOST_CACHE_DIR=/cache ALPHA2_HOST_DOWNLOAD_URL=\$MIRROR /v/bin/python -m alpha2 install > /tmp/install
+cat /tmp/install
+grep -qF \"(checked against \$checked)\" /tmp/install"
+
+# The glibc floor the archive was built for, as its copy of the FFmpeg lock file states it.
+floor=$(tar -xzOf "$archive" --wildcards '*/compliance/FFMPEG-RUNTIME.toml' |
+  awk -F ' *= *' '$0 == "[assets.linux-x64]" { active = 1; next }
+    active && /^\[/ { exit }
+    active && $1 == "minimum_os" { gsub(/"/, "", $2); sub(/^glibc /, "", $2); print $2; exit }')
+[ -n "$floor" ] || { echo "the archive's FFmpeg lock file names no glibc floor" >&2; exit 2; }
+echo "glibc floor $floor"
+
+# On a glibc at or above the floor, `pip install alpha2` brings the host wheel and the client
+# reports the host's capabilities. Below it, pip finds no host wheel for the system, and the
+# client alone refuses to install the archive, naming the floor and the system's glibc; on a
+# glibc older than the client's own extension module needs, pip refuses the client too.
+glibc_journey="set -e
 dnf install -y -q python3.11 python3.11-pip > /dev/null
 python3.11 -m venv /v
-if /v/bin/pip install -q --no-index --find-links /artifacts alpha2 2> /tmp/pip; then exit 1; fi
-/v/bin/pip install -q --no-index --find-links /artifacts --no-deps alpha2
-if ALPHA2_HOST_CACHE_DIR=/cache ALPHA2_HOST_DOWNLOAD_URL=\$MIRROR /v/bin/python -m alpha2 install 2> /tmp/err; then
-  exit 1
-fi
-cat /tmp/err
-grep -q 'needs glibc 2.35 or later; this system has glibc 2.34' /tmp/err"
-
-# Runs once the floor is glibc 2.28 (the manylinux_2_28 build).
-echo "SKIP almalinux8 (the glibc floor is 2.35)"
+system=\$(getconf GNU_LIBC_VERSION | cut -d ' ' -f 2)
+if [ \"\${system#2.}\" -ge \"\${FLOOR#2.}\" ]; then
+  /v/bin/pip install -q certifi
+  /v/bin/pip install -q --no-index --find-links /artifacts alpha2
+  ALPHA2_RENDERER=cpu /v/bin/python -m alpha2 capabilities > /tmp/capabilities.json
+  grep -q '\"encode\"' /tmp/capabilities.json
+else
+  if /v/bin/pip install -q --no-index --find-links /artifacts alpha2 2> /tmp/pip; then exit 1; fi
+  if ! /v/bin/pip install -q --no-index --find-links /artifacts --no-deps alpha2 2> /tmp/pip; then
+    cat /tmp/pip
+    grep -q 'No matching distribution found for alpha2' /tmp/pip
+    exit 0
+  fi
+  if ALPHA2_HOST_CACHE_DIR=/cache ALPHA2_HOST_DOWNLOAD_URL=\$MIRROR /v/bin/python -m alpha2 install 2> /tmp/err; then
+    exit 1
+  fi
+  cat /tmp/err
+  grep -q \"needs glibc \$FLOOR or later; this system has glibc \$system\" /tmp/err
+fi"
+run_case almalinux9 almalinux:9 "$glibc_journey" -e FLOOR="$floor"
+run_case almalinux8 almalinux:8 "$glibc_journey" -e FLOOR="$floor"
 
 # No CA store in the image: the client verifies with certifi's roots.
 published=${ALPHA2_PUBLISHED_VERSION:-$(curl -fsSI https://github.com/alpha2-sh/alpha2/releases/latest |

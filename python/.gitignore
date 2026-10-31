@@ -7,3 +7,5 @@ __pycache__/
 dist/
 *.so
 *.pyd
+# The release pins the release job writes before it builds the alpha2 wheel.
+alpha2/src/alpha2/_host_archives.json

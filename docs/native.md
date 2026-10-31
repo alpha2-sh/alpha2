@@ -22,14 +22,23 @@ alpha2-<version>-<target>-bundled/
 
 Keep `bin/` and `lib/` together when the archive is moved or packaged into an application: the programs find the libraries relative to themselves.
 
+Every archive (and every Python wheel) of a release has a build provenance attestation from the release workflow. Check a downloaded archive with the GitHub CLI before unpacking it:
+
+```sh
+gh attestation verify alpha2-<version>-<target>-bundled.tar.gz --repo alpha2-sh/alpha2
+```
+
+`checksums.sha256` comes from the same release as the archives, so it catches a damaged download but not a replaced one; the attestation, and the installers' pins below, do.
+
 ### The host cache
 
-`npx @alpha2-sh/node install` downloads the archive of the package's own version for the platform, checks it against `checksums.sha256`, and unpacks it into a cache that clients share. A client for another language that installs the host should use the same layout, so one download serves both:
+`npx @alpha2-sh/node install` downloads the archive of the package's own version for the platform, checks it, and unpacks it into a cache that clients share. A client for another language that installs the host should use the same layout, so one download serves both:
 
 - The cache is `ALPHA2_HOST_CACHE_DIR` when it is set; else `alpha2` in `$XDG_CACHE_HOME` (when it is an absolute path) or `~/.cache` on Linux, in `~/Library/Caches` on macOS, and in `%LOCALAPPDATA%` on Windows.
 - Each archive is unpacked under its own name, `<cache>/alpha2-<version>-<target>-bundled/`, and appears there whole: it is unpacked beside it and renamed into place. A client looks for `bin/alpha2-host` of its own version.
 - A forced reinstall renames the installed directory aside to `<name>.old-<random>` before the new one moves in, so a copy that is in use (a host from it is running) fails the install and stays whole; leftovers older than a day are removed by the next install.
 - The archives come from `<base>/v<version>/<archive>` with `<base>` `https://github.com/alpha2-sh/alpha2/releases/download`, or `ALPHA2_HOST_DOWNLOAD_URL`, a mirror with the same layout. Downloads honour `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`.
+- The published client packages pin the archives' SHA-256s: `@alpha2-sh/node` those of every target in `dist/host-archives.json`, an `alpha2` wheel that of its own target in `alpha2/_host_archives.json`, both as `{"version": "<version>", "archives": {"<target>": "<sha256>"}}`. With a pin for its version and target, an installer checks the download against it and does not fetch `checksums.sha256`, from GitHub or a mirror; without one (a source checkout), it checks against `<base>/v<version>/checksums.sha256`. Both report which (`verifiedBy` / `verified_by`: `release-pin` or `checksums`).
 
 ## `alpha2-host`
 

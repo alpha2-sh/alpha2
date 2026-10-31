@@ -77,6 +77,93 @@ jobs:
     with:
       targets: '["linux-x64","linux-arm64","macos-arm64","win-x64"]'
 
+  distribute:
+    name: Distribute ${{ matrix.target }}
+    # What the release publishes for each target: the archive the package job built, the Python
+    # wheels built from it (the alpha2 wheel pins its SHA-256), and their provenance attestations.
+    # distribute.sh hashes the archive it is given, so any step that changes the archive's bytes
+    # runs before it.
+    needs: [version, package]
+    if: ${{ !cancelled() && needs.version.result == 'success' && needs.package.result == 'success' }}
+    runs-on: >-
+      ${{ fromJSON('{"linux-x64":"ubuntu-22.04","linux-arm64":"ubuntu-24.04-arm","macos-arm64":"macos-26","win-x64":"windows-2025"}')[matrix.target] }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [linux-x64, linux-arm64, macos-arm64, win-x64]
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+
+      - run: pipx install uv==0.9.17
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: alpha2-native-${{ matrix.target }}
+          path: target/package-archives
+
+      - name: Pin the archive and build the wheels from it
+        run: scripts/release/distribute.sh "${{ matrix.target }}" target/package-archives/alpha2-*-bundled.*
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            target/alpha2-dist/${{ matrix.target }}/alpha2-*-bundled.*
+            target/alpha2-dist/${{ matrix.target }}/wheels/*.whl
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: alpha2-dist-${{ matrix.target }}
+          if-no-files-found: error
+          retention-days: 7
+          path: target/alpha2-dist/${{ matrix.target }}
+
+  pin-node:
+    name: Pin the archives in the Node package
+    # The npm packages come from the validate run, so a dispatch with skip-validate has none to pin.
+    needs: [validate, version, distribute]
+    if: >-
+      ${{ !cancelled() && needs.validate.result == 'success' && needs.version.result == 'success' &&
+      needs.distribute.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          sparse-checkout: scripts/release
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: alpha2-npm-packages
+          path: npm-packages
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: alpha2-dist-*
+          path: dist
+          merge-multiple: true
+      - name: Write the archive pins into the @alpha2-sh/node tarball
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: scripts/release/pin-node.sh "npm-packages/alpha2-sh-node-$VERSION.tgz" dist npm-pinned
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: alpha2-npm-node-pinned
+          if-no-files-found: error
+          retention-days: 7
+          path: npm-pinned/*.tgz
+
   publish-crates:
     name: Publish crates
     # A dispatch, with or without skip-validate, builds only: only a tag push publishes.
@@ -143,7 +230,7 @@ jobs:
     # A dispatch, with or without skip-validate, builds only: only a tag push publishes. The crates
     # go first, so npm and PyPI never get a release whose crates failed to publish.
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: [version, package, publish-crates]
+    needs: [version, pin-node, publish-crates]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: release
@@ -166,6 +253,12 @@ jobs:
         with:
           name: alpha2-npm-packages
           path: npm-packages
+      # @alpha2-sh/node is published with the archive pins pin-node wrote into it.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: alpha2-npm-node-pinned
+          path: npm-pinned
+      - run: cp -f npm-pinned/*.tgz npm-packages/
       - name: Publish the npm packages not on npm at this version
         env:
           VERSION: ${{ needs.version.outputs.version }}
@@ -188,7 +281,7 @@ jobs:
     # A dispatch, with or without skip-validate, builds only: only a tag push publishes. The crates
     # go first, as for npm.
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: [version, package, publish-crates]
+    needs: [version, distribute, publish-crates]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     # PyPI trusts this workflow (release.yml) in this environment for `alpha2` and `alpha2-host`.
@@ -197,12 +290,14 @@ jobs:
       contents: read
       id-token: write
     steps:
+      # The wheels distribute built from the published archives, which the alpha2 wheels pin.
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: alpha2-python-*
-          path: wheels
+          pattern: alpha2-dist-*
+          path: dist
           merge-multiple: true
       - name: Publish the wheels not on PyPI at this version
+        working-directory: dist
         run: |
           pipx install uv==0.9.17
           ls -l wheels
@@ -232,7 +327,7 @@ jobs:
           sparse-checkout: release/ffmpeg-lgpl/manifest.toml
           sparse-checkout-cone-mode: false
 
-      - name: Read the FFmpeg source location from the lock file
+      - name: Read the FFmpeg source location and the Linux glibc floor from the lock file
         id: ffmpeg
         run: |
           manifest=release/ffmpeg-lgpl/manifest.toml
@@ -242,10 +337,17 @@ jobs:
           ffmpeg_version="$(scalar ffmpeg_version)"
           test -n "$repository" && test -n "$release_tag" && test -n "$ffmpeg_version"
           echo "source_url=https://github.com/$repository/releases/download/$release_tag/ffmpeg-$ffmpeg_version.tar.xz" >> "$GITHUB_OUTPUT"
+          linux_minimum_os="$(awk -F ' *= *' '
+            $0 == "[assets.linux-x64]" { active = 1; next }
+            active && /^\[/ { exit }
+            active && $1 == "minimum_os" { gsub(/"/, "", $2); print $2; exit }' "$manifest")"
+          test -n "$linux_minimum_os"
+          echo "linux_minimum_os=$linux_minimum_os" >> "$GITHUB_OUTPUT"
 
+      # The archives as distribute hashed and attested them.
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          pattern: alpha2-native-*
+          pattern: alpha2-dist-*
           path: artifacts
           merge-multiple: true
 
@@ -265,13 +367,19 @@ jobs:
             To use a system FFmpeg 8 instead, build alpha2-host from source
             (`cargo install alpha2-host`).
 
-            Linux archives need glibc 2.35 or later and do not run on musl
+            Linux archives need ${{ steps.ffmpeg.outputs.linux_minimum_os }} or later and do not run on musl
             (Alpine). The macOS archive is ad-hoc signed and not notarized: a copy
             downloaded with a browser is quarantined, and macOS holds every program
             and library in it until the quarantine is removed
             (`xattr -dr com.apple.quarantine <unpacked folder>`). Installs through
             `npx @alpha2-sh/node install` or `python -m alpha2 install` are not
             quarantined.
+
+            Those installers check the archive against the SHA-256 that the npm
+            package and the Python wheel of this version pin, also when it comes
+            from a mirror. Every archive and wheel has a build provenance
+            attestation; check a downloaded archive with
+            `gh attestation verify <archive> --repo ${{ github.repository }}`.
 
             Every archive includes license notices, the exact FFmpeg runtime
             lock, build audit, dynamic dependency report, and source location.

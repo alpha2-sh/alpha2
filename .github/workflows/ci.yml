@@ -76,7 +76,8 @@ jobs:
               esac
               case $path in
                 release/* | scripts/build-native-release.sh | scripts/fetch-ffmpeg-sdk.sh | \
-                  scripts/packaging/* | python/alpha2-host/* | python/alpha2/pyproject.toml | \
+                  scripts/packaging/* | scripts/release/* | python/alpha2-host/* | \
+                  python/alpha2/pyproject.toml | python/alpha2/src/alpha2/install.py | \
                   packages/alpha2-node/src/install.ts | packages/alpha2-node/src/archive.ts | \
                   packages/alpha2-node/src/http.ts | Cargo.lock | rust-toolchain.toml | \
                   .github/workflows/package.yml | .github/workflows/release.yml)

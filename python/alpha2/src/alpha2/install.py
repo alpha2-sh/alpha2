@@ -12,6 +12,8 @@ import bz2
 import functools
 import glob
 import hashlib
+import importlib.resources
+import json
 import os
 import platform
 import re
@@ -31,7 +33,9 @@ import warnings
 import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
+from importlib.resources.abc import Traversable
 from pathlib import Path
+from typing import Literal
 
 from . import _native
 from .errors import Alpha2HostInstallError
@@ -275,6 +279,57 @@ class InstallResult:
     """The archive's directory in the cache, which holds ``bin/`` and ``lib/``."""
     downloaded: bool
     """Whether it was downloaded now; ``False`` when it was already installed."""
+    verified_by: Literal["release-pin", "checksums"] | None
+    """What the downloaded archive was checked against: the SHA-256 the published package pins
+    (``"release-pin"``), or the release's ``checksums.sha256`` when the package pins none for this
+    version and platform, as in a source checkout (``"checksums"``). ``None`` when nothing was
+    downloaded."""
+
+
+def _pins_file() -> Traversable:
+    """The release pins a published wheel carries beside this module."""
+    return importlib.resources.files("alpha2") / "_host_archives.json"
+
+
+def _pinned_archive_sha256(version: str, target: str) -> str | None:
+    """The SHA-256 of ``version``'s ``target`` archive as the published wheel pins it, or ``None``
+    when it pins none for them: a source checkout or a CI build has no pins file.
+
+    A file that is there but unreadable is an error, so a damaged package never falls back to the
+    checksums the mirror serves.
+    """
+    file = _pins_file()
+    try:
+        text = file.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeDecodeError) as error:
+        raise _pins_error(file, str(error)) from error
+    try:
+        pins = json.loads(text)
+    except ValueError as error:
+        raise _pins_error(file, str(error)) from error
+    if (
+        not isinstance(pins, dict)
+        or not isinstance(pins.get("version"), str)
+        or not isinstance(pins.get("archives"), dict)
+    ):
+        raise _pins_error(file, "it has no version and archives")
+    if pins["version"] != version:
+        return None
+    pinned = pins["archives"].get(target)
+    if pinned is None:
+        return None
+    if not isinstance(pinned, str) or not re.fullmatch(r"[0-9a-f]{64}", pinned):
+        raise _pins_error(file, f"its {target} entry is not a SHA-256")
+    return pinned
+
+
+def _pins_error(file: Traversable, reason: str) -> Alpha2HostInstallError:
+    return Alpha2HostInstallError(
+        "CHECKSUM_MISMATCH",
+        f"cannot read the release pins in {file} ({reason}); reinstall the alpha2 package",
+    )
 
 
 def install_host(
@@ -289,10 +344,13 @@ def install_host(
 
     The archive comes from the GitHub release (or ``download_url``, a mirror of
     :data:`HOST_DOWNLOAD_URL`; default ``ALPHA2_HOST_DOWNLOAD_URL`` when set), is checked against
-    the release's ``checksums.sha256``, and is unpacked into the cache, where the client finds
-    it. An archive already installed is not downloaded again unless ``force`` is set. The archive
-    appears in the cache whole or not at all, so installs running at the same time do not see each
-    other's partial work, and ``force`` over a copy that is in use leaves that copy as it was.
+    the SHA-256 the published wheel pins for it, or against the release's ``checksums.sha256``
+    when the wheel pins none (a source checkout), and is unpacked into the cache, where the client
+    finds it. With a pin, ``checksums.sha256`` is not fetched, so a mirror cannot substitute an
+    archive. An archive already installed is not downloaded again unless ``force`` is set. The
+    archive appears in the cache whole or not at all, so installs running at the same time do not
+    see each other's partial work, and ``force`` over a copy that is in use leaves that copy as it
+    was.
     Downloads honour ``HTTPS_PROXY``/``HTTP_PROXY``/``NO_PROXY`` and verify with the operating
     system's certificate store (``certifi`` on a Linux system without one). Linux systems need
     glibc :data:`LINUX_GLIBC_FLOOR` or later; musl systems are refused before anything is
@@ -312,8 +370,9 @@ def install_host(
     directory = cache / base
     host_path = directory / "bin" / host_executable_name()
     if not force and host_path.is_file():
-        return InstallResult(host_path, directory, downloaded=False)
+        return InstallResult(host_path, directory, downloaded=False, verified_by=None)
 
+    pinned = _pinned_archive_sha256(version, target)
     archive = f"{base}.{'zip' if target == 'win-x64' else 'tar.gz'}"
     from_environment = os.environ.get("ALPHA2_HOST_DOWNLOAD_URL", "")
     url = download_url or (from_environment if from_environment.strip() else HOST_DOWNLOAD_URL)
@@ -324,20 +383,22 @@ def install_host(
     # Staged in the cache itself, so the finished directory moves into place with one rename.
     staging = Path(tempfile.mkdtemp(prefix=".install-", dir=cache))
     try:
-        listing = _download_text(f"{release_url}/checksums.sha256", "host", cancel)
-        expected = _checksum_of(listing, archive)
+        expected = pinned
         if expected is None:
-            raise Alpha2HostInstallError(
-                "DOWNLOAD_FAILED", f"{release_url}/checksums.sha256 lists no {archive}"
-            )
+            listing = _download_text(f"{release_url}/checksums.sha256", "host", cancel)
+            expected = _checksum_of(listing, archive)
+            if expected is None:
+                raise Alpha2HostInstallError(
+                    "DOWNLOAD_FAILED", f"{release_url}/checksums.sha256 lists no {archive}"
+                )
         archive_path = staging / archive
         actual = _download_file(
             f"{release_url}/{archive}", archive_path, "host", on_progress, cancel
         )
         if actual != expected:
+            source = "checksums.sha256 says" if pinned is None else "the release pins"
             raise Alpha2HostInstallError(
-                "CHECKSUM_MISMATCH",
-                f"{archive} has SHA-256 {actual}; checksums.sha256 says {expected}",
+                "CHECKSUM_MISMATCH", f"{archive} has SHA-256 {actual}; {source} {expected}"
             )
         unpacked = staging / "unpacked"
         unpacked.mkdir()
@@ -350,7 +411,10 @@ def install_host(
         downloaded = _replace_directory(
             staged, directory, force=force, is_installed=host_path.is_file
         )
-        return InstallResult(host_path, directory, downloaded=downloaded)
+        verified_by: Literal["release-pin", "checksums"] | None = None
+        if downloaded:
+            verified_by = "checksums" if pinned is None else "release-pin"
+        return InstallResult(host_path, directory, downloaded, verified_by)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
 

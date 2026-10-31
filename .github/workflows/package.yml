@@ -38,14 +38,29 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
+      # A manylinux container has no rustup; the hosted runners do.
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
+        run: |
+          if ! command -v rustup > /dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+              sh -s -- -y --no-modify-path --default-toolchain none --profile minimal
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup toolchain install
 
       - run: cargo install cargo-about --version 0.9.2 --locked --features cli
 
+      # On the Ubuntu runners, or as root in a manylinux (AlmaLinux) container, where bindgen also
+      # needs libclang.
       - name: Install Linux packaging tools
         if: startsWith(matrix.target, 'linux-')
-        run: sudo apt-get update && sudo apt-get install --yes pkg-config unzip
+        run: |
+          if command -v dnf > /dev/null; then
+            dnf install --assumeyes clang-devel pkgconf-pkg-config unzip
+          else
+            sudo apt-get update && sudo apt-get install --yes pkg-config unzip
+          fi
 
       - name: Install macOS packaging tools
         if: startsWith(matrix.target, 'macos-')
@@ -59,37 +74,17 @@ jobs:
       - name: Build the native archive
         run: scripts/build-native-release.sh bundled "${{ matrix.target }}"
 
-      # The Python wheels of this target: `alpha2-host` repackages the bundled archive just built,
-      # and `alpha2` is the abi3 extension module with the client, which depends on it.
-      - name: Build Python wheels
+      # The Python wheels of this target from the archive just built, installed and checked the way
+      # the release's distribute job does it: `pip install alpha2` brings the host it pins, and the
+      # client finds it.
+      - name: Build Python wheels, install them and find the host
         run: |
           pipx install uv==0.9.17
-          uv run --no-project --python 3.12 python/alpha2-host/build_wheel.py \
-            target/alpha2-native-release/archives/alpha2-*-bundled.* target/python-wheels
-          # From the package directory: maturin takes the name, metadata and crate from its
-          # pyproject.toml, which a bare --manifest-path would skip.
-          (cd python/alpha2 && uvx maturin@1.15.0 build --release --out ../../target/python-wheels)
-          ls -l target/python-wheels
-
-      # From the two wheels (and the trust packages alpha2 depends on), `pip install alpha2` brings
-      # the host it pins, and the client finds it inside the alpha2-host package, which starts with
-      # the libraries beside it.
-      - name: Install the Python wheels and find the host
-        run: |
           check="$RUNNER_TEMP/wheel-check"
-          uv venv --python 3.11 "$check"
-          uv pip install --python "$check" \
-            "truststore>=0.10; sys_platform == 'darwin' or sys_platform == 'win32'" \
-            "certifi>=2024.2.2; sys_platform == 'linux'"
-          uv pip install --python "$check" --no-index --find-links target/python-wheels alpha2
+          scripts/release/build-wheels.sh target/alpha2-native-release/archives/alpha2-*-bundled.* \
+            target/python-wheels "$check"
           python="$check/bin/python"
           [ -d "$check/Scripts" ] && python="$check/Scripts/python"
-          host="$("$python" -c '
-          import pathlib, alpha2, alpha2_host
-          found = alpha2.resolve_host_binary()
-          assert found == pathlib.Path(alpha2_host.host_path()), found
-          print(found)')"
-          { "$host" 2>&1 || true; } | grep "usage: alpha2-host"
           echo "PYTHON_CHECK=$python" >> "$GITHUB_ENV"
 
       - name: Build the Node client package
@@ -98,16 +93,6 @@ jobs:
           npm run build:js --workspace alpha2
           npm run build --workspace @alpha2-sh/node
           npm pack --workspace @alpha2-sh/node --pack-destination target/npm-pack
-
-      - name: Install journeys in containers
-        if: matrix.target == 'linux-x64'
-        run: |
-          journeys="$RUNNER_TEMP/journeys"
-          mkdir -p "$journeys"
-          cp target/alpha2-native-release/archives/*.tar.gz target/python-wheels/*.whl \
-            target/npm-pack/*.tgz "$journeys/"
-          node --test scripts/packaging/*.test.mjs
-          scripts/packaging/install-journeys.sh "$journeys"
 
       # windows-latest's ANSI code page is 1252: Hangul and the emoji are outside it.
       - name: Install into caches named outside the code page
@@ -139,3 +124,51 @@ jobs:
           if-no-files-found: error
           retention-days: 7
           path: target/python-wheels/*.whl
+
+      - name: Upload the Node client package for the install journeys
+        if: matrix.target == 'linux-x64'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ inputs.upload-name-prefix }}journeys-node-client
+          if-no-files-found: error
+          retention-days: 1
+          path: target/npm-pack/*.tgz
+
+  # The install journeys start Docker containers, which a job running in a container cannot, so
+  # they run on the bare runner from what the linux-x64 package job uploaded.
+  journeys:
+    name: Install journeys (linux-x64)
+    needs: package
+    if: ${{ !cancelled() && contains(fromJSON(inputs.targets), 'linux-x64') }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ inputs.upload-name-prefix }}alpha2-native-linux-x64
+          path: ${{ runner.temp }}/journeys
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ inputs.upload-name-prefix }}alpha2-python-linux-x64
+          path: ${{ runner.temp }}/journeys
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ inputs.upload-name-prefix }}journeys-node-client
+          path: ${{ runner.temp }}/journeys
+
+      - name: Install journeys in containers
+        run: |
+          pipx install uv==0.9.17
+          node --test scripts/packaging/*.test.mjs
+          scripts/packaging/install-journeys.sh "$RUNNER_TEMP/journeys"

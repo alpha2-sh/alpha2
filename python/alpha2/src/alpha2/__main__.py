@@ -67,8 +67,13 @@ def _install(arguments: argparse.Namespace) -> int:
             "set ALPHA2_OPENH264=0 to turn it off."
         )
         return 0
+    checked = (
+        "the SHA-256 this package pins"
+        if result.verified_by == "release-pin"
+        else "the release's checksums.sha256"
+    )
     print(
-        f"installed {result.host_path}"
+        f"installed {result.host_path} (checked against {checked})"
         if result.downloaded
         else f"already installed: {result.host_path}"
     )

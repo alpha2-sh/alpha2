@@ -89,7 +89,10 @@ async function main(): Promise<number> {
     if (shown >= 0) process.stderr.write("\n");
     console.log(
       result.downloaded
-        ? `installed ${result.hostPath}`
+        ? `installed ${result.hostPath} (checked against ` +
+            (result.verifiedBy === "release-pin"
+              ? "the SHA-256 this package pins)"
+              : "the release's checksums.sha256)")
         : `already installed: ${result.hostPath}`,
     );
     return 0;

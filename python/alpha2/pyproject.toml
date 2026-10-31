@@ -60,6 +60,9 @@ module-name = "alpha2._native"
 python-source = "src"
 # Bytecode a local run left beside the sources is not part of the package.
 exclude = ["src/alpha2/__pycache__/**"]
+# The release pins: the release job writes them (scripts/release/distribute.sh) before it builds
+# the wheel, and git ignores them.
+include = [{ path = "src/alpha2/_host_archives.json", format = "wheel" }]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

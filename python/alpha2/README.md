@@ -232,7 +232,10 @@ version, the archive of this version in the shared cache, then `PATH`.
 
 `python -m alpha2 install` downloads the release archive into the cache (`ALPHA2_HOST_CACHE_DIR`,
 else `~/.cache/alpha2`, `~/Library/Caches/alpha2` or `%LOCALAPPDATA%\alpha2`), the one
-`@alpha2-sh/node` uses, so one download serves both. Or unpack the archive from the GitHub release
+`@alpha2-sh/node` uses, so one download serves both. It checks the archive against the SHA-256
+the published wheel pins for it, so a mirror cannot substitute one; a source checkout, which has no
+pin, checks against the release's `checksums.sha256` instead (`InstallResult.verified_by` says
+which). Or unpack the archive from the GitHub release
 yourself and point `ALPHA2_HOST_PATH` at its `bin/alpha2-host`. On macOS an archive downloaded
 with a browser is quarantined, and the client refuses it (`HOST_QUARANTINED`): run
 `xattr -dr com.apple.quarantine <unpacked dir>`, or download with `curl -LO`. To use a system

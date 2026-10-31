@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  cp,
   mkdir,
   mkdtemp,
   readdir,
@@ -30,7 +31,11 @@ import {
   resolveHostBinary,
 } from "../dist/index.js";
 import { HTTP_SETTINGS } from "../dist/http.js";
-import { INSTALL_MACHINE, OPENH264_TARGETS } from "../dist/install.js";
+import {
+  INSTALL_MACHINE,
+  LINUX_GLIBC_FLOOR,
+  OPENH264_TARGETS,
+} from "../dist/install.js";
 
 const { version } = JSON.parse(
   await readFile(new URL("../package.json", import.meta.url), "utf8"),
@@ -85,7 +90,8 @@ async function serveRelease({ checksum, https } = {}) {
     ]);
   else execFileSync("tar", ["-czf", archivePath, "-C", root, base]);
   const bytes = await readFile(archivePath);
-  const digest = checksum ?? createHash("sha256").update(bytes).digest("hex");
+  const archiveSha256 = createHash("sha256").update(bytes).digest("hex");
+  const digest = checksum ?? archiveSha256;
   const files = new Map([
     [`/v${version}/${archive}`, bytes],
     [
@@ -109,6 +115,7 @@ async function serveRelease({ checksum, https } = {}) {
   after(() => server.close());
   return {
     base,
+    archiveSha256,
     requests,
     downloadUrl: `${https ? "https" : "http"}://127.0.0.1:${server.address().port}`,
   };
@@ -204,24 +211,27 @@ test(
     const release = await serveRelease();
     const cacheDirectory = await scratch("alpha2-node-cache-");
     standIn(t, { platform: () => "linux", arch: () => "x64" });
+    const floor = LINUX_GLIBC_FLOOR;
+    const older = `2.${Number(floor.split(".")[1]) - 1}`;
     const cases = [
       [
         { kind: "musl" },
-        /alpha2-host is built for glibc 2\.35 or later; this system's C library is musl \(Alpine and other musl distributions are not supported\)/,
+        `alpha2-host is built for glibc ${floor} or later; this system's C library is musl (Alpine and other musl distributions are not supported)`,
       ],
       [
         { kind: "unknown" },
-        /glibc 2\.35 or later; this system's C library is not glibc/,
+        `glibc ${floor} or later; this system's C library is not glibc`,
       ],
       [
-        { kind: "glibc", version: "2.34" },
-        /needs glibc 2\.35 or later; this system has glibc 2\.34\. Build it from source \(cargo install alpha2-host with FFmpeg 8 development files\) and set ALPHA2_HOST_PATH/,
+        { kind: "glibc", version: older },
+        `needs glibc ${floor} or later; this system has glibc ${older}. Build it from source (cargo install alpha2-host with FFmpeg 8 development files) and set ALPHA2_HOST_PATH`,
       ],
-      // Compared as numbers: 9 is less than 35.
-      [{ kind: "glibc", version: "2.9" }, /this system has glibc 2\.9\./],
+      // Compared as numbers: 2.9 sorts after the floor as text but is older.
+      [{ kind: "glibc", version: "2.9" }, "this system has glibc 2.9."],
     ];
-    for (const [libc, message] of cases) {
+    for (const [libc, text] of cases) {
       INSTALL_MACHINE.linuxLibc = () => libc;
+      const message = new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
       for (const install of [installHost, installOpenH264])
         await assert.rejects(
           install({ cacheDirectory, downloadUrl: release.downloadUrl }),
@@ -232,6 +242,24 @@ test(
     assert.deepEqual(await readdir(cacheDirectory), []);
   },
 );
+
+test("the glibc floor is the minimum_os the FFmpeg lock file names for the Linux archives", async () => {
+  const manifest = await readFile(
+    new URL("../../../release/ffmpeg-lgpl/manifest.toml", import.meta.url),
+    "utf8",
+  );
+  const floors = Object.fromEntries(
+    [
+      ...manifest.matchAll(
+        /^\[assets\.(linux-[^\]]+)\]\r?\n(?:[^[\r\n].*\n)*?minimum_os = "([^"]*)"/gm,
+      ),
+    ].map(([, target, minimumOs]) => [target, minimumOs]),
+  );
+  assert.deepEqual(floors, {
+    "linux-x64": `glibc ${LINUX_GLIBC_FLOOR}`,
+    "linux-arm64": `glibc ${LINUX_GLIBC_FLOOR}`,
+  });
+});
 
 test("the cache is ALPHA2_HOST_CACHE_DIR when it is set, and a blank one is unset", async () => {
   const root = await scratch("alpha2-node-cache-");
@@ -270,6 +298,7 @@ test(
       hostPath,
       directory: join(cacheDirectory, release.base),
       downloaded: true,
+      verifiedBy: "checksums",
     });
     assert.equal(progress.received, progress.total);
     assert.deepEqual(await readdir(cacheDirectory), [release.base]);
@@ -302,10 +331,13 @@ test(
     }
 
     const requests = release.requests.length;
-    assert.equal(
-      (await installHost({ cacheDirectory, downloadUrl: release.downloadUrl }))
-        .downloaded,
-      false,
+    assert.deepEqual(
+      await installHost({ cacheDirectory, downloadUrl: release.downloadUrl }),
+      {
+        hostPath,
+        directory: join(cacheDirectory, release.base),
+        downloaded: false,
+      },
     );
     assert.equal(release.requests.length, requests);
     assert.equal(
@@ -597,6 +629,146 @@ test(
       { name: "Alpha2HostInstallError", code: "CHECKSUM_MISMATCH" },
     );
     assert.deepEqual(await readdir(cacheDirectory), []);
+  },
+);
+
+/**
+ * This package's built installer copied beside its manifest into a scratch directory, with
+ * `pins` (an object, or text as it is) written as its `dist/host-archives.json`, as the published
+ * package carries it. Resolves with that copy's `installHost`.
+ */
+async function pinnedInstaller(pins) {
+  const root = await scratch("alpha2-node-pinned-");
+  await cp(
+    fileURLToPath(new URL("../dist", import.meta.url)),
+    join(root, "dist"),
+    {
+      recursive: true,
+    },
+  );
+  await cp(
+    fileURLToPath(new URL("../package.json", import.meta.url)),
+    join(root, "package.json"),
+  );
+  await writeFile(
+    join(root, "dist", "host-archives.json"),
+    typeof pins === "string" ? pins : JSON.stringify(pins),
+  );
+  const module = await import(
+    pathToFileURL(join(root, "dist", "install.js")).href
+  );
+  return module.installHost;
+}
+
+const checksumsRequest = (requests) =>
+  requests.filter((path) => path.endsWith("/checksums.sha256"));
+
+test(
+  "a release pin wins over checksums.sha256 and over a mirror",
+  { skip: !supported && "no archive is published for this platform" },
+  async () => {
+    // The mirror serves an archive and a checksums file that agree with each other.
+    const release = await serveRelease();
+    const other = "b".repeat(64);
+    const pinnedElsewhere = await pinnedInstaller({
+      version,
+      archives: { [hostTarget()]: other },
+    });
+    const cacheDirectory = await scratch("alpha2-node-cache-");
+    await assert.rejects(
+      pinnedElsewhere({ cacheDirectory, downloadUrl: release.downloadUrl }),
+      {
+        code: "CHECKSUM_MISMATCH",
+        message: `${release.base}.${process.platform === "win32" ? "zip" : "tar.gz"} has SHA-256 ${release.archiveSha256}; the release pins ${other}`,
+      },
+    );
+    assert.deepEqual(await readdir(cacheDirectory), []);
+
+    const pinned = await pinnedInstaller({
+      version,
+      archives: { "linux-x64": other, [hostTarget()]: release.archiveSha256 },
+    });
+    const result = await pinned({
+      cacheDirectory,
+      downloadUrl: release.downloadUrl,
+    });
+    assert.equal(result.downloaded, true);
+    assert.equal(result.verifiedBy, "release-pin");
+    assert.deepEqual(checksumsRequest(release.requests), []);
+  },
+);
+
+test(
+  "without a pin the release checksums are used",
+  { skip: !supported && "no archive is published for this platform" },
+  async () => {
+    const release = await serveRelease();
+    const unpinned = await installHost({
+      cacheDirectory: await scratch("alpha2-node-cache-"),
+      downloadUrl: release.downloadUrl,
+    });
+    assert.equal(unpinned.verifiedBy, "checksums");
+    assert.equal(checksumsRequest(release.requests).length, 1);
+
+    // Pins of another version, or without this platform, do not apply.
+    for (const pins of [
+      { version: "0.0.1", archives: { [hostTarget()]: "b".repeat(64) } },
+      { version, archives: {} },
+    ]) {
+      const result = await (
+        await pinnedInstaller(pins)
+      )({
+        cacheDirectory: await scratch("alpha2-node-cache-"),
+        downloadUrl: release.downloadUrl,
+      });
+      assert.equal(result.verifiedBy, "checksums");
+    }
+    assert.equal(checksumsRequest(release.requests).length, 3);
+
+    const cacheDirectory = await scratch("alpha2-node-cache-");
+    const { stdout } = await run(
+      process.execPath,
+      [fileURLToPath(new URL("../dist/cli.js", import.meta.url)), "install"],
+      {
+        env: {
+          ...process.env,
+          ALPHA2_HOST_CACHE_DIR: cacheDirectory,
+          ALPHA2_HOST_DOWNLOAD_URL: release.downloadUrl,
+        },
+      },
+    );
+    assert.equal(
+      stdout,
+      `installed ${join(cacheDirectory, release.base, "bin", hostExecutableName())} ` +
+        "(checked against the release's checksums.sha256)\n",
+    );
+  },
+);
+
+test(
+  "a damaged pins file is refused before anything is downloaded",
+  { skip: !supported && "no archive is published for this platform" },
+  async () => {
+    const release = await serveRelease();
+    for (const [pins, reason] of [
+      ["{", /cannot read the release pins in .*host-archives\.json \(/],
+      [{ archives: {} }, /\(it has no version and archives\)/],
+      [
+        { version, archives: { [hostTarget()]: "ABC" } },
+        /its [a-z0-9-]+ entry is not a SHA-256\); reinstall @alpha2-sh\/node$/,
+      ],
+    ]) {
+      const cacheDirectory = await scratch("alpha2-node-cache-");
+      await assert.rejects(
+        (await pinnedInstaller(pins))({
+          cacheDirectory,
+          downloadUrl: release.downloadUrl,
+        }),
+        { code: "CHECKSUM_MISMATCH", message: reason },
+      );
+      assert.deepEqual(await readdir(cacheDirectory), []);
+    }
+    assert.deepEqual(release.requests, []);
   },
 );
 

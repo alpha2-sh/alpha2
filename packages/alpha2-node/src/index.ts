@@ -69,6 +69,7 @@ export {
   OPENH264_DOWNLOAD_URL,
 } from "./install.js";
 export type {
+  HostArchiveVerification,
   HostInstallErrorCode,
   InstallHostOptions,
   InstallHostResult,
