@@ -104,7 +104,7 @@ jobs:
         shell: bash
         run: |
           echo "image: $ImageOS $ImageVersion"
-          rustc -vV | head -1
+          rustc --version
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL \
@@ -164,7 +164,7 @@ jobs:
         shell: bash
         run: |
           echo "image: $ImageOS $ImageVersion"
-          rustc -vV | head -1
+          rustc --version
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL \
@@ -216,7 +216,7 @@ jobs:
         shell: bash
         run: |
           echo "image: $ImageOS $ImageVersion"
-          rustc -vV | head -1
+          rustc --version
       - name: Install native media build dependencies
         run: >-
           sudo apt-get update && sudo apt-get install --yes
@@ -282,7 +282,7 @@ jobs:
         shell: bash
         run: |
           echo "image: $ImageOS $ImageVersion"
-          rustc -vV | head -1
+          rustc --version
       - name: Install native media build dependencies
         run: >-
           sudo apt-get update && sudo apt-get install --yes
@@ -368,7 +368,7 @@ jobs:
         shell: bash
         run: |
           echo "image: $ImageOS $ImageVersion"
-          rustc -vV | head -1
+          rustc --version
       - name: Install native media build dependencies
         run: >-
           sudo apt-get update && sudo apt-get install --yes
@@ -465,7 +465,7 @@ jobs:
         shell: bash
         run: |
           echo "image: $ImageOS $ImageVersion"
-          rustc -vV | head -1
+          rustc --version
       - name: Install native media build dependencies
         run: >-
           sudo apt-get update && sudo apt-get install --yes
@@ -528,7 +528,7 @@ jobs:
         shell: bash
         run: |
           echo "image: $ImageOS $ImageVersion"
-          rustc -vV | head -1
+          rustc --version
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -552,7 +552,7 @@ jobs:
         shell: bash
         run: |
           echo "image: $ImageOS $ImageVersion"
-          rustc -vV | head -1
+          rustc --version
       - name: Install native media build dependencies
         run: >-
           sudo apt-get update && sudo apt-get install --yes
@@ -589,7 +589,7 @@ jobs:
         shell: bash
         run: |
           echo "image: $ImageOS $ImageVersion"
-          rustc -vV | head -1
+          rustc --version
       - name: Install native media build dependencies
         run: >-
           sudo apt-get update && sudo apt-get install --yes
@@ -631,7 +631,7 @@ jobs:
         shell: bash
         run: |
           echo "image: $ImageOS $ImageVersion"
-          rustc -vV | head -1
+          rustc --version
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -652,7 +652,7 @@ jobs:
         shell: bash
         run: |
           echo "image: $ImageOS $ImageVersion"
-          rustc -vV | head -1
+          rustc --version
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -685,7 +685,7 @@ jobs:
         shell: bash
         run: |
           echo "image: $ImageOS $ImageVersion"
-          rustc -vV | head -1
+          rustc --version
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -783,7 +783,7 @@ jobs:
         shell: bash
         run: |
           echo "image: $ImageOS $ImageVersion"
-          rustc -vV | head -1
+          rustc --version
       # The toolchain check runs the pinned rustc.
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
@@ -837,7 +837,7 @@ jobs:
         shell: bash
         run: |
           echo "image: $ImageOS $ImageVersion"
-          rustc -vV | head -1
+          rustc --version
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -967,7 +967,7 @@ jobs:
         shell: bash
         run: |
           echo "image: $ImageOS $ImageVersion"
-          rustc -vV | head -1
+          rustc --version
       - name: Install native media build dependencies
         if: runner.os == 'Linux'
         run: >-
@@ -1069,7 +1069,7 @@ jobs:
         shell: bash
         run: |
           echo "image: $ImageOS $ImageVersion"
-          rustc -vV | head -1
+          rustc --version
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -1129,7 +1129,7 @@ jobs:
         shell: bash
         run: |
           echo "image: $ImageOS $ImageVersion"
-          rustc -vV | head -1
+          rustc --version
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -1152,7 +1152,7 @@ jobs:
         shell: bash
         run: |
           echo "image: $ImageOS $ImageVersion"
-          rustc -vV | head -1
+          rustc --version
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check
@@ -1174,7 +1174,7 @@ jobs:
         shell: bash
         run: |
           echo "image: $ImageOS $ImageVersion"
-          rustc -vV | head -1
+          rustc --version
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       # The npm packages a release tag publishes come from this job, so a tag builds them and their
@@ -1254,7 +1254,7 @@ jobs:
         shell: bash
         run: |
           echo "image: $ImageOS $ImageVersion"
-          rustc -vV | head -1
+          rustc --version
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -1318,7 +1318,7 @@ jobs:
         shell: bash
         run: |
           echo "image: $ImageOS $ImageVersion"
-          rustc -vV | head -1
+          rustc --version
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -1399,7 +1399,7 @@ jobs:
         shell: bash
         run: |
           echo "image: $ImageOS $ImageVersion"
-          rustc -vV | head -1
+          rustc --version
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -1477,7 +1477,7 @@ jobs:
         shell: bash
         run: |
           echo "image: $ImageOS $ImageVersion"
-          rustc -vV | head -1
+          rustc --version
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2

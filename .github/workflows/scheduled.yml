@@ -46,7 +46,7 @@ jobs:
       - name: Provenance
         run: |
           echo "image: $ImageOS $ImageVersion"
-          rustc -vV | head -1
+          rustc --version
       - name: Install the nightly toolchain
         run: rustup toolchain install nightly --profile minimal
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -77,7 +77,7 @@ jobs:
       - name: Provenance
         run: |
           echo "image: $ImageOS $ImageVersion"
-          rustc -vV | head -1
+          rustc --version
       - name: Install the nightly toolchain with Miri
         run: rustup toolchain install nightly --profile minimal --component miri
       - run: scripts/miri.sh
