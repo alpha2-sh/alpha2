@@ -697,6 +697,8 @@ pub struct VulkanDeviceInfo {
     pub sampler_ycbcr_conversion: u32,
     /// Whether `videoMaintenance1` is enabled on the device.
     pub video_maintenance1: u32,
+    /// Whether `videoDecodeVP9` (`VK_KHR_video_decode_vp9`) is enabled on the device.
+    pub video_decode_vp9: u32,
     /// Enabled instance extension names.
     pub instance_extensions: Vec<String>,
     /// Enabled device extension names.
@@ -900,6 +902,7 @@ pub unsafe fn create_vulkan_device_context(
         synchronization2: info.synchronization2,
         sampler_ycbcr_conversion: info.sampler_ycbcr_conversion,
         video_maintenance1: info.video_maintenance1,
+        video_decode_vp9: info.video_decode_vp9,
         instance_extensions: instance_ptrs.as_ptr(),
         instance_extension_count: u32::try_from(instance_ptrs.len())
             .map_err(|_| BridgeError::InvalidInput("too many Vulkan extensions"))?,
@@ -1395,6 +1398,9 @@ pub enum BridgeError {
     /// The loaded `FFmpeg` was built without this hardware device type: which
     /// ones it has is a property of the runtime libraries, not of this build.
     MissingHwDevice(&'static str),
+    /// A decoded surface the GPU interop does not take, described with what
+    /// the surface is (its pixel format, size and planes) and why.
+    UnsupportedSurface(String),
 }
 
 /// How a planar or semi-planar YCbCr pixel format stores its samples, as
@@ -1463,6 +1469,7 @@ impl fmt::Display for BridgeError {
             Self::MissingHwDevice(kind) => {
                 write!(formatter, "the loaded FFmpeg has no {kind} hardware device")
             }
+            Self::UnsupportedSurface(description) => formatter.write_str(description),
         }
     }
 }
@@ -2102,6 +2109,36 @@ pub fn packet_from_bytes(data: &[u8]) -> Result<rsmpeg::avcodec::AVPacket, Bridg
         unsafe { ptr::copy_nonoverlapping(data.as_ptr(), packet.data, data.len()) };
     }
     Ok(packet)
+}
+
+/// Replaces the payload of `packet` with `data`, which is no longer than it,
+/// keeping its timestamps, flags and side data.
+///
+/// # Errors
+/// When `data` is longer than the payload, or the packet's buffer cannot be
+/// made writable.
+pub fn shrink_packet_to(
+    packet: &mut rsmpeg::avcodec::AVPacket,
+    data: &[u8],
+) -> Result<(), BridgeError> {
+    let size = i32::try_from(data.len())
+        .ok()
+        .filter(|size| *size <= packet.size)
+        .ok_or(BridgeError::InvalidInput("a packet cannot grow in place"))?;
+    // SAFETY: `packet` is a live packet; `av_packet_make_writable` gives it a buffer of its own
+    // of at least `size` bytes, copying the payload when the buffer was shared.
+    let status = unsafe { ffi::av_packet_make_writable(packet.as_mut_ptr()) };
+    if status < 0 {
+        return Err(BridgeError::FfmpegCode(status));
+    }
+    if !data.is_empty() {
+        // SAFETY: the packet's writable buffer holds at least `data.len()` bytes and does not
+        // overlap `data`, which the caller owns.
+        unsafe { ptr::copy_nonoverlapping(data.as_ptr(), packet.data, data.len()) };
+    }
+    // SAFETY: `size` is not above the packet's size; FFmpeg zeroes the padding after it.
+    unsafe { ffi::av_shrink_packet(packet.as_mut_ptr(), size) };
+    Ok(())
 }
 
 /// What the codec parameters of a video stream no `FFmpeg` encoder produced

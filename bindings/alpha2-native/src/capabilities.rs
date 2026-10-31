@@ -1409,22 +1409,31 @@ pub(crate) struct VideoEncoderOpenRequest<'a> {
 /// split's share of the encoder, which is none, and it would run on one
 /// worker. The caller passes how to decide instead; it is asked at most once.
 pub(crate) struct SoftwareEncoderThreads<'a> {
-    decide: &'a dyn Fn() -> i64,
+    decide: &'a dyn Fn(Option<usize>) -> i64,
     decided: std::cell::OnceCell<i64>,
 }
 
 impl<'a> SoftwareEncoderThreads<'a> {
-    /// The count `decide` returns, asked for when a software candidate opens.
-    pub(crate) fn new(decide: &'a dyn Fn() -> i64) -> Self {
+    /// The count `decide` returns, asked for when a software candidate
+    /// opens; `decide` is told the encoder's own count when the picture
+    /// fixes it ([`crate::CodecThreadRequest::encoder_fixed_threads`]).
+    pub(crate) fn new(decide: &'a dyn Fn(Option<usize>) -> i64) -> Self {
         Self {
             decide,
             decided: std::cell::OnceCell::new(),
         }
     }
 
-    /// The decided count, at least one worker.
+    /// The decided count for an encoder that runs as many workers as it is
+    /// given, at least one.
     pub(crate) fn get(&self) -> i64 {
-        *self.decided.get_or_init(|| (self.decide)().max(1))
+        self.get_fixed(None)
+    }
+
+    /// The decided count, telling the decision the encoder runs `fixed`
+    /// workers whatever it is given, when it does.
+    pub(crate) fn get_fixed(&self, fixed: Option<usize>) -> i64 {
+        *self.decided.get_or_init(|| (self.decide)(fixed).max(1))
     }
 }
 
@@ -1640,7 +1649,12 @@ fn open_openh264(
     let (rate, rate_control) = crate::rate_control::openh264_rate(config.rate_control);
     let time_base = encoder_time_base(config.frame_rate, None)
         .map_err(|error| (NativeEncoderRejection::OpenFailed, error))?;
-    let _ = request.threads.get();
+    // OpenH264 runs one thread per slice whatever it is offered; the split reserves that count.
+    let _ = request
+        .threads
+        .get_fixed(Some(usize::from(crate::openh264::thread_count(
+            crate::openh264::slice_count(config.height),
+        ))));
     let encoder = crate::openh264::OpenH264Encoder::open(
         library,
         &crate::openh264::OpenH264Settings {
@@ -1702,7 +1716,8 @@ fn open_one_video_encoder(
         Some(Ok(quantized)) => {
             match open_video_encoder_context(request, candidate, name, Some(&quantized), pixels) {
                 Ok(encoder) => {
-                    return Ok((encoder, crate::AppliedRateControl::Quantizer, None, pixels));
+                    let applied = crate::AppliedRateControl::of_quantizer_request(name);
+                    return Ok((encoder, applied, None, pixels));
                 }
                 Err((_, error)) => Some(format!("{} refused: {error}", quantized.describe())),
             }

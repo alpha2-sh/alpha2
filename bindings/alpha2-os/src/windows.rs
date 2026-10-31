@@ -274,23 +274,91 @@ pub(crate) fn on_termination(handler: Box<dyn Fn(Termination) + Send + Sync>) ->
     Ok(())
 }
 
-/// The working set and its peak, from `K32GetProcessMemoryInfo`.
+/// The working set, the private commit and their peaks, from
+/// `K32GetProcessMemoryInfo`.
 pub(crate) fn process_memory() -> ProcessMemory {
     use windows_sys::Win32::System::ProcessStatus::{
-        K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+        K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX,
     };
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
-    // SAFETY: an all-zero `PROCESS_MEMORY_COUNTERS` is valid; the call fills it.
-    let mut counters: PROCESS_MEMORY_COUNTERS = unsafe { std::mem::zeroed() };
-    let size = u32::try_from(std::mem::size_of::<PROCESS_MEMORY_COUNTERS>()).unwrap_or(u32::MAX);
+    // SAFETY: an all-zero `PROCESS_MEMORY_COUNTERS_EX` is valid; the call fills it.
+    let mut counters: PROCESS_MEMORY_COUNTERS_EX = unsafe { std::mem::zeroed() };
+    let size = u32::try_from(std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX>()).unwrap_or(u32::MAX);
     // SAFETY: the pseudo-handle of the current process needs no closing; `counters` is `size` bytes
-    // and outlives the call.
-    let read =
-        unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &raw mut counters, size) } != 0;
+    // and outlives the call, and the extended struct begins with the basic one, so the call may
+    // take its address as one with `cb` saying which it is.
+    let read = unsafe {
+        K32GetProcessMemoryInfo(
+            GetCurrentProcess(),
+            std::ptr::addr_of_mut!(counters).cast::<PROCESS_MEMORY_COUNTERS>(),
+            size,
+        )
+    } != 0;
     let bytes = |value: usize| read.then(|| u64::try_from(value).ok()).flatten();
     ProcessMemory {
         resident_bytes: bytes(counters.WorkingSetSize),
         peak_resident_bytes: bytes(counters.PeakWorkingSetSize),
+        footprint_bytes: bytes(counters.PrivateUsage),
+        peak_footprint_bytes: bytes(counters.PeakPagefileUsage),
+    }
+}
+
+/// Physical and available memory from `GlobalMemoryStatusEx`, and the lower
+/// of the job object's process and job memory limits, when the process runs
+/// in a job that sets one.
+pub(crate) fn memory_capacity() -> crate::MemoryCapacity {
+    use windows_sys::Win32::System::JobObjects::{
+        JOB_OBJECT_LIMIT_JOB_MEMORY, JOB_OBJECT_LIMIT_PROCESS_MEMORY,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+        QueryInformationJobObject,
+    };
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    // SAFETY: an all-zero `MEMORYSTATUSEX` is valid once `dwLength` is set, which the call
+    // requires.
+    let mut status: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+    status.dwLength = u32::try_from(std::mem::size_of::<MEMORYSTATUSEX>()).unwrap_or(u32::MAX);
+    // SAFETY: `status` is a `MEMORYSTATUSEX` with its length set and outlives the call.
+    let read = unsafe { GlobalMemoryStatusEx(&raw mut status) } != 0;
+    let physical = read.then_some(status.ullTotalPhys);
+    // SAFETY: an all-zero `JOBOBJECT_EXTENDED_LIMIT_INFORMATION` is valid; the call fills it.
+    let mut job: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+    let size = u32::try_from(std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>())
+        .unwrap_or(u32::MAX);
+    // SAFETY: a null handle asks for the job of the calling process; `job` is `size` bytes of the
+    // class asked for and outlives the call. Outside a job the call fails and nothing is read.
+    let in_job = unsafe {
+        QueryInformationJobObject(
+            std::ptr::null_mut(),
+            JobObjectExtendedLimitInformation,
+            std::ptr::addr_of_mut!(job).cast(),
+            size,
+            std::ptr::null_mut(),
+        )
+    } != 0;
+    let flags = if in_job {
+        job.BasicLimitInformation.LimitFlags
+    } else {
+        0
+    };
+    let job_limit = [
+        (flags & JOB_OBJECT_LIMIT_PROCESS_MEMORY != 0).then_some(job.ProcessMemoryLimit),
+        (flags & JOB_OBJECT_LIMIT_JOB_MEMORY != 0).then_some(job.JobMemoryLimit),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(|limit| u64::try_from(limit).ok())
+    .min()
+    .filter(|limit| physical.is_none_or(|physical| *limit < physical));
+    crate::MemoryCapacity {
+        physical_bytes: physical,
+        available_bytes: read.then_some(status.ullAvailPhys),
+        limit_bytes: job_limit.or(physical),
+        limit_source: if job_limit.is_some() {
+            "job"
+        } else {
+            "physical"
+        },
+        used_in_limit_bytes: None,
     }
 }
 

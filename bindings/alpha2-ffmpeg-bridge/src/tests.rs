@@ -747,3 +747,12 @@ fn log_detail_keeps_the_last_four_lines_ascii() {
     assert_eq!(last.len(), "[test_detail] ".len() + 200, "{last}");
     assert_eq!(log_detail(&[]), "");
 }
+
+/// The pinned runtime decodes VP9 with alpha: only libvpx's VP9 decoder reads the alpha plane a
+/// `WebM` keeps in its block additions, and `FFmpeg`'s own `vp9` drops it.
+#[test]
+fn the_runtime_has_the_libvpx_vp9_decoder() {
+    let decoder = rsmpeg::avcodec::AVCodec::find_decoder_by_name(c"libvpx-vp9")
+        .expect("this FFmpeg runtime has no libvpx-vp9 decoder");
+    assert_eq!(decoder.id, ffi::AV_CODEC_ID_VP9);
+}

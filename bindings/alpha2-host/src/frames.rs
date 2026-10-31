@@ -267,6 +267,9 @@ pub struct FrameInstallMetrics {
     /// Hardware frames whose import failed and which were uploaded from a
     /// CPU download of the surface instead.
     pub import_fallbacks: u64,
+    /// The bytes those downloads brought to the CPU, and the time they took.
+    pub source_download_bytes: u64,
+    pub source_download: Duration,
     /// The `duration` above, split by the work that consumed it.
     pub timings: SourceUploadTimings,
     /// Stills held on the GPU after this frame: the ones it shows.
@@ -491,12 +494,18 @@ impl NativeGpuFrames {
         match self.upload_native(renderer, frame) {
             Ok(upload) => Ok((upload, true)),
             Err(SurfaceError::Import(error)) if frame.is_hardware() && self.import_fallback => {
+                let download = Instant::now();
                 let cpu = frame.to_cpu().map_err(|download| {
                     format!(
                         "{error}; downloading the surface instead also failed: {}",
                         error_message(download)
                     )
                 })?;
+                metrics.source_download =
+                    metrics.source_download.saturating_add(download.elapsed());
+                metrics.source_download_bytes = metrics
+                    .source_download_bytes
+                    .saturating_add(plane_bytes(&cpu));
                 metrics.import_fallbacks = metrics.import_fallbacks.saturating_add(1);
                 let upload = self
                     .upload_native(renderer, &NativeVideoFrame::Cpu(cpu))
@@ -1246,6 +1255,7 @@ pub fn upload_native_frame(
                     reserve_surface(renderer, surface_budget, surface.retained_bytes())?;
                 let import_started = Instant::now();
                 let imported = context.import_surface(lease).map_err(error_message)?;
+                let surface_color = videotoolbox_color(metadata.color, &imported);
                 // Normalize against the imported image's own extent so the shader cannot disagree
                 // with the texture it samples.
                 let coded = RenderSize::new(imported.coded_size[0], imported.coded_size[1])
@@ -1264,7 +1274,7 @@ pub fn upload_native_frame(
                             format: gpu_plane_format(imported.layout),
                             size: coded,
                             alpha: 1.0,
-                            color: metadata.color,
+                            color: Some(surface_color),
                         },
                         presentation,
                         color,
@@ -1706,6 +1716,9 @@ pub struct NativeRepack {
     pub gpu_copy_bytes: u64,
     /// Whether a surface that failed to import was downloaded instead.
     pub import_fallback: bool,
+    /// The bytes that download brought to the CPU, and the time it took.
+    pub download_bytes: u64,
+    pub download: Duration,
     /// Whether the import waited for completed decoder surfaces.
     pub surface_budget_stalled: bool,
     /// CPU plane bytes written to the GPU.
@@ -1797,14 +1810,18 @@ impl NativeGpuFrames {
         let repack = match self.repack_native(renderer, frame, targets, timings) {
             Ok(repack) => repack,
             Err(SurfaceError::Import(error)) if frame.is_hardware() && self.import_fallback => {
+                let download = Instant::now();
                 let cpu = frame.to_cpu().map_err(|download| {
                     format!(
                         "{error}; downloading the surface instead also failed: {}",
                         error_message(download)
                     )
                 })?;
+                let download = download.elapsed();
                 let mut repack = repack_cpu(renderer, &cpu, targets, timings)?;
                 repack.import_fallback = true;
+                repack.download_bytes = plane_bytes(&cpu);
+                repack.download = download;
                 repack
             }
             Err(error) => return Err(error.into_message()),
@@ -1922,6 +1939,7 @@ impl NativeGpuFrames {
                 reserve_surface(renderer, &self.surface_budget, surface.retained_bytes())?;
             let import_started = Instant::now();
             let imported = context.import_surface(lease).map_err(error_message)?;
+            let surface_color = videotoolbox_color(metadata.color, &imported);
             let [x, y, width, height] = imported.visible_rect;
             let external: Arc<dyn ExternalTextureLease> = Arc::new(HostMetalLease {
                 import: Arc::clone(&imported.lease),
@@ -1934,7 +1952,7 @@ impl NativeGpuFrames {
                     uv: &imported.uv,
                     format: gpu_plane_format(imported.layout),
                     coded_size: imported.coded_size,
-                    color: metadata.color,
+                    color: Some(surface_color),
                     lease: external,
                 },
                 alpha2_media::Rect {
@@ -2128,4 +2146,54 @@ fn repack_cpu(
             .sum(),
         ..NativeRepack::default()
     })
+}
+
+/// The colour a `VideoToolbox` surface's samples are in: the stream's, with the range its pixel
+/// buffer's format says, which is what the planes hold. A buffer whose range differs from the
+/// stream's tag is reported once per pair of format and tag.
+#[cfg(all(target_os = "macos", feature = "hwdecode"))]
+fn videotoolbox_color(
+    tagged: Option<alpha2_media::ColorMetadata>,
+    imported: &alpha2_native_gpu::ImportedMetalFrame,
+) -> alpha2_media::ColorMetadata {
+    use alpha2_media::ColorRange;
+    static REPORTED: std::sync::Mutex<Vec<(String, bool)>> = std::sync::Mutex::new(Vec::new());
+    let range = if imported.full_range {
+        ColorRange::Full
+    } else {
+        ColorRange::Limited
+    };
+    let color = tagged.unwrap_or(alpha2_media::ColorMetadata::UNDECLARED);
+    if color.range != range
+        && let Ok(mut reported) = REPORTED.lock()
+    {
+        let key = (
+            imported.pixel_format.clone(),
+            color.range == ColorRange::Full,
+        );
+        if !reported.contains(&key) {
+            alpha2_os::diagnostic!(
+                "alpha2-host: VideoToolbox returned {} for a {}-range stream; its samples are read \
+                 as {} range",
+                imported.pixel_format,
+                if key.1 { "full" } else { "limited" },
+                if imported.full_range {
+                    "full"
+                } else {
+                    "limited"
+                }
+            );
+            reported.push(key);
+        }
+    }
+    alpha2_media::ColorMetadata { range, ..color }
+}
+
+/// The bytes of `frame`'s planes, as a download of a decoder surface brought them to the CPU.
+fn plane_bytes(frame: &alpha2_media::DecodedVideoFrame) -> u64 {
+    frame
+        .planes
+        .iter()
+        .map(|plane| plane.bytes.len() as u64)
+        .sum()
 }

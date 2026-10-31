@@ -168,7 +168,7 @@ impl NativeVideoEncodeSink {
         path: impl Into<OutputTarget>,
         config: VideoEncodeConfig,
     ) -> Result<Self, EncodeError> {
-        Self::create_selected(path, config, None, &codec_thread_budget)
+        Self::create_selected(path, config, None, &|_| codec_thread_budget())
     }
 
     /// Creates a concrete encoder selected by its `FFmpeg` short name.
@@ -181,7 +181,7 @@ impl NativeVideoEncodeSink {
         config: VideoEncodeConfig,
         encoder_name: &str,
     ) -> Result<Self, EncodeError> {
-        Self::create_selected(path, config, Some(encoder_name), &codec_thread_budget)
+        Self::create_selected(path, config, Some(encoder_name), &|_| codec_thread_budget())
     }
 
     /// Creates an encoder whose software thread count the caller decides.
@@ -204,7 +204,7 @@ impl NativeVideoEncodeSink {
         path: impl Into<OutputTarget>,
         config: VideoEncodeConfig,
         encoder_name: Option<&str>,
-        software_threads: &dyn Fn() -> i64,
+        software_threads: &dyn Fn(Option<usize>) -> i64,
     ) -> Result<Self, EncodeError> {
         Self::create_selected(path, config, encoder_name, software_threads)
     }
@@ -214,7 +214,7 @@ impl NativeVideoEncodeSink {
         path: impl Into<OutputTarget>,
         config: VideoEncodeConfig,
         encoder_name: Option<&str>,
-        software_threads: &dyn Fn() -> i64,
+        software_threads: &dyn Fn(Option<usize>) -> i64,
     ) -> Result<Self, EncodeError> {
         check_video_config(&config)?;
         let target = path.into();
@@ -309,6 +309,9 @@ impl NativeVideoEncodeSink {
             });
             match received {
                 Ok(mut packet) => {
+                    if self.selection.encoder_name == "h264_videotoolbox" {
+                        crate::vt_sei::strip_vt_user_data_sei(&mut packet)?;
+                    }
                     packet.set_stream_index(self.stream_index);
                     crate::mux::fill_frame_duration(&mut packet, self.frame_units);
                     packet.rescale_ts(self.encoder_time_base, self.stream_time_base);

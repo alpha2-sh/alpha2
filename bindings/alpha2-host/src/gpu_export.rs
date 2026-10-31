@@ -89,34 +89,18 @@ impl Host {
         None
     }
 
-    /// Why this host has no device shared with a hardware encoder: on
-    /// Windows, what the adapter it renders on answered, and an adapter that
-    /// could encode, when one could.
-    #[cfg_attr(not(target_os = "windows"), allow(clippy::unused_self))]
+    /// Why this host has no device shared with a hardware encoder: what
+    /// making it on the adapter the host renders on answered, and an adapter
+    /// that could encode, when one could.
     fn no_encode_device(&self, codec: Option<alpha2_native::NativeVideoCodec>) -> String {
-        let reason = "this host has no GPU device shared with a hardware encoder".to_owned();
-        #[cfg(target_os = "windows")]
-        return self.no_d3d12_encode_device(codec, reason);
-        #[cfg(not(target_os = "windows"))]
-        {
-            let _ = codec;
-            reason
-        }
-    }
-
-    /// [`Self::no_encode_device`] on Windows, from `reason`, the reason
-    /// without what the adapter choice found.
-    #[cfg(target_os = "windows")]
-    fn no_d3d12_encode_device(
-        &self,
-        codec: Option<alpha2_native::NativeVideoCodec>,
-        reason: String,
-    ) -> String {
         // A switched-off path makes no device for encode alone, so the switch is the reason.
+        #[cfg(target_os = "windows")]
         if let Err(off) = self.gpu_encode_gate() {
             return off;
         }
-        let reason = self.encode_adapters.no_device.clone().unwrap_or(reason);
+        let reason = self.encode_adapters.no_device.clone().unwrap_or_else(|| {
+            "this host has no GPU device shared with a hardware encoder".to_owned()
+        });
         // A report names the adapter that could encode the default codec, or failing that any.
         let elsewhere = &self.encode_adapters.elsewhere;
         let codec = codec.or_else(|| {
@@ -192,7 +176,7 @@ impl Host {
     }
 
     /// Every capability the GPU-resident path has here, one per codec it
-    /// takes: on Linux and macOS the one encoder there is, on Windows each
+    /// takes: on macOS the one encoder there is, on Windows and Linux each
     /// of H.264, HEVC and AV1 the device encodes.
     pub(crate) fn gpu_output_codecs(&self) -> Vec<HardwareEncodeCapability> {
         let Some(device) = self.hardware_encode_device() else {
@@ -201,12 +185,12 @@ impl Host {
         if self.gpu_encode_gate().is_err() {
             return Vec::new();
         }
-        #[cfg(target_os = "windows")]
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
         return crate::adapter_choice::ENCODE_CODECS
             .iter()
             .filter_map(|codec| self.device_capability(&device, Some(*codec)).ok())
             .collect();
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
         self.device_capability(&device, None).into_iter().collect()
     }
 
@@ -221,9 +205,9 @@ impl Host {
         codec: alpha2_native::NativeVideoCodec,
         pinned: Option<&str>,
     ) -> Result<(HardwareEncodeDevice, HardwareEncodeCapability), GpuOutputRefusal> {
-        // Windows asks about the export's own codec; elsewhere the one encoder's codec is checked
-        // below.
-        let asked = cfg!(target_os = "windows").then_some(codec);
+        // Windows and Linux ask about the export's own codec; macOS's one encoder's codec is
+        // checked below.
+        let asked = cfg!(any(target_os = "windows", target_os = "linux")).then_some(codec);
         let device = self.hardware_encode_device();
         let capability = device
             .as_ref()
@@ -330,7 +314,7 @@ impl Host {
         has_audio: bool,
         video_rate: crate::config::ResolvedVideoRate,
         container: alpha2_media::Container,
-        audio_codec: NativeAudioCodec,
+        (audio_codec, audio_encoder): (NativeAudioCodec, Option<&str>),
         audio_rate: ResolvedAudioRate,
         loudness: Option<LoudnessRequest>,
         output: &alpha2_native::OutputTarget,
@@ -402,15 +386,16 @@ impl Host {
         );
 
         let graph_before = self.gpu_renderer().diagnostics();
+        // What frames sampled before this export measured is not its own.
+        let _ = self.gpu_renderer().take_frame_gpu_times();
         let cancel = crate::termination::export_cancel();
         let plan = crate::export_decode::ExportDecodePlan::new(
-            self.export_codec_split(project, assets, range, true, false),
+            self.export_codec_split(project, assets, range, true, (false, None)),
             self.export_providers(project, size),
         );
         let decode_lookahead = plan.decode_lookahead;
         let codec_threads = plan.codec_threads;
-        self.failure
-            .note("audioEncoder", json!(has_audio.then_some("aac")));
+        self.failure.note("audioEncoder", json!(audio_encoder));
         self.failure
             .note("hardwareDecodeReady", json!(plan.hardware_decode));
         self.failure.note(
@@ -462,6 +447,7 @@ impl Host {
             trace: ExportTrace::from_env(started),
             ..ExportMetrics::default()
         };
+        self.prepare_project_pipelines(snapshot, &mut metrics);
         let mut audio_sources = has_audio
             .then(|| {
                 WindowedAudioSources::new(
@@ -635,9 +621,9 @@ impl Host {
                 metrics.hardware_decoded_frames = metrics
                     .hardware_decoded_frames
                     .saturating_add(decoded.hardware_decoded_frames);
-                metrics.hardware_fallbacks = metrics
+                metrics
                     .hardware_fallbacks
-                    .merged(decoded.hardware_fallbacks);
+                    .merge(&decoded.hardware_fallbacks);
                 metrics.reverse_cache_hits = metrics
                     .reverse_cache_hits
                     .saturating_add(decoded.reverse_cache_hits);
@@ -674,14 +660,22 @@ impl Host {
                 // begin then waits until those planes are no longer read. The handoff copy follows
                 // the render on the same queue, which orders the two.
                 self.failure.enter(ExportPhase::Upload, Some(frame_index));
+                let surface_wait = Instant::now();
                 let mut lease =
                     frame_bound.acquire(&cancel, &|| encode_worker.check_stall(), || {
                         input.acquire_surface()
                     })?;
+                metrics.encoder_surface_wait = metrics
+                    .encoder_surface_wait
+                    .saturating_add(surface_wait.elapsed());
                 if let Some(sink) = metrics.trace.as_ref() {
                     frame_trace.surface_acquired = sink.now();
                 }
+                let plane_wait = Instant::now();
                 let frame = input.begin_frame(lease.surface()).map_err(error_message)?;
+                metrics.encoder_plane_wait = metrics
+                    .encoder_plane_wait
+                    .saturating_add(plane_wait.elapsed());
                 if let Some(sink) = metrics.trace.as_ref() {
                     frame_trace.planes_ready = sink.now();
                 }
@@ -778,6 +772,7 @@ impl Host {
                     frame_trace.packed = sink.now();
                 }
                 frame_trace.index = index;
+                metrics.record_pipelines(index, &self.gpu_renderer().take_pipeline_creations());
                 let queue_started = Instant::now();
                 self.failure.enter(ExportPhase::Encode, Some(index));
                 let backpressured = encode_worker.send(EncodeCommand::GpuVideo {
@@ -944,7 +939,7 @@ impl Host {
         } else {
             Value::Null
         };
-        result["audioEncoder"] = json!(has_audio.then_some("aac"));
+        result["audioEncoder"] = json!(audio_encoder);
         result["fps"] = json!(frames_per_second(
             completed,
             started.elapsed().as_secs_f64()
@@ -957,6 +952,9 @@ impl Host {
             .note_decoder_sessions(plan.decoder_sessions, metrics.decoder_session_reopens);
         result["performance"] =
             export_metrics_json(&metrics, Some((&graph_before, &after)), &pipeline_limits);
+        crate::metrics::add_gpu_time_metrics(&mut result["performance"], Some(self.gpu_renderer()));
+        // The plane copies into the encoder's input image are counted as they are made.
+        result["performance"]["encoderInputCopyEstimated"] = json!(false);
         Ok(result)
     }
 }
@@ -978,6 +976,10 @@ fn record_repack(metrics: &mut ExportMetrics, repack: &crate::frames::NativeRepa
         alpha2_native::HardwareDecodeFallback::ImportFailed,
         u64::from(repack.import_fallback),
     );
+    metrics.source_download_bytes = metrics
+        .source_download_bytes
+        .saturating_add(repack.download_bytes);
+    metrics.source_download = metrics.source_download.saturating_add(repack.download);
     metrics.source_upload_bytes = metrics
         .source_upload_bytes
         .saturating_add(repack.upload_bytes);

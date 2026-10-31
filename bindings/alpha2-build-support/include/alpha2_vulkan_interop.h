@@ -72,6 +72,7 @@ typedef struct Alpha2VulkanDeviceInfo {
     uint32_t synchronization2;
     uint32_t sampler_ycbcr_conversion;
     uint32_t video_maintenance1;
+    uint32_t video_decode_vp9;
     const char *const *instance_extensions;
     uint32_t instance_extension_count;
     const char *const *device_extensions;

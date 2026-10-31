@@ -412,11 +412,22 @@ if [[ -n "${FFMPEG_ENCODERS:-}" ]]; then
   "${ENCODE[@]}" -f lavfi -i testsrc2=size=128x96:rate=30:duration=0.5 \
     -an -c:v libx264 -profile:v high10 -pix_fmt yuv420p10le \
     -x264-params threads=1:sliced-threads=0 h264-high10.mp4
-  # FFmpeg registers a Vulkan VP9 decoder; a device without VP9 decode fails the session on the
-  # first packet, not at open.
+  # A device that lists no VP9 decode refuses this before a session opens; one whose VP9 minimum is
+  # above 96 rows fails the session on the first packet, not at open.
   "${ENCODE[@]}" -f lavfi -i testsrc2=size=128x96:rate=30:duration=0.5 \
     -an -c:v libvpx-vp9 -b:v 200k -pix_fmt yuv420p -threads 1 \
     -fflags +bitexact -flags:v +bitexact vp9.webm
+  # VP9 within every hardware decoder's limits (the RTX 4090's Vulkan VP9 decoder starts at
+  # 128x128).
+  "${ENCODE[@]}" -f lavfi -i testsrc2=size=192x128:rate=30:duration=1 \
+    -an -c:v libvpx-vp9 -b:v 300k -pix_fmt yuv420p -threads 1 \
+    -fflags +bitexact -flags:v +bitexact vp9-128.webm
+  # VP9 with alpha: green whose alpha is 0, 128 and 255 in three column bands, lossless so the alpha
+  # decodes exactly.
+  "${ENCODE[@]}" -f lavfi -i "color=c=0x00ff00:s=64x48:r=30:d=0.4,format=yuva420p,\
+geq=lum='lum(X,Y)':cb='cb(X,Y)':cr='cr(X,Y)':a='if(lt(X,16),0,if(lt(X,32),128,255))'" \
+    -an -c:v libvpx-vp9 -pix_fmt yuva420p -lossless 1 -threads 1 \
+    -fflags +bitexact -flags:v +bitexact vp9-alpha.webm
   # Browser colour contract: a gray ramp over four flat, in-gamut colour blocks, losslessly coded
   # and tagged BT.709 limited, so the browser's conversion of a decoded frame can be compared with
   # the frame's own planes.

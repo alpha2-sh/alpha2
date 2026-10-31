@@ -65,6 +65,8 @@ _MACHINES = {"amd64": "x86_64", "x64": "x86_64", "arm64": "aarch64"}
 def _linux_libc() -> tuple[str, str | None]:
     """This Linux system's C library: ``("glibc", version)``, ``("musl", None)`` or
     ``("unknown", None)``."""
+    if sys.platform == "win32":
+        return "unknown", None
     try:
         reported = os.confstr("CS_GNU_LIBC_VERSION")
     except (ValueError, OSError):

@@ -381,13 +381,19 @@ impl Renderer {
                     .created
                     .push(program);
             }
-            composite_pipeline(
-                self.gpu.device(),
-                &cached.bind_group_layout,
-                &cached.shader,
-                self.intermediate_format(),
-                entry,
-                label,
+            crate::diagnostics::timed_pipeline_creation(
+                &self.diagnostics,
+                || label.to_owned(),
+                || {
+                    composite_pipeline(
+                        self.gpu.device(),
+                        &cached.bind_group_layout,
+                        &cached.shader,
+                        self.intermediate_format(),
+                        entry,
+                        label,
+                    )
+                },
             )
         })
     }
@@ -829,7 +835,7 @@ const COVERAGE_MARGIN: f64 = 4.0;
 /// shader's rotation.
 pub(crate) fn layer_bounds(visual: LayerTransform, size: RenderSize) -> Option<PixelRect> {
     let (width, height) = (f64::from(size.width), f64::from(size.height));
-    let (turn_sin, turn_cos) = f64::from(visual.rotation_degrees).to_radians().sin_cos();
+    let (turn_sin, turn_cos) = libm::sincos(f64::from(visual.rotation_degrees).to_radians());
     let corner = |u: f64, v: f64| {
         let x = (u - f64::from(visual.anchor[0])) * f64::from(visual.scale[0]) * width;
         let y = (v - f64::from(visual.anchor[1])) * f64::from(visual.scale[1]) * height;

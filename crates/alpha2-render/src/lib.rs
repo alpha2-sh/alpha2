@@ -22,6 +22,8 @@ mod diagnostics;
 mod effect;
 mod effect_resource;
 mod error;
+mod frame_gpu_time;
+pub use frame_gpu_time::FrameGpuTimes;
 mod gaussian_blur;
 mod generator;
 mod gpu_errors;
@@ -83,7 +85,8 @@ pub use cpu::{
     CpuImage, CpuRenderStats, CpuRenderer, CpuSource, RgbaPixels, YuvPlanes, pack_cpu_image,
 };
 pub use diagnostics::{
-    AdapterDiagnostics, BenchmarkMetadata, PassTiming, RenderDiagnostics, TimingSource,
+    AdapterDiagnostics, BenchmarkMetadata, PassTiming, PipelineCreation, PipelineCreationStats,
+    RenderDiagnostics, TimingSource,
 };
 pub use effect::{
     DiagnosticSeverity, EffectDef, EffectId, EffectKind, EffectParams, EffectResourceKind,

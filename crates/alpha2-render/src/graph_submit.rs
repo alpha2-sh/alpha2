@@ -180,11 +180,23 @@ impl Renderer {
         for work in &source_work {
             work.encode(&mut command_encoder);
         }
+        let sample = self
+            .frame_gpu_timer()
+            .and_then(crate::frame_gpu_time::FrameGpuTimer::begin);
+        if let Some(sample) = &sample {
+            sample.graph_start(&mut command_encoder);
+        }
         let graph_work = self
             .encode_graph(graph, &mut command_encoder)
             .map_err(GraphError::into_render_error)?;
+        if let Some(sample) = &sample {
+            sample.graph_end(&mut command_encoder);
+        }
         let pack =
             self.encode_nv12_pack(graph_work.texture(), planes, encoding, &mut command_encoder)?;
+        if let Some(sample) = &sample {
+            sample.pack_end(&mut command_encoder);
+        }
         // Nothing reads this frame back, so its GPU proof travels in a buffer of its own.
         let (canary_buffer, canary) = self.canaries.encode_own(&self.gpu, &mut command_encoder)?;
         collected.command_encode = clock.lap();
@@ -195,6 +207,9 @@ impl Renderer {
         collected.command_encode = collected.command_encode.saturating_add(clock.lap());
         // A rejected submission wrote no plane and no canary: the frame fails here, untracked.
         let submitted = self.submit_measured([command_buffer], true)?;
+        if let Some(sample) = sample {
+            sample.submitted(&self.gpu);
+        }
         self.submission_canaries
             .track(&self.gpu, canary_buffer, canary);
         drop(pack);
@@ -229,11 +244,25 @@ impl Renderer {
         for work in &source_work {
             work.encode(&mut command_encoder);
         }
+        // Only an export's timed frames are sampled.
+        let sample = measure
+            .then(|| self.frame_gpu_timer())
+            .flatten()
+            .and_then(crate::frame_gpu_time::FrameGpuTimer::begin);
+        if let Some(sample) = &sample {
+            sample.graph_start(&mut command_encoder);
+        }
         let graph_work = self
             .encode_graph(graph, &mut command_encoder)
             .map_err(GraphError::into_render_error)?;
+        if let Some(sample) = &sample {
+            sample.graph_end(&mut command_encoder);
+        }
         let readback_work =
             self.encode_yuv420p_readback(graph_work.texture(), encoding, &mut command_encoder)?;
+        if let Some(sample) = &sample {
+            sample.pack_end(&mut command_encoder);
+        }
         collected.command_encode = clock.lap();
         stage_source_submissions(self.gpu.queue(), &source_work)?;
         collected.source_acquire = clock.lap();
@@ -243,6 +272,9 @@ impl Renderer {
         // Closing the encoder and flushing uniforms belong to the command-encoding span.
         collected.command_encode = collected.command_encode.saturating_add(clock.lap());
         let submitted = self.submit_measured([command_buffer], measure)?;
+        if let Some(sample) = sample {
+            sample.submitted(&self.gpu);
+        }
         collected.queue_lock_wait = submitted.timings.queue_lock_wait;
         collected.queue_submit = submitted.timings.queue_submit;
         collected.lease_retire = submitted.lease_retire;

@@ -1063,12 +1063,39 @@ fn configured_codec_thread_budget() -> usize {
         .ok()
         .flatten()
         .unwrap_or_else(|| {
-            std::thread::available_parallelism()
-                .map_or(1, std::num::NonZeroUsize::get)
-                .saturating_sub(2)
-                .max(1)
+            codec_thread_budget_for(
+                std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get),
+            )
         })
         .clamp(1, 64)
+}
+
+/// The codec workers a machine of `hardware_threads` gives an export: all
+/// but [`codec_thread_reserve`], at least one.
+pub(crate) fn codec_thread_budget_for(hardware_threads: usize) -> usize {
+    hardware_threads
+        .saturating_sub(codec_thread_reserve(hardware_threads))
+        .max(1)
+}
+
+/// Hardware threads the codec budget leaves to the renderer, the coordinator
+/// and the rest of the machine: two on a machine of 16 or more, one on 6 to
+/// 15, none below, where every thread is needed for the codecs.
+///
+/// Measured on an i7-1165G7 (4 cores, 8 threads) with two 4K H.264 sources
+/// decoded in software side by side, 150 frames, three alternating rounds:
+/// with `h264_mf`, a reserve of two and an encoder floor of four (budget 6,
+/// one decoder thread each, encoder 4) ran 44.4 ms a frame with 20 % of the
+/// export waiting on decode; this reserve and [`encoder_thread_floor`]
+/// (budget 7, two decoder threads each, encoder 3) ran 29.0 ms a frame with
+/// 14 % waiting. `OpenH264`, whose eight 4K slice threads leave each decoder
+/// one thread either way, ran 40.6 and 37.4 ms a frame.
+pub(crate) const fn codec_thread_reserve(hardware_threads: usize) -> usize {
+    match hardware_threads {
+        16.. => 2,
+        6..=15 => 1,
+        _ => 0,
+    }
 }
 
 /// What one export needs from the shared software-codec worker budget.
@@ -1082,6 +1109,11 @@ pub struct CodecThreadRequest {
     pub source_frame_pixels: u64,
     /// Whether the video encoder draws on this budget.
     pub software_video_encoder: bool,
+    /// The workers the software video encoder runs whatever it is offered,
+    /// when its count is fixed by the picture (`OpenH264`'s one thread per
+    /// slice): the split reserves exactly that for it and gives decode the
+    /// rest, so the encoder threads it reports are the ones that run.
+    pub encoder_fixed_threads: Option<usize>,
 }
 
 /// Luma samples one software decoder worker is sized to carry.
@@ -1092,8 +1124,21 @@ const MIN_SOFTWARE_DECODER_THREADS: usize = 2;
 /// stops paying above this on a single stream, and every worker above it is
 /// contending the encoder for cores instead.
 const MAX_SOFTWARE_DECODER_THREADS: usize = 6;
-/// Workers the software video encoder keeps whatever decode asks for.
+/// Workers the software video encoder keeps whatever decode asks for, on a
+/// budget of 12 or more; a third of a smaller budget ([`encoder_thread_floor`]).
 const ENCODER_THREAD_FLOOR: usize = 4;
+
+/// The encoder's floor out of a budget of `total_threads`: four, or a third
+/// of a budget under 12, so a small machine's decoders are not starved for
+/// an encoder that a two-thread share keeps busy.
+const fn encoder_thread_floor(total_threads: usize) -> usize {
+    let third = total_threads / 3;
+    if third < ENCODER_THREAD_FLOOR {
+        if third == 0 { 1 } else { third }
+    } else {
+        ENCODER_THREAD_FLOOR
+    }
+}
 /// `FFmpeg` workers a hardware decode session opens with, whatever the budget.
 ///
 /// Such a session decodes on the device; its workers only parse and submit.
@@ -1111,7 +1156,9 @@ const ENCODER_THREAD_FLOOR: usize = 4;
 ///
 /// Two, not one: the many-cut run is the same, and one worker doubles a long
 /// source's decode time, which an encode-bound export hides but a decode-bound
-/// one would not. The worker count changes no output byte.
+/// one would not. The worker count changes no output byte. The 4090 is the
+/// only measurement: `VideoToolbox` and D3D12VA sessions take the same count
+/// unmeasured.
 pub const HARDWARE_DECODER_THREADS: usize = 2;
 
 /// One export-wide software-codec allocation. Every software decoder receives
@@ -1158,7 +1205,14 @@ pub struct CodecThreadAllocation {
 /// count, and so its output, the same whichever way the sources decode.
 #[must_use]
 pub fn codec_thread_allocation(request: CodecThreadRequest) -> CodecThreadAllocation {
-    let configured = configured_codec_thread_budget();
+    codec_thread_allocation_within(request, configured_codec_thread_budget())
+}
+
+/// [`codec_thread_allocation`] out of a budget of `configured` workers.
+pub(crate) fn codec_thread_allocation_within(
+    request: CodecThreadRequest,
+    configured: usize,
+) -> CodecThreadAllocation {
     let encoder_slots = usize::from(request.software_video_encoder);
     let decode_concurrency = request
         .decode_concurrency
@@ -1167,15 +1221,23 @@ pub fn codec_thread_allocation(request: CodecThreadRequest) -> CodecThreadAlloca
     let total_threads = configured.max(decode_concurrency.saturating_add(encoder_slots));
     // The encoder's floor is reserved before decode is sized, so a small budget starves the stage
     // with slack rather than the one on the path.
-    let encoder_floor = if request.software_video_encoder {
-        ENCODER_THREAD_FLOOR.min(total_threads.saturating_sub(decode_concurrency).max(1))
-    } else {
-        0
+    let fixed_encoder = request
+        .encoder_fixed_threads
+        .filter(|_| request.software_video_encoder)
+        .map(|threads| threads.max(1));
+    let encoder_floor = match fixed_encoder {
+        Some(threads) => threads.min(total_threads.saturating_sub(decode_concurrency).max(1)),
+        None if request.software_video_encoder => encoder_thread_floor(total_threads)
+            .min(total_threads.saturating_sub(decode_concurrency).max(1)),
+        None => 0,
     };
     let decode_budget = total_threads
         .saturating_sub(encoder_floor)
         .max(decode_concurrency);
-    let even_share = {
+    let even_share = if fixed_encoder.is_some() {
+        // The encoder takes what it runs; decode shares the rest.
+        (decode_budget / decode_concurrency).max(1)
+    } else {
         let contexts = decode_concurrency.saturating_add(encoder_slots).max(1);
         (total_threads / contexts).max(1)
     };
@@ -1184,16 +1246,21 @@ pub fn codec_thread_allocation(request: CodecThreadRequest) -> CodecThreadAlloca
         // and with a hardware encoder nothing can use what decode would give up.
         even_share
     } else {
+        // Never above the even share either: on a small budget, whose encoder floor is a third,
+        // one large source would otherwise leave the encoder fewer workers than a decoder.
         software_decoder_threads(request.source_frame_pixels)
             .clamp(1, (decode_budget / decode_concurrency).max(1))
+            .min(even_share)
     };
     let decode_assigned = decoder_threads.saturating_mul(decode_concurrency);
     // The floor is already reserved out of `decode_budget`; taking the remainder rather than the
     // floor keeps the total inside the budget when decode could not yield (the hardware case).
-    let encoder_threads = if request.software_video_encoder {
-        total_threads.saturating_sub(decode_assigned).max(1)
-    } else {
-        0
+    let encoder_threads = match fixed_encoder {
+        Some(threads) => threads,
+        None if request.software_video_encoder => {
+            total_threads.saturating_sub(decode_assigned).max(1)
+        }
+        None => 0,
     };
     CodecThreadAllocation {
         total_threads,

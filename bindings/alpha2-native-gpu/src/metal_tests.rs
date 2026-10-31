@@ -518,20 +518,21 @@ fn only_an_iosurface_backed_four_two_zero_buffer_imports() {
     let Some(context) = shared_context() else {
         return;
     };
-    for (name, buffer) in [
-        ("BGRA", pixel_buffer(64, 32, BGRA, true)),
+    for (name, buffer, described) in [
+        (
+            "BGRA",
+            pixel_buffer(64, 32, BGRA, true),
+            "BGRA (64x32, 0 planes) is not an IOSurface-backed 4:2:0 buffer: pixel format is not \
+             420v/420f/x420/xf20",
+        ),
         (
             "420v without an IOSurface",
             pixel_buffer(64, 32, NV12_VIDEO, false),
+            "420v (64x32, 2 planes) is not an IOSurface-backed 4:2:0 buffer: no IOSurface",
         ),
     ] {
         let error = import(&context, buffer, (64, 32)).expect_err(name);
-        assert!(
-            error
-                .to_string()
-                .contains("not an IOSurface-backed 4:2:0 buffer"),
-            "{name}: {error}"
-        );
+        assert!(error.to_string().contains(described), "{name}: {error}");
     }
     let error = context
         .import_surface(Arc::new(VideoToolboxFrameLease::new(AVFrame::new())))
@@ -733,7 +734,9 @@ fn only_an_iosurface_backed_eight_bit_video_range_buffer_is_an_encoder_target() 
         let frame = frame(buffer, 64, 32);
         let error = context.encoder_planes(&frame).expect_err(name);
         assert!(
-            error.to_string().contains(&format!("({status})")),
+            error
+                .to_string()
+                .contains(&format!("{} ({status})", encoder_plane_reason(status))),
             "{name}: {error}"
         );
     }
@@ -741,6 +744,40 @@ fn only_an_iosurface_backed_eight_bit_video_range_buffer_is_an_encoder_target() 
         .encoder_planes(&AVFrame::new())
         .expect_err("a software frame");
     assert!(error.to_string().starts_with("encoder frame:"), "{error}");
+}
+
+/// Every status the two Metal helpers return has its words, and an unknown
+/// one says so rather than borrowing another's; the four-character codes
+/// print as text, or in hex when they are not printable.
+#[test]
+fn helper_codes_have_words() {
+    let encoder = (-6..=-1).map(encoder_plane_reason).collect::<Vec<_>>();
+    assert_eq!(
+        encoder,
+        [
+            "not an Apple-family GPU",
+            "Metal returned no texture",
+            "no IOSurface",
+            "not two planes",
+            "not 8-bit video-range NV12",
+            "bad argument",
+        ]
+    );
+    let frame = (-4..=-1).map(frame_info_reason).collect::<Vec<_>>();
+    assert_eq!(
+        frame,
+        [
+            "no IOSurface",
+            "not two planes",
+            "pixel format is not 420v/420f/x420/xf20",
+            "null argument",
+        ]
+    );
+    assert_eq!(encoder_plane_reason(-7), "unknown refusal");
+    assert_eq!(frame_info_reason(-5), "unknown refusal");
+    assert_eq!(four_cc_text(NV12_VIDEO), "420v");
+    assert_eq!(four_cc_text(PIXEL_FORMAT_420_10_FULL_RANGE), "xf20");
+    assert_eq!(four_cc_text(32), "0x00000020");
 }
 
 #[link(name = "CoreVideo", kind = "framework")]

@@ -321,6 +321,7 @@ pub(super) fn table_pow(tables: &PowTables, base: f32, exponent: f32) -> f32 {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_methods)] // The reference is the platform's `f64` math.
 mod tests {
     use super::{pow_tables, table_pow, wrap};
     use crate::cpu::kernels::{builtin_hsv_to_rgb, builtin_rgb_to_hsv, builtin_value_noise};

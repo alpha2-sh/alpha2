@@ -15,6 +15,9 @@ pub struct Renderer {
     pub(crate) effect_resources: crate::effect_resource::EffectResourceRegistry,
     pub(crate) textures: crate::Shared<crate::pool::TexturePool>,
     pub(crate) upload_textures: crate::Shared<crate::pool::UploadTexturePool>,
+    /// The adapter's device memory budget, 0 when unknown
+    /// ([`Self::set_gpu_memory_budget`]).
+    pub(crate) gpu_memory_budget: std::sync::atomic::AtomicU64,
     pub(crate) readback_buffers: crate::Shared<crate::pool::ReadbackBufferPool>,
     pub(crate) uniform_buffers: crate::Shared<crate::uniform::UniformBufferPool>,
     /// Destroys what the pools let go of, once no encode uses it.
@@ -26,6 +29,8 @@ pub struct Renderer {
     /// Vector coverage kept between frames, and the rasterizer's buffers.
     pub(crate) vector_state: Mutex<crate::vector::VectorState>,
     pub(crate) timestamp_probe: std::sync::OnceLock<Option<crate::runtime_effect::TimestampProbe>>,
+    /// The timestamp queries export frames are sampled with, made on the first sampled frame.
+    pub(crate) frame_gpu_timer: std::sync::OnceLock<Option<crate::frame_gpu_time::FrameGpuTimer>>,
     pub(crate) pass_timing: std::sync::atomic::AtomicBool,
     /// Test-only: composite every layer as a full-frame pass, culling
     /// nothing, as the reference the bounded passes must match.
@@ -338,6 +343,7 @@ impl Renderer {
             upload_textures: crate::Shared::new(crate::pool::UploadTexturePool::new(
                 crate::Shared::clone(&retirement),
             )),
+            gpu_memory_budget: std::sync::atomic::AtomicU64::new(0),
             readback_buffers: crate::Shared::new(crate::pool::ReadbackBufferPool::new(
                 crate::Shared::clone(&retirement),
             )),
@@ -352,6 +358,7 @@ impl Renderer {
             result_cache: Mutex::new(crate::result_cache::ResultCache::default()),
             vector_state: Mutex::default(),
             timestamp_probe: std::sync::OnceLock::new(),
+            frame_gpu_timer: std::sync::OnceLock::new(),
             pass_timing: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
             full_frame_layers: std::sync::atomic::AtomicBool::new(false),
@@ -372,6 +379,36 @@ impl Renderer {
             frame_lock: crate::Shared::default(),
             submission_clock,
         }
+    }
+
+    /// The timer export frames are sampled with, or `None` on a device without timestamp
+    /// queries (and in a browser, whose exports are timed by the page).
+    pub(crate) fn frame_gpu_timer(&self) -> Option<&crate::frame_gpu_time::FrameGpuTimer> {
+        self.frame_gpu_timer
+            .get_or_init(|| {
+                (cfg!(not(target_arch = "wasm32"))
+                    && self.features.contains(wgpu::Features::TIMESTAMP_QUERY))
+                .then(|| {
+                    crate::frame_gpu_time::FrameGpuTimer::new(self.gpu.device(), self.gpu.queue())
+                })
+            })
+            .as_ref()
+    }
+
+    /// How long the export frames sampled since the last call kept the GPU busy: every eighth
+    /// frame rendered through [`Self::render_graph_nv12_timed`] or
+    /// [`Self::render_graph_yuv420p_timed`] brackets its graph and its pack with timestamps,
+    /// read back on later frames without waiting. The totals start again from zero.
+    ///
+    /// # Errors
+    /// Why no frame is timed here: the device has no timestamp queries.
+    pub fn take_frame_gpu_times(&self) -> Result<crate::FrameGpuTimes, &'static str> {
+        let timer = self
+            .frame_gpu_timer()
+            .ok_or("the device has no timestamp queries")?;
+        // Runs the map callbacks of samples whose copies have finished, without waiting.
+        let _ = self.gpu.device().poll(wgpu::PollType::Poll);
+        Ok(timer.take())
     }
 
     /// Where an embedding reports the GPU errors its device's
@@ -817,7 +854,51 @@ impl Renderer {
     /// Existing idle textures are evicted immediately until the pool is within
     /// the new budget. In-flight textures are considered when they return.
     pub fn set_texture_budget_bytes(&self, budget_bytes: u64) {
-        self.textures.set_budget(budget_bytes);
+        self.textures
+            .set_budget(budget_bytes.min(self.pool_budget_cap()));
+    }
+
+    /// Records the adapter's device memory budget, as its graphics API
+    /// reports it (`None` where it reports none), and holds the idle pools to
+    /// a quarter of it: the intermediate texture budget a profile sets (here
+    /// and in [`Self::set_texture_budget_bytes`]) and the upload texture
+    /// pool's default are lowered to that quarter when they would exceed it.
+    /// The budget is reported, not otherwise enforced. Returns whether a pool
+    /// was lowered.
+    pub fn set_gpu_memory_budget(&self, budget_bytes: Option<u64>) -> bool {
+        self.gpu_memory_budget.store(
+            budget_bytes.unwrap_or(0),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        let cap = self.pool_budget_cap();
+        let textures = self.textures.stats().budget_bytes;
+        let uploads = self.upload_textures.stats().budget_bytes;
+        if textures > cap {
+            self.textures.set_budget(cap);
+        }
+        if uploads > cap {
+            self.upload_textures.set_budget(cap);
+        }
+        textures > cap || uploads > cap
+    }
+
+    /// The adapter's device memory budget, when its graphics API reports one
+    /// ([`Self::set_gpu_memory_budget`]).
+    #[must_use]
+    pub fn gpu_memory_budget(&self) -> Option<u64> {
+        match self
+            .gpu_memory_budget
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            0 => None,
+            bytes => Some(bytes),
+        }
+    }
+
+    /// The most an idle pool may keep: a quarter of the device memory budget,
+    /// or no limit when it is unknown.
+    fn pool_budget_cap(&self) -> u64 {
+        self.gpu_memory_budget().map_or(u64::MAX, |bytes| bytes / 4)
     }
 
     /// Applies filter and temporal sampling controls.
@@ -944,6 +1025,13 @@ impl Renderer {
             quality.motion_blur_subframes,
             self.degradations(),
         )
+    }
+
+    /// The effect and composite pipelines created since the last call, oldest
+    /// first (at most the last 256), with when each creation began and ended:
+    /// a host traces them against the frames that waited for them.
+    pub fn take_pipeline_creations(&self) -> Vec<crate::PipelineCreation> {
+        crate::diagnostics::take_pipeline_creations(&self.diagnostics)
     }
 
     /// Records a host presentation outcome without imposing a product clock.

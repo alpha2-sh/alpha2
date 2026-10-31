@@ -315,7 +315,8 @@ pub struct ResolvedVideoRate {
 impl ResolvedVideoRate {
     /// The export result's `videoRateControl`, with what the encoder ran.
     ///
-    /// `applied` is `quantizer` or `bitrate`; a quantizer the encoder refused
+    /// `applied` is `quantizer`, `quality` (the quantizer mapped onto an
+    /// encoder's own quality scale) or `bitrate`; a quantizer the encoder refused
     /// falls back to the bitrate silently to the caller and visibly here, with
     /// the reason in `quantizerRefused`.
     pub fn to_json(
@@ -481,18 +482,28 @@ pub enum VideoDecodePolicy {
 }
 
 impl Default for VideoDecodePolicy {
-    /// Linux defaults to the resident GPU path; other platforms stay on the CPU.
+    /// `auto` on Linux and macOS, `software` on Windows, by measurement.
     ///
     /// The rule for every platform: the default is `auto` only where measured
-    /// exports show a gain, and `software` everywhere else until they do.
-    ///
-    /// On Linux the shared Vulkan device measured no regression across encoder
-    /// configurations and a large gain wherever the encoder competes for the
-    /// CPU, and a device that cannot decode falls back with its reason
-    /// reported. macOS and Windows have not shown that gain, so enabling them
-    /// by default would only add an interop path to every export.
+    /// exports decode exactly as software does (imported surfaces within one
+    /// code of a software decode, 8-bit and 10-bit), with no fallback, no
+    /// slower (steady milliseconds per frame at most 1.02 times software's),
+    /// and with a gain: at most 0.8 times the host CPU per frame, or 0.95
+    /// times the steady time. Measured 2026-10-31 on the default adapter and
+    /// encoder, a 1080p30 H.264 source exported full frame with an overlay and
+    /// on its own, three alternating rounds of the release host:
+    /// - Linux, RTX 4090, Vulkan Video into `h264_vulkan`: steady 0.99 and
+    ///   1.02 times software, host CPU 0.26 and 0.33 times; passes.
+    /// - macOS, Apple M4, `VideoToolbox` into `h264_videotoolbox`: steady 1.00
+    ///   and 1.00 times, host CPU 0.53 and 0.43 times; passes.
+    /// - Windows, Iris Xe, D3D12VA into `h264_d3d12va`: steady 1.09 and 1.26
+    ///   times software (both hardware configurations bistable between runs),
+    ///   host CPU 0.42 and 0.29 times; fails on the steady time.
     fn default() -> Self {
-        if cfg!(all(target_os = "linux", feature = "hwdecode")) {
+        if cfg!(all(
+            any(target_os = "linux", target_os = "macos"),
+            feature = "hwdecode"
+        )) {
             Self::Auto
         } else {
             Self::Software
@@ -798,17 +809,17 @@ pub fn decoder_session_count(
     }
 }
 
-/// What one decoder session of a video of `luma_samples` per frame is
-/// estimated to hold: 8-bit 4:2:0 frames, as many as `threads` frame
-/// threads keep (two each: the one it decodes and the one it hands on) plus
-/// four, for the references, the frame returned and the one decoded ahead.
-/// Measured with H.264 at the default threads, software sessions held 24
-/// frames at 1080p and at 4K, against 26 here; one with a single thread held
-/// four.
-pub fn decoder_session_bytes(luma_samples: u64, threads: i64) -> u64 {
-    let frame = luma_samples.saturating_mul(3).div_ceil(2);
+/// What one decoder session of a video whose decoded pictures hold
+/// `frame_bytes` each is estimated to hold: as many pictures as `threads`
+/// frame threads keep (two each: the one it decodes and the one it hands on)
+/// plus four, for the references, the frame returned and the one decoded
+/// ahead. Measured with 8-bit H.264 at the default threads, software sessions
+/// held 24 frames at 1080p and at 4K, against 26 here; one with a single
+/// thread held four. The picture's own format sizes it, so a 10-bit stream
+/// counts twice an 8-bit one of its size.
+pub fn decoder_session_bytes(frame_bytes: u64, threads: i64) -> u64 {
     let threads = u64::try_from(threads.max(1)).unwrap_or(1);
-    frame.saturating_mul(threads.saturating_mul(2).saturating_add(4))
+    frame_bytes.saturating_mul(threads.saturating_mul(2).saturating_add(4))
 }
 
 /// Video frames in flight between render and encode, from `ALPHA2_EXPORT_IN_FLIGHT_FRAMES`,
@@ -1059,10 +1070,13 @@ mod tests {
     }
 
     #[test]
-    fn the_default_mode_follows_the_platform() {
+    fn the_decode_default_is_auto_where_measured() {
         use super::VideoDecodePolicy;
 
-        let expected = if cfg!(all(target_os = "linux", feature = "hwdecode")) {
+        let expected = if cfg!(all(
+            any(target_os = "linux", target_os = "macos"),
+            feature = "hwdecode"
+        )) {
             VideoDecodePolicy::Auto
         } else {
             VideoDecodePolicy::Software
@@ -1112,14 +1126,22 @@ mod tests {
     }
 
     #[test]
-    fn a_decoder_session_is_estimated_as_its_frames_and_two_per_thread() {
+    fn a_decoder_session_is_estimated_from_its_frame_bytes() {
         use super::decoder_session_bytes;
 
-        let hd = 1920 * 1080;
-        // 1080p at eleven threads, the default split of this machine's 22: 26 frames, against the
-        // 24 measured.
+        let hd = 1920 * 1080 * 3 / 2;
+        // 1080p 8-bit 4:2:0 at eleven threads, the default split of this machine's 22: 26
+        // frames, against the 24 measured.
         assert_eq!(decoder_session_bytes(hd, 11), 3_110_400 * 26);
         assert_eq!(decoder_session_bytes(hd, 1), 3_110_400 * 6);
+        // A 10-bit 4K picture (yuv420p10le, two bytes a sample, as the probe reports it) is twice
+        // the 8-bit one, and so is the session.
+        let (uhd_8, uhd_10) = (3840 * 2160 * 3 / 2, 3840 * 2160 * 3);
+        assert_eq!(
+            decoder_session_bytes(uhd_10, 11),
+            2 * decoder_session_bytes(uhd_8, 11)
+        );
+        assert_eq!(decoder_session_bytes(uhd_10, 11), 24_883_200 * 26);
         // No thread count below one, and no video at all costs nothing.
         assert_eq!(decoder_session_bytes(hd, 0), decoder_session_bytes(hd, 1));
         assert_eq!(decoder_session_bytes(0, 11), 0);

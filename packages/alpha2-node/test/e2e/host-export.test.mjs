@@ -64,6 +64,10 @@ function assertDeclaredPerformance(performance, path) {
       typeof value === "object" &&
       value !== null &&
       Object.values(value).every(Number.isSafeInteger),
+    hardwareFallbackMessages: (value) =>
+      typeof value === "object" &&
+      value !== null &&
+      Object.values(value).every((message) => typeof message === "string"),
     encodeChannelDepthSamples: (value) =>
       Array.isArray(value) && value.every(Number.isSafeInteger),
     gpuEncodeBudget: (value) =>

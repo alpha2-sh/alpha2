@@ -28,6 +28,7 @@ members = [
     "bindings/alpha2-python",
     "tests/alloc_budget",
     "tests/audio_determinism",
+    "tests/extension_raster_pins",
     "tests/facade_without_wgpu",
     "tests/golden_support",
     "tests/provider_contract",

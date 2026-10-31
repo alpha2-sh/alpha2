@@ -24,6 +24,10 @@ pub enum Capability {
     VulkanVideo,
     /// Vulkan Video H.264 encode on the shared device.
     VulkanVideoEncode,
+    /// Vulkan Video VP9 decode on the shared device.
+    VulkanVideoVp9,
+    /// Vulkan Video HEVC encode on the shared device.
+    VulkanVideoEncodeHevc,
     /// The Khronos validation layer, 1.4 or newer.
     VulkanValidation,
     /// A Khronos validation layer older than 1.4.
@@ -110,6 +114,8 @@ impl Capability {
         Self::Vulkan,
         Self::VulkanVideo,
         Self::VulkanVideoEncode,
+        Self::VulkanVideoVp9,
+        Self::VulkanVideoEncodeHevc,
         Self::VulkanValidation,
         Self::OldVulkanValidationLayer,
         Self::D3d12Video,
@@ -158,6 +164,8 @@ impl Capability {
             Self::Vulkan => "vulkan",
             Self::VulkanVideo => "vulkan-video",
             Self::VulkanVideoEncode => "vulkan-video-encode",
+            Self::VulkanVideoVp9 => "vulkan-video-vp9",
+            Self::VulkanVideoEncodeHevc => "vulkan-video-encode-hevc",
             Self::VulkanValidation => "vulkan-validation",
             Self::OldVulkanValidationLayer => "old-vulkan-validation-layer",
             Self::D3d12Video => "d3d12-video",

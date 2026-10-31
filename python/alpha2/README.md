@@ -176,7 +176,7 @@ print(result["stills"][0]["frameTime"])  # the grid frame that holds 1.5 s, in t
 the frames, and `video_decode=` (`"software"`, `"auto"`, `"hardware-required"`) how video is
 decoded, on `HostClient(...)` for every request or per call to `export`, `still` and
 `capabilities`. Unset, the host reads `ALPHA2_RENDERER` and `ALPHA2_VIDEO_DECODE`, else decides:
-`auto` renderer, and `auto` decode on Linux, `software` on macOS and Windows.
+`auto` renderer, and `auto` decode on Linux and macOS, `software` on Windows.
 
 - `auto` renders on a hardware GPU when there is one and on the CPU otherwise, never on a software
   GPU adapter (lavapipe, llvmpipe, WARP, SwiftShader). `gpu` takes whatever adapter the host finds

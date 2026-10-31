@@ -28,6 +28,19 @@ pub enum VideoToolboxCodec {
 }
 
 impl VideoToolboxCodec {
+    /// Every codec, in the order a device's list names them.
+    const ALL: [Self; 4] = [Self::H264, Self::Hevc, Self::Vp9, Self::Av1];
+
+    /// The codec's `FFmpeg` name, as conform and `capabilities.decode` spell it.
+    const fn name(self) -> &'static str {
+        match self {
+            Self::H264 => "h264",
+            Self::Hevc => "hevc",
+            Self::Vp9 => "vp9",
+            Self::Av1 => "av1",
+        }
+    }
+
     /// The `CMVideoCodecType` four-character code.
     const fn four_cc(self) -> u32 {
         u32::from_be_bytes(*match self {
@@ -48,8 +61,73 @@ pub fn videotoolbox_hardware_decodes(codec: VideoToolboxCodec) -> bool {
     unsafe { alpha2_native_gpu_vt_hardware_decodes(codec.four_cc()) != 0 }
 }
 
+/// The codecs `VideoToolbox` decodes in hardware on this machine, by `FFmpeg`
+/// name, asked once per process: the answer is the machine's, not a device's.
+fn hardware_decode_codecs() -> &'static [&'static str] {
+    static CODECS: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+    CODECS.get_or_init(|| {
+        VideoToolboxCodec::ALL
+            .into_iter()
+            .filter(|codec| videotoolbox_hardware_decodes(*codec))
+            .map(VideoToolboxCodec::name)
+            .collect()
+    })
+}
+
+/// The system-wide `IOSurface` ID behind a `VideoToolbox` frame's pixel
+/// buffer, or `None` for a frame without one. The ID names the surface even
+/// when `CoreVideo` hands it over in a new pixel buffer, so a count of IDs is
+/// a count of the decoder's surfaces.
+#[must_use]
+pub fn videotoolbox_surface_id(frame: &VideoToolboxFrameLease) -> Option<u32> {
+    let pixel_buffer = usize::try_from(frame.info().ok()?.pixel_buffer).ok()? as *mut c_void;
+    // SAFETY: the lease holds the frame, and with it the pixel buffer, for the call; the helper
+    // accepts null.
+    let id = unsafe { alpha2_native_gpu_iosurface_id(pixel_buffer) };
+    (id != 0).then_some(id)
+}
+
+/// `alpha2_native_gpu_metal_encoder_plane`'s refusals in words.
+fn encoder_plane_reason(code: i32) -> &'static str {
+    match code {
+        -1 => "bad argument",
+        -2 => "not 8-bit video-range NV12",
+        -3 => "not two planes",
+        -4 => "no IOSurface",
+        -5 => "Metal returned no texture",
+        -6 => "not an Apple-family GPU",
+        _ => "unknown refusal",
+    }
+}
+
+/// `alpha2_native_gpu_metal_frame_info`'s refusals in words.
+fn frame_info_reason(code: i32) -> &'static str {
+    match code {
+        -1 => "null argument",
+        -2 => "pixel format is not 420v/420f/x420/xf20",
+        -3 => "not two planes",
+        -4 => "no IOSurface",
+        _ => "unknown refusal",
+    }
+}
+
+/// A `CoreVideo` pixel format as its four characters, or in hex when they are
+/// not all printable ASCII.
+fn four_cc_text(format: u32) -> String {
+    let bytes = format.to_be_bytes();
+    if bytes
+        .iter()
+        .all(|byte| byte.is_ascii_graphic() || *byte == b' ')
+    {
+        bytes.iter().map(|byte| char::from(*byte)).collect()
+    } else {
+        format!("0x{format:08x}")
+    }
+}
+
 unsafe extern "C" {
     fn alpha2_native_gpu_vt_hardware_decodes(codec_type: u32) -> i32;
+    fn alpha2_native_gpu_iosurface_id(pixel_buffer: *mut c_void) -> u32;
     fn alpha2_native_gpu_metal_cache_create(device: *mut c_void, output: *mut *mut c_void) -> i32;
     fn alpha2_native_gpu_metal_cache_destroy(cache: *mut c_void);
     fn alpha2_native_gpu_metal_frame_info(
@@ -79,6 +157,8 @@ unsafe extern "C" {
 const PIXEL_FORMAT_420_10_VIDEO_RANGE: u32 = u32::from_be_bytes(*b"x420");
 /// `kCVPixelFormatType_420YpCbCr10BiPlanarFullRange`.
 const PIXEL_FORMAT_420_10_FULL_RANGE: u32 = u32::from_be_bytes(*b"xf20");
+/// `kCVPixelFormatType_420YpCbCr8BiPlanarFullRange`.
+const PIXEL_FORMAT_420_8_FULL_RANGE: u32 = u32::from_be_bytes(*b"420f");
 
 /// How long a wait on the renderer's queue may take, in milliseconds.
 static WAIT_TIMEOUT_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(30_000);
@@ -259,6 +339,14 @@ pub struct ImportedMetalFrame {
     /// `CoreVideo` may hand back a buffer larger than the display size, so this
     /// is the extent presentation must normalize sample coordinates against.
     pub coded_size: [u32; 2],
+    /// Whether the planes hold full-range samples, from the buffer's pixel
+    /// format (`420f`/`xf20` full, `420v`/`x420` video range). The buffer is
+    /// what the samples are, whatever the stream's tag says: `VideoToolbox`
+    /// hands back an HEVC-with-alpha base layer converted to video range
+    /// from a full-range tag.
+    pub full_range: bool,
+    /// The buffer's pixel format as its four characters, for a report.
+    pub pixel_format: String,
     /// Decoder and `CoreVideo` ownership retained through queue completion.
     pub lease: Arc<MetalImportLease>,
 }
@@ -335,6 +423,8 @@ impl SharedMetalContext {
             epoch: 1,
         };
         drop(hal);
+        // Asked here, before any export, so a session never pays for the query.
+        hardware_decode_codecs();
         Ok(Self {
             gpu,
             cache: Arc::new(MetalCache { raw: cache }),
@@ -358,6 +448,14 @@ impl SharedMetalContext {
             .device()
             .features()
             .contains(wgpu::Features::TEXTURE_FORMAT_16BIT_NORM)
+    }
+
+    /// The codecs `VideoToolbox` decodes in hardware here, by `FFmpeg` name
+    /// (`h264`, `hevc`, `vp9`, `av1`), as `VTIsHardwareDecodeSupported`
+    /// answers per codec, not per profile.
+    #[must_use]
+    pub fn decode_codecs(&self) -> &'static [&'static str] {
+        hardware_decode_codecs()
     }
 
     /// Raw-device cache identity.
@@ -388,9 +486,15 @@ impl SharedMetalContext {
         // SAFETY: the retained AVFrame owns `pixel_buffer`, and output is writable.
         let result = unsafe { alpha2_native_gpu_metal_frame_info(pixel_buffer, &raw mut info) };
         if result != 0 {
-            return Err(BridgeError::InvalidInput(
-                "VideoToolbox frame is not an IOSurface-backed 4:2:0 buffer",
-            ));
+            return Err(BridgeError::UnsupportedSurface(format!(
+                "VideoToolbox frame {} ({}x{}, {} planes) is not an IOSurface-backed 4:2:0 \
+                 buffer: {}",
+                four_cc_text(info.pixel_format),
+                info.width,
+                info.height,
+                info.plane_count,
+                frame_info_reason(result)
+            )));
         }
         let layout = match info.pixel_format {
             PIXEL_FORMAT_420_10_VIDEO_RANGE | PIXEL_FORMAT_420_10_FULL_RANGE => {
@@ -485,6 +589,11 @@ impl SharedMetalContext {
                 info.clean_height,
             ],
             coded_size: [info.plane_width[0], info.plane_height[0]],
+            full_range: matches!(
+                info.pixel_format,
+                PIXEL_FORMAT_420_8_FULL_RANGE | PIXEL_FORMAT_420_10_FULL_RANGE
+            ),
+            pixel_format: four_cc_text(info.pixel_format),
             lease,
         })
     }
@@ -530,7 +639,9 @@ impl SharedMetalContext {
             };
             if result != 0 {
                 return Err(SharedMetalError(format!(
-                    "encoder pixel buffer plane {plane} cannot be a Metal render target ({result})"
+                    "encoder pixel buffer plane {plane} cannot be a Metal render target: {} \
+                     ({result})",
+                    encoder_plane_reason(result)
                 )));
             }
             // SAFETY: a non-null result is the +1 id<MTLTexture> the helper transferred to us.

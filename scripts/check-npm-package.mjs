@@ -63,9 +63,9 @@ const wasmBudgets = {
   // grid and the CSS value parsers (about 810 KB), and the CPU renderer a browser without a GPU
   // draws with (about 260 KB) and its kernels for the built-in effects and transitions (about
   // 530 KB), and text looks and animators: gradient fills, stacked strokes, cluster layout,
-  // selection and per-cluster transformed rasters (about 640 KB). Rust 1.99.0 builds 9,019,282
-  // bytes.
-  "alpha2_wasm_bg.wasm": 9_470_246,
+  // selection and per-cluster transformed rasters (about 640 KB), and font family matching with
+  // its Unicode normalization tables. Rust 1.99.0 builds 9,339,479 bytes.
+  "alpha2_wasm_bg.wasm": 9_806_453,
   // Includes the band-limited resampling converter. Rust 1.99.0 builds 113,964 bytes.
   "alpha2_audio_worklet.wasm": 119_662,
   // Loaded only for SVG, animated image, Lottie, OpenEXR or image sequence sources. Rust 1.99.0

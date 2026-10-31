@@ -24,6 +24,7 @@ fn nv12_capability() -> alpha2_native::HardwareEncodeCapability {
         plane_ring_slots: 4,
         handoff_retained_surfaces: 4,
         codec_retained_surfaces: 0,
+        default_channel_depth: 2,
     }
 }
 
@@ -87,15 +88,12 @@ fn the_gpu_budget_counts_the_ring_the_surfaces_and_what_the_handoff_retains() {
     )
     .expect("roomy");
     let budget = roomy.gpu.expect("gpu budget");
-    assert_eq!(
-        roomy.encode_channel_depth,
-        crate::metrics::GPU_DEFAULT_ENCODE_CHANNEL_DEPTH
-    );
+    assert_eq!(roomy.encode_channel_depth, capability.default_channel_depth);
     assert_eq!(budget.surface_bytes, surface);
     assert_eq!(budget.ring_bytes, ring);
     assert_eq!(
         budget.surface_ceiling(),
-        crate::metrics::GPU_DEFAULT_ENCODE_CHANNEL_DEPTH + 2 + 4
+        capability.default_channel_depth + 2 + 4
     );
     let deep = gpu_encode_pipeline_limits(
         &capability,
@@ -192,6 +190,7 @@ fn direct_target_capability() -> alpha2_native::HardwareEncodeCapability {
         plane_ring_slots: 0,
         handoff_retained_surfaces: 0,
         codec_retained_surfaces: 6,
+        default_channel_depth: 0,
     }
 }
 
@@ -218,13 +217,10 @@ fn the_gpu_budget_of_a_direct_target_holds_the_surfaces_the_codec_keeps() {
     assert_eq!(budget.surface_bytes, surface);
     assert_eq!(budget.ring_bytes, 0);
     assert_eq!(budget.retained_surfaces, 6);
-    assert_eq!(
-        roomy.encode_channel_depth,
-        crate::metrics::GPU_DEFAULT_ENCODE_CHANNEL_DEPTH
-    );
+    assert_eq!(roomy.encode_channel_depth, capability.default_channel_depth);
     assert_eq!(
         budget.surface_ceiling(),
-        crate::metrics::GPU_DEFAULT_ENCODE_CHANNEL_DEPTH + 2 + 6
+        capability.default_channel_depth + 2 + 6
     );
     assert_eq!(roomy.staging_bytes_per_frame, 0);
 
@@ -287,7 +283,7 @@ fn input_policies_parse_and_classify() {
 fn the_input_policy_and_a_pinned_encoder_choose_the_output_path() {
     use crate::config::VideoInputPolicy;
     let _gpu = gpu_test_lock();
-    let Some((mut host, capability, _)) = gpu_output_host(VideoDecodePolicy::Auto) else {
+    let Some((mut host, capability)) = gpu_output_host(VideoDecodePolicy::Auto) else {
         return;
     };
     let encoder = capability.encoder;
@@ -439,7 +435,7 @@ fn the_input_policy_and_a_pinned_encoder_choose_the_output_path() {
 #[test]
 fn the_capability_lists_each_codec_the_path_takes() {
     let _gpu = gpu_test_lock();
-    let host = create_host(VideoDecodePolicy::Auto).expect("host");
+    let host = create_media_host(VideoDecodePolicy::Auto).expect("host");
     let path = host.capability_report().encode["gpuOutputPath"].clone();
     let codecs = path["codecs"].as_array().expect("codecs").clone();
     if path["available"] == json!(false) {
@@ -463,7 +459,7 @@ fn the_capability_lists_each_codec_the_path_takes() {
             codecs[0]["rateControlModes"], path["rateControlModes"],
             "{path}"
         );
-        if !cfg!(target_os = "windows") {
+        if cfg!(target_os = "macos") {
             assert_eq!(codecs.len(), 1, "{path}");
         }
     }
@@ -528,7 +524,7 @@ fn rejection_request(directory: &std::path::Path, policy: &str) -> Value {
 #[test]
 fn a_rejected_gpu_frame_restarts_the_export_on_the_readback_path() {
     let _gpu = gpu_test_lock();
-    let Some((mut host, _, _)) = gpu_output_host(VideoDecodePolicy::Software) else {
+    let Some((mut host, _)) = gpu_output_host(VideoDecodePolicy::Software) else {
         return;
     };
     let directory = scratch_directory("rejected-restart");
@@ -573,7 +569,7 @@ fn a_rejected_gpu_frame_restarts_the_export_on_the_readback_path() {
 #[test]
 fn gpu_required_does_not_restart_after_a_rejected_frame() {
     let _gpu = gpu_test_lock();
-    let Some((mut host, _, _)) = gpu_output_host(VideoDecodePolicy::Software) else {
+    let Some((mut host, _)) = gpu_output_host(VideoDecodePolicy::Software) else {
         return;
     };
     let directory = scratch_directory("rejected-required");

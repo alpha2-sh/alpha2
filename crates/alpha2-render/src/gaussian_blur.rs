@@ -412,7 +412,7 @@ impl<'a> RenderGraph<'a> {
                     .with("sigma", ParamValue::Float(pass / spacing)),
                 runtime,
             )?;
-            blurred = blurred.hypot(pass);
+            blurred = libm::hypotf(blurred, pass);
             if pass < MAX_PASS_SIGMA_TAPS * spacing {
                 break;
             }

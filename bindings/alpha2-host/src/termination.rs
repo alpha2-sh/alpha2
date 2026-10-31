@@ -137,6 +137,17 @@ impl Terminations {
         "pending"
     }
 
+    /// Cancels every running export for a cause the caller recorded as their
+    /// failure first (the memory watchdog's): neither a termination nor the
+    /// client's cancel, so the exports report that cause, not a cancel.
+    // Only the Linux memory watchdog stops exports this way.
+    #[cfg_attr(not(any(target_os = "linux", target_os = "android")), allow(dead_code))]
+    pub(crate) fn cancel_running(&self) {
+        for (_, token) in &self.lock().running {
+            token.cancel();
+        }
+    }
+
     /// Marks the process as busy for the rest of its life: one that answers
     /// a single request and then exits through `main`, which reports it.
     pub(crate) fn hold_busy(&self) {

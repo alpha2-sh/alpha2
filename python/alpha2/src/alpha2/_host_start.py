@@ -4,6 +4,7 @@ refused it, a loader that cannot run it."""
 from __future__ import annotations
 
 import errno
+import os
 import re
 import sys
 from pathlib import Path
@@ -115,3 +116,34 @@ def glibc_hint(stderr: str) -> str:
     kind, version = _linux_libc() if sys.platform.startswith("linux") else ("unknown", None)
     has = f"glibc {version}" if kind == "glibc" and version else kind
     return f"; this alpha2-host needs glibc {LINUX_GLIBC_FLOOR} or later (this system has {has})"
+
+
+def oom_kill_count() -> int | None:
+    """How many processes the kernel's out-of-memory killer has ended in this process's cgroup (the
+    ``oom_kill`` line of cgroup v2's ``memory.events``), or ``None`` where there is none to read:
+    off Linux, outside cgroup v2, or without the file. A host started by this process runs in the
+    same cgroup, so a count that rose while a SIGKILLed host ran says the kernel killed it.
+    ``ALPHA2_TEST_MEMORY_EVENTS`` names another file to read, for tests only."""
+    path = os.environ.get("ALPHA2_TEST_MEMORY_EVENTS")
+    if path is None:
+        if not sys.platform.startswith("linux"):
+            return None
+        try:
+            with open("/proc/self/cgroup", encoding="utf-8") as membership:
+                relative = next(
+                    (line[3:].strip() for line in membership if line.startswith("0::")), None
+                )
+        except OSError:
+            return None
+        if relative is None:
+            return None
+        path = f"/sys/fs/cgroup{relative.rstrip('/')}/memory.events"
+    try:
+        with open(path, encoding="utf-8") as events:
+            for line in events:
+                name, _, value = line.partition(" ")
+                if name == "oom_kill":
+                    return int(value)
+    except (OSError, ValueError):
+        return None
+    return None

@@ -8,7 +8,10 @@ use super::encoder::{
     length_prefixed, slice_count, thread_count,
 };
 use super::ffi::EncParamExt;
-use super::library::{Lookup, OpenH264Provider, OpenH264Status, cached_library_path, resolve};
+use super::library::{
+    Lookup, MACOS_SYSTEM_CANDIDATES, OpenH264Provider, OpenH264Status, cached_library_path,
+    resolve, system_candidates,
+};
 
 fn settings(rate: OpenH264Rate) -> OpenH264Settings {
     OpenH264Settings {
@@ -194,7 +197,7 @@ fn turned_off_it_loads_nothing() {
         library: Some(PathBuf::from("/nonexistent/libopenh264.so")),
         unverified: false,
         cache: None,
-        system: true,
+        system: system_candidates(),
     });
     assert!(matches!(status, OpenH264Status::Disabled));
     assert_eq!(status.remedy(), None);
@@ -209,7 +212,7 @@ fn nothing_installed_says_where_it_looked_and_how_to_install() {
         library: None,
         unverified: false,
         cache: Some(cache.clone()),
-        system: false,
+        system: &[],
     });
     let OpenH264Status::NotInstalled(reason) = &status else {
         panic!("{status:?}");
@@ -219,6 +222,44 @@ fn nothing_installed_says_where_it_looked_and_how_to_install() {
         assert!(status.remedy().unwrap().contains("install --openh264"));
     }
     std::fs::remove_dir_all(cache).unwrap();
+}
+
+/// macOS looks for a system `OpenH264` at absolute paths alone (`dlopen` of
+/// a leaf name also searches the working directory there), and a lookup that
+/// finds none names every path it looked at.
+#[test]
+fn macos_system_lookup_uses_absolute_paths_only() {
+    assert_eq!(MACOS_SYSTEM_CANDIDATES.len(), 3);
+    for candidate in MACOS_SYSTEM_CANDIDATES {
+        assert!(candidate.starts_with('/'), "{candidate}");
+        assert!(
+            candidate.ends_with("/lib/libopenh264.8.dylib"),
+            "{candidate}"
+        );
+    }
+    if cfg!(target_os = "macos") {
+        assert_eq!(system_candidates(), MACOS_SYSTEM_CANDIDATES);
+    }
+    let status = resolve(&Lookup {
+        enabled: None,
+        library: None,
+        unverified: false,
+        cache: None,
+        system: MACOS_SYSTEM_CANDIDATES,
+    });
+    match &status {
+        OpenH264Status::NotInstalled(reason) => {
+            for candidate in MACOS_SYSTEM_CANDIDATES {
+                assert!(reason.contains(candidate), "{reason}");
+            }
+        }
+        // A Mac with Homebrew's or MacPorts' package.
+        OpenH264Status::Available(library) if cfg!(target_os = "macos") => {
+            assert_eq!(library.provider(), OpenH264Provider::System);
+            assert!(MACOS_SYSTEM_CANDIDATES.contains(&library.path()));
+        }
+        other => panic!("{other:?}"),
+    }
 }
 
 #[test]
@@ -233,7 +274,7 @@ fn a_library_with_another_hash_is_refused_before_it_is_loaded() {
         library: Some(path.clone()),
         unverified: false,
         cache: None,
-        system: false,
+        system: &[],
     });
     let OpenH264Status::Unusable(reason) = &status else {
         panic!("{status:?}");
@@ -251,7 +292,7 @@ fn a_library_with_another_hash_is_refused_before_it_is_loaded() {
             library: None,
             unverified: false,
             cache: Some(dir.clone()),
-            system: false,
+            system: &[],
         });
         assert!(matches!(status, OpenH264Status::Unusable(_)), "{status:?}");
         assert!(status.remedy().unwrap().contains("--force"));
@@ -269,7 +310,7 @@ fn an_unverified_file_that_is_not_a_library_is_reported_with_the_loader_message(
         library: Some(path),
         unverified: true,
         cache: None,
-        system: false,
+        system: &[],
     });
     let OpenH264Status::Unusable(reason) = &status else {
         panic!("{status:?}");
@@ -297,7 +338,7 @@ fn a_quarantined_library_refusal_names_gatekeeper() {
         library: Some(path.clone()),
         unverified: true,
         cache: None,
-        system: false,
+        system: &[],
     });
     let OpenH264Status::Unusable(reason) = &status else {
         panic!("{status:?}");
@@ -382,7 +423,7 @@ fn a_library_of_another_api_version_or_without_the_entry_points_is_refused() {
             library: Some(path),
             unverified: true,
             cache: None,
-            system: false,
+            system: &[],
         })
     };
     let Some(newer) = fake_library(
@@ -445,7 +486,7 @@ fn cisco_s_binary_loads_as_itself() {
         library: Some(PathBuf::from(path)),
         unverified: false,
         cache: None,
-        system: false,
+        system: &[],
     });
     let OpenH264Status::Available(library) = status else {
         panic!("{status:?}");

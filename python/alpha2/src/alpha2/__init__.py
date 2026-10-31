@@ -81,7 +81,14 @@ from .install import (
 )
 from .measure import LayoutBounds, NodeBounds, TextBounds, TextMeasurer
 from .protocol import PROTOCOL_VERSION
-from .results import ExportResult, PublishReport, StillResult
+from .results import (
+    AdapterCandidate,
+    AdapterChoice,
+    ExportResult,
+    PublishReport,
+    StillResult,
+    VideoEncoderFallback,
+)
 from .values import constant, key, keyframes, lift, point_key, point_keyframes
 
 __all__ = [
@@ -90,6 +97,8 @@ __all__ = [
     "PROTOCOL_VERSION",
     "QUALITY_LEVELS",
     "TICKS_PER_SECOND",
+    "AdapterCandidate",
+    "AdapterChoice",
     "Alpha2AbortError",
     "Alpha2ComposeError",
     "Alpha2ConformError",
@@ -112,6 +121,7 @@ __all__ = [
     "TextMeasurer",
     "Ticks",
     "TrackBuilder",
+    "VideoEncoderFallback",
     "__version__",
     "capabilities",
     "compose",

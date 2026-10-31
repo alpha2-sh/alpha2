@@ -98,7 +98,7 @@ fn every_extension_corpus_file_keeps_the_contract() {
             .and_then(|name| name.to_str())
             .unwrap_or_default();
         let extension = path.extension().and_then(|extension| extension.to_str());
-        if matches!(extension, Some("rgba" | "py")) || name == "MANIFEST.json" {
+        if path.is_dir() || matches!(extension, Some("rgba" | "py")) || name == "MANIFEST.json" {
             continue;
         }
         let bytes = std::fs::read(&path).expect("read");

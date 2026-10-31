@@ -125,7 +125,7 @@ fn content_bounds(layer: &LayerInput<'_>, size: RenderSize) -> Option<PixelBox> 
     let texel = (f64::from(visual.scale[0]).abs() * width / f64::from(source.width))
         .max(f64::from(visual.scale[1]).abs() * height / f64::from(source.height));
     let margin = 4.0 + 2.0 * texel.max(1.0);
-    let (turn_sin, turn_cos) = f64::from(visual.rotation_degrees).to_radians().sin_cos();
+    let (turn_sin, turn_cos) = libm::sincos(f64::from(visual.rotation_degrees).to_radians());
     let corner = |u: f64, v: f64| {
         let x = (u - f64::from(visual.anchor[0])) * f64::from(visual.scale[0]) * width;
         let y = (v - f64::from(visual.anchor[1])) * f64::from(visual.scale[1]) * height;

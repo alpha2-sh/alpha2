@@ -37,12 +37,15 @@ pub enum HardwareVideoDecode {
     #[default]
     None,
     /// A device that decodes these codecs, by `FFmpeg` decoder name.
-    // Only a Vulkan device lists its codecs; macOS and Windows hosts build it in tests alone.
-    #[cfg_attr(not(all(target_os = "linux", feature = "hwdecode")), allow(dead_code))]
+    // Vulkan and VideoToolbox list their codecs; Windows hosts build it in tests alone.
+    #[cfg_attr(
+        not(all(any(target_os = "linux", target_os = "macos"), feature = "hwdecode")),
+        allow(dead_code)
+    )]
     Codecs(Vec<&'static str>),
     /// A device that says whether it decodes a stream only when a session
-    /// for that stream opens (`VideoToolbox`, D3D12), so a stream is assumed
-    /// decodable until then.
+    /// for that stream opens (D3D12), so a stream is assumed decodable until
+    /// then.
     PerStream,
 }
 
@@ -131,10 +134,35 @@ pub struct ResolvedMedia {
     pub report: ConformReport,
     /// Each readable source's selected file, by source ID.
     pub paths: HashMap<String, PathBuf>,
-    /// Luma samples in the stored frames of each selected file's video
-    /// stream, by source ID, as the probe above read them: what sizes a
-    /// software decode session, so the export need not open the file again.
-    pub video_pixels: HashMap<String, u64>,
+    /// The stored frames of each selected file's video stream, by source
+    /// ID, as the probe above read them: what sizes a decode session, so the
+    /// export need not open the file again.
+    pub video_frames: HashMap<String, VideoFrameSize>,
+}
+
+/// One video stream's stored frames: what sizes a decode session.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct VideoFrameSize {
+    /// Luma samples, which the decoder's thread count follows.
+    pub pixels: u64,
+    /// Bytes one decoded picture holds (`StreamInfo::frame_bytes`; the
+    /// 8-bit 4:2:0 size when the format is not known), which a session's
+    /// memory estimate counts.
+    pub bytes: u64,
+}
+
+impl VideoFrameSize {
+    /// The frames of `video`, or `None` for a stream without a size.
+    pub fn of(video: &alpha2_media::StreamInfo) -> Option<Self> {
+        let (width, height) = video.dimensions?;
+        let pixels = u64::from(width).saturating_mul(u64::from(height));
+        Some(Self {
+            pixels,
+            bytes: video
+                .frame_bytes
+                .unwrap_or_else(|| pixels.saturating_mul(3).div_ceil(2)),
+        })
+    }
 }
 
 /// Finds and checks the media of every host-supplied source `project` reads.
@@ -150,7 +178,7 @@ pub fn resolve_media(
 ) -> ResolvedMedia {
     let mut assets = Vec::new();
     let mut proxy_paths = HashMap::new();
-    let mut pixels = HashMap::<PathBuf, u64>::new();
+    let mut frames = HashMap::<PathBuf, VideoFrameSize>::new();
     for source in project
         .used_sources()
         .into_iter()
@@ -175,20 +203,23 @@ pub fn resolve_media(
         }
         let hash = hash_recorded;
         let still = source.kind == MediaKind::Image;
+        let mut alpha_dropped = None;
         let mut entry = AssetEntry::new(
             source.id.clone(),
             0,
             original.map_or(OriginalState::Offline { path: None }, |path| {
-                let (state, found) = original_state(path, hash, still, hardware);
-                pixels.extend(found.map(|found| (path.to_path_buf(), found)));
+                let (state, found, alpha) = original_state(path, hash, still, hardware);
+                frames.extend(found.map(|found| (path.to_path_buf(), found)));
+                alpha_dropped = alpha;
                 state
             }),
         );
+        entry.alpha_dropped = alpha_dropped.map(str::to_owned);
         for (index, proxy) in proxies.iter().enumerate() {
             let id = format!("{}#proxy{index}", source.id);
             let (variant, found) = proxy_variant(&id, proxy, hardware);
             entry.proxies.push(variant);
-            pixels.extend(found.map(|found| (proxy.path.clone(), found)));
+            frames.extend(found.map(|found| (proxy.path.clone(), found)));
             proxy_paths.insert(id, proxy.path.clone());
         }
         assets.push(entry);
@@ -207,15 +238,15 @@ pub fn resolve_media(
             Some((source.source_id.as_str().to_owned(), path))
         })
         .collect::<HashMap<_, _>>();
-    let video_pixels = paths
+    let video_frames = paths
         .iter()
-        .filter_map(|(id, path)| Some((id.clone(), *pixels.get(path)?)))
+        .filter_map(|(id, path)| Some((id.clone(), *frames.get(path)?)))
         .collect();
     ResolvedMedia {
         catalog,
         report,
         paths,
-        video_pixels,
+        video_frames,
     }
 }
 
@@ -386,36 +417,37 @@ fn sequence_original(
     })
 }
 
-/// What an original is, and the luma samples of its stored video frames.
+/// What an original is, the luma samples of its stored video frames, and why its alpha is not
+/// decoded when it is not.
 fn original_state(
     path: &Path,
     hash: bool,
     still: bool,
     hardware: &HardwareVideoDecode,
-) -> (OriginalState, Option<u64>) {
+) -> (OriginalState, Option<VideoFrameSize>, Option<&'static str>) {
     if !path.is_file() {
-        return (offline(path), None);
+        return (offline(path), None, None);
     }
     match probe_media(path, hash, still, hardware) {
-        Ok((fingerprint, pixels)) => (OriginalState::Online { fingerprint }, pixels),
-        Err(reason) => (OriginalState::Unsupported { reason }, None),
+        Ok((fingerprint, frames, alpha)) => (OriginalState::Online { fingerprint }, frames, alpha),
+        Err(reason) => (OriginalState::Unsupported { reason }, None, None),
     }
 }
 
-/// What a proxy is, and the luma samples of its stored video frames.
+/// What a proxy is, and its stored video frames.
 fn proxy_variant(
     id: &str,
     proxy: &ProxyRequest,
     hardware: &HardwareVideoDecode,
-) -> (ProxyVariant, Option<u64>) {
+) -> (ProxyVariant, Option<VideoFrameSize>) {
     let found = proxy
         .path
         .is_file()
         .then(|| probe_media(&proxy.path, false, false, hardware))
         .ok_or_else(|| "the proxy file is missing".to_owned())
         .and_then(|result| result);
-    let (state, shape, pixels) = match found {
-        Ok((fingerprint, pixels)) => (ProxyState::Ready, Some(fingerprint), pixels),
+    let (state, shape, frames) = match found {
+        Ok((fingerprint, frames, _)) => (ProxyState::Ready, Some(fingerprint), frames),
         Err(reason) => (ProxyState::Failed { reason }, None, None),
     };
     let streams = shape.as_ref().and_then(|shape| shape.streams.as_ref());
@@ -434,7 +466,7 @@ fn proxy_variant(
         color_pipeline: proxy.color_pipeline.clone(),
         state,
     };
-    (variant, pixels)
+    (variant, frames)
 }
 
 /// Evidence of the media at `path`: its length and modification time, what
@@ -456,23 +488,28 @@ pub fn fingerprint(
     still: bool,
     hardware: &HardwareVideoDecode,
 ) -> Result<MediaFingerprint, String> {
-    probe_media(path, hash, still, hardware).map(|(fingerprint, _)| fingerprint)
+    probe_media(path, hash, still, hardware).map(|(fingerprint, _, _)| fingerprint)
 }
 
-/// [`fingerprint`], and the luma samples in the stored frames of the video
-/// stream a decoder opens, which a software decode session is sized from.
+/// [`fingerprint`], the stored frames of the video stream a decoder
+/// opens, which a decode session is sized from, and why that stream's alpha
+/// is not decoded when it is not.
 fn probe_media(
     path: &Path,
     hash: bool,
     still: bool,
     hardware: &HardwareVideoDecode,
-) -> Result<(MediaFingerprint, Option<u64>), String> {
+) -> Result<
+    (
+        MediaFingerprint,
+        Option<VideoFrameSize>,
+        Option<&'static str>,
+    ),
+    String,
+> {
     let metadata = std::fs::metadata(path).map_err(|error| error.to_string())?;
     let probe = alpha2_native::probe(path).map_err(|error| format!("{error}"))?;
-    let stored_pixels = probe.selected_video_stream().and_then(|video| {
-        let (width, height) = video.dimensions?;
-        Some(u64::from(width).saturating_mul(u64::from(height)))
-    });
+    let stored_frames = probe.selected_video_stream().and_then(VideoFrameSize::of);
     let video = probe
         .selected_video_stream()
         .filter(|video| video.kind == StreamKind::Video);
@@ -517,7 +554,8 @@ fn probe_media(
         }),
         color: video.and_then(|video| video.color),
     };
-    Ok((fingerprint, stored_pixels))
+    let alpha_dropped = video.and_then(alpha2_native::alpha_dropped_reason);
+    Ok((fingerprint, stored_frames, alpha_dropped))
 }
 
 /// The rate the video stream at `index` presents its first frames at, as

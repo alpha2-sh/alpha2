@@ -19,7 +19,7 @@ fn every_hardware_fallback_reason_reports_under_its_own_key() {
     ];
     let mut counts = HardwareFallbackCounts::default();
     for reason in reasons {
-        counts.record(reason);
+        counts.record(reason, reason.as_str());
     }
     let entries = counts.entries().collect::<Vec<_>>();
     assert_eq!(entries.len(), reasons.len());
@@ -34,6 +34,49 @@ fn every_hardware_fallback_reason_reports_under_its_own_key() {
             reason.as_str()
         );
     }
+}
+
+/// The first message per reason is what the report keeps: a later fallback of
+/// the same reason, a merged shard's, or one counted before a snapshot does
+/// not replace it.
+#[test]
+fn the_first_fallback_message_per_reason_is_kept() {
+    use alpha2_native::HardwareDecodeFallback::{DecoderOpenFailed, NoHardwareConfig};
+
+    let mut counts = HardwareFallbackCounts::default();
+    counts.record(
+        NoHardwareConfig,
+        "VideoToolbox has no hardware decoder for av1 here",
+    );
+    counts.record(NoHardwareConfig, "a later refusal");
+    let before = counts.clone();
+    let mut shard = HardwareFallbackCounts::default();
+    shard.record(NoHardwareConfig, "a shard's refusal");
+    shard.record(DecoderOpenFailed, "OSStatus -12906");
+    counts.merge(&shard);
+    assert_eq!(
+        counts.messages().collect::<Vec<_>>(),
+        [
+            (
+                "noHardwareConfig",
+                "VideoToolbox has no hardware decoder for av1 here"
+            ),
+            ("decoderOpenFailed", "OSStatus -12906"),
+        ]
+    );
+    assert_eq!(
+        counts.entries().collect::<Vec<_>>(),
+        [("noHardwareConfig", 3), ("decoderOpenFailed", 1)]
+    );
+    let since = counts.since(&before);
+    assert_eq!(
+        since.messages().collect::<Vec<_>>(),
+        [("decoderOpenFailed", "OSStatus -12906")]
+    );
+    assert_eq!(
+        since.entries().collect::<Vec<_>>(),
+        [("noHardwareConfig", 1), ("decoderOpenFailed", 1)]
+    );
 }
 
 /// An explicit `WGPU_BACKEND` without Vulkan skips the Linux shared device,
@@ -171,7 +214,7 @@ fn old_validation_layer_host_child() {
         return;
     };
     drop(context);
-    let host = create_gpu_test_host(VideoDecodePolicy::Auto).expect("an auto host starts");
+    let host = create_gpu_media_host(VideoDecodePolicy::Auto).expect("an auto host starts");
     assert!(!host.hardware_decode_ready(), "{hazard}");
     assert_eq!(
         host.hardware_decode_unavailable.as_deref(),
@@ -182,7 +225,7 @@ fn old_validation_layer_host_child() {
         crate::assets::HardwareVideoDecode::None
     );
     drop(host);
-    let error = create_gpu_test_host(VideoDecodePolicy::HardwareRequired)
+    let error = create_gpu_media_host(VideoDecodePolicy::HardwareRequired)
         .err()
         .expect("hardware-required refuses to start");
     assert_eq!(error.code, "HARDWARE_DECODE_UNAVAILABLE");
@@ -204,7 +247,7 @@ const IMPORT_PARITY_STREAMS: [(&str, &str, bool, u32, u32); 7] = [
     ("hevc-main10-padded.mp4", "hevc", true, 320, 180),
     ("av1-padded.mp4", "av1", false, 320, 180),
     ("av1-10bit-padded.mp4", "av1", true, 320, 180),
-    ("vp9.webm", "vp9", false, 128, 96),
+    ("vp9-128.webm", "vp9", false, 192, 128),
     ("h264-high10.mp4", "h264", true, 128, 96),
 ];
 
@@ -253,7 +296,7 @@ fn parity_device() -> Option<alpha2_native_gpu::SharedVulkanContext> {
 
 #[cfg(all(target_os = "macos", feature = "hwdecode"))]
 fn parity_device() -> Option<alpha2_native_gpu::SharedMetalContext> {
-    if !create_gpu_test_host(VideoDecodePolicy::Auto)
+    if !create_gpu_media_host(VideoDecodePolicy::Auto)
         .expect("host")
         .hardware_decode_ready()
     {
@@ -269,7 +312,7 @@ fn parity_device() -> Option<alpha2_native_gpu::SharedMetalContext> {
 
 #[cfg(all(target_os = "windows", feature = "hwdecode"))]
 fn parity_device() -> Option<()> {
-    if create_gpu_test_host(VideoDecodePolicy::Auto)
+    if create_gpu_media_host(VideoDecodePolicy::Auto)
         .expect("host")
         .hardware_decode_ready()
     {
@@ -494,7 +537,7 @@ fn import_parity_child() {
             .expect("height"),
     );
     let hardware = policy == "hardware";
-    let mut host = create_gpu_test_host(if hardware {
+    let mut host = create_gpu_media_host(if hardware {
         VideoDecodePolicy::HardwareRequired
     } else {
         VideoDecodePolicy::Software
@@ -672,7 +715,7 @@ fn a_surface_that_cannot_be_imported_reaches_the_frame_through_a_download() {
         return;
     };
     #[cfg(target_os = "windows")]
-    let Some(context) = create_gpu_test_host(VideoDecodePolicy::Auto)
+    let Some(context) = create_gpu_media_host(VideoDecodePolicy::Auto)
         .expect("host")
         .decode_d3d12()
     else {
@@ -730,6 +773,8 @@ fn a_surface_that_cannot_be_imported_reaches_the_frame_through_a_download() {
         "the downloaded surface uploads as planes"
     );
     assert_eq!(metrics.import_fallbacks, 1);
+    // The download is counted: one 128x96 NV12 picture.
+    assert_eq!(metrics.source_download_bytes, 128 * 96 * 3 / 2);
     let downloaded = presented(&upload);
     // What arrives is what the software decoder's frame presents as: H.264 decodes bit-exactly, and
     // both reach the GPU as planes.
@@ -808,7 +853,7 @@ fn only_a_frame_s_own_failure_falls_back_to_a_download() {
     feature = "hwdecode"
 ))]
 fn surface_importing_gpu_output_host() -> Option<Host> {
-    let (host, _, _) = gpu_output_host(VideoDecodePolicy::Auto)?;
+    let (host, _) = gpu_output_host(VideoDecodePolicy::Auto)?;
     if imports_decoded(&host, "h264") == Some(true) {
         Some(host)
     } else {
@@ -961,6 +1006,13 @@ fn a_surface_that_cannot_be_imported_is_downloaded_on_both_gpu_paths() {
             performance["sourceUploadBytes"].as_u64() > Some(0),
             "{path}: {performance}"
         );
+        // Each of the 15 surfaces was downloaded, a 256x144 NV12 picture each, whatever the
+        // output's size.
+        assert_eq!(
+            performance["sourceDownloadBytes"],
+            json!(15 * 256 * 144 * 3 / 2),
+            "{path}: {performance}"
+        );
         assert_eq!(result["frames"], json!(15), "{path}: {result}");
         for (index, (downloaded, imported)) in decoded_luma(&downloaded)
             .iter()
@@ -1037,7 +1089,7 @@ fn a_synchronous_export_decodes_in_software() {
     };
     // The comparison path opens software decoders whatever the host may do, and says so.
     for policy in [VideoDecodePolicy::Software, VideoDecodePolicy::Auto] {
-        let mut host = create_gpu_test_host(policy).expect("host");
+        let mut host = create_gpu_media_host(policy).expect("host");
         let result = host
             .handle(
                 request(&format!("{}.mp4", policy.as_str())),
@@ -1060,7 +1112,7 @@ fn a_synchronous_export_decodes_in_software() {
         assert_eq!(performance["hardwareDecodedFrames"], json!(0));
     }
     // `hardware-required` cannot be kept by it, so it is refused before any output opens.
-    match create_gpu_test_host(VideoDecodePolicy::HardwareRequired) {
+    match create_gpu_media_host(VideoDecodePolicy::HardwareRequired) {
         Ok(mut host) => {
             let error = host
                 .handle(request("strict.mp4"), &mut |_| Ok(()))
@@ -1129,7 +1181,7 @@ fn a_build_without_hardware_decode_refuses_hardware_required_at_startup() {
         ),
         feature = "hwdecode"
     ));
-    match create_gpu_test_host(VideoDecodePolicy::HardwareRequired) {
+    match create_gpu_media_host(VideoDecodePolicy::HardwareRequired) {
         Err(error) if !built => {
             assert_eq!(
                 error.code, "HARDWARE_DECODE_UNAVAILABLE",

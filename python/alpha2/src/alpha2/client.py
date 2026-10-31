@@ -74,7 +74,7 @@ __all__ = [
 
 VideoDecodeMode = Literal["software", "auto", "hardware-required"]
 """The video decode path asked of the host. Unset, the host uses its platform default ("auto" on
-Linux, "software" on macOS and Windows)."""
+Linux and macOS, "software" on Windows)."""
 
 _VIDEO_DECODE_MODES = ("software", "auto", "hardware-required")
 
@@ -1366,6 +1366,8 @@ def _request_host(
         refusal = _quarantine_check(binary)
         if refusal is not None:
             raise Alpha2HostError("HOST_QUARANTINED", refusal)
+    # Read before the host starts, so a kill by the kernel while it runs shows as a rise.
+    oom_kills_before = _host_start.oom_kill_count()
     try:
         host = _Host(binary, modes)
     except OSError as cause:
@@ -1568,8 +1570,37 @@ def _request_host(
             f"alpha2-host could not be loaded: {detail}{_host_start.glibc_hint(tail)}",
             **exit_options,
         )
-    # Nothing the host said names a cause, so none is claimed: a SIGKILL is as consistent with an
-    # external kill as with the OOM killer.
+    oom_kills_after = _host_start.oom_kill_count()
+    if (
+        signal_name == "SIGKILL"
+        and oom_kills_before is not None
+        and oom_kills_after is not None
+        and oom_kills_after > oom_kills_before
+    ):
+        # The kernel's out-of-memory killer ended a process of this cgroup while the host ran, and
+        # the host died of SIGKILL: the class a smaller ``memory.scale`` can answer.
+        raise Alpha2HostError(
+            "HOST_OOM_KILLED",
+            f"the kernel's out-of-memory killer ended alpha2-host: {detail}",
+            failure={
+                "code": "OUT_OF_MEMORY",
+                "message": f"the kernel's out-of-memory killer ended alpha2-host ({ended})",
+                "origin": "python",
+                "operation": "export",
+                "backend": "native",
+                "phase": phase_now(),
+                "resource": "cpu",
+                "stderr": tail,
+                "exitCode": code,
+                "signal": signal_name,
+                "ntstatus": ntstatus_name(code),
+            },
+            stderr=tail,
+            exit_code=code,
+            signal=signal_name,
+        )
+    # Nothing the host said names a cause, so none is claimed: a SIGKILL without a rise in the
+    # cgroup's out-of-memory kills is as consistent with an external kill.
     failure = {
         "code": "HOST_EXITED",
         "message": f"alpha2-host exited before responding ({ended})",

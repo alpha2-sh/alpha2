@@ -81,7 +81,7 @@ fn an_output_that_fails_to_open_removes_the_partial_it_created() {
         &video,
         av_config(48_000).video,
         Some("alpha2_no_such_encoder"),
-        &|| 1,
+        &|_| 1,
     )
     .err()
     .expect("no such encoder");

@@ -3,6 +3,7 @@
     "description": "Linux x86_64, NVIDIA RTX 4090 and AMD integrated GPU (RADV), Vulkan",
     "capabilities": [
       "vulkan-video",
+      "vulkan-video-vp9",
       "nvenc",
       "gpu-resident",
       "openh264",
@@ -216,7 +217,7 @@
         "intel",
         "nvidia"
       ],
-      "host": "encoder"
+      "host": "auto"
     },
     "corruption": {
       "adapter": "intel",
@@ -239,13 +240,13 @@
     "perf": {
       "rounds": 3,
       "sourceEnv": {
-        "ALPHA2_GPU_ADAPTER": "encoder"
+        "ALPHA2_GPU_ADAPTER": "auto"
       },
       "configurations": [
         {
           "name": "iris-resident-d3d12",
           "env": {
-            "ALPHA2_GPU_ADAPTER": "encoder"
+            "ALPHA2_GPU_ADAPTER": "auto"
           },
           "args": [
             "--renderer",
@@ -267,7 +268,7 @@
         {
           "name": "iris-readback-mf",
           "env": {
-            "ALPHA2_GPU_ADAPTER": "encoder"
+            "ALPHA2_GPU_ADAPTER": "auto"
           },
           "args": [
             "--renderer",
@@ -291,7 +292,7 @@
         {
           "name": "iris-readback-openh264",
           "env": {
-            "ALPHA2_GPU_ADAPTER": "encoder"
+            "ALPHA2_GPU_ADAPTER": "auto"
           },
           "args": [
             "--renderer",
@@ -344,7 +345,7 @@
         {
           "name": "p2r-sw-resident",
           "env": {
-            "ALPHA2_GPU_ADAPTER": "encoder"
+            "ALPHA2_GPU_ADAPTER": "auto"
           },
           "args": [
             "--renderer",
@@ -366,7 +367,7 @@
         {
           "name": "p2r-hw-resident",
           "env": {
-            "ALPHA2_GPU_ADAPTER": "encoder"
+            "ALPHA2_GPU_ADAPTER": "auto"
           },
           "args": [
             "--renderer",

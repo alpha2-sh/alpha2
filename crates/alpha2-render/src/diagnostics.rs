@@ -69,6 +69,10 @@ pub struct RenderDiagnostics {
     pub uniform_buffers: UniformBufferPoolStats,
     /// Runtime and built-in pipeline cache counts.
     pub pipelines: PipelineCacheStats,
+    /// Effect and composite pipelines created, and the CPU time their
+    /// creation took: a first draw that compiles shaders stalls the frame
+    /// that asked for it.
+    pub pipeline_creation: PipelineCreationStats,
     /// Kept graph results: budget, occupancy, hits, misses, invalidations.
     pub result_cache: crate::ResultCacheStats,
     /// Frames presented by the caller.
@@ -113,6 +117,28 @@ pub struct RenderDiagnostics {
     pub copy_bytes: u64,
 }
 
+/// Pipelines this renderer created and the time it took.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct PipelineCreationStats {
+    /// Pipelines created.
+    pub created: u64,
+    /// Microseconds their creation took in all.
+    pub create_micros_total: u64,
+    /// Microseconds the slowest one took.
+    pub create_micros_max: u64,
+}
+
+/// One pipeline's creation, for a trace: which, and when it began and ended.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PipelineCreation {
+    /// The pipeline: an effect's ID, or the composite program's label.
+    pub label: String,
+    /// When its creation began.
+    pub started: web_time::Instant,
+    /// When it ended.
+    pub finished: web_time::Instant,
+}
+
 /// Reproducible metadata envelope written beside benchmark measurements.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BenchmarkMetadata {
@@ -137,6 +163,10 @@ pub struct BenchmarkMetadata {
 /// Entries retained while pass timing is enabled.
 const PASS_HISTORY: usize = 256;
 
+/// Pipeline creations kept until [`crate::Renderer::take_pipeline_creations`]
+/// takes them; older ones go first.
+const PIPELINE_HISTORY: usize = 256;
+
 #[derive(Debug, Default)]
 pub(crate) struct DiagnosticsState {
     passes: VecDeque<PassTiming>,
@@ -159,6 +189,8 @@ pub(crate) struct DiagnosticsState {
     render_passes: u64,
     copy_operations: u64,
     copy_bytes: u64,
+    pipeline_creation: PipelineCreationStats,
+    pipeline_creations: VecDeque<PipelineCreation>,
 }
 
 pub(crate) type SharedDiagnostics = Arc<Mutex<DiagnosticsState>>;
@@ -306,6 +338,7 @@ pub(crate) fn snapshot(
         readback_buffers: resources.readback_buffers,
         uniform_buffers: resources.uniform_buffers,
         pipelines: resources.pipelines,
+        pipeline_creation: state.pipeline_creation,
         result_cache: resources.result_cache,
         presented_frames: state.presented_frames,
         dropped_frames: state.dropped_frames,
@@ -326,6 +359,45 @@ pub(crate) fn snapshot(
         copy_operations: state.copy_operations,
         copy_bytes: state.copy_bytes,
     }
+}
+
+/// Creates a pipeline with `create`, recording how long it took under
+/// `label`.
+pub(crate) fn timed_pipeline_creation<T>(
+    state: &SharedDiagnostics,
+    label: impl FnOnce() -> String,
+    create: impl FnOnce() -> T,
+) -> T {
+    let started = web_time::Instant::now();
+    let created = create();
+    let finished = web_time::Instant::now();
+    let micros = u64::try_from(finished.duration_since(started).as_micros()).unwrap_or(u64::MAX);
+    let mut state = state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let totals = &mut state.pipeline_creation;
+    totals.created = totals.created.saturating_add(1);
+    totals.create_micros_total = totals.create_micros_total.saturating_add(micros);
+    totals.create_micros_max = totals.create_micros_max.max(micros);
+    if state.pipeline_creations.len() == PIPELINE_HISTORY {
+        state.pipeline_creations.pop_front();
+    }
+    state.pipeline_creations.push_back(PipelineCreation {
+        label: label(),
+        started,
+        finished,
+    });
+    created
+}
+
+/// The pipeline creations recorded since the last call, oldest first.
+pub(crate) fn take_pipeline_creations(state: &SharedDiagnostics) -> Vec<PipelineCreation> {
+    state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .pipeline_creations
+        .drain(..)
+        .collect()
 }
 
 pub(crate) fn record_yuv_repack(state: &SharedDiagnostics) {

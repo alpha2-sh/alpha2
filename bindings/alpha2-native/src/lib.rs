@@ -66,6 +66,7 @@ pub use tools::{
 mod video_backend;
 mod video_encode;
 mod video_frame;
+mod vt_sei;
 pub use alpha2_ffmpeg_bridge::Yuv420pFrameBuffer;
 pub use alpha2_media::{EncoderRefusal, OpenFailureKind};
 #[cfg(feature = "cpal-host")]
@@ -93,7 +94,8 @@ pub use convert::{
     codec_thread_budget, codec_thread_override, configured_codec_thread_override,
 };
 pub use decode::{
-    DecodeStageTimings, NativeAudioDecoder, NativeDecoder, ProbeResult, SOURCE_SAMPLE_RATES, probe,
+    DecodeStageTimings, DroppedLayer, NativeAudioDecoder, NativeDecoder, ProbeResult,
+    SOURCE_SAMPLE_RATES, alpha_dropped_reason, decodes_vp9_alpha, probe,
     software_decode_unsupported, visit_packet_times,
 };
 pub use encode::{

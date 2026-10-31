@@ -304,7 +304,7 @@ impl NativeAvEncodeSink {
         path: impl Into<OutputTarget>,
         config: AvEncodeConfig,
     ) -> Result<Self, EncodeError> {
-        Self::create_selected(path, config, None, &codec_thread_budget)
+        Self::create_selected(path, config, None, &|_| codec_thread_budget())
     }
 
     /// Creates the requested concrete video encoder by its `FFmpeg` short name.
@@ -317,7 +317,7 @@ impl NativeAvEncodeSink {
         config: AvEncodeConfig,
         encoder_name: &str,
     ) -> Result<Self, EncodeError> {
-        Self::create_selected(path, config, Some(encoder_name), &codec_thread_budget)
+        Self::create_selected(path, config, Some(encoder_name), &|_| codec_thread_budget())
     }
 
     /// Creates an encoder whose software thread count the caller decides.
@@ -339,7 +339,7 @@ impl NativeAvEncodeSink {
         path: impl Into<OutputTarget>,
         config: AvEncodeConfig,
         encoder_name: Option<&str>,
-        software_threads: &dyn Fn() -> i64,
+        software_threads: &dyn Fn(Option<usize>) -> i64,
     ) -> Result<Self, EncodeError> {
         Self::create_selected(path, config, encoder_name, software_threads)
     }
@@ -349,7 +349,7 @@ impl NativeAvEncodeSink {
         path: impl Into<OutputTarget>,
         config: AvEncodeConfig,
         encoder_name: Option<&str>,
-        software_threads: &dyn Fn() -> i64,
+        software_threads: &dyn Fn(Option<usize>) -> i64,
     ) -> Result<Self, EncodeError> {
         crate::video_encode::check_video_config(&config.video)?;
         if !config

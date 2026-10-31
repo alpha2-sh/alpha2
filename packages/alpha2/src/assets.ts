@@ -58,6 +58,11 @@ export interface AssetEntry {
   readonly original: OriginalState;
   /** In the host's order of preference. */
   readonly proxies?: readonly ProxyVariant[];
+  /**
+   * Why the host decodes the original's video without its alpha, when it carries alpha the host
+   * cannot read (an HEVC auxiliary alpha layer, VP9 alpha without libvpx's decoder).
+   */
+  readonly alpha_dropped?: string;
 }
 
 /** Every source's media as one host sees it now. Runtime state, never part of a project. */
@@ -131,6 +136,8 @@ export type ConformIssue = { readonly blocking: boolean } & (
    * Never blocking.
    */
   | { readonly kind: "undeclared_color" }
+  /** The original carries alpha the host does not decode: it draws opaque. Never blocking. */
+  | { readonly kind: "alpha_dropped"; readonly reason: string }
 );
 
 /** One source's media for the purpose. */

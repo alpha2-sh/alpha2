@@ -50,6 +50,7 @@ typedef struct Alpha2VulkanDeviceState {
     VkPhysicalDeviceSynchronization2Features synchronization2;
     VkPhysicalDeviceSamplerYcbcrConversionFeatures ycbcr;
     VkPhysicalDeviceVideoMaintenance1FeaturesKHR video_maintenance1;
+    VkPhysicalDeviceVideoDecodeVP9FeaturesKHR video_decode_vp9;
     pthread_mutex_t queue_mutex[ALPHA2_MAX_QUEUE_FAMILIES];
     uint32_t initialized;
     uint32_t unlockable_reported;
@@ -169,8 +170,13 @@ int alpha2_vulkan_device_init(AVHWDeviceContext *context,
      * FFmpeg reads what is enabled from this chain; it has to describe the device as created, no
      * more and no less.
      */
+    state->video_decode_vp9 = (VkPhysicalDeviceVideoDecodeVP9FeaturesKHR){
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VIDEO_DECODE_VP9_FEATURES_KHR,
+        .videoDecodeVP9 = info->video_decode_vp9 != 0,
+    };
     state->video_maintenance1 = (VkPhysicalDeviceVideoMaintenance1FeaturesKHR){
         .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VIDEO_MAINTENANCE_1_FEATURES_KHR,
+        .pNext = &state->video_decode_vp9,
         .videoMaintenance1 = info->video_maintenance1 != 0,
     };
     state->ycbcr = (VkPhysicalDeviceSamplerYcbcrConversionFeatures){

@@ -13,6 +13,7 @@
 //! handles through them, and they are not part of this crate's API.
 
 mod acquisition;
+mod adapter_choice;
 mod adapter_pin;
 mod capabilities;
 mod context;
@@ -23,7 +24,11 @@ pub mod validation_log;
 mod watchdog;
 
 pub use acquisition::{AcquisitionGuard, serialize_acquisition};
-pub use adapter_pin::{AdapterPin, gl_version_supported, high_performance_rank, product_order};
+pub use adapter_choice::{
+    AdapterChoiceReport, AdapterOrder, AdapterRecord, ChoiceReason, GPU_ENCODE_CODECS,
+    decode_refusals, encode_elsewhere, explain_choice, rank_adapters,
+};
+pub use adapter_pin::{AdapterPolicy, gl_version_supported, high_performance_rank, product_order};
 pub use capabilities::{Capabilities, CapabilityTier, IntermediateFormat};
 pub use context::{
     AcceptedDevice, AdapterRefusals, ExternalQueueLock, GpuContext, ProductRequest,

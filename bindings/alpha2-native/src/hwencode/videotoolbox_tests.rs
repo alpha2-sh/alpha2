@@ -298,8 +298,11 @@ fn a_surface_is_encoded_only_by_its_own_session_and_only_once_packed() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
+/// A quality level's quantizer runs as `VideoToolbox` quality on Apple
+/// silicon (`flags=+qscale`), reported as `quality`; the bitrate is not its
+/// fallback here.
 #[test]
-fn a_quality_level_runs_the_bitrate_fallback_and_says_so() {
+fn a_quality_level_runs_as_videotoolbox_quality() {
     let Some((_, device)) = device() else {
         return;
     };
@@ -312,13 +315,11 @@ fn a_quality_level_runs_the_bitrate_fallback_and_says_so() {
     let (mut session, _input) = open(&device, &output, quantized);
     let selection = session.selection().clone();
     session.abort();
-    assert_eq!(selection.rate_control, crate::AppliedRateControl::Bitrate);
-    assert!(
-        selection
-            .quantizer_refused
-            .as_deref()
-            .is_some_and(|reason| reason.contains(ENCODER)),
+    assert_eq!(
+        selection.rate_control,
+        crate::AppliedRateControl::Quality,
         "{selection:?}"
     );
+    assert_eq!(selection.quantizer_refused, None);
     let _ = std::fs::remove_dir_all(directory);
 }

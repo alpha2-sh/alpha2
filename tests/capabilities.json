@@ -11,6 +11,14 @@
     "description": "Vulkan Video H.264 encode on the shared device.",
     "probe": "vulkan-video and the shared context reports an encode extent"
   },
+  "vulkan-video-vp9": {
+    "description": "Vulkan Video VP9 decode on the shared device.",
+    "probe": "vulkan-video and the shared context lists vp9 in decode_codecs()"
+  },
+  "vulkan-video-encode-hevc": {
+    "description": "Vulkan Video HEVC encode on the shared device.",
+    "probe": "vulkan-video and the shared context lists hevc in encode_codecs()"
+  },
   "vulkan-validation": {
     "description": "The Khronos validation layer, 1.4 or newer.",
     "probe": "a Khronos validation layer >= 1.4 loads"

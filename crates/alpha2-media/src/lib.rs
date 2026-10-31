@@ -25,8 +25,8 @@ pub use io::{
     Decoder, EmojiPolicy, EncodeError, EncodeEvent, EncodeSink, EncoderRefusal,
     GPU_TIMEOUT_MESSAGE, GpuFault, HostTexture, HostTexturePixels, MAX_AUDIO_CHANNELS,
     MAX_FRAME_DIMENSION, MAX_FRAME_PIXELS, OpenFailureKind, Orientation, PixelFormat, Plane,
-    Premultiplication, RasterColorSpace, Rect, Rotation, SampleAspectRatio, Speaker, SpeakerLayout,
-    StreamInfo, StreamKind, TextAlign, TextTexture, YuvFormat, frame_size_supported,
+    Premultiplication, RasterColorSpace, Rect, Rotation, SampleAspectRatio, SourceAlpha, Speaker,
+    SpeakerLayout, StreamInfo, StreamKind, TextAlign, TextTexture, YuvFormat, frame_size_supported,
     sample_ticks_floor,
 };
 pub use pixels::{

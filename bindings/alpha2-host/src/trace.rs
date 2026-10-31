@@ -62,6 +62,16 @@ pub struct AudioBlockTrace {
     pub finished: Duration,
 }
 
+/// One pipeline the renderer created during the export.
+#[derive(Clone, Debug)]
+struct PipelineTrace {
+    /// The frame whose drawing created it (0 for one created before).
+    frame: u64,
+    label: String,
+    started: Duration,
+    finished: Duration,
+}
+
 /// Rows collected during an export and written once it has finished.
 ///
 /// Rows are buffered rather than streamed because the two threads this
@@ -72,6 +82,7 @@ pub struct ExportTrace {
     epoch: Instant,
     video: Vec<VideoFrameTrace>,
     audio: Vec<AudioBlockTrace>,
+    pipelines: Vec<PipelineTrace>,
     next_audio: usize,
 }
 
@@ -94,6 +105,7 @@ impl ExportTrace {
             epoch,
             video: Vec::new(),
             audio: Vec::new(),
+            pipelines: Vec::new(),
             next_audio: 0,
         }
     }
@@ -111,6 +123,18 @@ impl ExportTrace {
     /// Records one audio block handed to the encode worker.
     pub fn push_audio(&mut self, row: AudioBlockTrace) {
         self.audio.push(row);
+    }
+
+    /// Records the pipelines the renderer created while drawing frame `frame`.
+    pub fn push_pipelines(&mut self, frame: u64, creations: &[alpha2_render::PipelineCreation]) {
+        for creation in creations {
+            self.pipelines.push(PipelineTrace {
+                frame,
+                label: creation.label.clone(),
+                started: creation.started.saturating_duration_since(self.epoch),
+                finished: creation.finished.saturating_duration_since(self.epoch),
+            });
+        }
     }
 
     /// Fills in the encode-worker spans reported for one completed command.
@@ -156,12 +180,13 @@ impl ExportTrace {
         out.push_str(
             "kind,index,decodeWaitStartedMs,decodedMs,installedMs,submittedMs,\
              readbackWaitStartedMs,readbackReadyMs,packedMs,encodeQueuedMs,encodeStartedMs,\
-             encodeSentMs,encodeFinishedMs,surfaceAcquiredMs,planesReadyMs\n",
+             encodeSentMs,encodeFinishedMs,surfaceAcquiredMs,planesReadyMs,label,startedMs,\
+             finishedMs\n",
         );
         for row in &self.video {
             let _ = writeln!(
                 out,
-                "video,{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3}",
+                "video,{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},,,",
                 row.index,
                 ms(row.decode_wait_started),
                 ms(row.decoded),
@@ -181,10 +206,21 @@ impl ExportTrace {
         for (index, row) in self.audio.iter().enumerate() {
             let _ = writeln!(
                 out,
-                "audio,{index},,,,,,,,{:.3},{:.3},{:.3},{:.3},,",
+                "audio,{index},,,,,,,,{:.3},{:.3},{:.3},{:.3},,,,,",
                 ms(row.queued),
                 ms(row.started),
                 ms(row.sent),
+                ms(row.finished),
+            );
+        }
+        // A label is an effect ID or a fixed pipeline name: no comma, quote or line break.
+        for row in &self.pipelines {
+            let _ = writeln!(
+                out,
+                "pipeline,{},,,,,,,,,,,,,,{},{:.3},{:.3}",
+                row.frame,
+                row.label,
+                ms(row.started),
                 ms(row.finished),
             );
         }

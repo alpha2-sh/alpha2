@@ -6,8 +6,9 @@
 //! handler for a request to terminate the process, the exit of the process
 //! that started this one, what the processes this one starts inherit and how
 //! long they live, a clock that stops while the system sleeps, the process's
-//! resident memory, the work the calling thread has done, and a diagnostic
-//! line on standard error that a closed stream does not turn into a panic.
+//! memory and the machine's, the work the calling thread has done, the
+//! operating system's version, and a diagnostic line on standard error that a
+//! closed stream does not turn into a panic.
 //!
 //! The rest of the workspace forbids `unsafe`; this crate, like
 //! `alpha2-ffmpeg-bridge`, is where the few calls that need it are kept and
@@ -19,6 +20,8 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 mod lifetime;
+mod memory;
+mod os_version;
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
@@ -31,6 +34,10 @@ use windows as platform;
 pub use lifetime::{
     KillOnCloseJob, exit_without_handlers, stop_std_handle_inheritance, watch_parent,
 };
+pub use memory::{MemoryCapacity, memory_capacity};
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub use memory::{cgroup_v2_usage, memory_capacity_at};
+pub use os_version::os_version;
 
 /// Takes an exclusive advisory lock on `file` without waiting: `Ok(true)`
 /// when this handle now holds it, `Ok(false)` when another open handle (in
@@ -528,7 +535,15 @@ pub fn utf8_arguments(
         .collect()
 }
 
-/// The process's resident memory, as the operating system counts it.
+/// The process's memory, as the operating system counts it.
+///
+/// Resident memory is what is in RAM now, shared pages included. The
+/// footprint is what the system charges this process for, the figure its
+/// memory limit and the out-of-memory killer go by: on Linux anonymous plus
+/// shared-memory resident pages (`RssAnon` + `RssShmem`; its peak is
+/// `VmHWM`, which counts file pages too), on macOS the physical footprint
+/// (`ri_phys_footprint`, compressed pages included), on Windows the private
+/// commit (`PrivateUsage`; its peak is `PeakPagefileUsage`).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ProcessMemory {
     /// Bytes resident now: `VmRSS` on Linux, the task's resident size on
@@ -537,6 +552,10 @@ pub struct ProcessMemory {
     /// The most bytes resident at once so far: `VmHWM` on Linux,
     /// `ru_maxrss` on macOS, the peak working set on Windows.
     pub peak_resident_bytes: Option<u64>,
+    /// The footprint now.
+    pub footprint_bytes: Option<u64>,
+    /// The largest footprint so far.
+    pub peak_footprint_bytes: Option<u64>,
 }
 
 /// The file version of the executable or DLL at `path` (`major.minor.build.revision`), from its

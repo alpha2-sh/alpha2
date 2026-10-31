@@ -88,7 +88,12 @@ def partial_of(output: Path) -> Path:
 
 def assert_declared_performance(performance: dict[str, Any], path: str) -> None:
     """``performance`` has a scalar or None per counter, besides the declared non-scalar ones."""
-    declared = {"hardwareFallbackReasons", "encodeChannelDepthSamples", "gpuEncodeBudget"}
+    declared = {
+        "hardwareFallbackReasons",
+        "hardwareFallbackMessages",
+        "encodeChannelDepthSamples",
+        "gpuEncodeBudget",
+    }
     for key, value in performance.items():
         if key not in declared:
             assert value is None or isinstance(value, (int, float, bool, str)), key

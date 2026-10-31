@@ -379,14 +379,15 @@ fn sample_source(input: VertexOutput, index: u32, looped: bool) -> SampledSource
 // from a register instead of the texture.
 //
 // A half float is rounded toward zero, as the half-float render targets of
-// the devices tested store a value (NVIDIA, RADV, lavapipe), keeping
-// subnormals. An 8-bit code is rounded to nearest; devices do not round a
+// the devices measured store a finite value (NVIDIA, RADV, lavapipe,
+// llvmpipe GL, Apple M4, Intel Iris Xe, NVIDIA MX450), keeping subnormals and
+// infinity. An 8-bit code is rounded to nearest; devices do not round a
 // value to the nearest code exactly (NVIDIA and RADV store v * 255 = n.51
 // as n), so the pass writes one that is already a code.
 
 // A half float exactly as the texture holds it, for a value of 0 or more
 // (every composite result is). From 2^-14 up a half float keeps 10 of the 23
-// fraction bits: the others are cut. Below, a subnormal half float has a
+// fraction bits: the others are cut (infinity has none to cut). Below, a subnormal half float has a
 // fixed step of 2^-24, which scaling by 2^24 (exact, a power of two) makes a
 // whole number to truncate; under 2^-24 nothing is left. Both are computed and
 // one selected, without a branch, so a software rasterizer runs one path.

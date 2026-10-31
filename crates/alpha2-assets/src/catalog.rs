@@ -102,6 +102,10 @@ pub struct AssetEntry {
     /// Proxies made from the original, in the host's order of preference.
     #[serde(default)]
     pub proxies: Vec<ProxyVariant>,
+    /// Why the host decodes the original's video without its alpha, when it carries alpha the
+    /// host cannot read (an HEVC auxiliary alpha layer, VP9 alpha without libvpx's decoder).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alpha_dropped: Option<String>,
 }
 
 impl AssetEntry {
@@ -113,6 +117,7 @@ impl AssetEntry {
             revision,
             original,
             proxies: Vec::new(),
+            alpha_dropped: None,
         }
     }
 }

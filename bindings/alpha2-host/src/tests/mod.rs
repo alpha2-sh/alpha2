@@ -39,6 +39,7 @@ use alpha2_render::{FrameSubmitTimings, InputSpec, RenderSize};
 use alpha2_time::{MediaTime, TimeRange};
 use serde_json::{Value, json};
 
+mod alpha_sources;
 mod audio;
 mod conform;
 mod copy;
@@ -85,6 +86,27 @@ fn gpu_test_lock() -> alpha2_gpu::validation_log::TestTurn<std::sync::MutexGuard
 /// surface imports, runtime WGSL effects) or reports (its pools and passes).
 fn create_gpu_test_host(policy: VideoDecodePolicy) -> Result<Host, HostError> {
     crate::create_host_with(policy, crate::config::RendererPolicy::Gpu)
+}
+
+/// The adapter a test that reaches a hardware decoder or the GPU encoder renders on: the one
+/// `ALPHA2_GPU_ADAPTER` names, else `auto`, which takes the adapter with the video engines. On
+/// Linux and macOS that is the default anyway; on a hybrid Windows laptop the default
+/// (`performance`) passes over the integrated GPU, the only one there whose D3D12 device decodes
+/// and encodes.
+fn media_adapter() -> crate::adapter_choice::AdapterPolicy {
+    crate::adapter_choice::AdapterPolicy::set_in_env()
+        .unwrap_or(crate::adapter_choice::AdapterPolicy::Auto)
+}
+
+/// [`create_host`] on [`media_adapter`].
+fn create_media_host(policy: VideoDecodePolicy) -> Result<Host, HostError> {
+    let renderer = crate::config::RendererPolicy::from_env().map_err(HostError::invalid_input)?;
+    crate::create_host_on(policy, renderer, &media_adapter())
+}
+
+/// [`create_gpu_test_host`] on [`media_adapter`].
+fn create_gpu_media_host(policy: VideoDecodePolicy) -> Result<Host, HostError> {
+    crate::create_host_on(policy, crate::config::RendererPolicy::Gpu, &media_adapter())
 }
 
 /// A file of the checked-in corpus. Like [`gpu_test_lock`] and
@@ -254,52 +276,29 @@ fn h264_gpu_output(host: &Host) -> Result<alpha2_native::HardwareEncodeCapabilit
 }
 
 /// A host whose renderer's device feeds a hardware encoder, with what that
-/// encoder takes and the adapter policy it was made with; or `None` (a
-/// recorded `gpu-resident` skip) on a machine without one.
-///
-/// The host on the default adapter is tried first. Where the host scans
-/// adapters (Windows), a hybrid laptop's default adapter may lack the encoder
-/// another has, so a host on the adapter that encodes H.264 is tried next,
-/// as `ALPHA2_GPU_ADAPTER=encoder` would make it.
+/// encoder takes; or `None` (a recorded `gpu-resident` skip) on a machine
+/// without one. The host renders on [`media_adapter`]: `auto` puts the
+/// renderer on the adapter that encodes the most codecs on the GPU.
 #[cfg(all(
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwencode"
 ))]
 fn gpu_output_host(
     policy: VideoDecodePolicy,
-) -> Option<(
-    Host,
-    alpha2_native::HardwareEncodeCapability,
-    crate::adapter_choice::AdapterPin,
-)> {
-    use crate::adapter_choice::AdapterPin;
+) -> Option<(Host, alpha2_native::HardwareEncodeCapability)> {
     // The host itself is made everywhere, lavapipe included; only the GPU-resident output may be
     // missing.
-    let host = create_host(policy).expect("host");
-    let first = match h264_gpu_output(&host) {
-        Ok(capability) => return Some((host, capability, AdapterPin::from_env())),
-        Err(reason) => reason,
-    };
-    drop(host);
-    #[cfg(target_os = "windows")]
-    let second = match crate::create_gpu_host_with_adapter(
-        policy,
-        &AdapterPin::Encoder,
-        alpha2_gpu::SoftwareAdapters::Allow,
-    ) {
-        Ok(host) => match h264_gpu_output(&host) {
-            Ok(capability) => return Some((host, capability, AdapterPin::Encoder)),
-            Err(reason) => format!("; on the encoder adapter: {reason}"),
-        },
-        Err(error) => format!("; no host on the encoder adapter: {}", error.message),
-    };
-    #[cfg(not(target_os = "windows"))]
-    let second = String::new();
-    alpha2_test_support::skip!(
-        alpha2_test_support::Capability::GpuResident,
-        "no GPU-resident H.264 output here ({first}{second})"
-    );
-    None
+    let host = create_media_host(policy).expect("host");
+    match h264_gpu_output(&host) {
+        Ok(capability) => Some((host, capability)),
+        Err(reason) => {
+            alpha2_test_support::skip!(
+                alpha2_test_support::Capability::GpuResident,
+                "no GPU-resident H.264 output here ({reason})"
+            );
+            None
+        }
+    }
 }
 
 /// Whether `host` decodes `codec` into surfaces its renderer imports: the

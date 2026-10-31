@@ -85,15 +85,19 @@ pub struct DecodedFrameSet {
     pub decoder_session_reopens: u64,
 }
 
-/// Software fallbacks counted per reason.
+/// Software fallbacks counted per reason, with the first message seen for
+/// each reason.
 ///
 /// A fixed slot per reason keeps per-shard totals cheap to add and subtract,
 /// which a map keyed by reason would not be.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct HardwareFallbackCounts([u64; Self::REASONS.len()]);
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct HardwareFallbackCounts {
+    counts: [u64; Self::REASONS.len()],
+    messages: [Option<String>; Self::REASONS.len()],
+}
 
 impl HardwareFallbackCounts {
-    const REASONS: [HardwareDecodeFallback; 10] = [
+    const REASONS: [HardwareDecodeFallback; 11] = [
         HardwareDecodeFallback::ContextUnavailable,
         HardwareDecodeFallback::NoHardwareConfig,
         HardwareDecodeFallback::UnsupportedColor,
@@ -104,6 +108,7 @@ impl HardwareFallbackCounts {
         HardwareDecodeFallback::ReverseWindow,
         HardwareDecodeFallback::UnsupportedCrop,
         HardwareDecodeFallback::ImportFailed,
+        HardwareDecodeFallback::AlphaChannel,
     ];
 
     fn slot(reason: HardwareDecodeFallback) -> usize {
@@ -113,40 +118,61 @@ impl HardwareFallbackCounts {
             .unwrap_or(0)
     }
 
-    pub fn record(&mut self, reason: HardwareDecodeFallback) {
+    /// Counts one fallback, keeping `message` when it is the reason's first.
+    pub fn record(&mut self, reason: HardwareDecodeFallback, message: &str) {
         self.record_many(reason, 1);
+        self.messages[Self::slot(reason)].get_or_insert_with(|| message.to_owned());
     }
 
     pub fn record_many(&mut self, reason: HardwareDecodeFallback, count: u64) {
         let slot = Self::slot(reason);
-        self.0[slot] = self.0[slot].saturating_add(count);
+        self.counts[slot] = self.counts[slot].saturating_add(count);
     }
 
-    #[must_use]
-    pub fn merged(self, other: Self) -> Self {
-        let mut merged = self;
-        for (total, added) in merged.0.iter_mut().zip(other.0) {
+    /// Adds `other`'s totals; a reason keeps this side's message when it has
+    /// one.
+    pub fn merge(&mut self, other: &Self) {
+        for (total, added) in self.counts.iter_mut().zip(other.counts) {
             *total = total.saturating_add(added);
         }
-        merged
+        for (message, added) in self.messages.iter_mut().zip(&other.messages) {
+            if message.is_none() {
+                message.clone_from(added);
+            }
+        }
     }
 
+    /// What was counted after `before`; a message stays only for a reason
+    /// `before` had none for.
     #[must_use]
-    pub fn since(self, before: Self) -> Self {
+    pub fn since(self, before: &Self) -> Self {
         let mut delta = self;
-        for (total, earlier) in delta.0.iter_mut().zip(before.0) {
+        for (total, earlier) in delta.counts.iter_mut().zip(before.counts) {
             *total = total.saturating_sub(earlier);
+        }
+        for (message, earlier) in delta.messages.iter_mut().zip(&before.messages) {
+            if earlier.is_some() {
+                *message = None;
+            }
         }
         delta
     }
 
     /// Non-zero reasons paired with their stable report key.
-    pub fn entries(self) -> impl Iterator<Item = (&'static str, u64)> {
+    pub fn entries(&self) -> impl Iterator<Item = (&'static str, u64)> + '_ {
         Self::REASONS
             .into_iter()
-            .zip(self.0)
+            .zip(self.counts)
             .filter(|(_, count)| *count > 0)
             .map(|(reason, count)| (reason.as_str(), count))
+    }
+
+    /// The first message recorded for each reason that has one.
+    pub fn messages(&self) -> impl Iterator<Item = (&'static str, &str)> + '_ {
+        Self::REASONS
+            .into_iter()
+            .zip(&self.messages)
+            .filter_map(|(reason, message)| Some((reason.as_str(), message.as_deref()?)))
     }
 }
 
@@ -1334,7 +1360,7 @@ impl ExportDecodeState {
         let windows_before = self.reverse_windows_built;
         let software_before = self.software_decoded_frames;
         let hardware_before = self.hardware_decoded_frames;
-        let fallbacks_before = self.hardware_fallbacks;
+        let fallbacks_before = self.hardware_fallbacks.clone();
         let reopens_before = self.session_reopens;
         self.job_time = job.time;
         self.job_cursors = job.needs.iter().map(decode_cursor_key).collect();
@@ -1408,7 +1434,7 @@ impl ExportDecodeState {
             reverse_cache_bytes: self.reverse_cache_bytes,
             software_decoded_frames: self.software_decoded_frames.saturating_sub(software_before),
             hardware_decoded_frames: self.hardware_decoded_frames.saturating_sub(hardware_before),
-            hardware_fallbacks: self.hardware_fallbacks.since(fallbacks_before),
+            hardware_fallbacks: self.hardware_fallbacks.clone().since(&fallbacks_before),
             decoder_session_reopens: self.session_reopens.saturating_sub(reopens_before),
         })
     }
@@ -1550,7 +1576,7 @@ impl ExportDecodeState {
                     if self.hardware_required {
                         return Err(format!("hardware decode is required: {error}"));
                     }
-                    self.record_fallback(error.reason);
+                    self.record_fallback(error.reason, &error.source.to_string());
                     // A stream that cannot open in hardware will not for the next cursor or LRU
                     // re-open either, and each attempt pays a full hardware `avcodec_open2`.
                     self.software_only.insert(source.clone());
@@ -1578,14 +1604,18 @@ impl ExportDecodeState {
         source: &SourceId,
         path: &std::path::Path,
     ) -> Result<NativeExportDecoder, String> {
-        NativeExportDecoder::open_with_threads(path, self.decoder_threads)
+        let decoder = NativeExportDecoder::open_with_threads(path, self.decoder_threads)
             .map_err(error_message)?
             .with_declared_color(self.declared_colors.get(source).copied())
-            .map_err(|error| error_message(error.source))
+            .map_err(|error| error_message(error.source))?;
+        if let Some(dropped) = decoder.dropped_layer() {
+            self.decoding.note_dropped_layer(source, dropped);
+        }
+        Ok(decoder)
     }
 
-    fn record_fallback(&mut self, reason: HardwareDecodeFallback) {
-        self.hardware_fallbacks.record(reason);
+    fn record_fallback(&mut self, reason: HardwareDecodeFallback, message: &str) {
+        self.hardware_fallbacks.record(reason, message);
     }
 
     /// Whether this run must fail rather than decode a video frame in software.
@@ -1622,8 +1652,9 @@ impl ExportDecodeState {
         &mut self,
         cursor: &DecodeCursorKey,
         reason: HardwareDecodeFallback,
+        message: &str,
     ) -> Result<(), String> {
-        self.record_fallback(reason);
+        self.record_fallback(reason, message);
         self.software_only.insert(cursor.0.clone());
         self.decoders.remove(cursor);
         self.decoded.remove(cursor);
@@ -1736,7 +1767,7 @@ impl ExportDecodeState {
                         reason.as_str()
                     ));
                 }
-                self.fall_back_to_software(cursor, reason)?;
+                self.fall_back_to_software(cursor, reason, &message)?;
                 self.decode_video_once(cursor, requested, cancel)
                     .map_err(DecodeVideoFailure::into_message)
             }
@@ -1915,8 +1946,8 @@ impl ExportDecodeState {
     }
 
     /// Bytes one decoded frame of `cursor` is expected to retain: what its
-    /// last window measured, else its current frame, else its stream's size
-    /// as 8-bit 4:2:0.
+    /// last window measured, else its current frame, else what its stream's
+    /// probe says a decoded picture holds, else its size as 8-bit 4:2:0.
     fn expected_frame_bytes(&self, cursor: &DecodeCursorKey) -> u64 {
         self.reverse_frame_bytes
             .get(cursor)
@@ -1931,10 +1962,9 @@ impl ExportDecodeState {
                     decoder
                         .streams()
                         .iter()
-                        .find_map(|stream| stream.dimensions)
-                        .map(|(width, height)| {
-                            (u64::from(width) * u64::from(height) * 3).div_ceil(2)
-                        })
+                        .find(|stream| stream.dimensions.is_some())
+                        .and_then(crate::assets::VideoFrameSize::of)
+                        .map(|frames| frames.bytes)
                 })
             })
             .filter(|bytes| *bytes > 0)
@@ -2005,7 +2035,10 @@ impl ExportDecodeState {
         {
             self.decoders.remove(cursor);
             self.decoded.remove(cursor);
-            self.record_fallback(HardwareDecodeFallback::ReverseWindow);
+            self.record_fallback(
+                HardwareDecodeFallback::ReverseWindow,
+                "a reverse window decodes in software",
+            );
         }
         if !self.decoders.contains_key(cursor) {
             self.evict_decoder_session();
@@ -2386,8 +2419,7 @@ pub fn decode_pool_loop(
                                 .saturating_add(decoded.software_decoded_frames);
                             hardware_decoded_frames = hardware_decoded_frames
                                 .saturating_add(decoded.hardware_decoded_frames);
-                            hardware_fallbacks =
-                                hardware_fallbacks.merged(decoded.hardware_fallbacks);
+                            hardware_fallbacks.merge(&decoded.hardware_fallbacks);
                             decoder_session_reopens = decoder_session_reopens
                                 .saturating_add(decoded.decoder_session_reopens);
                             stage_timings = stage_timings.merged(decoded.stage_timings);

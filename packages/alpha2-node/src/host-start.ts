@@ -1,4 +1,4 @@
-import { closeSync, openSync, readSync, statSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 
 import { INSTALL_MACHINE, LINUX_GLIBC_FLOOR } from "./install.js";
 
@@ -154,5 +154,37 @@ function isFile(path: string): boolean {
     return statSync(path).isFile();
   } catch {
     return false;
+  }
+}
+
+/**
+ * How many processes the kernel's out-of-memory killer has ended in this process's cgroup (the
+ * `oom_kill` line of cgroup v2's `memory.events`), or `undefined` where there is none to read:
+ * off Linux, outside cgroup v2, or without the file. A host started by this process runs in the
+ * same cgroup, so a count that rose while a SIGKILLed host ran says the kernel killed it.
+ * `ALPHA2_TEST_MEMORY_EVENTS` names another file to read, for tests only.
+ */
+export function oomKillCount(): number | undefined {
+  const injected = process.env.ALPHA2_TEST_MEMORY_EVENTS;
+  let path = injected;
+  if (path === undefined) {
+    if (process.platform !== "linux") return undefined;
+    try {
+      const membership = readFileSync("/proc/self/cgroup", "utf8");
+      const line = membership
+        .split("\n")
+        .find((entry) => entry.startsWith("0::"));
+      if (line === undefined) return undefined;
+      path = `/sys/fs/cgroup${line.slice(3).trim().replace(/\/$/, "")}/memory.events`;
+    } catch {
+      return undefined;
+    }
+  }
+  try {
+    const events = readFileSync(path, "utf8");
+    const count = /^oom_kill (\d+)$/m.exec(events)?.[1];
+    return count === undefined ? undefined : Number(count);
+  } catch {
+    return undefined;
   }
 }

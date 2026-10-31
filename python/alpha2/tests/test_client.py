@@ -25,6 +25,7 @@ from alpha2 import (
     HostClient,
 )
 from alpha2.client import resolve_host_binary
+from alpha2.errors import failure_class_of_code
 from alpha2.install import host_executable_name
 from alpha2.protocol import describe_exit, windows_policy_blocked
 
@@ -757,6 +758,48 @@ def test_a_host_that_dies_mid_export_is_host_exited_with_no_cause_claimed(
     assert error.failure["signal"] == signal_name
     assert error.failure["exitCode"] == exit_code
     assert "last words" in error.failure["stderr"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows has no SIGKILL")
+def test_oom_killed_host_is_out_of_memory(
+    tmp_path: Path, fake_host: FakeHost, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A host that dies of SIGKILL while its cgroup's ``oom_kill`` count rises was ended by the
+    kernel's out-of-memory killer: ``HOST_OOM_KILLED``, class ``OUT_OF_MEMORY`` on the CPU. The
+    same death without a rise is ``HOST_EXITED``, as is a count that cannot be read."""
+    events = tmp_path / "memory.events"
+    events.write_text("low 0\nhigh 0\nmax 3\noom 1\noom_kill 1\noom_group_kill 0\n")
+    monkeypatch.setenv("ALPHA2_TEST_MEMORY_EVENTS", str(events))
+    host_path = fake_host(
+        tmp_path,
+        """
+        import os, pathlib
+        request, _ = read_request()
+        send(request, type="progress", phase="frames", completed=3, total=9)
+        if os.environ.get("RAISE_OOM_KILL") == "1":
+            path = pathlib.Path(os.environ["ALPHA2_TEST_MEMORY_EVENTS"])
+            path.write_text(path.read_text().replace("oom_kill 1", "oom_kill 2"))
+        os.kill(os.getpid(), signal.SIGKILL)
+        """,
+    )
+    monkeypatch.setenv("RAISE_OOM_KILL", "1")
+    with pytest.raises(Alpha2HostError) as caught:
+        HostClient(host_path=host_path).export(**export_args(tmp_path / "out.mp4"))
+    error = caught.value
+    assert error.code == "HOST_OOM_KILLED"
+    assert error.signal == "SIGKILL"
+    assert error.failure["code"] == "OUT_OF_MEMORY"
+    assert error.failure["resource"] == "cpu"
+    assert error.failure["origin"] == "python"
+    assert failure_class_of_code("HOST_OOM_KILLED") == ("OUT_OF_MEMORY", "cpu")
+    monkeypatch.setenv("RAISE_OOM_KILL", "0")
+    with pytest.raises(Alpha2HostError) as caught:
+        HostClient(host_path=host_path).export(**export_args(tmp_path / "again.mp4"))
+    assert caught.value.code == "HOST_EXITED"
+    monkeypatch.setenv("ALPHA2_TEST_MEMORY_EVENTS", str(tmp_path / "missing.events"))
+    with pytest.raises(Alpha2HostError) as caught:
+        HostClient(host_path=host_path).export(**export_args(tmp_path / "unread.mp4"))
+    assert caught.value.code == "HOST_EXITED"
 
 
 def test_a_host_the_loader_refuses_to_start_is_host_load_failed(

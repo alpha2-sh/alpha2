@@ -170,9 +170,13 @@ impl Muxer {
     ///
     /// # Errors
     /// As [`Self::open_streams`], short of the header.
-    // Used by the D3D12VA backend, which exists on Windows only, and by the tests.
+    // Used by the D3D12VA and Vulkan HEVC backends, which exist on Windows and Linux only, and by
+    // the tests.
     #[cfg_attr(
-        not(any(test, all(feature = "hwencode", target_os = "windows"))),
+        not(any(
+            test,
+            all(feature = "hwencode", any(target_os = "windows", target_os = "linux"))
+        )),
         allow(dead_code)
     )]
     pub(crate) fn open_deferred(

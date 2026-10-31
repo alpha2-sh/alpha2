@@ -32,22 +32,25 @@ void alpha2_native_gpu_metal_cache_destroy(void *cache) {
 /*
  * Describes a bi-planar 8- or 10-bit 4:2:0 pixel buffer: its size, plane sizes, clean aperture (the
  * whole buffer when the aperture is unusable) and IOSurface. Returns -1 for a null argument, -2 for
- * another pixel format, -3 for a plane count other than 2, -4 without an IOSurface.
+ * another pixel format, -3 for a plane count other than 2, -4 without an IOSurface. The size, pixel
+ * format and plane count are written before any of the last three, so a refusal can name them.
  */
 int32_t alpha2_native_gpu_metal_frame_info(void *pixel_buffer,
                                            Alpha2MetalFrameInfo *output) {
     if (pixel_buffer == NULL || output == NULL) return -1;
     CVPixelBufferRef buffer = (CVPixelBufferRef)pixel_buffer;
     OSType format = CVPixelBufferGetPixelFormatType(buffer);
+    output->width = (uint32_t)CVPixelBufferGetWidth(buffer);
+    output->height = (uint32_t)CVPixelBufferGetHeight(buffer);
+    output->pixel_format = format;
+    output->plane_count = (uint32_t)CVPixelBufferGetPlaneCount(buffer);
     if (format != kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange &&
         format != kCVPixelFormatType_420YpCbCr8BiPlanarFullRange &&
         format != kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange &&
         format != kCVPixelFormatType_420YpCbCr10BiPlanarFullRange) return -2;
-    if (CVPixelBufferGetPlaneCount(buffer) != 2) return -3;
+    if (output->plane_count != 2) return -3;
     IOSurfaceRef surface = CVPixelBufferGetIOSurface(buffer);
     if (surface == NULL) return -4;
-    output->width = (uint32_t)CVPixelBufferGetWidth(buffer);
-    output->height = (uint32_t)CVPixelBufferGetHeight(buffer);
     output->plane_width[0] = (uint32_t)CVPixelBufferGetWidthOfPlane(buffer, 0);
     output->plane_height[0] = (uint32_t)CVPixelBufferGetHeightOfPlane(buffer, 0);
     output->plane_width[1] = (uint32_t)CVPixelBufferGetWidthOfPlane(buffer, 1);
@@ -77,7 +80,6 @@ int32_t alpha2_native_gpu_metal_frame_info(void *pixel_buffer,
     output->clean_y = top;
     output->clean_width = right - left;
     output->clean_height = bottom - top;
-    output->pixel_format = format;
     output->io_surface = (uint64_t)(uintptr_t)surface;
     return 0;
 }
@@ -183,4 +185,15 @@ int32_t alpha2_native_gpu_vt_hardware_decodes(uint32_t codec_type) {
         VTRegisterSupplementalVideoDecoderIfAvailable((CMVideoCodecType)codec_type);
     }
     return VTIsHardwareDecodeSupported((CMVideoCodecType)codec_type) ? 1 : 0;
+}
+
+/*
+ * The system-wide ID of the IOSurface behind a CoreVideo pixel buffer, or 0 for a null buffer or
+ * one without an IOSurface. Unlike the buffer's address, the ID names the surface even when
+ * CoreVideo wraps it in a new pixel buffer.
+ */
+uint32_t alpha2_native_gpu_iosurface_id(void *pixel_buffer) {
+    if (pixel_buffer == NULL) return 0;
+    IOSurfaceRef surface = CVPixelBufferGetIOSurface((CVPixelBufferRef)pixel_buffer);
+    return surface == NULL ? 0 : IOSurfaceGetID(surface);
 }

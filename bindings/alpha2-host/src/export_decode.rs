@@ -113,7 +113,13 @@ impl Host {
             .map_or(HardwareVideoDecode::None, |context| {
                 HardwareVideoDecode::Codecs(context.decode_codecs().to_vec())
             });
-        #[cfg(not(all(target_os = "linux", feature = "hwdecode")))]
+        #[cfg(all(target_os = "macos", feature = "hwdecode"))]
+        return self
+            .decode_metal()
+            .map_or(HardwareVideoDecode::None, |context| {
+                HardwareVideoDecode::Codecs(context.decode_codecs().to_vec())
+            });
+        #[cfg(not(all(any(target_os = "linux", target_os = "macos"), feature = "hwdecode")))]
         if self.hardware_decode_ready() {
             HardwareVideoDecode::PerStream
         } else {
@@ -170,35 +176,42 @@ impl Host {
     /// How an export divides its software codec workers between decode and
     /// a video encoder that does (`software_video_encoder`) or does not run on
     /// the CPU: the encoder that opened, which the readback path knows only
-    /// once one has.
+    /// once one has. `encoder_fixed_threads` is the software encoder's own
+    /// worker count when the picture fixes it (`OpenH264`).
     pub(crate) fn export_codec_split(
         &self,
         project: &Project,
         assets: &HashMap<String, PathBuf>,
         range: TimeRange,
         pipeline_enabled: bool,
-        software_video_encoder: bool,
+        (software_video_encoder, encoder_fixed_threads): (bool, Option<usize>),
     ) -> ExportCodecSplit {
         // The synchronous comparison path (the pipeline off) supplies frames from software
         // decoders on the coordinator, whatever the host may decode on.
         let hardware_decode = pipeline_enabled && self.hardware_decode_ready();
         let decode_lookahead = configured_decode_lookahead(pipeline_enabled);
         let (workload_parallelism, reads) = visual_decode_reads(project, range);
-        // The largest video sizes every decoder session's estimate; a conformed export already
-        // read it.
+        // The largest video sizes every decoder session's estimate; a conformed export, or the
+        // admission before it, already read it.
         let probe_started = Instant::now();
-        let largest_video_pixels = crate::host::max_video_source_pixels(
-            project,
-            assets,
-            self.conformed_video_pixels.as_ref(),
-        );
+        let admitted = *self
+            .largest_video_frames
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let largest_video = admitted.unwrap_or_else(|| {
+            crate::host::max_video_source_frames(
+                project,
+                assets,
+                self.conformed_video_frames.as_ref(),
+            )
+        });
         let source_probe = probe_started.elapsed();
         // Frame area sizes the threads of a software decode session only when it shares the
         // budget with a software encoder.
         let source_frame_pixels = if hardware_decode || !software_video_encoder {
             0
         } else {
-            largest_video_pixels
+            largest_video.pixels
         };
         let requested_sessions = configured_decoder_session_override();
         let threads_for = |sessions: usize| {
@@ -212,14 +225,21 @@ impl Host {
                 hardware_decode,
                 source_frame_pixels,
                 software_video_encoder,
+                encoder_fixed_threads,
             })
         };
         let mut codec_threads =
             threads_for(requested_sessions.unwrap_or(crate::MAX_DECODER_SESSIONS));
+        fit_session_threads(
+            &mut codec_threads,
+            hardware_decode,
+            largest_video.bytes,
+            self.memory.decoder_sessions.byte_budget(),
+        );
         let decoder_sessions = decoder_session_count(
             workload_parallelism,
             decoder_session_bytes(
-                largest_video_pixels,
+                largest_video.bytes,
                 if hardware_decode {
                     codec_threads.hardware_decoder_threads
                 } else {
@@ -306,4 +326,36 @@ impl Host {
             stall: None,
         }
     }
+}
+
+/// Lowers the decoder threads of `threads` until one session of a video whose
+/// pictures hold `frame_bytes` fits the decoder session `budget`
+/// ([`decoder_session_bytes`]), down to one: a session too large for the
+/// budget runs with fewer threads rather than past it. What one session at
+/// one thread needs is held whatever `memory.scale` asked for, up to the
+/// unscaled budget ([`crate::memory::ByteBudget::holding`]); the session
+/// count is decided after, from the fitted estimate.
+pub(crate) fn fit_session_threads(
+    threads: &mut alpha2_native::CodecThreadAllocation,
+    hardware_decode: bool,
+    frame_bytes: u64,
+    budget: crate::memory::ByteBudget,
+) {
+    let allowed = budget.holding(decoder_session_bytes(frame_bytes, 1));
+    let fitted = |threads: i64| {
+        let mut threads = threads.max(1);
+        while threads > 1 && decoder_session_bytes(frame_bytes, threads) > allowed {
+            threads -= 1;
+        }
+        threads
+    };
+    if hardware_decode {
+        threads.hardware_decoder_threads = fitted(threads.hardware_decoder_threads);
+    }
+    let decoder_threads = fitted(threads.decoder_threads);
+    let freed = usize::try_from(threads.decoder_threads.saturating_sub(decoder_threads))
+        .unwrap_or(0)
+        .saturating_mul(threads.decode_concurrency);
+    threads.allocated_threads = threads.allocated_threads.saturating_sub(freed);
+    threads.decoder_threads = decoder_threads;
 }

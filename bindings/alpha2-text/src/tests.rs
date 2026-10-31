@@ -358,6 +358,151 @@ fn a_requested_family_draws_first_and_the_stack_fills_in() {
     );
 }
 
+/// `bytes` with a name table that also has a Windows family record (name
+/// ID 1) in `language` reading `name`: the table is rebuilt at the end of the
+/// file and its directory entry pointed at it, which is all a parser reads.
+fn with_family_record(bytes: &[u8], language: u16, name: &str) -> Vec<u8> {
+    let be16 = |data: &[u8], at: usize| u16::from_be_bytes([data[at], data[at + 1]]);
+    let be32 = |data: &[u8], at: usize| {
+        u32::from_be_bytes([data[at], data[at + 1], data[at + 2], data[at + 3]])
+    };
+    let tables = usize::from(be16(bytes, 4));
+    let entry = (0..tables)
+        .map(|index| 12 + 16 * index)
+        .find(|&at| &bytes[at..at + 4] == b"name")
+        .expect("a name table");
+    let start = usize::try_from(be32(bytes, entry + 8)).expect("offset");
+    let length = usize::try_from(be32(bytes, entry + 12)).expect("length");
+    let table = &bytes[start..start + length];
+    let count = usize::from(be16(table, 2));
+    let storage = usize::from(be16(table, 4));
+    let mut strings = table[storage..].to_vec();
+    let added = name
+        .encode_utf16()
+        .flat_map(u16::to_be_bytes)
+        .collect::<Vec<_>>();
+    let mut records = table[6..6 + 12 * count].to_vec();
+    for field in [
+        3,
+        1,
+        language,
+        1,
+        u16::try_from(added.len()).expect("short"),
+    ] {
+        records.extend_from_slice(&field.to_be_bytes());
+    }
+    records.extend_from_slice(&u16::try_from(strings.len()).expect("small").to_be_bytes());
+    strings.extend_from_slice(&added);
+    let mut rebuilt = Vec::new();
+    rebuilt.extend_from_slice(&0_u16.to_be_bytes());
+    rebuilt.extend_from_slice(&u16::try_from(count + 1).expect("few").to_be_bytes());
+    rebuilt.extend_from_slice(
+        &u16::try_from(6 + records.len())
+            .expect("small")
+            .to_be_bytes(),
+    );
+    rebuilt.extend_from_slice(&records);
+    rebuilt.extend_from_slice(&strings);
+    let mut out = bytes.to_vec();
+    while !out.len().is_multiple_of(4) {
+        out.push(0);
+    }
+    let at = u32::try_from(out.len()).expect("small font");
+    out.extend_from_slice(&rebuilt);
+    out[entry + 8..entry + 12].copy_from_slice(&at.to_be_bytes());
+    out[entry + 12..entry + 16]
+        .copy_from_slice(&u32::try_from(rebuilt.len()).expect("small").to_be_bytes());
+    out
+}
+
+/// The Korean family name of Malgun Gothic, as its ko-KR name record spells it.
+const KOREAN_FAMILY: &str = "\u{B9D1}\u{C740} \u{ACE0}\u{B515}";
+/// Windows' language ID for Korean (Korea).
+const KO_KR: u16 = 0x0412;
+
+/// The fixture, and a copy renamed `QQ...` that also names its family in
+/// Korean, registered in that order.
+fn localized_stack() -> (TextRasterizer, String) {
+    let fixture = std::fs::read("../../tests/fonts/Alpha2Fixture.ttf").expect("fixture");
+    let family = font_family(&fixture, 0).expect("the fixture names its family");
+    let other = "Q".repeat(family.len());
+    let korean = with_family_record(
+        &rename_family(&fixture, &family, &other),
+        KO_KR,
+        KOREAN_FAMILY,
+    );
+    let rasterizer = TextRasterizer::new(vec![
+        TextFont {
+            family: "first".into(),
+            bytes: fixture.into(),
+            face_index: 0,
+        },
+        TextFont {
+            family: "second".into(),
+            bytes: korean.into(),
+            face_index: 0,
+        },
+    ])
+    .expect("fonts");
+    (rasterizer, other)
+}
+
+/// A project may name a family by any name the font's table gives it, in
+/// any language: the Korean record of a font whose US English family is
+/// another finds it.
+#[test]
+fn a_family_is_found_by_its_localized_name() {
+    let (rasterizer, other) = localized_stack();
+    let names = font_family_names(&rasterizer.fonts[1].source.bytes, 0);
+    assert!(names.contains(&other), "{names:?}");
+    assert!(names.contains(&KOREAN_FAMILY.to_owned()), "{names:?}");
+    // The table's own family is still the one its faces are grouped and reported by.
+    assert_eq!(
+        font_family(&rasterizer.fonts[1].source.bytes, 0),
+        Some(other)
+    );
+    assert_eq!(rasterizer.font_order(Some(KOREAN_FAMILY), 400), [1, 0]);
+    assert_eq!(rasterizer.unmatched_families(), Vec::<String>::new());
+}
+
+/// Names compare after NFC and Unicode lowercasing: a decomposed (NFD)
+/// spelling of the Korean name, and an English name in capitals, find their
+/// font.
+#[test]
+fn a_family_is_found_whatever_its_normalization_or_case() {
+    use unicode_normalization::UnicodeNormalization;
+
+    let (rasterizer, other) = localized_stack();
+    let decomposed = KOREAN_FAMILY.nfd().collect::<String>();
+    assert_ne!(decomposed, KOREAN_FAMILY);
+    assert_eq!(rasterizer.font_order(Some(&decomposed), 400), [1, 0]);
+    assert_eq!(
+        rasterizer.font_order(Some(&format!("  {}  ", other.to_uppercase())), 400),
+        [1, 0]
+    );
+    assert_eq!(fold_family("\u{C5}LPHA"), fold_family("A\u{30A}lpha"));
+    assert_eq!(rasterizer.unmatched_families(), Vec::<String>::new());
+}
+
+/// A family no font has keeps the fallback order and is listed, once, as a
+/// request spelled it; a family that matched is not.
+#[test]
+fn an_unmatched_family_is_reported() {
+    let (rasterizer, _) = localized_stack();
+    assert_eq!(rasterizer.font_order(Some("Missing Sans"), 400), [0, 1]);
+    assert_eq!(rasterizer.font_order(Some("Missing Sans"), 700), [0, 1]);
+    assert_eq!(rasterizer.font_order(Some("Absent"), 400), [0, 1]);
+    rasterizer.font_order(Some(KOREAN_FAMILY), 400);
+    assert_eq!(
+        rasterizer.unmatched_families(),
+        ["Absent".to_owned(), "Missing Sans".to_owned()]
+    );
+    // With no fonts there is nothing a family could have matched.
+    let empty = TextRasterizer::empty();
+    empty.font_order(Some("Missing Sans"), 400);
+    assert_eq!(empty.unmatched_families(), Vec::<String>::new());
+}
+
 /// The runs `text` splits into with fonts tried in `order`, as (font, text).
 fn runs(rasterizer: &TextRasterizer, text: &str, order: &[usize]) -> Vec<(usize, String)> {
     runs_under(rasterizer, text, order, EmojiPolicy::Color)

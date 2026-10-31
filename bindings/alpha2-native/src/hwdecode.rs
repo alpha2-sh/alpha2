@@ -114,15 +114,13 @@ pub fn probe_vulkan_decode(
         })?;
     debug_assert_eq!(config.pix_fmt, ffi::AV_PIX_FMT_VULKAN);
 
-    // The device an export decodes on, as the host chooses it, passed by its index: `FFmpeg`
-    // reads a name that starts with a digit as an index, so passing `ALPHA2_VULKAN_DEVICE` on
-    // unchanged would pick another device or none.
+    // The device an export decodes on, as the host's adapter choice takes it, passed by its
+    // loader index: `FFmpeg` reads a name that starts with a digit as an index, so passing an
+    // `ALPHA2_GPU_ADAPTER` name on unchanged would pick another device or none.
     let requested_device = CString::new(
-        alpha2_native_gpu::shared_device_index(
-            std::env::var("ALPHA2_VULKAN_DEVICE").ok().as_deref(),
-        )
-        .map_err(|error| DecodeError::Unsupported(error.to_string()))?
-        .to_string(),
+        alpha2_native_gpu::shared_device_index()
+            .map_err(|error| DecodeError::Unsupported(error.to_string()))?
+            .to_string(),
     )
     .map_err(|_| DecodeError::Unsupported("a device index held a NUL byte".into()))?;
     let device = AVHWDeviceContext::create(

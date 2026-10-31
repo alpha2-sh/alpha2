@@ -148,3 +148,34 @@ fn the_startup_line_names_openh264() {
         "openh264=unusable (bad checksum)"
     );
 }
+
+/// Each fallback says how the encoder ran and what its refusal is evidence of, so a client can
+/// tell a busy GPU encoder (which may open later) from a missing one.
+#[test]
+fn fallback_entries_say_how_the_encoder_ran() {
+    let rejected = [
+        alpha2_native::NativeVideoEncoderFallback {
+            encoder_name: "h264_nvenc".to_owned(),
+            hardware_accelerated: true,
+            reason: alpha2_native::NativeEncoderRejection::OpenFailed,
+            kind: OpenFailureKind::Busy,
+            detail: "OpenEncodeSessionEx failed: out of memory (10)".to_owned(),
+        },
+        alpha2_native::NativeVideoEncoderFallback {
+            encoder_name: "h264_mf".to_owned(),
+            hardware_accelerated: false,
+            reason: alpha2_native::NativeEncoderRejection::Dimensions,
+            kind: OpenFailureKind::Unsuitable,
+            detail: "64x48 is below 128x96".to_owned(),
+        },
+    ];
+    assert_eq!(
+        crate::encoder_refusal::fallbacks_json(&rejected),
+        serde_json::json!([
+            {"encoder": "h264_nvenc", "hardwareAccelerated": true, "kind": "busy",
+             "reason": "open-failed", "detail": "OpenEncodeSessionEx failed: out of memory (10)"},
+            {"encoder": "h264_mf", "hardwareAccelerated": false, "kind": "unsuitable",
+             "reason": "dimensions", "detail": "64x48 is below 128x96"},
+        ])
+    );
+}

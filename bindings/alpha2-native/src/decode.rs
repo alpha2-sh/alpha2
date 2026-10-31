@@ -21,8 +21,8 @@ use crate::video_frame::{HardwareDecoderSpec, HardwareOpenError};
 use alpha2_ffmpeg_bridge::{DecodedFrame, DemuxInput, OpenInputError};
 use alpha2_media::{
     AudioBlock, CancelToken, ColorMetadata, DecodeError, DecodeEvent, DecodeRequest, DecodeResult,
-    DecodedVideoFrame, Decoder, MAX_AUDIO_CHANNELS, Orientation, SampleAspectRatio, Speaker,
-    SpeakerLayout, StreamInfo, StreamKind,
+    DecodedVideoFrame, Decoder, MAX_AUDIO_CHANNELS, Orientation, SampleAspectRatio, SourceAlpha,
+    Speaker, SpeakerLayout, StreamInfo, StreamKind,
 };
 use alpha2_time::{FrameRate, MediaTime, TICKS_PER_SECOND};
 use rsmpeg::avcodec::{AVCodec, AVCodecContext, AVCodecRef, AVPacket};
@@ -162,6 +162,25 @@ pub struct NativeDecoder {
     /// from the demuxer, in order, which the decode reads before the
     /// demuxer's next until a seek drops it.
     prefetched: Prefetched,
+    /// What this decoder does not decode of its stream (an alpha channel, extra layers).
+    dropped_layer: Option<DroppedLayer>,
+}
+
+/// What a decoder leaves out of its stream, which a report states: the frames
+/// decode, without it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DroppedLayer {
+    /// `alpha-dropped` or `extra-layers-dropped`.
+    pub code: &'static str,
+    /// Why.
+    pub reason: String,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Makes a software open on this thread decode VP9 with alpha as a runtime without
+    /// libvpx's decoder does: with FFmpeg's own `vp9`.
+    pub(crate) static WITHOUT_LIBVPX_VP9: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// What a read of a stream's first packets took from the demuxer, in order,
@@ -1309,10 +1328,12 @@ impl NativeDecoder {
         let sample_aspect_ratio = selected.sample_aspect_ratio;
         // HDR decodes like any 10-bit stream; the renderer tone-maps it or the project refuses it.
         let color = selected.color;
+        let dropped_layer;
         let (time_base, decoder) = {
             let stream = &input.streams()[video_index];
             let parameters = stream.codecpar();
-            let codec = software_video_decoder(parameters.codec_id)?;
+            let (codec, dropped) = software_decoder_for(&parameters, selected.alpha)?;
+            dropped_layer = dropped;
             let mut decoder = AVCodecContext::new(&codec);
             decoder.apply_codecpar(&parameters).map_err(adapter_error)?;
             decoder.set_pkt_timebase(stream.time_base);
@@ -1345,6 +1366,7 @@ impl NativeDecoder {
             recovery: Recovery::new(time_base),
             slack,
             prefetched,
+            dropped_layer,
         })
     }
 
@@ -1363,7 +1385,7 @@ impl NativeDecoder {
         path: impl AsRef<Path>,
         threads: i64,
         device: AVHWDeviceContext,
-        spec: &HardwareDecoderSpec,
+        spec: &HardwareDecoderSpec<'_>,
     ) -> Result<Self, HardwareOpenError> {
         use crate::video_frame::HardwareDecodeFallback::{
             DecoderOpenFailed, NoHardwareConfig, SourceUnavailable, UnsupportedColor,
@@ -1393,6 +1415,18 @@ impl NativeDecoder {
                 DecodeError::Unsupported("hardware export currently supports SDR only".into()),
             ));
         }
+        // A hardware session decodes the base picture alone, so it would drop the alpha a
+        // software decoder keeps (or, for HEVC's auxiliary layer, report as dropped).
+        if let Some(alpha) = selected.alpha {
+            return Err(HardwareOpenError::new(
+                crate::video_frame::HardwareDecodeFallback::AlphaChannel,
+                DecodeError::Unsupported(format!(
+                    "the stream carries alpha ({}), which {} decode drops",
+                    alpha.as_str(),
+                    spec.backend
+                )),
+            ));
+        }
         let (time_base, decoder) = {
             let stream = &input.streams()[video_index];
             let parameters = stream.codecpar();
@@ -1402,6 +1436,22 @@ impl NativeDecoder {
                     DecodeError::Unsupported("selected video codec has no decoder".into()),
                 )
             })?;
+            if let Some(codecs) = spec.hardware_codecs {
+                let listed = hardware_codec_name(parameters.codec_id);
+                if !listed.is_some_and(|name| codecs.contains(&name)) {
+                    let name = listed.map_or_else(
+                        || preferred.name().to_string_lossy().into_owned(),
+                        str::to_owned,
+                    );
+                    return Err(HardwareOpenError::new(
+                        NoHardwareConfig,
+                        DecodeError::Unsupported(format!(
+                            "{} has no hardware decoder for {name} here",
+                            spec.backend
+                        )),
+                    ));
+                }
+            }
             let supported = |codec: &AVCodecRef<'_>| {
                 (0..)
                     .map_while(|index| codec.hw_config(index))
@@ -1470,7 +1520,15 @@ impl NativeDecoder {
             recovery: Recovery::hardware(time_base),
             slack,
             prefetched,
+            dropped_layer: None,
         })
+    }
+
+    /// What this decoder leaves out of its stream (an alpha channel it cannot
+    /// read, extra HEVC layers), or `None` when it decodes all of it.
+    #[must_use]
+    pub const fn dropped_layer(&self) -> Option<&DroppedLayer> {
+        self.dropped_layer.as_ref()
     }
 
     /// Effective end of the selected video source.
@@ -1959,6 +2017,109 @@ pub(crate) fn software_video_decoder(
         .ok_or_else(|| DecodeError::Unsupported(hardware_only_reason(&preferred)))
 }
 
+const NO_LIBVPX_VP9: &str = "this FFmpeg runtime has no libvpx-vp9 decoder";
+const HEVC_ALPHA_NOT_DECODED: &str = "alpha in an HEVC auxiliary layer is not decoded";
+
+/// libvpx's VP9 decoder, the one that reads alpha, when the runtime has it.
+fn libvpx_vp9() -> Option<AVCodecRef<'static>> {
+    #[cfg(test)]
+    if WITHOUT_LIBVPX_VP9.with(std::cell::Cell::get) {
+        return None;
+    }
+    AVCodec::find_decoder_by_name(c"libvpx-vp9")
+}
+
+/// Whether this runtime decodes VP9's alpha: it has libvpx's VP9 decoder.
+#[must_use]
+pub fn decodes_vp9_alpha() -> bool {
+    libvpx_vp9().is_some()
+}
+
+/// Why a software session decodes `stream` without its alpha, when it carries alpha this
+/// runtime does not read: what a conform reports before an export decodes it.
+#[must_use]
+pub fn alpha_dropped_reason(stream: &StreamInfo) -> Option<&'static str> {
+    match stream.alpha? {
+        SourceAlpha::Vp9SideData => libvpx_vp9().is_none().then_some(NO_LIBVPX_VP9),
+        SourceAlpha::HevcAuxiliaryLayer => Some(HEVC_ALPHA_NOT_DECODED),
+        SourceAlpha::Planar => None,
+    }
+}
+
+/// The decoder a software session opens for the stream `parameters`
+/// describe, which carries `alpha`, and what it leaves out.
+///
+/// VP9 with alpha in its block additions opens libvpx's VP9 decoder, the one
+/// that reads them; HEVC's auxiliary alpha layer and MV-HEVC's other views
+/// have no decoder here, so the base layer decodes and the loss is reported.
+fn software_decoder_for(
+    parameters: &rsmpeg::avcodec::AVCodecParameters,
+    alpha: Option<SourceAlpha>,
+) -> Result<(AVCodecRef<'static>, Option<DroppedLayer>), DecodeError> {
+    let codec = software_video_decoder(parameters.codec_id)?;
+    let dropped = |code, reason: &str| {
+        Some(DroppedLayer {
+            code,
+            reason: reason.to_owned(),
+        })
+    };
+    match alpha {
+        Some(SourceAlpha::Vp9SideData) => Ok(match libvpx_vp9() {
+            Some(libvpx) => (libvpx, None),
+            None => (codec, dropped("alpha-dropped", NO_LIBVPX_VP9)),
+        }),
+        Some(SourceAlpha::HevcAuxiliaryLayer) => {
+            Ok((codec, dropped("alpha-dropped", HEVC_ALPHA_NOT_DECODED)))
+        }
+        _ if parameters.codec_id == ffi::AV_CODEC_ID_HEVC
+            && crate::parameter_sets::hevc_layers(
+                &alpha2_ffmpeg_bridge::codec_parameters_extradata(parameters),
+            ) == Some(crate::parameter_sets::HevcLayers::Extra) =>
+        {
+            Ok((
+                codec,
+                dropped(
+                    "extra-layers-dropped",
+                    "the HEVC layers besides the base layer are not decoded",
+                ),
+            ))
+        }
+        _ => Ok((codec, None)),
+    }
+}
+
+/// How the video stream `stream`, described by `parameters`, carries alpha:
+/// VP9's `alpha_mode` tag, an HEVC auxiliary layer in its parameter sets, or
+/// a pixel format with an alpha plane.
+fn source_alpha(
+    metadata: Option<rsmpeg::avutil::AVDictionaryRef<'_>>,
+    parameters: &rsmpeg::avcodec::AVCodecParameters,
+) -> Option<SourceAlpha> {
+    let tagged = || {
+        metadata
+            .and_then(|metadata| {
+                metadata
+                    .get(c"alpha_mode", None, 0)
+                    .map(|entry| entry.value().to_bytes() == b"1")
+            })
+            .unwrap_or(false)
+    };
+    match parameters.codec_id {
+        ffi::AV_CODEC_ID_VP9 if tagged() => return Some(SourceAlpha::Vp9SideData),
+        ffi::AV_CODEC_ID_HEVC
+            if crate::parameter_sets::hevc_layers(
+                &alpha2_ffmpeg_bridge::codec_parameters_extradata(parameters),
+            ) == Some(crate::parameter_sets::HevcLayers::AuxiliaryAlpha) =>
+        {
+            return Some(SourceAlpha::HevcAuxiliaryLayer);
+        }
+        _ => {}
+    }
+    alpha2_ffmpeg_bridge::sample_profile(parameters.format)
+        .filter(|profile| profile.has_alpha)
+        .map(|_| SourceAlpha::Planar)
+}
+
 fn hardware_only_reason(decoder: &AVCodecRef<'_>) -> String {
     let name = decoder.name().to_string_lossy();
     format!(
@@ -1996,6 +2157,34 @@ pub(crate) fn effective_media_duration(
     stream_duration.into_iter().chain(container_duration).max()
 }
 
+/// Bytes one picture of `format` at `width` by `height` holds, unpadded, or
+/// `None` for a format `FFmpeg` does not know (`StreamInfo::frame_bytes`).
+fn decoded_frame_bytes(format: i32, (width, height): (u32, u32)) -> Option<u64> {
+    let size = rsmpeg::avutil::AVImage::get_buffer_size(
+        format,
+        i32::try_from(width).ok()?,
+        i32::try_from(height).ok()?,
+        1,
+    )?;
+    u64::try_from(size).ok().filter(|bytes| *bytes > 0)
+}
+
+/// The `FFmpeg` name a device's hardware codec list uses for `codec_id`, for
+/// the codecs a hardware session may decode.
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos", target_os = "windows"),
+    feature = "hwdecode"
+))]
+const fn hardware_codec_name(codec_id: ffi::AVCodecID) -> Option<&'static str> {
+    match codec_id {
+        ffi::AV_CODEC_ID_H264 => Some("h264"),
+        ffi::AV_CODEC_ID_HEVC => Some("hevc"),
+        ffi::AV_CODEC_ID_VP9 => Some("vp9"),
+        ffi::AV_CODEC_ID_AV1 => Some("av1"),
+        _ => None,
+    }
+}
+
 /// Refuses a stream whose SPS crops its left or top edge on a backend whose
 /// surfaces do not keep that crop ([`HardwareDecoderSpec::keeps_leading_crop`]).
 /// A sample description whose SPS this cannot read is not refused.
@@ -2005,7 +2194,7 @@ pub(crate) fn effective_media_duration(
 ))]
 fn check_hardware_crop(
     parameters: &rsmpeg::avcodec::AVCodecParameters,
-    spec: &HardwareDecoderSpec,
+    spec: &HardwareDecoderSpec<'_>,
 ) -> Result<(), HardwareOpenError> {
     if spec.keeps_leading_crop {
         return Ok(());
@@ -2036,7 +2225,7 @@ fn check_hardware_crop(
 ))]
 fn check_hardware_sample_profile(
     format: ffi::AVPixelFormat,
-    spec: &HardwareDecoderSpec,
+    spec: &HardwareDecoderSpec<'_>,
 ) -> Result<(), HardwareOpenError> {
     let Some(profile) = alpha2_ffmpeg_bridge::sample_profile(format) else {
         return Ok(());
@@ -2305,6 +2494,11 @@ pub(crate) fn probe_context(input: &DemuxInput, path: &Path) -> Result<ProbeResu
                 } else {
                     None
                 },
+                alpha: (kind == StreamKind::Video)
+                    .then(|| source_alpha(stream.metadata(), &parameters))
+                    .flatten(),
+                frame_bytes: dimensions
+                    .and_then(|size| decoded_frame_bytes(parameters.format, size)),
             })
         })
         .collect();

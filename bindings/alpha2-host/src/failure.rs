@@ -485,6 +485,7 @@ pub fn startup_failure_json(host_code: &str, message: &str, native: Option<&str>
         json!({
             "hostVersion": env!("CARGO_PKG_VERSION"),
             "os": std::env::consts::OS,
+            "osVersion": alpha2_os::os_version(),
             "arch": std::env::consts::ARCH,
             "features": {
                 "hwdecode": cfg!(feature = "hwdecode"),
@@ -528,14 +529,30 @@ pub fn gpu_json(snapshot: &GpuDiagnosticSnapshot) -> Value {
     })
 }
 
-/// The process's resident memory now and at its peak, as the OS reports
-/// them ([`alpha2_os::process_memory`]: Linux, macOS, and Windows); `null`
-/// fields where it does not.
+/// The process's resident memory and footprint now and at their peaks, as
+/// the OS reports them ([`alpha2_os::process_memory`]: Linux, macOS, and
+/// Windows), and the machine's memory and the process's limit
+/// (`capacity`, [`memory_capacity_json`]); `null` fields where it does not.
 pub fn process_memory_json() -> Value {
     let memory = alpha2_os::process_memory();
     json!({
         "residentBytes": memory.resident_bytes,
         "peakResidentBytes": memory.peak_resident_bytes,
+        "footprintBytes": memory.footprint_bytes,
+        "peakFootprintBytes": memory.peak_footprint_bytes,
+        "capacity": memory_capacity_json(),
+    })
+}
+
+/// The machine's memory and this process's limit ([`alpha2_os::memory_capacity`]).
+pub fn memory_capacity_json() -> Value {
+    let capacity = crate::memory::machine_capacity();
+    json!({
+        "physicalBytes": capacity.physical_bytes,
+        "availableBytes": capacity.available_bytes,
+        "limitBytes": capacity.limit_bytes,
+        "limitSource": capacity.limit_source,
+        "usedInLimitBytes": capacity.used_in_limit_bytes,
     })
 }
 

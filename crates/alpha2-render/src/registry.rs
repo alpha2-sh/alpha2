@@ -364,12 +364,18 @@ impl Renderer {
     /// What a registered effect draws with, made now when it was not yet.
     pub(crate) fn effect_pipeline<'a>(&self, effect: &'a RegisteredEffect) -> &'a EffectPipeline {
         effect.pipeline.get_or_init(|| {
-            let device = self.gpu.device();
-            let shader = effect_shader(device, &effect.definition);
-            let format = self.intermediate_format();
-            on_compile_stack(&self.gpu, || {
-                effect_pipeline(device, &effect.definition, shader, format)
-            })
+            crate::diagnostics::timed_pipeline_creation(
+                &self.diagnostics,
+                || effect.definition.id.as_str().to_owned(),
+                || {
+                    let device = self.gpu.device();
+                    let shader = effect_shader(device, &effect.definition);
+                    let format = self.intermediate_format();
+                    on_compile_stack(&self.gpu, || {
+                        effect_pipeline(device, &effect.definition, shader, format)
+                    })
+                },
+            )
         })
     }
 

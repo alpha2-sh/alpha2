@@ -178,14 +178,14 @@ pub fn encode_linear_rgb(rgb: [f32; 3], transfer: SdrOutputTransfer) -> [f32; 3]
                 if value <= 0.003_130_8 {
                     12.92 * value
                 } else {
-                    1.055 * value.powf(1.0 / 2.4) - 0.055
+                    1.055 * libm::powf(value, 1.0 / 2.4) - 0.055
                 }
             }
             SdrOutputTransfer::Bt709 => {
                 if value < 0.018 {
                     4.5 * value
                 } else {
-                    1.099 * value.powf(0.45) - 0.099
+                    1.099 * libm::powf(value, 0.45) - 0.099
                 }
             }
         }
@@ -201,7 +201,7 @@ fn decode_sdr(value: f32) -> f32 {
     if value <= 0.040_45 {
         value / 12.92
     } else {
-        ((value + 0.055) / 1.055).powf(2.4)
+        libm::powf((value + 0.055) / 1.055, 2.4)
     }
 }
 

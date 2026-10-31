@@ -45,6 +45,7 @@ import {
   hostBlockedMessage,
   hostStartTimeout,
   hostStartTimeoutMessage,
+  oomKillCount,
   spawnRefusal,
   windowsStatus,
 } from "./host-start.js";
@@ -95,7 +96,7 @@ export interface Alpha2NodeOptions extends ResolveHostBinaryOptions {
   readonly concurrency?: number;
   /**
    * Video decode path for every request this client makes. When it is unset the host uses its
-   * platform default, which is "auto" on Linux and "software" on macOS and Windows. "auto" uses the
+   * platform default, which is "auto" on Linux and macOS and "software" on Windows. "auto" uses the
    * GPU decoder where the device and stream support it, and "hardware-required" fails instead of
    * decoding a video frame on the CPU.
    */
@@ -202,10 +203,11 @@ export interface ResolvedVideoRateControl {
   readonly mode: "constant" | "variable";
   readonly quantizer: number | null;
   /**
-   * What the encoder ran: `quantizer`, or `bitrate` because none was asked for or because the
-   * encoder refused it (`quantizerRefused` says why).
+   * What the encoder ran: `quantizer`; `quality` where the encoder has no QP and the quantizer was
+   * mapped onto its own quality scale (`h264_videotoolbox` on Apple silicon); or `bitrate`
+   * because none was asked for or because the encoder refused it (`quantizerRefused` says why).
    */
-  readonly applied: "quantizer" | "bitrate";
+  readonly applied: "quantizer" | "quality" | "bitrate";
   readonly quantizerRefused: string | null;
   /** The level the request named, or null for an explicit rate. */
   readonly level: QualityLevel | null;
@@ -262,10 +264,45 @@ export interface PublishReport {
   readonly retries: number;
 }
 
+/** One video encoder an export tried before the one that wrote the video. */
+export interface VideoEncoderFallback {
+  readonly encoder: string;
+  /** Whether it was tried on the GPU; a hybrid encoder can be tried on the GPU, then the CPU. */
+  readonly hardwareAccelerated: boolean;
+  /**
+   * What the refusal is evidence of: `absent` (not on this machine), `busy` (another export holds
+   * every session; it may open later), `unsuitable` (not for this export's size or options), or
+   * `unknown`.
+   */
+  readonly kind: "absent" | "busy" | "unsuitable" | "unknown";
+  /** The typed rejection. */
+  readonly reason: string;
+  /** The encoder's own words. */
+  readonly detail: string;
+}
+
 /** Successful metadata returned by the native host after an export. */
 export interface NativeExportResult {
   /** The container the file was written in. */
   readonly container: ExportContainer;
+  /** The GPU adapter that rendered, or the CPU renderer's name. */
+  readonly adapter: string;
+  /** The FFmpeg encoder that wrote the video; `null` for a packet copy, which encodes nothing. */
+  readonly videoEncoder: string | null;
+  /** `hardware` or `software`: how {@link videoEncoder} runs. */
+  readonly videoEncoderClass: string | null;
+  /** Whether {@link videoEncoder} encoded on the GPU or a media engine. */
+  readonly videoEncoderHardware: boolean | null;
+  /** The encoder the request pinned, else the first the host would have taken. */
+  readonly videoEncoderPreferred: string | null;
+  /** The encoders tried before {@link videoEncoder}, in the order tried; `[]` when none were. */
+  readonly videoEncoderFallbacks: readonly VideoEncoderFallback[];
+  /** The FFmpeg encoder that wrote the audio (`aac`, `libopus`); `null` without audio. */
+  readonly audioEncoder: string | null;
+  /** Whether the host could decode video on the GPU when the export ran. */
+  readonly hardwareDecodeReady?: boolean;
+  /** Why `auto` decode set up no hardware decoder at the host's start, when it could not. */
+  readonly hardwareDecodeUnavailable?: string | null;
   readonly renderMs: number;
   readonly frames: number;
   readonly audio: boolean;
@@ -279,6 +316,12 @@ export interface NativeExportResult {
   readonly rendererReason: string | null;
   /** The CPU renderer's threads; absent on a GPU host. */
   readonly rendererThreads?: number;
+  /**
+   * Families the project's texts name that no supplied font has (matched by any name a font's
+   * table gives, in any language, after NFC and lowercasing), sorted; those texts drew in the
+   * fallback order. Empty when every family matched.
+   */
+  readonly unmatchedFontFamilies: readonly string[];
   /**
    * How this export's frames reached the encoder: read back from the GPU, rendered into the
    * encoder's own GPU images, or copied as the source's packets. It is not a file path (that is
@@ -380,10 +423,11 @@ export interface NativeExportResult {
   /**
    * What the export's decoders reported about damaged input, per source in source ID order: what a
    * `tolerant` decode policy (`ALPHA2_DECODE_POLICY`) skipped, and silence inserted where a clean
-   * stream's timestamps jump; `[]` when they reported nothing.
+   * stream's timestamps jump; then each source whose alpha or extra layers were not decoded, and
+   * a shortage of decoder sessions; `[]` when they reported nothing.
    */
   readonly decodeDiagnostics: readonly (
-    DecodeDiagnostics | DecoderSessionsShortDiagnostic
+    DecodeDiagnostics | LayerDroppedDiagnostic | DecoderSessionsShortDiagnostic
   )[];
   /**
    * What the renderer's result cache did: repeated frames and unchanged clip pictures are found
@@ -454,6 +498,8 @@ export interface NativeExportResult {
 export interface ExportPerformance {
   /** Per reason a source left the hardware decode path, how many times it did. */
   readonly hardwareFallbackReasons?: Readonly<Record<string, number>>;
+  /** Per reason in `hardwareFallbackReasons` that has one, the first fallback's message. */
+  readonly hardwareFallbackMessages?: Readonly<Record<string, string>>;
   /**
    * How many times the encode worker took a command and left each number of frames behind in its
    * channel, indexed by that number.
@@ -493,6 +539,7 @@ export type PerformanceValue =
   | null
   | readonly number[]
   | Readonly<Record<string, number>>
+  | Readonly<Record<string, string>>
   | GpuEncodeBudget;
 
 /** The device memory the GPU-resident path reserved, in bytes and surfaces. */
@@ -549,6 +596,18 @@ export interface DecoderSessionsShortDiagnostic {
   readonly limit: "memory" | "override" | "cap";
   readonly reopens: number;
   readonly message: string;
+}
+
+/**
+ * A source whose decoder leaves part of its stream out, decoding the rest: `alpha-dropped` for an
+ * alpha channel no decoder of this host reads (HEVC's auxiliary alpha layer, or VP9 alpha on a
+ * runtime without libvpx's VP9 decoder), `extra-layers-dropped` for HEVC layers besides the base.
+ */
+export interface LayerDroppedDiagnostic {
+  readonly type: "layerDropped";
+  readonly code: "alpha-dropped" | "extra-layers-dropped";
+  readonly source: string;
+  readonly reason: string;
 }
 
 /** Where {@link ExportProjectRequest.renderCache} bakes frames. */
@@ -735,8 +794,10 @@ export interface ExportProjectRequest {
    * Byte budgets for this export, replacing the host's environment settings
    * (`ALPHA2_EXPORT_IN_FLIGHT_BYTES` and the rest) and defaults field by field. Each bounds memory
    * the host reserves before it allocates; an export whose least working set does not fit fails
-   * with `RESOURCE_LIMIT` before it renders. The result's `memoryPolicy` reports what applied and
-   * where each value came from.
+   * with `RESOURCE_LIMIT` before it renders. On a machine or container with less memory than the
+   * defaults assume, the budgets left at their defaults shrink together to half of what the host
+   * may use (source `machine`); one set here never does. The result's `memoryPolicy` reports what
+   * applied, where each value came from, and the machine memory (`machine`).
    */
   readonly memory?: ExportMemoryBudget;
   /** Overrides the client's decode mode for this export. */
@@ -1015,9 +1076,17 @@ export interface HostDecodeCapabilities {
   readonly hardwareUnavailable: string | null;
   /** Whether the device can present 10-bit decoded planes. */
   readonly tenBit: boolean;
-  /** Codecs the decode device itself enabled, where the backend reports them. */
+  /**
+   * Codecs the decode device decodes in hardware (Vulkan's enabled decode extensions, VideoToolbox's
+   * per-codec answer); `null` where the backend decides per stream (D3D12VA) or without a device.
+   */
   readonly deviceCodecs: readonly string[] | null;
   readonly codecs: readonly DecodeCodecCapability[];
+  /**
+   * The source codecs whose alpha the host decodes: `prores` (4444), and `vp9` where the runtime
+   * has the `libvpx-vp9` decoder. HEVC's auxiliary alpha layer decodes opaque.
+   */
+  readonly alpha: readonly string[];
 }
 
 /** What {@link Alpha2NodeClient.getCapabilities} reports about the host. */
@@ -1032,6 +1101,11 @@ export interface HostCapabilities {
   readonly rendererReason: string | null;
   /** The CPU renderer's threads; absent on a GPU host. */
   readonly rendererThreads?: number;
+  /**
+   * The operating system's version: product version and build on macOS, distribution and kernel
+   * on Linux, `major.minor.build.revision` on Windows.
+   */
+  readonly osVersion: string;
   /** What the host can do, in the report every alpha2 runtime gives. */
   readonly capabilities: CapabilityReport<
     HostDecodeCapabilities,
@@ -1328,6 +1402,8 @@ export interface StillResult {
   };
   readonly media: Readonly<Record<string, Selection>>;
   readonly decodeDiagnostics: readonly unknown[];
+  /** As {@link NativeExportResult.unmatchedFontFamilies}. */
+  readonly unmatchedFontFamilies: readonly string[];
   readonly [metadata: string]: unknown;
 }
 
@@ -2276,6 +2352,8 @@ async function requestHost(
           )
         : new Alpha2HostError(refusal.code, refusal.message, { cause });
     };
+    // Read before the host starts, so a kill by the kernel while it runs shows as a rise.
+    const oomKillsBefore = oomKillCount();
     let child: ChildProcess;
     try {
       child = spawn(binary, ["serve"], {
@@ -2449,9 +2527,40 @@ async function requestHost(
               { stderr: tail, exitCode: code, signal: exitSignal },
             ),
           );
+        } else if (
+          exitSignal === "SIGKILL" &&
+          oomKillsBefore !== undefined &&
+          (oomKillCount() ?? oomKillsBefore) > oomKillsBefore
+        ) {
+          // The kernel's out-of-memory killer ended a process of this cgroup while the host ran,
+          // and the host died of SIGKILL: the class a smaller `memory.scale` can answer.
+          const failure: ExportFailure = {
+            code: "OUT_OF_MEMORY",
+            message: `the kernel's out-of-memory killer ended alpha2-host (${ended})`,
+            origin: "node",
+            operation: "export",
+            backend: "native",
+            phase: phaseNow(),
+            resource: "cpu",
+            stderr: tail,
+            exitCode: code,
+            signal: exitSignal,
+          };
+          rejectPromise(
+            new Alpha2HostError(
+              "HOST_OOM_KILLED",
+              `the kernel's out-of-memory killer ended alpha2-host: ${detail}`,
+              {
+                failure,
+                stderr: tail,
+                exitCode: code,
+                signal: exitSignal,
+              },
+            ),
+          );
         } else {
-          // Nothing the host said names a cause, so none is claimed: a SIGKILL is as consistent
-          // with an external kill as with the OOM killer.
+          // Nothing the host said names a cause, so none is claimed: a SIGKILL without a rise in
+          // the cgroup's out-of-memory kills is as consistent with an external kill.
           const failure: ExportFailure = {
             code: "HOST_EXITED",
             message: `alpha2-host exited before responding (${ended})`,

@@ -26,6 +26,9 @@ pub struct ExportDecoding {
     /// Fewer decoder sessions than the videos read at once, and what that
     /// cost: reported after the sources.
     short_of_sessions: Mutex<Option<Value>>,
+    /// What a source's decoder leaves out of its stream (alpha, extra HEVC
+    /// layers), by source ID: reported after the sources.
+    dropped_layers: Mutex<BTreeMap<String, alpha2_native::DroppedLayer>>,
 }
 
 impl ExportDecoding {
@@ -46,6 +49,17 @@ impl ExportDecoding {
             policy,
             sources: Mutex::default(),
             short_of_sessions: Mutex::default(),
+            dropped_layers: Mutex::default(),
+        }
+    }
+
+    /// Notes that `source`'s decoder leaves `dropped` out of its stream: its
+    /// frames decode without it, which the export reports once per source.
+    pub fn note_dropped_layer(&self, source: &SourceId, dropped: &alpha2_native::DroppedLayer) {
+        if let Ok(mut noted) = self.dropped_layers.lock() {
+            noted
+                .entry(source.as_str().to_owned())
+                .or_insert_with(|| dropped.clone());
         }
     }
 
@@ -103,6 +117,11 @@ impl ExportDecoding {
             .lock()
             .ok()
             .and_then(|noted| noted.clone());
+        let dropped_layers = self
+            .dropped_layers
+            .lock()
+            .map(|noted| noted.clone())
+            .unwrap_or_default();
         Value::Array(
             sources
                 .into_iter()
@@ -116,6 +135,14 @@ impl ExportDecoding {
                         "droppedAudioSamples": counts.dropped_audio_samples,
                     })
                 })
+                .chain(dropped_layers.into_iter().map(|(source, dropped)| {
+                    json!({
+                        "type": "layerDropped",
+                        "code": dropped.code,
+                        "source": source,
+                        "reason": dropped.reason,
+                    })
+                }))
                 .chain(short_of_sessions)
                 .collect(),
         )

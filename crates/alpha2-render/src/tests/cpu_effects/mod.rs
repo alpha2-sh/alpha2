@@ -94,10 +94,16 @@ fn check_effect(
     cases: &[(Params, Tolerance)],
     runtime: EffectRuntime,
 ) {
+    // The time is in the name when it is not the start, so each time's pictures and report
+    // lines stay apart.
+    let at = match runtime.time.ticks() {
+        0 => String::new(),
+        ticks => format!("-at-{ticks}"),
+    };
     for (index, (values, tolerance)) in cases.iter().enumerate() {
         for small in [false, true] {
             let name = format!(
-                "{}-{index}{}",
+                "{}-{index}{}{at}",
                 effect.as_str().rsplit('.').next().unwrap_or("effect"),
                 if small { "-small" } else { "" }
             );

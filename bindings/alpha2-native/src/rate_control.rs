@@ -255,13 +255,71 @@ pub(crate) fn mechanism_request(
         // `crf` 23-41 ran 0.8-2.1 dB below `qp` at the same number on the 1080p showcase).
         ("x26x", RateControlMechanism::ConstantQuantizer) => fixed_quantizer(vec![(c"qp", q)]),
         ("crf", RateControlMechanism::ConstantQuantizer) => fixed_quantizer(vec![(c"crf", q)]),
+        // VideoToolbox has no QP; `flags=+qscale` makes FFmpeg pass `global_quality /
+        // (FF_QP2LAMBDA * 100)` as `kVTCompressionPropertyKey_Quality`, so the quantizer is mapped
+        // onto that 0-1 scale ([`videotoolbox_quality`]). FFmpeg refuses `qscale` off Apple
+        // silicon, where the open-time fallback runs the bitrate. The map is H.264's; HEVC keeps
+        // the bitrate.
+        ("videotoolbox", RateControlMechanism::ConstantQuantizer)
+            if encoder_name == "h264_videotoolbox" =>
+        {
+            fixed_quantizer(videotoolbox_quality_options(quantizer))
+        }
         // These families open with `flags=+qscale global_quality=N` but none reads N as a QP, so a
-        // quantizer visibly falls back to bitrate. VideoToolbox reads it as 0-1 quality, higher
-        // better (an M4 wrote `very-high` smaller than `very-low`); MediaFoundation passes it
-        // unscaled as `AVEncVideoEncodeQP`; libavcodec's `mpeg4` reads each frame's `quality`,
-        // which no sink sets.
+        // quantizer visibly falls back to bitrate. MediaFoundation passes it unscaled as
+        // `AVEncVideoEncodeQP` (an M4's VideoToolbox, before its map, wrote `very-high` smaller
+        // than `very-low` the same way); libavcodec's `mpeg4` reads each frame's `quality`, which
+        // no sink sets.
         _ => return None,
     })
+}
+
+/// `FFmpeg`'s `FF_QP2LAMBDA`, the factor `qscale` encoders divide
+/// `global_quality` by.
+const FF_QP2LAMBDA: u32 = 118;
+
+/// `VideoToolbox` quality (`kVTCompressionPropertyKey_Quality`, 0-1, higher
+/// better) per H.264 quantizer, at the quantizers the quality levels resolve
+/// to (`alpha2_media::level_quantizer`): the quality at which `h264_videotoolbox`
+/// on an M4 holds `OpenH264`'s PSNR-Y at the same level within 0.5 dB.
+///
+/// Measured on the perf project P1 (the complex parity project at 1080p30,
+/// first 4 s), each output against an `OpenH264` QP 0 encode of the same
+/// frames: `OpenH264` at the five levels gave 40.6, 44.3, 47.3, 49.7 and
+/// 52.0 dB; `VideoToolbox` at 0.25, 0.40, 0.50, 0.57 and 0.65 gave 40.6,
+/// 44.3, 47.5, 50.0 and 51.7 dB, at 0.85x, 0.80x, 0.74x, 0.74x and 0.66x of
+/// `OpenH264`'s bitrate, the same on the readback and GPU-resident paths. Grainy content (P1 with film grain) needs about 0.05
+/// to 0.10 more for the same match, so the map is the parity project's, as
+/// the quantizers' own definition is one content's.
+const VIDEOTOOLBOX_QUALITY: [(u32, f64); 5] =
+    [(23, 0.65), (27, 0.57), (31, 0.50), (35, 0.40), (41, 0.25)];
+
+/// The `VideoToolbox` quality for an H.264 `quantizer`: [`VIDEOTOOLBOX_QUALITY`]
+/// between its points, extended along its end segments, rounded to hundredths
+/// and held to 0.01-1.
+pub(crate) fn videotoolbox_quality(quantizer: u32) -> f64 {
+    let table = &VIDEOTOOLBOX_QUALITY;
+    let segment = table
+        .windows(2)
+        .find(|pair| quantizer <= pair[1].0)
+        .unwrap_or(&table[table.len() - 2..]);
+    let ((q0, v0), (q1, v1)) = (segment[0], segment[1]);
+    let position = (f64::from(quantizer) - f64::from(q0)) / (f64::from(q1) - f64::from(q0));
+    let quality = v0 + (v1 - v0) * position;
+    (quality * 100.0).round().clamp(1.0, 100.0) / 100.0
+}
+
+/// The options that make `FFmpeg` pass [`videotoolbox_quality`] for
+/// `quantizer`: `global_quality` is the hundredths times `FF_QP2LAMBDA`,
+/// which `FFmpeg` divides back exactly.
+fn videotoolbox_quality_options(quantizer: u32) -> Vec<(&'static CStr, String)> {
+    // Hundredths between 1 and 100.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let hundredths = (videotoolbox_quality(quantizer) * 100.0).round() as u32;
+    vec![
+        (c"flags", "+qscale".to_owned()),
+        (c"global_quality", (hundredths * FF_QP2LAMBDA).to_string()),
+    ]
 }
 
 /// Which form of a resolved rate control an encoder actually ran.
@@ -270,6 +328,9 @@ pub(crate) fn mechanism_request(
 pub enum AppliedRateControl {
     /// The constant quantizer.
     Quantizer,
+    /// The quantizer mapped onto the encoder's own quality scale
+    /// (`VideoToolbox`'s 0-1 `Quality`), which has no QP.
+    Quality,
     /// The bitrate: either none was asked for, or the encoder refused it.
     Bitrate,
 }
@@ -280,7 +341,17 @@ impl AppliedRateControl {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Quantizer => "quantizer",
+            Self::Quality => "quality",
             Self::Bitrate => "bitrate",
+        }
+    }
+
+    /// What `encoder_name` runs when it opened with its quantizer request.
+    pub(crate) fn of_quantizer_request(encoder_name: &str) -> Self {
+        if encoder_name.ends_with("_videotoolbox") {
+            Self::Quality
+        } else {
+            Self::Quantizer
         }
     }
 }

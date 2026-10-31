@@ -10,6 +10,26 @@ use alpha2_native::{EncoderRefusal, NativeVideoCodec, OpenFailureKind};
 
 use crate::protocol::code_tag;
 
+/// The encoders an export tried before the one that wrote its video, as its result's
+/// `videoEncoderFallbacks` lists them: each with whether it ran on the GPU, what its refusal is
+/// evidence of (`kind`), the typed rejection and the encoder's own words.
+pub fn fallbacks_json(rejected: &[alpha2_native::NativeVideoEncoderFallback]) -> serde_json::Value {
+    serde_json::Value::Array(
+        rejected
+            .iter()
+            .map(|fallback| {
+                serde_json::json!({
+                    "encoder": fallback.encoder_name,
+                    "hardwareAccelerated": fallback.hardware_accelerated,
+                    "kind": fallback.kind.as_str(),
+                    "reason": fallback.reason.as_str(),
+                    "detail": fallback.detail,
+                })
+            })
+            .collect(),
+    )
+}
+
 /// How long a client waits before it asks a busy encoder again, as the failure's `retryAfterMs`:
 /// about the time a short export holding a session takes to end.
 pub const ENCODER_BUSY_RETRY_AFTER_MS: u64 = 2_000;

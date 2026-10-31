@@ -239,8 +239,14 @@ fn composite(
 
 /// `src` over `dst` premultiplied (`One, 1 - Sa`), computed in `f32` and
 /// stored as a half-float target holds it.
+///
+/// A GPU blends in fixed-function hardware whose internal precision varies:
+/// this model is exact on lavapipe, llvmpipe, WARP and Metal and within 16
+/// half-float steps (under a quarter of a code) on NVIDIA, RADV and the Iris
+/// Xe, which no single blend model fits better. The CPU keeps one model so its
+/// output is the same everywhere.
 #[inline]
-fn over(dst: &mut Rgba, src: Rgba) {
+pub(crate) fn over(dst: &mut Rgba, src: Rgba) {
     let keep = 1.0 - src[3];
     for channel in 0..4 {
         dst[channel] = half::load(half::store(src[channel] + dst[channel] * keep));

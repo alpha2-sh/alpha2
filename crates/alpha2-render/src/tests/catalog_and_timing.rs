@@ -488,3 +488,92 @@ fn a_transition_or_generator_pass_records_its_gpu_time_under_its_own_kind() {
     }
     assert!(pollster::block_on(scope.pop()).is_none());
 }
+
+#[test]
+fn drawing_a_builtin_the_first_time_counts_one_pipeline_creation() {
+    let _lock = gpu_test_lock();
+    let mut renderer = Renderer::new(gpu());
+    renderer.register_builtins().expect("built-ins register");
+    let id = crate::EffectId::from_static("alpha2.effect.invert", 1);
+    let source = rgba_texture(&renderer, [200, 100, 50, 255]);
+    let view = source.create_view(&wgpu::TextureViewDescriptor::default());
+    let size = RenderSize::new(4, 4).expect("size");
+    let draw = || {
+        renderer
+            .render_effect(
+                &id,
+                &view,
+                None,
+                size,
+                &EffectParams::new(),
+                EffectRuntime::default(),
+            )
+            .expect("the effect draws")
+    };
+    let before = renderer.diagnostics().pipeline_creation;
+    renderer.take_pipeline_creations();
+    drop(draw());
+    let first = renderer.diagnostics().pipeline_creation;
+    assert_eq!(first.created, before.created + 1, "{first:?}");
+    assert!(first.create_micros_total >= first.create_micros_max);
+    let creations = renderer.take_pipeline_creations();
+    assert_eq!(
+        creations
+            .iter()
+            .map(|creation| creation.label.as_str())
+            .collect::<Vec<_>>(),
+        [id.as_str()]
+    );
+    assert!(creations[0].finished >= creations[0].started);
+    drop(draw());
+    assert_eq!(
+        renderer.diagnostics().pipeline_creation,
+        first,
+        "a second draw creates nothing"
+    );
+    assert_eq!(renderer.take_pipeline_creations(), Vec::new());
+}
+
+#[test]
+fn preparing_a_projects_pipelines_creates_each_once() {
+    let _lock = gpu_test_lock();
+    let mut renderer = Renderer::new(gpu());
+    renderer.register_builtins().expect("built-ins register");
+    let invert = crate::EffectId::from_static("alpha2.effect.invert", 1);
+    let blur = crate::EffectId::from_static(crate::GAUSSIAN_BLUR_ID, 1);
+    let ids = [invert.clone(), blur, invert.clone()];
+    renderer.take_pipeline_creations();
+    renderer.warmup(&ids).expect("prepared");
+    let prepared = renderer.take_pipeline_creations();
+    let mut labels = prepared
+        .iter()
+        .map(|creation| creation.label.as_str())
+        .collect::<Vec<_>>();
+    labels.sort_unstable();
+    let mut unique = labels.clone();
+    unique.dedup();
+    assert_eq!(labels, unique, "each pipeline once");
+    assert!(labels.contains(&invert.as_str()), "{labels:?}");
+    // The blur draws through its passes' pipelines, prepared with it.
+    assert!(labels.len() > 2, "{labels:?}");
+    renderer.warmup(&ids).expect("prepared again");
+    let source = rgba_texture(&renderer, [200, 100, 50, 255]);
+    let view = source.create_view(&wgpu::TextureViewDescriptor::default());
+    drop(
+        renderer
+            .render_effect(
+                &invert,
+                &view,
+                None,
+                RenderSize::new(4, 4).expect("size"),
+                &EffectParams::new(),
+                EffectRuntime::default(),
+            )
+            .expect("the effect draws"),
+    );
+    assert_eq!(
+        renderer.take_pipeline_creations(),
+        Vec::new(),
+        "nothing is created again, and a prepared effect draws without creating"
+    );
+}

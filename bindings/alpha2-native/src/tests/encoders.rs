@@ -388,6 +388,7 @@ fn codec_threading_policy_and_unused_option_guard_are_explicit() {
                 hardware_decode,
                 source_frame_pixels: 3840 * 2160,
                 software_video_encoder: true,
+                encoder_fixed_threads: None,
             });
             assert!(allocation.decode_concurrency <= concurrency);
             assert!(allocation.decoder_threads >= 1);
@@ -718,15 +719,9 @@ fn probe_reports_every_rate_control_mechanism_per_encoder() {
 
 #[test]
 fn encoders_that_do_not_read_a_qp_are_sent_no_quantizer() {
-    // VideoToolbox reads `global_quality` as 0-1 quality and MediaFoundation as raw QP (an M4 wrote
-    // `very-high` smaller than `very-low`), so quantizer levels fall back to bitrate there.
-    for name in [
-        "h264_videotoolbox",
-        "hevc_videotoolbox",
-        "h264_mf",
-        "hevc_mf",
-        "mpeg4",
-    ] {
+    // MediaFoundation reads `global_quality` as raw QP, so quantizer levels fall back to bitrate
+    // there; VideoToolbox's 0-1 quality is mapped for H.264 alone.
+    for name in ["hevc_videotoolbox", "h264_mf", "hevc_mf", "mpeg4"] {
         assert_eq!(
             crate::rate_control::mechanism_request(
                 name,
@@ -750,6 +745,55 @@ fn encoders_that_do_not_read_a_qp_are_sent_no_quantizer() {
             "{name}"
         );
     }
+}
+
+/// `h264_videotoolbox` takes the quantizer as `VideoToolbox` quality through
+/// `flags=+qscale`, which `FFmpeg` divides by `FF_QP2LAMBDA * 100`: a higher
+/// quantizer is never a higher quality, the levels' quantizers land on the
+/// measured points, and every value stays inside 0.01-1.
+#[test]
+fn videotoolbox_quality_maps_levels_monotonically() {
+    use crate::rate_control::videotoolbox_quality;
+
+    let levels = [
+        alpha2_media::QualityLevel::VeryLow,
+        alpha2_media::QualityLevel::Low,
+        alpha2_media::QualityLevel::Medium,
+        alpha2_media::QualityLevel::High,
+        alpha2_media::QualityLevel::VeryHigh,
+    ]
+    .map(|level| {
+        let quantizer = alpha2_media::level_quantizer(alpha2_media::VideoCodec::H264, level)
+            .expect("H.264 levels have a quantizer");
+        videotoolbox_quality(quantizer)
+    });
+    assert!(
+        levels.windows(2).all(|pair| pair[0] < pair[1]),
+        "{levels:?}"
+    );
+    let all = (0..=51).map(videotoolbox_quality).collect::<Vec<_>>();
+    assert!(all.windows(2).all(|pair| pair[0] >= pair[1]), "{all:?}");
+    assert!(
+        all.iter().all(|quality| (0.01..=1.0).contains(quality)),
+        "{all:?}"
+    );
+    let request = crate::rate_control::mechanism_request(
+        "h264_videotoolbox",
+        RateControlMechanism::ConstantQuantizer,
+        10_000_000,
+        27,
+    )
+    .expect("h264_videotoolbox has a quality spelling");
+    let hundredths = (videotoolbox_quality(27) * 100.0).round();
+    assert_eq!(
+        request.describe(),
+        format!("flags=+qscale global_quality={}", hundredths * 118.0)
+    );
+    assert_eq!(request.bit_rate, 0);
+    assert_eq!(
+        crate::AppliedRateControl::of_quantizer_request("h264_videotoolbox").as_str(),
+        "quality"
+    );
 }
 
 #[test]
@@ -1175,7 +1219,7 @@ fn encoder_candidates_fall_through_in_order_and_say_why() {
     let request = crate::capabilities::VideoEncoderOpenRequest {
         config: &config,
         requested_name: None,
-        threads: crate::capabilities::SoftwareEncoderThreads::new(&|| 1),
+        threads: crate::capabilities::SoftwareEncoderThreads::new(&|_| 1),
         global_header: true,
         width: 16,
         height: 16,
@@ -1262,7 +1306,7 @@ fn a_videotoolbox_encoder_is_probed_whatever_class_its_runtime_declares() {
 fn a_software_encoder_reached_after_a_hardware_one_opens_with_the_software_share() {
     let config = av_config(48_000).video;
     let asked = std::cell::Cell::new(0_u32);
-    let decide = || {
+    let decide = |_| {
         asked.set(asked.get() + 1);
         3
     };
@@ -1510,5 +1554,95 @@ fn an_absent_probe_is_cached() {
             None::<fn() -> Result<(), (OpenFailureKind, String)>>
         )
         .is_none()
+    );
+}
+
+/// `OpenH264` runs one thread per slice whatever it is offered, so the split
+/// reserves exactly that for it and gives decode the rest: the encoder threads
+/// a result reports are the ones that run.
+#[test]
+fn openh264_threads_are_reserved_in_the_split() {
+    use crate::convert::codec_thread_allocation_within;
+
+    let fixed = usize::from(crate::openh264::thread_count(crate::openh264::slice_count(
+        1080,
+    )));
+    assert_eq!(fixed, 4);
+    let request = |encoder_fixed_threads| CodecThreadRequest {
+        decode_concurrency: 2,
+        hardware_decode: false,
+        source_frame_pixels: 3840 * 2160,
+        software_video_encoder: true,
+        encoder_fixed_threads,
+    };
+    let fixed_split = codec_thread_allocation_within(request(Some(fixed)), 22);
+    assert_eq!(fixed_split.encoder_threads, 4);
+    // 4K decode wants five workers a session; the encoder's fixed four leave room for them.
+    assert_eq!(fixed_split.decoder_threads, 5);
+    assert_eq!(fixed_split.allocated_threads, 2 * 5 + 4);
+    // Without the reservation the encoder would be handed the remainder it never runs.
+    let remainder = codec_thread_allocation_within(request(None), 22);
+    assert_eq!(remainder.encoder_threads, 12);
+    // A budget below the encoder's count still gives each decoder one worker.
+    let tight = codec_thread_allocation_within(request(Some(8)), 6);
+    assert_eq!(tight.encoder_threads, 8);
+    assert_eq!(tight.decoder_threads, 1);
+    // Decoding in hardware, the fallback's share is what the encoder leaves.
+    let hardware = codec_thread_allocation_within(
+        CodecThreadRequest {
+            hardware_decode: true,
+            ..request(Some(fixed))
+        },
+        22,
+    );
+    assert_eq!(hardware.encoder_threads, 4);
+    assert_eq!(hardware.decoder_threads, 9);
+}
+
+/// The codec budget leaves two hardware threads on a big machine, one on a
+/// laptop and none below six, and the software encoder's floor is four or a
+/// third of a small budget: on 8 threads, 7 workers with an encoder floor of
+/// two, so two 4K software decoders get two workers each instead of one.
+#[test]
+fn the_reserve_scales_with_the_budget() {
+    use crate::convert::{codec_thread_allocation_within, codec_thread_budget_for};
+
+    assert_eq!(codec_thread_budget_for(24), 22);
+    assert_eq!(codec_thread_budget_for(16), 14);
+    assert_eq!(codec_thread_budget_for(8), 7);
+    assert_eq!(codec_thread_budget_for(6), 5);
+    assert_eq!(codec_thread_budget_for(4), 4);
+    assert_eq!(codec_thread_budget_for(1), 1);
+    let request = CodecThreadRequest {
+        decode_concurrency: 2,
+        hardware_decode: false,
+        source_frame_pixels: 3840 * 2160,
+        software_video_encoder: true,
+        encoder_fixed_threads: None,
+    };
+    let laptop = codec_thread_allocation_within(request, codec_thread_budget_for(8));
+    assert_eq!(
+        (laptop.decoder_threads, laptop.encoder_threads),
+        (2, 3),
+        "{laptop:?}"
+    );
+    // One 4K source on the laptop: the decoder is held to the even share, the encoder keeps four.
+    let single = codec_thread_allocation_within(
+        CodecThreadRequest {
+            decode_concurrency: 1,
+            ..request
+        },
+        codec_thread_budget_for(8),
+    );
+    assert_eq!(
+        (single.decoder_threads, single.encoder_threads),
+        (3, 4),
+        "{single:?}"
+    );
+    let workstation = codec_thread_allocation_within(request, codec_thread_budget_for(24));
+    assert_eq!(
+        (workstation.decoder_threads, workstation.encoder_threads),
+        (5, 12),
+        "{workstation:?}"
     );
 }

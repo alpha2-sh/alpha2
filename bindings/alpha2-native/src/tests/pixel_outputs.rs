@@ -82,7 +82,7 @@ fn encode(
     value: impl Fn(usize, usize, usize) -> u16 + Copy,
 ) -> crate::NativeVideoEncoderSelection {
     let _ = fs::remove_file(path);
-    let mut sink = NativeVideoEncodeSink::create_with_encoder_threads(path, config, None, &|| 2)
+    let mut sink = NativeVideoEncodeSink::create_with_encoder_threads(path, config, None, &|_| 2)
         .expect("a sink");
     let selection = sink.selection().clone();
     let mut frame =
@@ -260,7 +260,7 @@ fn ten_bit_outputs_keep_more_luma_codes_than_eight_bits_have() {
             &path,
             config(codec, container, pixels, 1024, 128),
             None,
-            &|| 2,
+            &|_| 2,
         )
         .unwrap_or_else(|error| panic!("{label}: {error}"));
         let selection = sink.selection().clone();
@@ -307,7 +307,7 @@ fn an_encoder_without_the_pixel_format_is_passed_over() {
             128,
         ),
         None,
-        &|| 2,
+        &|_| 2,
     )
     .err()
     .expect("refused");

@@ -236,6 +236,8 @@ pub struct WebEffectRegistry {
     surface_config: Option<wgpu::SurfaceConfiguration>,
     presenter: Option<Presenter>,
     browser_webgpu: bool,
+    /// The browser's own account of the adapter ([`BrowserAdapterInfo`]).
+    adapter_info: BrowserAdapterInfo,
     video_frame_copy: crate::interop::VideoFrameCopy,
     audio: ProjectAudio,
     exporter: Option<Exporter>,
@@ -274,6 +276,102 @@ impl ContextLossListener {
             wasm_bindgen::JsCast::unchecked_ref(callback.as_ref()),
         )?;
         Ok(Self { target, callback })
+    }
+}
+
+/// The browser's `GPUAdapterInfo` for the adapter the renderer uses, which
+/// wgpu reduces to the adapter's name from `description` alone (empty in
+/// Chrome): what a report needs to tell two machines apart. Empty on WebGL2.
+#[derive(Clone, Debug, Default)]
+struct BrowserAdapterInfo {
+    vendor: String,
+    architecture: String,
+    device: String,
+    description: String,
+    is_fallback_adapter: bool,
+}
+
+impl BrowserAdapterInfo {
+    /// Asks `navigator.gpu` for an adapter with the options wgpu passes (none),
+    /// which is the adapter the renderer was given, and reads its `info`. A
+    /// browser without WebGPU, or one that answers nothing, gives the empty
+    /// account.
+    async fn read() -> Self {
+        use wasm_bindgen::JsCast;
+        let get = |target: &JsValue, name: &str| {
+            web_sys::js_sys::Reflect::get(target, &JsValue::from_str(name))
+                .ok()
+                .filter(|value| !value.is_undefined() && !value.is_null())
+        };
+        let Some(gpu) = get(&web_sys::js_sys::global(), "navigator").and_then(|n| get(&n, "gpu"))
+        else {
+            return Self::default();
+        };
+        let Some(request) = get(&gpu, "requestAdapter")
+            .and_then(|value| value.dyn_into::<web_sys::js_sys::Function>().ok())
+        else {
+            return Self::default();
+        };
+        let Some(promise) = request
+            .call0(&gpu)
+            .ok()
+            .and_then(|value| value.dyn_into::<web_sys::js_sys::Promise>().ok())
+        else {
+            return Self::default();
+        };
+        let Some(adapter) = wasm_bindgen_futures::JsFuture::from(promise)
+            .await
+            .ok()
+            .filter(|value| !value.is_null() && !value.is_undefined())
+        else {
+            return Self::default();
+        };
+        let info = get(&adapter, "info").unwrap_or(JsValue::NULL);
+        let text = |name: &str| {
+            get(&info, name)
+                .and_then(|value| value.as_string())
+                .unwrap_or_default()
+        };
+        // `isFallbackAdapter` moved from the adapter to its info; either answers.
+        let is_fallback_adapter = get(&info, "isFallbackAdapter")
+            .or_else(|| get(&adapter, "isFallbackAdapter"))
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false);
+        Self {
+            vendor: text("vendor"),
+            architecture: text("architecture"),
+            device: text("device"),
+            description: text("description"),
+            is_fallback_adapter,
+        }
+    }
+
+    /// The adapter's report: wgpu's account of `adapter` with this one's
+    /// fields, and its name, wgpu's or else `<vendor> <architecture>`.
+    fn json(&self, adapter: &alpha2_render::AdapterDiagnostics) -> serde_json::Value {
+        let name = if adapter.name.is_empty() {
+            [self.vendor.as_str(), self.architecture.as_str()]
+                .into_iter()
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+        } else {
+            adapter.name.clone()
+        };
+        serde_json::json!({
+            "name": name,
+            "vendor": self.vendor,
+            "architecture": self.architecture,
+            "device": self.device,
+            "description": self.description,
+            "isFallbackAdapter": self.is_fallback_adapter,
+            "backend": adapter.backend,
+            "driver": adapter.driver,
+            "driverInfo": adapter.driver_info,
+            "shaderCompiler": adapter.shader_compiler,
+            "tier": format!("{:?}", adapter.tier),
+            "timestampQueries": adapter.timestamp_queries,
+        })
     }
 }
 
@@ -385,6 +483,11 @@ impl WebEffectRegistry {
             .map_err(|error| coded_error(Code::GpuInitFailed, error.to_string()))?;
         let device = gpu.device().clone();
         let browser_webgpu = gpu.capabilities().backend == "BrowserWebGpu";
+        let adapter_info = if browser_webgpu {
+            BrowserAdapterInfo::read().await
+        } else {
+            BrowserAdapterInfo::default()
+        };
         let context = gpu.clone();
         let health = watch_device(&device);
         let device_lost = Arc::clone(&health.lost);
@@ -410,6 +513,7 @@ impl WebEffectRegistry {
             surface_config: None,
             presenter: None,
             browser_webgpu,
+            adapter_info,
             video_frame_copy: crate::interop::VideoFrameCopy::default(),
         })
     }
@@ -513,6 +617,11 @@ impl WebEffectRegistry {
         surface.configure(gpu.device(), &config);
         let device = gpu.device().clone();
         let browser_webgpu = gpu.capabilities().backend == "BrowserWebGpu";
+        let adapter_info = if browser_webgpu {
+            BrowserAdapterInfo::read().await
+        } else {
+            BrowserAdapterInfo::default()
+        };
         let context = gpu.clone();
         let health = watch_device(&device);
         let device_lost = Arc::clone(&health.lost);
@@ -545,6 +654,7 @@ impl WebEffectRegistry {
             surface_config: Some(config),
             presenter: Some(presenter),
             browser_webgpu,
+            adapter_info,
             video_frame_copy: crate::interop::VideoFrameCopy::default(),
         })
     }
@@ -1644,15 +1754,7 @@ impl WebEffectRegistry {
         let value = serde_json::json!({
             "gpu": gpu_diagnostics_json(&self.health.log),
             "resultCache": result_cache_json(diagnostics.result_cache),
-            "adapter": {
-                "name": diagnostics.adapter.name,
-                "backend": diagnostics.adapter.backend,
-                "driver": diagnostics.adapter.driver,
-                "driverInfo": diagnostics.adapter.driver_info,
-                "shaderCompiler": diagnostics.adapter.shader_compiler,
-                "tier": format!("{:?}", diagnostics.adapter.tier),
-                "timestampQueries": diagnostics.adapter.timestamp_queries,
-            },
+            "adapter": self.adapter_info.json(&diagnostics.adapter),
             "passes": diagnostics.passes.iter().map(|pass| serde_json::json!({
                 "label": pass.label,
                 "nanoseconds": pass.nanoseconds,

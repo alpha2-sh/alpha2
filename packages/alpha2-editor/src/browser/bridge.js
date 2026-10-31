@@ -722,7 +722,7 @@ export function createBrowserBridge(options) {
   function capabilityReport(rendered) {
     return Object.freeze({
       schema: "alpha2-capabilities",
-      version: 1,
+      version: 2,
       runtime: "browser",
       gpu: rendered?.gpu ?? null,
       color: rendered?.color ?? null,
@@ -734,6 +734,7 @@ export function createBrowserBridge(options) {
       decode: null,
       encode: null,
       features,
+      adapters: null,
     });
   }
   /**

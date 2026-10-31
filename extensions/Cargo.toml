@@ -20,8 +20,10 @@ include = [
 
 [features]
 default = ["svg", "animated-image", "image-sequence", "lottie", "exr"]
-# Static SVG through resvg with only the fonts a host registers, never system fonts, so every host
-# rasterizes the same pixels.
+# Static SVG through resvg with only the fonts a host registers, never system fonts: every host runs
+# the same code on the same fonts. Pixels can still differ between CPU families and wasm by a code,
+# a few in color-dodge/burn (tiny-skia's fast reciprocal there, platform math in transforms and
+# filters).
 svg = ["dep:resvg", "dep:imagesize", "dep:flate2", "dep:simplecss", "dep:svgtypes", "dep:kurbo"]
 # GIF, animated WebP, and APNG, composited by one frame compositor.
 animated-image = ["dep:gif", "dep:image-webp", "dep:png"]

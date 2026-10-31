@@ -339,3 +339,41 @@ fn a_still_replaces_a_file_only_when_asked() {
     .expect("replaced");
     assert_eq!(read_png(&output).0, (96, 64));
 }
+
+/// A text naming a family no supplied font has draws in the fallback order,
+/// and the result lists the family; one that matches is not listed.
+#[test]
+fn a_still_lists_an_unmatched_font_family() {
+    let _gpu = gpu_test_lock();
+    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let directory = scratch_directory("stills-unmatched-font");
+    let named = |family: &str| {
+        let mut project = titled_project();
+        let sources = project["sources"].as_array_mut().expect("sources");
+        let title = sources.last_mut().expect("the title");
+        title["generator"]["style"]["font_family"] = json!(family);
+        project
+    };
+    let output = directory.join("missing.png");
+    let result = host
+        .handle(
+            still_request(&named("Missing Sans"), &[(40_000, &output)], &json!({})),
+            &mut |_| Ok(()),
+        )
+        .expect("a still");
+    assert_eq!(result["unmatchedFontFamilies"], json!(["Missing Sans"]));
+    let fixture = alpha2_text::font_family(&std::fs::read(font()).expect("font"), 0)
+        .expect("the fixture names its family");
+    let matched = directory.join("matched.png");
+    let result = host
+        .handle(
+            still_request(
+                &named(&fixture.to_uppercase()),
+                &[(40_000, &matched)],
+                &json!({}),
+            ),
+            &mut |_| Ok(()),
+        )
+        .expect("a still");
+    assert_eq!(result["unmatchedFontFamilies"], json!([]));
+}

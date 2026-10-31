@@ -169,7 +169,7 @@ fn a_stall_after_a_failed_hardware_open_is_not_reported_on_the_gpu() {
     };
     // D3D12VA has no MPEG-4 Part 2 decoder either.
     #[cfg(target_os = "windows")]
-    let Some(context) = create_gpu_test_host(VideoDecodePolicy::Auto)
+    let Some(context) = create_gpu_media_host(VideoDecodePolicy::Auto)
         .expect("host")
         .decode_d3d12()
     else {
@@ -677,7 +677,7 @@ fn a_cleanup_failure_after_the_output_is_written_does_not_fail_the_export() {
         any(target_os = "linux", target_os = "macos", target_os = "windows"),
         feature = "hwencode"
     ))]
-    if let Some((mut host, _, _)) = gpu_output_host(VideoDecodePolicy::Software) {
+    if let Some((mut host, _)) = gpu_output_host(VideoDecodePolicy::Software) {
         let output = directory.join("gpu.mp4");
         let mut request = json!({
             "protocolVersion": 1, "requestId": "cleanup-gpu", "operation": "export",
@@ -711,7 +711,7 @@ fn a_cleanup_failure_after_the_output_is_written_does_not_fail_the_export() {
 #[ignore = "run by the_synchronous_comparison_switch_is_not_ignored_on_the_gpu with ALPHA2_EXPORT_PIPELINE=off"]
 fn a_gpu_required_export_with_the_pipeline_off() {
     assert!(!crate::config::configured_pipeline_enabled());
-    let Some((mut host, _, _)) = gpu_output_host(VideoDecodePolicy::Software) else {
+    let Some((mut host, _)) = gpu_output_host(VideoDecodePolicy::Software) else {
         return;
     };
     let directory = scratch_directory("pipeline-off-gpu");
@@ -833,7 +833,7 @@ fn a_gpu_resident_encoder_stuck_on_the_gpu_fails_the_export_on_the_gpu() {
     // `h264_vulkan` waits on its fences with UINT64_MAX; the stall is injected in the worker, so it
     // is the same on any backend.
     let _gpu = gpu_test_lock();
-    let Some((mut host, _, _)) = gpu_output_host(VideoDecodePolicy::Software) else {
+    let Some((mut host, _)) = gpu_output_host(VideoDecodePolicy::Software) else {
         return;
     };
     let directory = scratch_directory("encode-stall-gpu");

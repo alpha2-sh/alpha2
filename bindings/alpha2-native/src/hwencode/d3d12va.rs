@@ -275,7 +275,7 @@ pub fn probe_d3d12va_encode(
         encoder: encoder.name.to_owned(),
         codec,
         rate_control: match selection.rate_control {
-            crate::AppliedRateControl::Quantizer => "disabled",
+            crate::AppliedRateControl::Quantizer | crate::AppliedRateControl::Quality => "disabled",
             crate::AppliedRateControl::Bitrate if rate_control.mode == BitrateMode::Constant => {
                 "cbr"
             }
@@ -591,6 +591,7 @@ fn capability_with(encoder: Encoder, extent: &D3D12EncodeExtent) -> HardwareEnco
         // The copier keeps each copy's frame in its slot until the slot is reused.
         handoff_retained_surfaces: alpha2_native_gpu::D3D12EncodeCopier::slots(),
         codec_retained_surfaces: CODEC_RETAINED_SURFACES,
+        default_channel_depth: DEFAULT_CHANNEL_DEPTH,
     }
 }
 
@@ -607,6 +608,13 @@ fn capability_with(encoder: Encoder, extent: &D3D12EncodeExtent) -> HardwareEnco
 /// point: `the_pool_allocates_within_the_host_leases_plus_the_retained_surfaces`
 /// checks this on whatever adapter it runs on.
 const CODEC_RETAINED_SURFACES: usize = 0;
+
+/// D3D12 Video Encode on an Intel Iris Xe (i7-1165G7, driver 32.0.101.7092;
+/// the perf project P1, 240 frames, three alternating rounds) ran depths 0, 1,
+/// 2, 4 and 8 at 6.197, 6.107, 6.091, 6.057 and 6.084 ms a frame at 1080p and
+/// 23.897, 23.870, 23.862, 23.884 and 23.867 at 4K: depth 0 is within 3 % of
+/// the best at both sizes, and holds two surfaces where depth 4 holds six.
+const DEFAULT_CHANNEL_DEPTH: usize = 0;
 
 /// Runs the one test encode of `encoder` on this device, or answers as the
 /// earlier one did.

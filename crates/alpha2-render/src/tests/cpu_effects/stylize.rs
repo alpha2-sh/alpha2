@@ -12,7 +12,48 @@ use crate::{
 
 /// The times the time-reading effects are checked at: the start, a few
 /// minutes in, and far enough that seconds in f32 lose their fraction.
-const TICKS: [i64; 3] = [0, 12_345_678, (1_i64 << 40) + 7];
+const TICKS: [i64; 3] = [0, 12_345_678, FAR];
+
+/// About 9.2e6 s in, where `time()`, seconds as an `f32`, steps by a whole
+/// second. Value noise fed that time lands on a different noise cell on two
+/// devices whose `time() * speed` differs in its last bit, so an effect built
+/// on it is held there to drawing the same picture twice on the GPU and to the
+/// CPU's alpha ([`Parity::check_gpu_determinism`]), not to the CPU's color.
+const FAR: i64 = (1_i64 << 40) + 7;
+
+/// [`check_effect`], but at [`FAR`] each case only as
+/// [`Parity::check_gpu_determinism`] checks it; `keeps_alpha` says the effect
+/// passes its source's alpha through (light leak), where one that moves pixels
+/// by its noise (VHS) moves the alpha too.
+fn check_noise_effect(
+    parity: &Parity,
+    picture: &TestPicture,
+    effect: &EffectId,
+    cases: &[(Params, Tolerance)],
+    ticks: i64,
+    keeps_alpha: bool,
+) {
+    if ticks != FAR {
+        check_effect(parity, picture, effect, cases, at(ticks));
+        return;
+    }
+    let name = effect.as_str().rsplit('.').next().unwrap_or("effect");
+    for (index, (values, _)) in cases.iter().enumerate() {
+        for small in [false, true] {
+            let name = format!(
+                "{name}-{index}{}-at-{ticks}",
+                if small { "-small" } else { "" }
+            );
+            parity.check_gpu_determinism(&name, size(), keeps_alpha, |graph, side| {
+                let mut source = graph.add_source(picture.view(side));
+                if small {
+                    source = small_layer(graph, source)?;
+                }
+                graph.add_effect(effect.clone(), source, params(values), at(ticks))
+            });
+        }
+    }
+}
 
 fn at(ticks: i64) -> EffectRuntime {
     EffectRuntime {
@@ -159,7 +200,7 @@ fn vhs_matches_at_several_times() {
         ]
     };
     for ticks in TICKS {
-        check_effect(
+        check_noise_effect(
             &parity,
             &card,
             &effect("vhs"),
@@ -169,7 +210,8 @@ fn vhs_matches_at_several_times() {
                 (vhs(0.7, 0.3, 0.2, 0.0, 1000.0), Tolerance::Unstable),
                 (vhs(0.0, 0.0, 0.0, 1.0, 0.0), Tolerance::Unstable),
             ],
-            at(ticks),
+            ticks,
+            false,
         );
     }
 }
@@ -346,7 +388,7 @@ fn light_leak_matches_at_several_times() {
         ]
     };
     for ticks in TICKS {
-        check_effect(
+        check_noise_effect(
             &parity,
             &card,
             &effect("light-leak"),
@@ -361,7 +403,8 @@ fn light_leak_matches_at_several_times() {
                     Tolerance::Edges,
                 ),
             ],
-            at(ticks),
+            ticks,
+            true,
         );
     }
 }

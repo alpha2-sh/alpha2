@@ -1538,7 +1538,7 @@ fn hdr_uniform_bytes(color: ColorMetadata, tone: Option<HdrToneMap>) -> Vec<u8> 
     #[allow(clippy::cast_precision_loss)]
     let peak = tone.source_peak_nits as f32;
     let white = crate::hdr::SDR_WHITE_NITS;
-    let gamma = 1.2 + 0.42 * (peak / 1_000.0).log10();
+    let gamma = 1.2 + 0.42 * libm::log10f(peak / 1_000.0);
     let mut bytes = Vec::with_capacity(80);
     for value in gamut
         .into_iter()

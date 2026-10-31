@@ -312,8 +312,9 @@ fn the_frame_submit_split_accounts_for_the_whole_stage() {
 #[test]
 fn the_export_trace_pairs_encode_spans_with_the_rows_that_queued_them() {
     // An audio block is reported by nothing at all, so the audio pairing is positional.
-    let mut trace = ExportTrace::from_env(Instant::now())
-        .unwrap_or_else(|| ExportTrace::for_path(PathBuf::from("/dev/null"), Instant::now()));
+    let epoch = Instant::now();
+    let mut trace = ExportTrace::from_env(epoch)
+        .unwrap_or_else(|| ExportTrace::for_path(PathBuf::from("/dev/null"), epoch));
     trace.push_video(VideoFrameTrace {
         index: 0,
         packed: Duration::from_millis(1),
@@ -353,17 +354,41 @@ fn the_export_trace_pairs_encode_spans_with_the_rows_that_queued_them() {
         Duration::from_millis(99),
     );
 
+    // A pipeline created while frame 0 was drawn, 4 ms into the export, taking 1.5 ms.
+    trace.push_pipelines(
+        0,
+        &[alpha2_render::PipelineCreation {
+            label: "alpha2.effect.glow".to_owned(),
+            started: epoch + Duration::from_millis(4),
+            finished: epoch + Duration::from_micros(5_500),
+        }],
+    );
+
     let csv = trace.to_csv();
     let rows = csv.lines().collect::<Vec<_>>();
-    assert_eq!(rows.len(), 4, "header plus one video and two audio rows");
+    assert_eq!(
+        rows.len(),
+        5,
+        "header plus one video, two audio and one pipeline row"
+    );
     assert!(rows[0].starts_with("kind,index,"));
+    assert!(rows[0].ends_with(",planesReadyMs,label,startedMs,finishedMs"));
     assert!(
-        rows[1].ends_with("10.000,18.000,20.000,0.000,0.000"),
+        rows[1].ends_with("10.000,18.000,20.000,0.000,0.000,,,"),
         "video row carries its own encode span and send boundary: {}",
         rows[1]
     );
-    assert_eq!(rows[2], "audio,0,,,,,,,,2.000,21.000,21.000,22.000,,");
-    assert_eq!(rows[3], "audio,1,,,,,,,,3.000,23.000,24.000,25.000,,");
+    assert_eq!(rows[2], "audio,0,,,,,,,,2.000,21.000,21.000,22.000,,,,,");
+    assert_eq!(rows[3], "audio,1,,,,,,,,3.000,23.000,24.000,25.000,,,,,");
+    assert_eq!(
+        rows[4],
+        "pipeline,0,,,,,,,,,,,,,,alpha2.effect.glow,4.000,5.500"
+    );
+    let columns = |row: &str| row.split(',').count();
+    assert!(
+        rows.iter().all(|row| columns(row) == columns(rows[0])),
+        "{rows:?}"
+    );
 }
 
 #[test]

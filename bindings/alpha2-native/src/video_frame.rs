@@ -60,6 +60,9 @@ pub enum HardwareDecodeFallback {
     /// The renderer could not import a decoded surface, so its pixels were
     /// downloaded and uploaded from the CPU instead.
     ImportFailed,
+    /// The stream carries alpha, which a hardware session would drop: VP9's
+    /// block additions, an HEVC auxiliary layer, or an alpha plane.
+    AlphaChannel,
 }
 
 impl HardwareDecodeFallback {
@@ -77,6 +80,7 @@ impl HardwareDecodeFallback {
             Self::ReverseWindow => "reverseWindow",
             Self::UnsupportedCrop => "unsupportedCrop",
             Self::ImportFailed => "importFailed",
+            Self::AlphaChannel => "alphaChannel",
         }
     }
 }
@@ -111,7 +115,7 @@ impl std::error::Error for HardwareOpenError {}
     any(target_os = "linux", target_os = "macos", target_os = "windows"),
     feature = "hwdecode"
 ))]
-pub(crate) struct HardwareDecoderSpec {
+pub(crate) struct HardwareDecoderSpec<'a> {
     /// `FFmpeg` hardware device type to match in the codec's configurations.
     pub device_type: ffi::AVHWDeviceType,
     /// Opaque hardware pixel format the decoder must produce.
@@ -132,6 +136,12 @@ pub(crate) struct HardwareDecoderSpec {
     /// lose the visible columns and rows past a leading crop, but the session
     /// gives it surfaces of the coded size (`alpha2_d3d12_get_format`).
     pub keeps_leading_crop: bool,
+    /// The codecs the device decodes in hardware, by `FFmpeg` name, when the
+    /// device lists them; a stream of another codec is refused before a
+    /// session opens. `VideoToolbox` needs this: `FFmpeg` asks it for HEVC
+    /// only with `EnableHardwareAcceleratedVideoDecoder`, which lets a Mac
+    /// without the hardware decoder run the session in software.
+    pub hardware_codecs: Option<&'a [&'static str]>,
     /// Callback that selects `pixel_format` during negotiation.
     pub get_format: unsafe extern "C" fn(
         *mut ffi::AVCodecContext,
@@ -633,6 +643,9 @@ impl NativeExportDecoder {
             require_device_context: true,
             ten_bit: context.supports_ten_bit(),
             keeps_leading_crop: true,
+            // The device was created with the decode extensions it lists; FFmpeg would open a
+            // session for any other codec and fail on its first packet.
+            hardware_codecs: Some(context.decode_codecs()),
             get_format: alpha2_ffmpeg_bridge::vulkan_get_format_callback(),
         };
         NativeDecoder::open_hardware(path, threads, context.ffmpeg_device(), &spec).map(|decoder| {
@@ -661,6 +674,7 @@ impl NativeExportDecoder {
     ) -> Result<Self, HardwareOpenError> {
         // VideoToolbox allocates its own decode session rather than adopting the renderer's device;
         // Metal interop happens at import time.
+        let mark = alpha2_ffmpeg_bridge::log_mark();
         let device = rsmpeg::avutil::AVHWDeviceContext::create(
             ffi::AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
             None,
@@ -678,17 +692,23 @@ impl NativeExportDecoder {
             require_device_context: false,
             ten_bit: context.supports_ten_bit(),
             keeps_leading_crop: false,
+            hardware_codecs: Some(context.decode_codecs()),
             get_format: alpha2_ffmpeg_bridge::videotoolbox_get_format_callback(),
         };
-        NativeDecoder::open_hardware(path, threads, device, &spec).map(|decoder| Self {
-            backend: ExportDecoderBackend::VideoToolbox {
-                decoder,
-                generation,
-                device_identity: context.identity().device,
-            },
-            hardware_frames: 0,
-            hardware_failure: None,
-        })
+        NativeDecoder::open_hardware(path, threads, device, &spec)
+            .map(|decoder| Self {
+                backend: ExportDecoderBackend::VideoToolbox {
+                    decoder,
+                    generation,
+                    device_identity: context.identity().device,
+                },
+                hardware_frames: 0,
+                hardware_failure: None,
+            })
+            .map_err(|mut error| {
+                error.source = with_videotoolbox_log(error.source, mark);
+                error
+            })
     }
 
     /// Opens a D3D12VA hardware decoder on the renderer's D3D12 device.
@@ -710,6 +730,7 @@ impl NativeExportDecoder {
             require_device_context: true,
             ten_bit: context.supports_ten_bit(),
             keeps_leading_crop: true,
+            hardware_codecs: None,
             get_format: alpha2_ffmpeg_bridge::d3d12_get_format_callback(),
         };
         NativeDecoder::open_hardware(path, threads, context.ffmpeg_device(), &spec).map(|decoder| {
@@ -736,6 +757,21 @@ impl NativeExportDecoder {
             ExportDecoderBackend::VideoToolbox { decoder, .. } => decoder.streams(),
             #[cfg(all(target_os = "windows", feature = "hwdecode"))]
             ExportDecoderBackend::D3D12 { decoder, .. } => decoder.streams(),
+        }
+    }
+
+    /// What the decoder leaves out of its stream ([`crate::NativeDecoder::dropped_layer`]); a
+    /// hardware session is never opened for a stream with alpha, so it drops nothing.
+    #[must_use]
+    pub fn dropped_layer(&self) -> Option<&crate::DroppedLayer> {
+        match &self.backend {
+            ExportDecoderBackend::Software(decoder) => decoder.dropped_layer(),
+            #[cfg(all(target_os = "linux", feature = "hwdecode"))]
+            ExportDecoderBackend::Vulkan { .. } => None,
+            #[cfg(all(target_os = "macos", feature = "hwdecode"))]
+            ExportDecoderBackend::VideoToolbox { .. } => None,
+            #[cfg(all(target_os = "windows", feature = "hwdecode"))]
+            ExportDecoderBackend::D3D12 { .. } => None,
         }
     }
 
@@ -952,7 +988,10 @@ impl NativeExportDecoder {
                 generation,
                 device_identity,
             } => {
-                let frame = decoder.seek_raw(request.time, cancel)?;
+                let mark = alpha2_ffmpeg_bridge::log_mark();
+                let frame = decoder
+                    .seek_raw(request.time, cancel)
+                    .map_err(|error| with_videotoolbox_log(error, mark))?;
                 videotoolbox_frame(decoder, frame.into_frame(), *generation, *device_identity)
             }
             #[cfg(all(target_os = "windows", feature = "hwdecode"))]
@@ -998,12 +1037,21 @@ impl NativeExportDecoder {
                 decoder,
                 generation,
                 device_identity,
-            } => decoder
-                .decode_raw_next(cancel)?
-                .map(|frame| {
-                    videotoolbox_frame(decoder, frame.into_frame(), *generation, *device_identity)
-                })
-                .transpose(),
+            } => {
+                let mark = alpha2_ffmpeg_bridge::log_mark();
+                decoder
+                    .decode_raw_next(cancel)
+                    .map_err(|error| with_videotoolbox_log(error, mark))?
+                    .map(|frame| {
+                        videotoolbox_frame(
+                            decoder,
+                            frame.into_frame(),
+                            *generation,
+                            *device_identity,
+                        )
+                    })
+                    .transpose()
+            }
             #[cfg(all(target_os = "windows", feature = "hwdecode"))]
             ExportDecoderBackend::D3D12 {
                 decoder,
@@ -1091,6 +1139,42 @@ fn d3d12_frame(
         metadata,
         surface: Arc::new(alpha2_ffmpeg_bridge::D3D12FrameLease::new(frame)),
     })
+}
+
+/// The logging classes of a `VideoToolbox` decode: the decoder (`FFmpeg`'s
+/// hwaccel logs the session's `OSStatus` through the codec context, named
+/// after the codec) and the hardware device and frames contexts.
+#[cfg(all(target_os = "macos", feature = "hwdecode"))]
+const VIDEOTOOLBOX_DECODE_LOG_CLASSES: &[&str] = &[
+    "h264",
+    "hevc",
+    "vp9",
+    "av1",
+    "AVHWDeviceContext",
+    "AVHWFramesContext",
+];
+
+/// `error` with the `VideoToolbox` lines `FFmpeg` logged since `mark`
+/// appended, so the `OSStatus` the session failed with reaches the typed
+/// error. Errors without a message are returned as they are.
+#[cfg(all(target_os = "macos", feature = "hwdecode"))]
+fn with_videotoolbox_log(error: DecodeError, mark: alpha2_ffmpeg_bridge::LogMark) -> DecodeError {
+    let detail = alpha2_ffmpeg_bridge::log_detail(&alpha2_ffmpeg_bridge::log_since(
+        mark,
+        VIDEOTOOLBOX_DECODE_LOG_CLASSES,
+    ));
+    if detail.is_empty() {
+        return error;
+    }
+    match error {
+        DecodeError::Adapter(message) => DecodeError::Adapter(format!("{message}{detail}")),
+        DecodeError::Unsupported(message) => DecodeError::Unsupported(format!("{message}{detail}")),
+        DecodeError::Gpu { fault, message } => DecodeError::Gpu {
+            fault,
+            message: format!("{message}{detail}"),
+        },
+        other => other,
+    }
 }
 
 #[cfg(all(target_os = "macos", feature = "hwdecode"))]

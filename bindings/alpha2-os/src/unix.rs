@@ -375,7 +375,7 @@ pub(crate) fn on_termination(handler: Box<dyn Fn(Termination) + Send + Sync>) ->
     Ok(())
 }
 
-/// `VmRSS` and `VmHWM` of `/proc/self/status`.
+/// `VmRSS`, `VmHWM` and `RssAnon` + `RssShmem` of `/proc/self/status`.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub(crate) fn process_memory() -> ProcessMemory {
     let status = fs::read_to_string("/proc/self/status").unwrap_or_default();
@@ -387,25 +387,30 @@ pub(crate) fn process_memory() -> ProcessMemory {
             .and_then(|value| value.trim().parse::<u64>().ok())
             .map(|value| value.saturating_mul(1_024))
     };
+    let peak = kib("VmHWM:");
     ProcessMemory {
         resident_bytes: kib("VmRSS:"),
-        peak_resident_bytes: kib("VmHWM:"),
+        peak_resident_bytes: peak,
+        footprint_bytes: kib("RssAnon:")
+            .zip(kib("RssShmem:"))
+            .map(|(anonymous, shared)| anonymous.saturating_add(shared)),
+        peak_footprint_bytes: peak,
     }
 }
 
-/// The task's resident size (`proc_pid_rusage`) and `ru_maxrss`, which
-/// macOS counts in bytes.
+/// The task's resident size and physical footprint with its lifetime peak
+/// (`proc_pid_rusage`), and `ru_maxrss`, which macOS counts in bytes.
 #[cfg(target_os = "macos")]
 pub(crate) fn process_memory() -> ProcessMemory {
-    // SAFETY: an all-zero `rusage_info_v2` is valid; the call fills it.
-    let mut usage: libc::rusage_info_v2 = unsafe { std::mem::zeroed() };
-    // SAFETY: `usage` is a `rusage_info_v2`, the flavor asked for, and outlives the call; the
+    // SAFETY: an all-zero `rusage_info_v4` is valid; the call fills it.
+    let mut usage: libc::rusage_info_v4 = unsafe { std::mem::zeroed() };
+    // SAFETY: `usage` is a `rusage_info_v4`, the flavor asked for, and outlives the call; the
     // buffer argument is that struct's address passed as `rusage_info_t*`, as the C prototype takes
     // it.
     let resident = unsafe {
         libc::proc_pid_rusage(
             libc::getpid(),
-            libc::RUSAGE_INFO_V2,
+            libc::RUSAGE_INFO_V4,
             std::ptr::addr_of_mut!(usage).cast(),
         )
     } == 0;
@@ -416,6 +421,67 @@ pub(crate) fn process_memory() -> ProcessMemory {
     ProcessMemory {
         resident_bytes: resident.then_some(usage.ri_resident_size),
         peak_resident_bytes: peak.then(|| u64::try_from(own.ru_maxrss).ok()).flatten(),
+        footprint_bytes: resident.then_some(usage.ri_phys_footprint),
+        // The kernel updates the lifetime maximum only now and then, so it can lag the footprint
+        // it already counts.
+        peak_footprint_bytes: resident.then_some(
+            usage
+                .ri_lifetime_max_phys_footprint
+                .max(usage.ri_phys_footprint),
+        ),
+    }
+}
+
+/// `hw.memsize`, and the free, inactive and purgeable pages of
+/// `host_statistics64` as what is available. macOS sets no per-process
+/// limit an export could read, so the limit is the physical total.
+#[cfg(target_os = "macos")]
+pub(crate) fn memory_capacity() -> crate::MemoryCapacity {
+    unsafe extern "C" {
+        // libc's binding is deprecated in favour of another crate; the call is libSystem's.
+        fn mach_host_self() -> libc::mach_port_t;
+    }
+    let mut physical = 0_u64;
+    let mut size = std::mem::size_of::<u64>();
+    // SAFETY: the name is a NUL-terminated string; `physical` is a `u64`, as `hw.memsize` is, and
+    // `size` says so; no new value is set.
+    let read = unsafe {
+        libc::sysctlbyname(
+            c"hw.memsize".as_ptr(),
+            std::ptr::addr_of_mut!(physical).cast(),
+            &raw mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    } == 0;
+    let physical = read.then_some(physical);
+    // SAFETY: an all-zero `vm_statistics64` is valid; the call fills at most `count` integers.
+    let mut statistics: libc::vm_statistics64 = unsafe { std::mem::zeroed() };
+    let mut count = libc::HOST_VM_INFO64_COUNT;
+    // SAFETY: `mach_host_self` returns this task's send right to the host port; the statistics
+    // buffer holds `count` integers and outlives the call.
+    let answered = unsafe {
+        libc::host_statistics64(
+            mach_host_self(),
+            libc::HOST_VM_INFO64,
+            std::ptr::addr_of_mut!(statistics).cast(),
+            &raw mut count,
+        )
+    } == libc::KERN_SUCCESS;
+    // SAFETY: `sysconf` reads a constant of the running system.
+    let page = u64::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) }).ok();
+    let available = answered.then_some(()).and(page).map(|page| {
+        (u64::from(statistics.free_count)
+            + u64::from(statistics.inactive_count)
+            + u64::from(statistics.purgeable_count))
+        .saturating_mul(page)
+    });
+    crate::MemoryCapacity {
+        physical_bytes: physical,
+        available_bytes: available,
+        limit_bytes: physical,
+        limit_source: "physical",
+        used_in_limit_bytes: None,
     }
 }
 

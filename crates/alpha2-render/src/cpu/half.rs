@@ -1,16 +1,19 @@
 //! Half floats as the intermediate stores them.
 //!
-//! The GPU's `Rgba16Float` targets round a value toward zero when they store
-//! it (NVIDIA, RADV and lavapipe alike), and the composite shader writes
-//! values that are already halves (`stored_half` in composite.wesl). Both are
-//! [`store`] here, so every picture the CPU keeps holds the bits a GPU keeps.
+//! The GPU's `Rgba16Float` targets round a finite value toward zero when they
+//! store it, keep subnormals, store a finite value past the largest half as
+//! that half and keep infinity: measured on NVIDIA, RADV, lavapipe, llvmpipe
+//! GL, Apple M4, Intel Iris Xe and NVIDIA MX450 over Vulkan and DX12. The
+//! composite shader writes values that are already halves (`stored_half` in
+//! composite.wesl). Both are [`store`] here, so every picture the CPU keeps
+//! holds the bits a GPU keeps.
 
 use std::sync::OnceLock;
 
 /// `value` rounded toward zero to the nearest half float, as its bits.
 ///
-/// Subnormal halves are kept (a step of 2^-24), magnitudes past the largest
-/// finite half become it, and NaN stays NaN.
+/// Subnormal halves are kept (a step of 2^-24), finite magnitudes past the
+/// largest finite half become it, infinity stays infinity and NaN stays NaN.
 #[must_use]
 #[inline]
 pub(crate) fn store(value: f32) -> u16 {
@@ -34,9 +37,8 @@ fn store_slow(bits: u32) -> u16 {
     let exponent = ((bits >> 23) & 0xff) as i32;
     let mantissa = bits & 0x007f_ffff;
     if exponent == 0xff {
-        // Infinity rounds toward zero to the largest finite half; NaN stays NaN.
         return if mantissa == 0 {
-            sign | 0x7bff
+            sign | 0x7c00
         } else {
             sign | 0x7e00
         };
@@ -146,17 +148,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn storing_rounds_toward_zero_and_keeps_subnormals() {
+    fn storing_rounds_toward_zero_and_keeps_subnormals_and_infinity() {
         for bits in 0..=u16::MAX {
             let value = half::f16::from_bits(bits);
             if value.is_nan() {
                 continue;
             }
             let exact = value.to_f32();
+            assert_eq!(store(exact), bits, "{exact} keeps its bits");
             if exact.is_infinite() {
                 continue;
             }
-            assert_eq!(store(exact), bits, "{exact} keeps its bits");
             // Just past the value, toward the next half away from zero, it still truncates to it.
             let nudged = f32::from_bits(exact.to_bits() + 1);
             if exact != 0.0 && (nudged.abs() < 65_520.0) {
@@ -166,7 +168,9 @@ mod tests {
         assert_eq!(store(1.0e-9), 0);
         assert_eq!(store(-1.0e-9), 0x8000);
         assert_eq!(store(1.0e9), 0x7bff);
-        assert_eq!(store(f32::INFINITY), 0x7bff);
+        assert_eq!(store(f32::INFINITY), 0x7c00);
+        assert_eq!(store(f32::NEG_INFINITY), 0xfc00);
+        assert_eq!(store(f32::MAX), 0x7bff);
         assert!(half::f16::from_bits(store(f32::NAN)).is_nan());
     }
 

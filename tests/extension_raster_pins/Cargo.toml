@@ -1,0 +1,26 @@
+[package]
+name = "alpha2-extension-raster-pins"
+version.workspace = true
+description = "SVG and Lottie rasters of alpha2-extensions that every target must draw within one code of a linux-x64 reference."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+alpha2-extensions = { workspace = true, features = ["svg", "lottie"] }
+alpha2-model.workspace = true
+alpha2-time.workspace = true
+png.workspace = true
+serde_json.workspace = true
+
+# The module runs under Node with its wasm-bindgen glue, as alpha2-render-determinism does.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen.workspace = true
+
+[lints]
+workspace = true

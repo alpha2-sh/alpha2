@@ -149,7 +149,9 @@ const MAX_DECODE_CONCURRENCY: usize = 4;
 const DEFAULT_DECODER_SESSIONS: usize = 8;
 /// The most decoder sessions an export keeps open. Thirty-two 4K hardware
 /// sessions open on the hardware it was measured on (an RTX 4090 with Vulkan
-/// video), and software sessions this many are bounded by memory first.
+/// video), the only measurement: `VideoToolbox` and D3D12VA run under the same
+/// cap unmeasured, and software sessions this many are bounded by memory
+/// first.
 const MAX_DECODER_SESSIONS: usize = 32;
 /// What an export's open decoder sessions may hold together, by
 /// [`config::decoder_session_bytes`]'s estimate: thirty-two 1080p software
@@ -593,8 +595,23 @@ pub(crate) fn create_host_with(
     policy: VideoDecodePolicy,
     renderer: crate::config::RendererPolicy,
 ) -> Result<Host, HostError> {
+    create_host_on(
+        policy,
+        renderer,
+        &crate::adapter_choice::AdapterPolicy::from_env(),
+    )
+}
+
+/// [`create_host_with`] on the adapter `adapter_policy` chooses.
+pub(crate) fn create_host_on(
+    policy: VideoDecodePolicy,
+    renderer: crate::config::RendererPolicy,
+    adapter_policy: &crate::adapter_choice::AdapterPolicy,
+) -> Result<Host, HostError> {
     use crate::config::RendererPolicy;
     use alpha2_gpu::SoftwareAdapters;
+    let create_gpu_host =
+        |policy, software| create_gpu_host_with_adapter(policy, adapter_policy, software);
     match renderer {
         RendererPolicy::Gpu => create_gpu_host(policy, SoftwareAdapters::Allow),
         RendererPolicy::Cpu => create_cpu_host(policy, "requested (--renderer cpu)".to_owned()),
@@ -642,8 +659,9 @@ fn create_cpu_host(policy: VideoDecodePolicy, reason: String) -> Result<Host, Ho
     }
     let renderer = alpha2_render::CpuRenderer::new(crate::config::configured_render_threads());
     alpha2_os::diagnostic!(
-        "alpha2-host renderer: CPU, {} threads ({reason})",
-        renderer.threads()
+        "alpha2-host renderer: CPU, {} threads ({reason}), OS {}",
+        renderer.threads(),
+        alpha2_os::os_version()
     );
     log_runtime_codecs();
     let builtins = alpha2_render::builtin_effect_definitions()
@@ -664,18 +682,6 @@ fn create_cpu_host(policy: VideoDecodePolicy, reason: String) -> Result<Host, Ho
         alpha2_os::diagnostic!("alpha2-host render cache unavailable: {reason}");
     }
     Ok(host)
-}
-
-/// A GPU host on the adapter `ALPHA2_GPU_ADAPTER` asks for.
-fn create_gpu_host(
-    policy: VideoDecodePolicy,
-    software: alpha2_gpu::SoftwareAdapters,
-) -> Result<Host, HostError> {
-    create_gpu_host_with_adapter(
-        policy,
-        &crate::adapter_choice::AdapterPin::from_env(),
-        software,
-    )
 }
 
 /// The host error for a product device that could not be opened: a pin that
@@ -702,18 +708,17 @@ fn gpu_init_error(error: alpha2_gpu::GpuError) -> HostError {
 /// `details.cause` of a `GPU_INIT_FAILED` whose DX12 shader compiler did not load.
 const SHADER_COMPILER_CAUSE: &str = "shader-compiler";
 
-/// A GPU host on the adapter `adapter_policy` chooses where the host scans
-/// adapters (Windows; elsewhere the product device follows the same
-/// `ALPHA2_GPU_ADAPTER` pin). `software` says whether a software adapter is
-/// acceptable: `auto` refuses one and renders on the CPU instead.
+/// A GPU host on the adapter `adapter_policy` chooses ([`alpha2_gpu::rank_adapters`]): on
+/// Windows among the DX12 adapters, on Linux among the Vulkan adapters that could carry the
+/// device shared with the video decoder and encoder, on macOS its one Metal device. `software`
+/// says whether a software adapter is acceptable: `auto` refuses one and renders on the CPU
+/// instead.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn create_gpu_host_with_adapter(
     policy: VideoDecodePolicy,
-    adapter_policy: &crate::adapter_choice::AdapterPin,
+    adapter_policy: &crate::adapter_choice::AdapterPolicy,
     software: alpha2_gpu::SoftwareAdapters,
 ) -> Result<Host, HostError> {
-    #[cfg(not(all(target_os = "windows", feature = "hwdevice")))]
-    let _ = adapter_policy;
     // The Windows scan opens a software adapter only when nothing else renders; `auto` then
     // lets that host go for the CPU renderer below.
     #[cfg(all(target_os = "windows", feature = "hwdevice"))]
@@ -746,14 +751,28 @@ pub(crate) fn create_gpu_host_with_adapter(
         ))
         .map_err(gpu_init_error)
     };
-    // The renderer goes on the shared Vulkan device, so a non-Vulkan backend skips it.
+    // The renderer goes on the shared Vulkan device, so a non-Vulkan backend skips it. The
+    // adapter choice ranks the Vulkan adapters and makes the device on the first that carries it.
     #[cfg(all(target_os = "linux", feature = "hwdevice"))]
-    let (shared_vulkan, unavailable) = shared_device_context(
-        policy,
-        cfg!(feature = "hwencode"),
-        backend_excluded(wgpu::Backends::from_env(), wgpu::Backends::VULKAN, "Vulkan"),
-        alpha2_native_gpu::SharedVulkanContext::create,
-    )?;
+    let excluded = backend_excluded(wgpu::Backends::from_env(), wgpu::Backends::VULKAN, "Vulkan");
+    #[cfg(all(target_os = "linux", feature = "hwdevice"))]
+    let (mut adapter_choice, mut no_shared_device) = (None, excluded.clone());
+    #[cfg(all(target_os = "linux", feature = "hwdevice"))]
+    let (shared_vulkan, unavailable) =
+        shared_device_context(policy, cfg!(feature = "hwencode"), excluded, || {
+            let decode = cfg!(feature = "hwdecode") && policy.allows_hardware();
+            let choice = alpha2_native_gpu::choose_shared_vulkan(adapter_policy, decode, true)
+                .inspect_err(|error| no_shared_device = Some(error.to_string()))?;
+            no_shared_device.clone_from(&choice.unavailable);
+            adapter_choice = Some(choice.report);
+            choice.context.ok_or_else(|| {
+                alpha2_native_gpu::SharedVulkanError::new(
+                    no_shared_device.clone().unwrap_or_else(|| {
+                        "no Vulkan adapter carries the shared device".to_owned()
+                    }),
+                )
+            })
+        })?;
     // A device `FFmpeg` cannot open a video session on still renders, and its frames decode in
     // software: `auto` says why, `hardware-required` refuses to start.
     #[cfg(all(target_os = "linux", feature = "hwdevice"))]
@@ -771,8 +790,8 @@ pub(crate) fn create_gpu_host_with_adapter(
         request_default()?
     };
     // D3D12VA shares the renderer's device, so the renderer must be on DX12: left to itself wgpu
-    // prefers Vulkan on Windows, which would silently turn hardware decode off. By default a
-    // decoding mode takes the first adapter D3D12VA decodes on (`ALPHA2_GPU_ADAPTER` overrides).
+    // prefers Vulkan on Windows, which would silently turn hardware decode off. The scan ranks
+    // the DX12 adapters by what each encodes and decodes (`ALPHA2_GPU_ADAPTER` overrides).
     #[cfg(all(target_os = "windows", feature = "hwencode"))]
     crate::d3d12va_probe::install();
     #[cfg(all(target_os = "windows", feature = "hwdevice"))]
@@ -813,9 +832,12 @@ pub(crate) fn create_gpu_host_with_adapter(
     )))]
     let gpu = request_default()?;
     #[cfg(all(target_os = "macos", feature = "hwdevice"))]
+    let mut no_shared_device = None;
+    #[cfg(all(target_os = "macos", feature = "hwdevice"))]
     let (shared_metal, unavailable) =
         shared_device_context(policy, cfg!(feature = "hwencode"), None, || {
             alpha2_native_gpu::SharedMetalContext::from_gpu(gpu.clone())
+                .inspect_err(|error| no_shared_device = Some(error.to_string()))
         })?;
     #[cfg(all(target_os = "windows", feature = "hwdevice"))]
     let (shared_d3d12, unavailable, no_encode_device) =
@@ -831,7 +853,24 @@ pub(crate) fn create_gpu_host_with_adapter(
         alpha2_os::diagnostic!("alpha2-host {diagnostic}");
         logged.push(diagnostic);
     });
+    // The adapter's device memory budget, where its graphics API reports one: reported, and the
+    // idle pools are held to a quarter of it.
+    #[cfg(feature = "hwdevice")]
+    let gpu_memory_budget = alpha2_native_gpu::adapter_memory_budget(gpu.adapter());
+    #[cfg(not(feature = "hwdevice"))]
+    let gpu_memory_budget = None;
     let mut renderer = Renderer::new(gpu);
+    let pools_lowered = renderer.set_gpu_memory_budget(gpu_memory_budget);
+    if let Some(budget) = gpu_memory_budget {
+        alpha2_os::diagnostic!(
+            "alpha2-host GPU memory budget: {budget} bytes{}",
+            if pools_lowered {
+                "; the idle texture pools are held to a quarter of it"
+            } else {
+                ""
+            }
+        );
+    }
     let wait_timeout = crate::config::configured_gpu_wait_timeout();
     renderer.set_gpu_wait_timeout(wait_timeout);
     #[cfg(feature = "hwdevice")]
@@ -844,9 +883,10 @@ pub(crate) fn create_gpu_host_with_adapter(
     })?;
     let capabilities = renderer.gpu_capabilities();
     alpha2_os::diagnostic!(
-        "alpha2-host GPU: {}, tier {:?}",
+        "alpha2-host GPU: {}, tier {:?}, OS {}",
         capabilities.summary(),
-        capabilities.tier
+        capabilities.tier,
+        alpha2_os::os_version()
     );
     if capabilities.shader_compiler.starts_with("DXC ") {
         alpha2_os::diagnostic!(
@@ -879,25 +919,40 @@ pub(crate) fn create_gpu_host_with_adapter(
     {
         host.hardware_decode_unavailable = unavailable;
     }
-    #[cfg(all(target_os = "windows", feature = "hwencode"))]
-    {
-        host.encode_adapters = crate::adapter_choice::EncodeAdapterNotes {
-            no_device: no_encode_device,
-            elsewhere: dx12.chosen.map_or_else(Vec::new, |chosen| {
-                crate::adapter_choice::encode_elsewhere(&dx12.records, chosen, decode_on_gpu)
-            }),
-        };
-    }
+    #[cfg(all(target_os = "linux", feature = "hwdevice"))]
+    let (no_encode_device, report) = (
+        missing_encode_device(host.shared_vulkan.is_none(), no_shared_device.clone()),
+        product_device_report(adapter_choice, adapter_policy, &host, no_shared_device),
+    );
+    #[cfg(all(target_os = "macos", feature = "hwdevice"))]
+    let (no_encode_device, report) = (
+        missing_encode_device(host.shared_metal.is_none(), no_shared_device.clone()),
+        metal_adapter_report(adapter_policy, &host, no_shared_device),
+    );
+    #[cfg(all(target_os = "windows", feature = "hwdevice"))]
+    let report = windows_default_note(
+        product_device_report(dx12.report.take(), adapter_policy, &host, None),
+        decode_on_gpu,
+    );
+    #[cfg(not(any(
+        all(target_os = "linux", feature = "hwdevice"),
+        all(target_os = "macos", feature = "hwdevice"),
+        all(target_os = "windows", feature = "hwdevice")
+    )))]
+    let (no_encode_device, report) = (
+        None,
+        product_device_report(None, adapter_policy, &host, None),
+    );
+    host.encode_adapters =
+        crate::adapter_choice::EncodeAdapterNotes::new(no_encode_device, Some(&report));
+    host.adapter_choice = Some(report);
     #[cfg(all(target_os = "windows", feature = "hwencode"))]
     if let Some(test_encodes) = test_encodes {
         test_encodes.finish();
     }
     #[cfg(all(target_os = "windows", feature = "hwdevice"))]
-    {
-        #[cfg(not(feature = "hwencode"))]
-        let _ = no_encode_device;
-        report_dx12_adapters(&host, &dx12, encode_on_gpu);
-    }
+    report_dx12_encode(&host, encode_on_gpu);
+    report_adapter_choice(&host);
     host.gpu_log = gpu_log;
     // Read now, before an upgrade can replace the file this process runs.
     if let Err(reason) = crate::host::host_binary_digest() {
@@ -1081,55 +1136,173 @@ fn start_test_encodes(
     ))
 }
 
-/// Says on stderr which adapter the renderer is on, what it decodes and
-/// encodes, and what every adapter passed over does. What it encodes is
-/// what an export would be offered, test encode included; the last line
-/// names the encoders the GPU-resident path takes, or why it takes none.
+/// Says on stderr what the GPU-resident path encodes on the Windows
+/// adapter the renderer is on, test encode included: the encoders it takes,
+/// or why it takes none.
 #[cfg(all(target_os = "windows", feature = "hwdevice"))]
 #[cfg_attr(not(feature = "hwencode"), allow(unused_variables))]
-fn report_dx12_adapters(host: &Host, dx12: &crate::dx12_adapters::Dx12Choice, encode_on_gpu: bool) {
+fn report_dx12_encode(host: &Host, encode_on_gpu: bool) {
     #[cfg(feature = "hwencode")]
-    let encodes = match (&host.shared_d3d12, encode_on_gpu) {
-        (_, false) => "off (ALPHA2_GPU_ENCODE is off)".to_owned(),
-        (None, true) => "none".to_owned(),
-        (Some(_), true) => {
-            let taken: Vec<_> = host
-                .gpu_output_codecs()
-                .iter()
-                .map(|capability| capability.codec)
-                .collect();
-            if taken.is_empty() {
-                "none".to_owned()
-            } else {
-                crate::adapter_choice::codec_list(&taken)
-            }
-        }
+    let encode = if encode_on_gpu {
+        gpu_encode_diagnostic(
+            &host.renderer.adapter().name,
+            &host.gpu_output_codecs(),
+            host.gpu_output_capability().err(),
+        )
+    } else {
+        "off (ALPHA2_GPU_ENCODE is off)".to_owned()
     };
-    #[cfg(not(feature = "hwencode"))]
-    let encodes = "not in this build".to_owned();
-    alpha2_os::diagnostic!(
-        "alpha2-host GPU: {} (renders, decodes: {}, encodes: {encodes})",
-        host.renderer.adapter().name,
-        if host.hardware_decode_ready() {
-            "yes"
-        } else {
-            "no"
-        }
-    );
-    for (at, record) in dx12.records.iter().enumerate() {
-        if Some(at) != dx12.chosen {
-            alpha2_os::diagnostic!("alpha2-host GPU passed over: {}", record.summary());
-        }
-    }
-    #[cfg(feature = "hwencode")]
-    let encode = gpu_encode_diagnostic(
-        &host.renderer.adapter().name,
-        &host.gpu_output_codecs(),
-        host.gpu_output_capability().err(),
-    );
     #[cfg(not(feature = "hwencode"))]
     let encode = "unavailable: this host was built without hardware encode".to_owned();
     alpha2_os::diagnostic!("alpha2-host GPU encode: {encode}");
+}
+
+/// Says on stderr which adapter the renderer is on, under which policy and
+/// why, and what every adapter passed over does.
+fn report_adapter_choice(host: &Host) {
+    let Some(report) = &host.adapter_choice else {
+        return;
+    };
+    let adapter = host.renderer.adapter();
+    alpha2_os::diagnostic!(
+        "alpha2-host GPU: {} ({}), {}: {}",
+        adapter.name,
+        adapter.backend,
+        report.policy.setting(),
+        report.explanation
+    );
+    for (at, record) in report.records.iter().enumerate() {
+        if Some(at) != report.chosen {
+            alpha2_os::diagnostic!("alpha2-host GPU passed over: {}", record.summary());
+        }
+    }
+}
+
+/// Why a host has no device shared with a hardware encoder, when `missing`
+/// says it has none and this build encodes on the GPU: `reason`, what making
+/// the device answered.
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "hwdevice"))]
+fn missing_encode_device(missing: bool, reason: Option<String>) -> Option<String> {
+    (missing && cfg!(feature = "hwencode"))
+        .then(|| reason.unwrap_or_else(|| "no shared device was made".to_owned()))
+}
+
+/// `report`, the choice made among the adapters that could carry a shared
+/// device, made to name the adapter `host` renders on. Without a shared
+/// device the renderer is the product device (`ALPHA2_GPU_ADAPTER`'s pin, or
+/// the high-performance order), which the report then names, with `why`
+/// there is no shared device.
+#[cfg(not(all(target_os = "macos", feature = "hwdevice")))]
+fn product_device_report(
+    report: Option<crate::adapter_choice::AdapterChoiceReport>,
+    policy: &crate::adapter_choice::AdapterPolicy,
+    host: &Host,
+    why: Option<String>,
+) -> crate::adapter_choice::AdapterChoiceReport {
+    use alpha2_gpu::ChoiceReason;
+    let name = host.renderer.adapter().name;
+    let mut report = report.unwrap_or_else(|| crate::adapter_choice::AdapterChoiceReport {
+        policy: policy.clone(),
+        chosen: None,
+        reason: ChoiceReason::NoSharedDevice,
+        explanation: String::new(),
+        records: Vec::new(),
+    });
+    if report
+        .chosen_record()
+        .is_some_and(|record| record.name == name)
+    {
+        return report;
+    }
+    report.chosen = report.records.iter().position(|record| record.name == name);
+    report.reason = if policy.is_pin() {
+        ChoiceReason::Pinned
+    } else {
+        ChoiceReason::NoSharedDevice
+    };
+    let why = why
+        .or_else(|| (!report.explanation.is_empty()).then(|| report.explanation.clone()))
+        .unwrap_or_else(|| "no shared device was wanted".to_owned());
+    report.explanation = format!("{name} renders as the product device: {why}");
+    report
+}
+
+/// `report`, with the reason Windows rendered by the high-performance order when that was only
+/// the Windows default (`ALPHA2_GPU_ADAPTER` unset), and where `auto` would have rendered:
+/// the user learns what they gave up and how to ask for it.
+#[cfg(all(target_os = "windows", feature = "hwdevice"))]
+fn windows_default_note(
+    mut report: crate::adapter_choice::AdapterChoiceReport,
+    decode_allowed: bool,
+) -> crate::adapter_choice::AdapterChoiceReport {
+    use crate::adapter_choice::AdapterPolicy;
+    if report.policy != AdapterPolicy::Performance || AdapterPolicy::set_in_env().is_some() {
+        return report;
+    }
+    let auto = alpha2_gpu::rank_adapters(&report.records, &AdapterPolicy::Auto, decode_allowed)
+        .ok()
+        .and_then(|order| order.order.first().copied())
+        .filter(|&at| Some(at) != report.chosen);
+    let hint = auto.map_or_else(String::new, |at| {
+        format!(
+            "; ALPHA2_GPU_ADAPTER=auto would render on {} ({})",
+            report.records[at].name,
+            report.records[at].summary()
+        )
+    });
+    report.explanation = format!(
+        "{}; ALPHA2_GPU_ADAPTER is unset, and Windows renders by the high-performance order \
+         because an Intel Iris Xe draws leftover memory into DX12 textures with this build's \
+         wgpu-hal{hint}",
+        report.explanation
+    );
+    report
+}
+
+/// The macOS choice: the one Metal device, what `VideoToolbox` decodes into
+/// it and the GPU-resident path encodes from it, or `why` neither does.
+#[cfg(all(target_os = "macos", feature = "hwdevice"))]
+fn metal_adapter_report(
+    policy: &crate::adapter_choice::AdapterPolicy,
+    host: &Host,
+    why: Option<String>,
+) -> crate::adapter_choice::AdapterChoiceReport {
+    let adapter = host.renderer.adapter();
+    let shared = match (&host.shared_metal, why) {
+        (Some(_), _) => Ok(()),
+        (None, Some(why)) => Err(why),
+        (None, None) => Err("no shared device was wanted".to_owned()),
+    };
+    let mut record = alpha2_gpu::AdapterRecord::unasked(0, adapter.name.clone(), "metal", false);
+    record.renders = Ok(());
+    record.decodes = match &shared {
+        Ok(()) if host.decode_policy.allows_hardware() => Ok(()),
+        Ok(()) => Err("decode is in software".to_owned()),
+        Err(why) => Err(why.clone()),
+    };
+    record.gpu_encodes = alpha2_gpu::GPU_ENCODE_CODECS
+        .iter()
+        .map(|&codec| {
+            let answer = match &shared {
+                Err(why) => Err(why.clone()),
+                Ok(()) if !cfg!(feature = "hwencode") => {
+                    Err("this host was built without hardware encode".to_owned())
+                }
+                Ok(()) if codec == "h264" => Ok(()),
+                Ok(()) => Err(format!(
+                    "the GPU-resident path encodes h264 on macOS, not {codec}"
+                )),
+            };
+            (codec, answer)
+        })
+        .collect();
+    let records = vec![record];
+    let order = alpha2_gpu::rank_adapters(&records, policy, host.decode_policy.allows_hardware())
+        .unwrap_or(alpha2_gpu::AdapterOrder {
+            order: vec![0],
+            reason: alpha2_gpu::ChoiceReason::OnlyAdapter,
+        });
+    crate::adapter_choice::AdapterChoiceReport::ranked(policy.clone(), records, &order)
 }
 
 /// The start line's account of the GPU-resident path: the backend and every

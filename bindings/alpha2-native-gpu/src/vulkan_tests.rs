@@ -1,61 +1,244 @@
-/// `ALPHA2_VULKAN_DEVICE` is not passed on to `FFmpeg`, which reads a
-/// value that starts with a digit (`4090`, `780M`) as a device index,
-/// while the host matches it against adapter names. The index a probe
-/// passes is that of the adapter the host chooses.
+/// The index a probe passes `FFmpeg` is the loader's index of the adapter the host's choice
+/// takes, not the adapter's position in wgpu's enumeration, which can differ.
 #[test]
-fn a_device_selector_resolves_to_the_adapter_the_host_chooses() {
-    let _turn = alpha2_gpu::serialize_acquisition();
-    let instance = super::hal_instance().expect("instance");
-    // SAFETY: adapter enumeration does not require a surface.
-    let adapters = unsafe { instance.enumerate_adapters(None) };
-    let Some(first) = adapters.first() else {
-        alpha2_test_support::skip!(
-            alpha2_test_support::Capability::Vulkan,
-            "the Vulkan instance lists no adapter"
-        );
+fn the_shared_device_index_is_a_loader_index_of_an_adapter_that_shares() {
+    let candidates = match super::vulkan_candidates() {
+        Ok(candidates) => candidates,
+        Err(error) => {
+            alpha2_test_support::skip!(
+                alpha2_test_support::Capability::Vulkan,
+                "no Vulkan instance ({error})"
+            );
+            return;
+        }
+    };
+    match super::shared_device_index() {
+        Ok(index) => assert!(
+            candidates
+                .iter()
+                .any(|candidate| candidate.loader_index == Some(index) && candidate.shares.is_ok()),
+            "{index} in {candidates:?}"
+        ),
+        Err(error) => assert!(
+            candidates.iter().all(|candidate| candidate.shares.is_err()),
+            "{error}: {candidates:?}"
+        ),
+    }
+}
+
+fn family(flags: ash::vk::QueueFlags) -> super::QueueFamily {
+    super::QueueFamily { flags, count: 1 }
+}
+
+#[test]
+fn candidates_without_a_separate_decode_queue_do_not_share() {
+    use ash::vk::QueueFlags;
+    let graphics = QueueFlags::GRAPHICS | QueueFlags::COMPUTE | QueueFlags::TRANSFER;
+    let every = |_: &std::ffi::CStr| true;
+    // Decode on the graphics family itself: wgpu's queue cannot be FFmpeg's decode queue.
+    let refused = super::video_plan(
+        &[family(graphics | QueueFlags::VIDEO_DECODE_KHR)],
+        every,
+        true,
+    )
+    .expect_err("one family");
+    assert!(refused.contains("decode queue separate"), "{refused}");
+    let refused = super::video_plan(&[family(graphics)], every, true).expect_err("no decode");
+    assert!(refused.contains("no video-decode queue"), "{refused}");
+    let refused = super::video_plan(
+        &[
+            family(QueueFlags::TRANSFER),
+            family(graphics),
+            family(QueueFlags::VIDEO_DECODE_KHR),
+        ],
+        every,
+        true,
+    )
+    .expect_err("graphics not first");
+    assert!(refused.contains("graphics queue family 0"), "{refused}");
+    let refused = super::video_plan(
+        &[family(graphics), family(QueueFlags::VIDEO_DECODE_KHR)],
+        every,
+        false,
+    )
+    .expect_err("no NV12");
+    assert!(refused.contains("NV12"), "{refused}");
+    let no_h264 = |name: &std::ffi::CStr| name != ash::khr::video_decode_h264::NAME;
+    let refused = super::video_plan(
+        &[family(graphics), family(QueueFlags::VIDEO_DECODE_KHR)],
+        no_h264,
+        true,
+    )
+    .expect_err("no H.264 decode");
+    assert!(refused.contains("H.264 video decode"), "{refused}");
+    let plan = super::video_plan(
+        &[
+            family(graphics),
+            family(QueueFlags::VIDEO_DECODE_KHR),
+            family(QueueFlags::VIDEO_ENCODE_KHR),
+        ],
+        every,
+        true,
+    )
+    .expect("shares");
+    assert_eq!((plan.decode_family, plan.encode_family), (1, Some(2)));
+    assert_eq!(plan.encode_codecs, ["h264", "hevc"]);
+    // HEVC alone: the queue is taken for it.
+    let no_h264 = |name: &std::ffi::CStr| name != ash::khr::video_encode_h264::NAME;
+    let plan = super::video_plan(
+        &[
+            family(graphics),
+            family(QueueFlags::VIDEO_DECODE_KHR),
+            family(QueueFlags::VIDEO_ENCODE_KHR),
+        ],
+        no_h264,
+        true,
+    )
+    .expect("shares");
+    assert_eq!(plan.encode_codecs, ["hevc"]);
+    // Without the encode extensions the encode queue is not taken.
+    let no_encode = |name: &std::ffi::CStr| name != ash::khr::video_maintenance1::NAME;
+    let plan = super::video_plan(
+        &[
+            family(graphics),
+            family(QueueFlags::VIDEO_DECODE_KHR),
+            family(QueueFlags::VIDEO_ENCODE_KHR),
+        ],
+        no_encode,
+        true,
+    )
+    .expect("decodes");
+    assert_eq!(plan.encode_family, None);
+    assert_eq!(plan.encode_codecs, [] as [&str; 0]);
+}
+
+fn candidate(
+    index: usize,
+    name: &str,
+    kind: wgpu::DeviceType,
+    encodes: bool,
+) -> super::VulkanCandidate {
+    super::VulkanCandidate {
+        index,
+        loader_index: Some(index),
+        name: name.to_owned(),
+        device_type: kind,
+        shares: Ok(()),
+        decode_codecs: vec!["h264"],
+        encode_codecs: if encodes { vec!["h264"] } else { Vec::new() },
+    }
+}
+
+#[test]
+fn create_on_failure_moves_to_the_next_candidate() {
+    use alpha2_gpu::{AdapterPolicy, ChoiceReason};
+    let machine = || {
+        vec![
+            candidate(
+                0,
+                "NVIDIA GeForce RTX 4090",
+                wgpu::DeviceType::DiscreteGpu,
+                true,
+            ),
+            candidate(
+                1,
+                "AMD Radeon Graphics (RADV)",
+                wgpu::DeviceType::IntegratedGpu,
+                true,
+            ),
+            candidate(2, "llvmpipe", wgpu::DeviceType::Cpu, false),
+        ]
+    };
+    let mut tried = Vec::new();
+    let choice = super::choose_over(machine(), &AdapterPolicy::Auto, true, true, |index| {
+        tried.push(index);
+        if index == 0 {
+            Err("out of device memory".to_owned())
+        } else {
+            Ok(index)
+        }
+    });
+    assert_eq!(tried, [0, 1]);
+    assert_eq!(choice.context, Some(1));
+    assert_eq!(
+        choice.report.chosen_record().map(|record| record.index),
+        Some(1)
+    );
+    assert_eq!(choice.report.reason, ChoiceReason::MostGpuEncoders);
+    assert!(
+        choice.report.records[0]
+            .decodes
+            .as_ref()
+            .is_err_and(|reason| reason.contains("out of device memory")),
+        "{:?}",
+        choice.report.records[0]
+    );
+    // A pin keeps its adapter, which then renders without a shared device.
+    let choice = super::choose_over(
+        machine(),
+        &AdapterPolicy::Index(0),
+        true,
+        true,
+        |_| -> Result<(), _> { Err("out of device memory".to_owned()) },
+    );
+    assert!(choice.context.is_none());
+    assert_eq!(choice.report.reason, ChoiceReason::Pinned);
+    assert!(
+        choice
+            .unavailable
+            .as_deref()
+            .is_some_and(|reason| reason.contains("out of device memory")),
+        "{:?}",
+        choice.unavailable
+    );
+    // No adapter shares: the product device renders, and the report says why.
+    let mut none = machine();
+    for candidate in &mut none {
+        candidate.shares = Err("no video-decode queue".to_owned());
+    }
+    let choice = super::choose_over(none, &AdapterPolicy::Auto, true, true, |_| Ok(()));
+    assert!(choice.context.is_none());
+    assert_eq!(choice.report.reason, ChoiceReason::NoSharedDevice);
+    assert_eq!(
+        choice.report.chosen_record().map(|record| record.index),
+        Some(0)
+    );
+    // Nothing wanted: nothing is made.
+    let choice = super::choose_over(
+        machine(),
+        &AdapterPolicy::Auto,
+        false,
+        false,
+        |_| -> Result<(), String> { panic!("nothing wanted a shared device") },
+    );
+    assert!(choice.context.is_none() && choice.unavailable.is_none());
+}
+
+/// The shared device lists VP9 among its decode codecs exactly when its adapter has
+/// `VK_KHR_video_decode_vp9` (and its feature), which the device is then created with.
+#[test]
+fn vp9_decode_is_listed_when_the_device_has_it() {
+    let Some(context) = failure_tests::shared_context() else {
         return;
     };
-    let raw = first.adapter.shared_instance().raw_instance();
-    // SAFETY: the instance is alive; enumeration has no other precondition.
-    let order = unsafe { raw.enumerate_physical_devices() }.expect("devices");
-    let name_at = |index: usize| {
-        // SAFETY: `order[index]` was enumerated from `raw`.
-        let properties = unsafe { raw.get_physical_device_properties(order[index]) };
-        properties
-            .device_name_as_c_str()
-            .expect("name")
-            .to_string_lossy()
-            .into_owned()
-    };
-    let mut checked = 0;
-    for adapter in adapters.iter().filter(|adapter| {
-        adapter
-            .features
-            .contains(wgpu::Features::TEXTURE_FORMAT_NV12)
-    }) {
-        let name = &adapter.info.name;
-        let index = super::shared_device_index(Some(name)).expect("by its name");
-        assert!(
-            name_at(index).contains(name.as_str()),
-            "{name}: {}",
-            name_at(index)
+    let candidates = super::vulkan_candidates().expect("candidates");
+    let adapter = context.gpu().capabilities().adapter_name.clone();
+    let candidate = candidates
+        .iter()
+        .find(|candidate| candidate.name == adapter)
+        .expect("the shared device's adapter is a candidate");
+    let listed = context.decode_codecs().contains(&"vp9");
+    assert!(
+        !listed || candidate.decode_codecs.contains(&"vp9"),
+        "{adapter}: vp9 listed without its extension"
+    );
+    if !listed {
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::VulkanVideoVp9,
+            "{adapter} does not decode VP9 through Vulkan Video (extension listed: {})",
+            candidate.decode_codecs.contains(&"vp9")
         );
-        // A word of the name that starts with a digit names the adapter, not an index.
-        for word in name
-            .split(' ')
-            .filter(|word| word.starts_with(|c: char| c.is_ascii_digit()))
-        {
-            let index = super::shared_device_index(Some(word)).expect("by a word of it");
-            assert!(name_at(index).contains(word), "{word}: {}", name_at(index));
-            checked += 1;
-        }
     }
-    let default = super::shared_device_index(None);
-    if let Ok(index) = default {
-        assert!(index < order.len());
-    }
-    eprintln!("checked {checked} digit-leading selectors");
-    assert!(super::shared_device_index(Some("no adapter has this name")).is_err());
 }
 
 #[test]
@@ -485,30 +668,6 @@ fn the_validation_layer_counts_as_loaded_exactly_when_the_loader_loads_it() {
 }
 
 #[test]
-fn the_shared_device_takes_the_adapter_wgpu_power_pref_asks_for() {
-    use wgpu::{DeviceType, PowerPreference};
-    let order = |preference| {
-        let mut types = [
-            DeviceType::Cpu,
-            DeviceType::IntegratedGpu,
-            DeviceType::DiscreteGpu,
-        ];
-        types.sort_by_key(|device_type| adapter_rank(*device_type, preference));
-        types[0]
-    };
-    assert_eq!(order(None), DeviceType::DiscreteGpu);
-    assert_eq!(
-        order(Some(PowerPreference::HighPerformance)),
-        DeviceType::DiscreteGpu
-    );
-    assert_eq!(order(Some(PowerPreference::None)), DeviceType::DiscreteGpu);
-    assert_eq!(
-        order(Some(PowerPreference::LowPower)),
-        DeviceType::IntegratedGpu
-    );
-}
-
-#[test]
 fn the_encode_extent_is_the_profile_and_granularity_h264_vulkan_opens_with() {
     use vk::native::{
         StdVideoH264ProfileIdc_STD_VIDEO_H264_PROFILE_IDC_BASELINE as BASELINE,
@@ -545,11 +704,7 @@ fn the_encode_extent_is_the_profile_and_granularity_h264_vulkan_opens_with() {
         },
         ..Default::default()
     };
-    let extent = encode_extent(
-        coded,
-        &encode,
-        &vk::VideoEncodeH264CapabilitiesKHR::default(),
-    );
+    let extent = encode_extent(coded, &encode, (0, 0, 0));
     assert_eq!(extent.granularity, (32, 32));
     assert_eq!(extent.coded(1280, 720), (1280, 736));
 }
@@ -563,7 +718,7 @@ fn this_device_reports_the_h264_profile_ffmpeg_opens() {
     ) else {
         return;
     };
-    let Some(extent) = context.encode_extent() else {
+    let Some(extent) = context.encode_extent("h264") else {
         alpha2_test_support::skip!(
             alpha2_test_support::Capability::VulkanVideoEncode,
             "no H.264 encode on this device"
@@ -573,6 +728,34 @@ fn this_device_reports_the_h264_profile_ffmpeg_opens() {
     // Every device with Vulkan H.264 encode this runs on (NVIDIA, RADV) has High, which FFmpeg
     // then picks.
     assert_eq!(extent.profile, "high", "{extent:?}");
+}
+
+#[test]
+fn hevc_encode_extents_are_read_from_the_device() {
+    let _device = in_process_device();
+    let Some(context) = alpha2_test_support::available!(
+        alpha2_test_support::Capability::VulkanVideo,
+        SharedVulkanContext::create().map_err(|error| format!("no Vulkan Video device ({error})"))
+    ) else {
+        return;
+    };
+    let listed = context.encode_codecs().contains(&"hevc");
+    let Some(extent) = context.encode_extent("hevc") else {
+        assert!(!listed, "hevc is listed without its extents");
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::VulkanVideoEncodeHevc,
+            "no HEVC encode on this device"
+        );
+        return;
+    };
+    assert!(listed, "HEVC extents on a device that does not list hevc");
+    assert_eq!(extent.profile, "main", "{extent:?}");
+    assert!(
+        extent.minimum.0 <= extent.maximum.0 && extent.minimum.1 <= extent.maximum.1,
+        "{extent:?}"
+    );
+    assert!(extent.accepts(1920, 1080), "{extent:?}");
+    assert!(!extent.rate_control_modes.is_empty(), "{extent:?}");
 }
 
 #[test]
@@ -637,7 +820,7 @@ fn one_driver_environment(manifest: &Path) -> Vec<(&'static str, Option<&Path>)>
         ("VK_ADD_DRIVER_FILES", None),
         ("VK_LOADER_DRIVERS_SELECT", None),
         ("VK_LOADER_DRIVERS_DISABLE", None),
-        ("ALPHA2_VULKAN_DEVICE", None),
+        ("ALPHA2_GPU_ADAPTER", None),
     ]
 }
 

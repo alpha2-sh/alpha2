@@ -13,7 +13,7 @@
 
 use std::cell::OnceCell;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::ops::Range;
 use std::sync::Arc;
@@ -96,9 +96,11 @@ pub struct TextRasterRequest {
     /// caller that draws something between them (a shadow). The two planes
     /// over each other are the joined raster, give or take a code.
     pub split_background: bool,
-    /// The family drawn first, as [`font_family`] reads it, matched without
-    /// regard to ASCII case; the rest of the stack fills in what it lacks.
-    /// `None`, or a family no font has, keeps the fallback order.
+    /// The family drawn first: any family name a font's name table gives
+    /// ([`font_family_names`], every language), matched after NFC and
+    /// lowercasing; the rest of the stack fills in what it lacks. `None`
+    /// keeps the fallback order, as does a family no font has, which
+    /// [`TextRasterizer::unmatched_families`] then lists.
     pub font_family: Option<String>,
     /// Space added after each typographic character unit (grapheme
     /// cluster), in pixels, as CSS `letter-spacing` adds it: none after a
@@ -372,8 +374,12 @@ impl std::error::Error for TextRasterError {}
 #[derive(Clone, Debug)]
 struct LoadedFont {
     source: TextFont,
-    /// The family its name table gives, if any.
+    /// The family its name table gives ([`font_family`]), folded
+    /// ([`fold_family`]): what its faces are grouped by.
     family: Option<String>,
+    /// Every family name its name table gives, in every language, folded: what
+    /// a requested family is matched against.
+    aliases: Vec<String>,
     /// OS/2 usWeightClass in [1, 1000]; 400 without the table.
     weight: u16,
     /// The fvar `wght` axis (min, default, max), for a variable face.
@@ -395,10 +401,18 @@ impl LoadedFont {
             .into_iter()
             .find(|axis| axis.tag == WGHT)
             .map(|axis| (axis.min_value, axis.def_value, axis.max_value));
-        let family = font_family(&source.bytes, source.face_index);
+        let family = font_family(&source.bytes, source.face_index).map(|name| fold_family(&name));
+        let mut aliases = font_family_names(&source.bytes, source.face_index)
+            .iter()
+            .map(|name| fold_family(name))
+            .collect::<Vec<_>>();
+        aliases.extend(family.clone());
+        aliases.sort();
+        aliases.dedup();
         Ok(Self {
             source,
             family,
+            aliases,
             weight,
             wght,
         })
@@ -496,6 +510,41 @@ pub fn font_family(bytes: &[u8], face_index: u32) -> Option<String> {
         })
 }
 
+/// Every family name a font's name table gives the face at `face_index`: the
+/// typographic family (name ID 16) and family (name ID 1) records in every
+/// language that decode to a non-empty name, each once, in table order. A
+/// project may name a family by any of them, a Korean font by its Korean name
+/// as well as its English one. Empty for bytes that do not parse.
+#[must_use]
+pub fn font_family_names(bytes: &[u8], face_index: u32) -> Vec<String> {
+    use rustybuzz::ttf_parser::name_id;
+    let Ok(face) = rustybuzz::ttf_parser::Face::parse(bytes, face_index) else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    for name in face.names() {
+        if name.name_id != name_id::TYPOGRAPHIC_FAMILY && name.name_id != name_id::FAMILY {
+            continue;
+        }
+        if let Some(text) = name.to_string().map(|text| text.trim().to_owned())
+            && !text.is_empty()
+            && !names.contains(&text)
+        {
+            names.push(text);
+        }
+    }
+    names
+}
+
+/// A family name as families are compared: NFC, then lowercased (Unicode,
+/// not ASCII only), so `Malgun Gothic`, `MALGUN GOTHIC` and an NFD spelling
+/// of a Korean name each match their font.
+#[must_use]
+pub fn fold_family(name: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    name.trim().nfc().collect::<String>().to_lowercase()
+}
+
 /// The pixel bytes a [`TextRasterizer`] keeps cached by default: room for a
 /// few full-frame 4K titles, or hundreds of caption-sized ones.
 pub const DEFAULT_TEXT_CACHE_BYTES: usize = 64 << 20;
@@ -516,6 +565,8 @@ pub struct TextRasterizer {
     cache: ResultCache,
     /// Animated clusters drawn before, for [`Self::rasterize_animated`].
     tiles: animated::TileCache,
+    /// Families requests asked for that no font has, as they were spelled.
+    unmatched: std::sync::Mutex<BTreeSet<String>>,
 }
 
 /// Rasterized results by content version, within a byte budget, evicting the
@@ -621,6 +672,7 @@ impl TextRasterizer {
             fonts: Vec::new(),
             cache: ResultCache::new(DEFAULT_TEXT_CACHE_BYTES),
             tiles: animated::TileCache::default(),
+            unmatched: std::sync::Mutex::default(),
         }
     }
 
@@ -640,6 +692,7 @@ impl TextRasterizer {
             fonts: loaded,
             cache: ResultCache::new(DEFAULT_TEXT_CACHE_BYTES),
             tiles: animated::TileCache::default(),
+            unmatched: std::sync::Mutex::default(),
         })
     }
 
@@ -661,6 +714,19 @@ impl TextRasterizer {
     #[must_use]
     pub fn font_count(&self) -> usize {
         self.fonts.len()
+    }
+
+    /// The families requests asked for that no registered font has, sorted,
+    /// each as a request spelled it: those requests drew in the fallback
+    /// order. Fonts added since do not take a family off the list.
+    #[must_use]
+    pub fn unmatched_families(&self) -> Vec<String> {
+        self.unmatched
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .cloned()
+            .collect()
     }
 
     /// Shapes, lays out, and rasterizes one request, or returns the cached
@@ -1042,11 +1108,10 @@ impl TextRasterizer {
     /// `family` first; inside a family, faces by CSS Fonts 4's weight
     /// matching for `weight` ([`weight_order`]), ties in registration order.
     fn font_order(&self, family: Option<&str>, weight: u16) -> Vec<usize> {
-        // Faces grouped by family, matched without regard to ASCII case; a face without one is a
-        // family of its own.
-        let mut groups: Vec<(Option<String>, Vec<usize>)> = Vec::new();
+        // Faces grouped by their folded family; a face without one is a family of its own.
+        let mut groups: Vec<(Option<&str>, Vec<usize>)> = Vec::new();
         for (index, font) in self.fonts.iter().enumerate() {
-            let name = font.family.as_deref().map(str::to_ascii_lowercase);
+            let name = font.family.as_deref();
             match groups
                 .iter_mut()
                 .find(|(held, _)| name.is_some() && *held == name)
@@ -1055,13 +1120,26 @@ impl TextRasterizer {
                 None => groups.push((name, vec![index])),
             }
         }
-        let wanted = family.map(str::to_ascii_lowercase);
-        if let Some(at) = groups
-            .iter()
-            .position(|(name, _)| wanted.is_some() && *name == wanted)
-        {
-            let preferred = groups.remove(at);
-            groups.insert(0, preferred);
+        if let Some(requested) = family {
+            let wanted = fold_family(requested);
+            // The first group any of whose faces has the name, in any language its table gives.
+            match groups.iter().position(|(_, faces)| {
+                faces
+                    .iter()
+                    .any(|&index| self.fonts[index].aliases.contains(&wanted))
+            }) {
+                Some(at) => {
+                    let preferred = groups.remove(at);
+                    groups.insert(0, preferred);
+                }
+                None if !self.fonts.is_empty() => {
+                    self.unmatched
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .insert(requested.to_owned());
+                }
+                None => {}
+            }
         }
         groups
             .into_iter()

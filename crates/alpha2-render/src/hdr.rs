@@ -60,16 +60,16 @@ impl Default for HdrToneMap {
 /// Display luminance, in nits, of a PQ code value in `0..=1`.
 #[must_use]
 pub fn pq_eotf(code: f32) -> f32 {
-    let e = f64::from(code.clamp(0.0, 1.0)).powf(1.0 / PQ_M2);
-    let y = ((e - PQ_C1).max(0.0) / (PQ_C2 - PQ_C3 * e)).powf(1.0 / PQ_M1);
+    let e = libm::pow(f64::from(code.clamp(0.0, 1.0)), 1.0 / PQ_M2);
+    let y = libm::pow((e - PQ_C1).max(0.0) / (PQ_C2 - PQ_C3 * e), 1.0 / PQ_M1);
     (y * PQ_PEAK_NITS) as f32
 }
 
 /// The PQ code value of a display luminance in nits.
 #[must_use]
 pub fn pq_inverse_eotf(nits: f32) -> f32 {
-    let y = (f64::from(nits) / PQ_PEAK_NITS).clamp(0.0, 1.0).powf(PQ_M1);
-    ((PQ_C1 + PQ_C2 * y) / (1.0 + PQ_C3 * y)).powf(PQ_M2) as f32
+    let y = libm::pow((f64::from(nits) / PQ_PEAK_NITS).clamp(0.0, 1.0), PQ_M1);
+    libm::pow((PQ_C1 + PQ_C2 * y) / (1.0 + PQ_C3 * y), PQ_M2) as f32
 }
 
 /// Scene light in `0..=1` of an HLG code value (the inverse OETF).
@@ -79,7 +79,7 @@ pub fn hlg_inverse_oetf(code: f32) -> f32 {
     let light = if e <= 0.5 {
         e * e / 3.0
     } else {
-        (((e - HLG_C) / HLG_A).exp() + HLG_B) / 12.0
+        (libm::exp((e - HLG_C) / HLG_A) + HLG_B) / 12.0
     };
     light as f32
 }
@@ -88,7 +88,7 @@ pub fn hlg_inverse_oetf(code: f32) -> f32 {
 /// OOTF, with the system gamma for that peak.
 #[must_use]
 pub fn hlg_ootf(scene: [f32; 3], peak_nits: f32) -> [f32; 3] {
-    let gamma = 1.2 + 0.42 * (f64::from(peak_nits) / 1_000.0).log10();
+    let gamma = 1.2 + 0.42 * libm::log10(f64::from(peak_nits) / 1_000.0);
     let luma: f64 = scene
         .iter()
         .zip(BT2020_LUMA)
@@ -96,7 +96,7 @@ pub fn hlg_ootf(scene: [f32; 3], peak_nits: f32) -> [f32; 3] {
         .sum();
     // Below about 334 nits `gamma - 1` is negative and zero luma would give NaN: floor the luma
     // as the shader does (yuv-to-linear.wesl).
-    let gain = f64::from(peak_nits) * luma.max(HLG_MIN_LUMA).powf(gamma - 1.0);
+    let gain = f64::from(peak_nits) * libm::pow(luma.max(HLG_MIN_LUMA), gamma - 1.0);
     scene.map(|component| (gain * f64::from(component)) as f32)
 }
 
@@ -251,7 +251,7 @@ mod tests {
         let scene = hlg_inverse_oetf(0.75);
         let [white, ..] = hlg_ootf([scene; 3], 1_000.0);
         assert!((white - 203.0).abs() < 1.5, "{white}");
-        assert!(hlg_inverse_oetf(0.5).mul_add(3.0, -0.25).abs() < 1.0e-6);
+        assert!((hlg_inverse_oetf(0.5) * 3.0 - 0.25).abs() < 1.0e-6);
     }
 
     #[test]

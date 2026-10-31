@@ -87,6 +87,9 @@ _CODE_CLASSES: dict[str, tuple[str, str]] = {
     "HOST_BLOCKED": _PERMANENT,
     "HOST_WRITE_FAILED": _UNKNOWN,
     "HOST_EXITED": ("HOST_EXITED", "unknown"),
+    # The kernel's out-of-memory killer ended the host (its cgroup's ``oom_kill`` count rose): a
+    # retry with a smaller ``memory.scale`` asks for less.
+    "HOST_OOM_KILLED": ("OUT_OF_MEMORY", "cpu"),
     "INVALID_RESPONSE": _UNKNOWN,
     "PROGRESS_CALLBACK_FAILED": _UNKNOWN,
     "ABORTED": ("CANCELLED", "unknown"),

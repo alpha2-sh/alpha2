@@ -6,8 +6,9 @@
 //
 // Needs a 1.4 layer (1.3.x crashes FFmpeg's video sessions): point VK_LAYER_PATH at its
 // `explicit_layer.d` and add its `lib` to LD_LIBRARY_PATH. Without one this fails rather than
-// skips. ALPHA2_VULKAN_DEVICE picks the probe's device; logs go to target/vulkan-validation (or
-// `ALPHA2_VALIDATION_LOGS`), one file per export since the layer truncates the file it opens.
+// skips. The probe decodes on the device the host's adapter choice takes (ALPHA2_GPU_ADAPTER pins
+// one); logs go to target/vulkan-validation (or `ALPHA2_VALIDATION_LOGS`), one file per export
+// since the layer truncates the file it opens.
 
 import { spawnSync } from "node:child_process";
 import {
@@ -99,7 +100,7 @@ const logs =
   process.env.ALPHA2_VALIDATION_LOGS ?? join(root, "target/vulkan-validation");
 mkdirSync(logs, { recursive: true });
 let failures = 0;
-let adapter = process.env.ALPHA2_VULKAN_DEVICE;
+let adapter;
 try {
   for (const testCase of CASES) {
     const report = run(testCase);
@@ -137,8 +138,8 @@ function judge(log, known) {
   return { problems, summary: summary || "none" };
 }
 
-// Runs the decode probe on `fixture` behind the layer, on the device named `adapter` (FFmpeg picks
-// its first device otherwise, which may have no video decode).
+// Runs the decode probe on `fixture` behind the layer. The probe opens the device the exports above
+// rendered on, `adapter`, which names it in the summary.
 function probe({ name, fixture, frames }, adapter) {
   const log = join(logs, `${name}.log`);
   rmSync(log, { force: true });
@@ -150,10 +151,7 @@ function probe({ name, fixture, frames }, adapter) {
       maxBuffer: 64 * 1024 * 1024,
       timeout: TIMEOUT_MS,
       killSignal: "SIGKILL",
-      env: {
-        ...layerEnvironment(log),
-        ...(adapter === undefined ? {} : { ALPHA2_VULKAN_DEVICE: adapter }),
-      },
+      env: layerEnvironment(log),
     },
   );
   if (result.error?.code === "ETIMEDOUT") {
@@ -181,7 +179,7 @@ function probe({ name, fixture, frames }, adapter) {
     return false;
   }
   process.stdout.write(
-    `ok ${name} (${submissions} submissions on ${adapter ?? "FFmpeg's first device"}; known: ${summary})\n`,
+    `ok ${name} (${submissions} submissions on ${adapter ?? "the host's adapter"}; known: ${summary})\n`,
   );
   return true;
 }

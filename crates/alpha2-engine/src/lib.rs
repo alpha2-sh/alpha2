@@ -36,8 +36,8 @@ pub use audio::{
     MAX_SETTLING_SECONDS,
 };
 pub use capabilities::{
-    CAPABILITY_SCHEMA, CAPABILITY_VERSION, CapabilityReport, ColorReport, Feature, GpuReport,
-    PlaybackReport, Runtime,
+    CAPABILITY_SCHEMA, CAPABILITY_VERSION, CapabilityReport, ColorReport, Feature, GpuMemoryReport,
+    GpuReport, PlaybackReport, Runtime,
 };
 pub use error::EngineError;
 pub use error_code::{ErrorCode, gpu_error_of, gpu_fault_of};

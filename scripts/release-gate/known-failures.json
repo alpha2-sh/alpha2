@@ -661,7 +661,139 @@
       "until": "0.6.0"
     },
     {
+      "test": "tests::cpu_transitions::classic::hsv_fade_matches",
+      "machines": [
+        "win"
+      ],
+      "phase": "adapters",
+      "step": "intel-render",
+      "reason": "Intel Iris Xe over DX12 draws stale memory: wgpu-hal 30.0.1 creates its committed resources with D3D12_HEAP_FLAG_CREATE_NOT_ZEROED and the driver skips all-zero blocks of the initializing copy. The wgpu-hal fix is not taken yet; any test reading such a texture can fail, the set varies from run to run.",
+      "owner": "AtlasYang",
+      "added": "2026-10-31",
+      "until": "0.6.0"
+    },
+    {
+      "test": "tests::cpu_transitions::classic::multiply_blend_matches",
+      "machines": [
+        "win"
+      ],
+      "phase": "adapters",
+      "step": "intel-render",
+      "reason": "Intel Iris Xe over DX12 draws stale memory: wgpu-hal 30.0.1 creates its committed resources with D3D12_HEAP_FLAG_CREATE_NOT_ZEROED and the driver skips all-zero blocks of the initializing copy. The wgpu-hal fix is not taken yet; any test reading such a texture can fail, the set varies from run to run.",
+      "owner": "AtlasYang",
+      "added": "2026-10-31",
+      "until": "0.6.0"
+    },
+    {
+      "test": "tests::masks::masks_combine_in_order_and_match_their_golden",
+      "machines": [
+        "win"
+      ],
+      "phase": "adapters",
+      "step": "intel-render",
+      "reason": "Intel Iris Xe over DX12 draws stale memory: wgpu-hal 30.0.1 creates its committed resources with D3D12_HEAP_FLAG_CREATE_NOT_ZEROED and the driver skips all-zero blocks of the initializing copy. The wgpu-hal fix is not taken yet; any test reading such a texture can fail, the set varies from run to run.",
+      "owner": "AtlasYang",
+      "added": "2026-10-31",
+      "until": "0.6.0"
+    },
+    {
+      "test": "tests::cpu_effects::distort::displacement_map_matches",
+      "machines": [
+        "win"
+      ],
+      "phase": "adapters",
+      "step": "intel-render",
+      "reason": "Intel Iris Xe over DX12 draws stale memory: wgpu-hal 30.0.1 creates its committed resources with D3D12_HEAP_FLAG_CREATE_NOT_ZEROED and the driver skips all-zero blocks of the initializing copy. The wgpu-hal fix is not taken yet; any test reading such a texture can fail, the set varies from run to run.",
+      "owner": "AtlasYang",
+      "added": "2026-10-31",
+      "until": "0.6.0"
+    },
+    {
+      "test": "tests::cpu_transitions::classic::directional_easing_matches",
+      "machines": [
+        "win"
+      ],
+      "phase": "adapters",
+      "step": "intel-render",
+      "reason": "Intel Iris Xe over DX12 draws stale memory: wgpu-hal 30.0.1 creates its committed resources with D3D12_HEAP_FLAG_CREATE_NOT_ZEROED and the driver skips all-zero blocks of the initializing copy. The wgpu-hal fix is not taken yet; any test reading such a texture can fail, the set varies from run to run.",
+      "owner": "AtlasYang",
+      "added": "2026-10-31",
+      "until": "0.6.0"
+    },
+    {
+      "test": "tests::cpu_transitions::classic::fold_matches",
+      "machines": [
+        "win"
+      ],
+      "phase": "adapters",
+      "step": "intel-render",
+      "reason": "Intel Iris Xe over DX12 draws stale memory: wgpu-hal 30.0.1 creates its committed resources with D3D12_HEAP_FLAG_CREATE_NOT_ZEROED and the driver skips all-zero blocks of the initializing copy. The wgpu-hal fix is not taken yet; any test reading such a texture can fail, the set varies from run to run.",
+      "owner": "AtlasYang",
+      "added": "2026-10-31",
+      "until": "0.6.0"
+    },
+    {
+      "test": "tests::cpu_vector::solid_fills_match",
+      "machines": [
+        "win"
+      ],
+      "phase": "adapters",
+      "step": "intel-render",
+      "reason": "Intel Iris Xe over DX12 draws stale memory: wgpu-hal 30.0.1 creates its committed resources with D3D12_HEAP_FLAG_CREATE_NOT_ZEROED and the driver skips all-zero blocks of the initializing copy. The wgpu-hal fix is not taken yet; any test reading such a texture can fail, the set varies from run to run.",
+      "owner": "AtlasYang",
+      "added": "2026-10-31",
+      "until": "0.6.0"
+    },
+    {
+      "test": "tests::cpu_transitions::classic::top_bottom_matches",
+      "machines": [
+        "win"
+      ],
+      "phase": "adapters",
+      "step": "intel-render",
+      "reason": "Intel Iris Xe over DX12 draws stale memory: wgpu-hal 30.0.1 creates its committed resources with D3D12_HEAP_FLAG_CREATE_NOT_ZEROED and the driver skips all-zero blocks of the initializing copy. The wgpu-hal fix is not taken yet; any test reading such a texture can fail, the set varies from run to run.",
+      "owner": "AtlasYang",
+      "added": "2026-10-31",
+      "until": "0.6.0"
+    },
+    {
+      "test": "tests::upload_reuse::uploads_with_zero_blocks_over_recycled_memory_read_back_exactly",
+      "machines": [
+        "win"
+      ],
+      "phase": "adapters",
+      "step": "intel-render",
+      "reason": "Intel Iris Xe over DX12 draws stale memory: wgpu-hal 30.0.1 creates its committed resources with D3D12_HEAP_FLAG_CREATE_NOT_ZEROED and the driver skips all-zero blocks of the initializing copy. The wgpu-hal fix is not taken yet; any test reading such a texture can fail, the set varies from run to run.",
+      "owner": "AtlasYang",
+      "added": "2026-10-31",
+      "until": "0.6.0"
+    },
+    {
       "test": "frame::tests::layout::a_collapsed_group_matches_one_that_is_not",
+      "machines": [
+        "win"
+      ],
+      "phase": "adapters",
+      "step": "intel-engine",
+      "reason": "Intel Iris Xe over DX12 draws stale memory: wgpu-hal 30.0.1 creates its committed resources with D3D12_HEAP_FLAG_CREATE_NOT_ZEROED and the driver skips all-zero blocks of the initializing copy. The wgpu-hal fix is not taken yet; any test reading such a texture can fail, the set varies from run to run.",
+      "owner": "AtlasYang",
+      "added": "2026-10-31",
+      "until": "0.6.0"
+    },
+    {
+      "test": "frame::tests::text_animators::animated_text_draws_the_same_on_the_cpu",
+      "machines": [
+        "win"
+      ],
+      "phase": "adapters",
+      "step": "intel-engine",
+      "reason": "Intel Iris Xe over DX12 draws stale memory: wgpu-hal 30.0.1 creates its committed resources with D3D12_HEAP_FLAG_CREATE_NOT_ZEROED and the driver skips all-zero blocks of the initializing copy. The wgpu-hal fix is not taken yet; any test reading such a texture can fail, the set varies from run to run.",
+      "owner": "AtlasYang",
+      "added": "2026-10-31",
+      "until": "0.6.0"
+    },
+    {
+      "test": "frame::tests::text_look::text_gradient_matches_a_shape_gradient",
       "machines": [
         "win"
       ],
@@ -678,7 +810,7 @@
         "win"
       ],
       "phase": "adapters",
-      "step": "encoder-host",
+      "step": "auto-host",
       "reason": "Intel Iris Xe over DX12 draws stale memory: wgpu-hal 30.0.1 creates its committed resources with D3D12_HEAP_FLAG_CREATE_NOT_ZEROED and the driver skips all-zero blocks of the initializing copy. The wgpu-hal fix is not taken yet; any test reading such a texture can fail, the set varies from run to run.",
       "owner": "AtlasYang",
       "added": "2026-10-31",

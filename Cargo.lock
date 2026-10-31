@@ -171,6 +171,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "alpha2-extension-raster-pins"
+version = "0.5.0"
+dependencies = [
+ "alpha2-extensions",
+ "alpha2-model",
+ "alpha2-time",
+ "png",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "alpha2-extensions"
 version = "0.5.0"
 dependencies = [
@@ -445,6 +457,7 @@ name = "alpha2-render-determinism"
 version = "0.5.0"
 dependencies = [
  "alpha2-engine",
+ "alpha2-geometry",
  "alpha2-media",
  "alpha2-model",
  "alpha2-render",
@@ -486,6 +499,7 @@ dependencies = [
  "serde_json",
  "unicode-bidi",
  "unicode-linebreak",
+ "unicode-normalization",
  "unicode-script",
  "unicode-segmentation",
 ]

@@ -3,18 +3,26 @@
 //!
 //! [`graph_hash`] draws the fixed graph of the renderer's own determinism
 //! test (`crates/alpha2-render/src/tests/cpu_determinism.rs`) and must equal
-//! its pin. [`project_hash`] renders every frame of the host parity project
-//! (`tests/cases/host-parity-effects-project.json`: every built-in effect
-//! and transition) through the engine, as an export does. `src/main.rs`
-//! prints both natively; `scripts/test-render-determinism.mjs` compares them
-//! with this crate built for wasm32 and with the packaged browser binding's
-//! CPU renderer drawing the same project.
+//! its pin. [`blur_and_stroke_hash`] draws a full-HD graph through the paths
+//! that call transcendental math: a wide multi-pass blur, a rotated layer and
+//! a stroked shape with a cusp and arcs. [`project_hash`] renders every frame
+//! of the host parity project (`tests/cases/host-parity-effects-project.json`:
+//! every built-in effect and transition) through the engine, as an export
+//! does. Each has a pin taken on linux-x64 that every target must draw.
+//! `src/main.rs` prints them natively; `scripts/test-render-determinism.mjs`
+//! compares them with this crate built for wasm32 and the project with the
+//! packaged browser binding's CPU renderer drawing it.
 
 use std::sync::Arc;
 
 use alpha2_engine::{EngineProject, FrameProvider, FrameRenderer, QualityProfile};
+use alpha2_geometry::kurbo::{Point, Vec2};
+use alpha2_geometry::{
+    CanvasSize, EvaluatedGeometry, EvaluatedItem, EvaluatedPath, EvaluatedSubpath, EvaluatedVertex,
+    build_scene,
+};
 use alpha2_media::{ColorMetadata, SourceId, VideoCodec, YuvEncoding};
-use alpha2_model::Project;
+use alpha2_model::{LineCap, LineJoin, Paint, Project, Rgba};
 use alpha2_render::{
     BlendMode, BlendSpace, Color, CpuImage, CpuRenderer, CpuSource, EffectId, EffectParams,
     EffectRuntime, GAUSSIAN_BLUR_ID, GraphLayer, LayerTransform, Lut3dData, ParamValue,
@@ -25,6 +33,12 @@ use alpha2_time::MediaTime;
 /// [`graph_hash`]'s value on linux-x64, where it was first drawn: the pin of
 /// the renderer's own determinism test.
 pub const PINNED_GRAPH_HASH: u64 = 4_158_224_015_832_628_688;
+
+/// [`blur_and_stroke_hash`]'s value on linux-x64, where it was first drawn.
+pub const PINNED_BLUR_AND_STROKE_HASH: u64 = 12_803_358_345_075_414_110;
+
+/// [`project_hash`]'s value on linux-x64, where it was first drawn.
+pub const PINNED_PROJECT_HASH: u64 = 8_340_324_065_314_071_693;
 
 /// The host parity project [`project_hash`] renders.
 pub const PROJECT_JSON: &str = include_str!("../../cases/host-parity-effects-project.json");
@@ -165,6 +179,102 @@ pub fn graph_hash() -> u64 {
     fnv(FNV_OFFSET, &planes)
 }
 
+/// The FNV-1a hash of a 1920x1080 I420 frame drawn through the renderer's
+/// transcendental math: a Gaussian blur of 40 pixels (several passes per
+/// axis, each sized from the last with `hypot`), the card rotated and
+/// scaled over it, and a stroked cubic with a cusp next to a stroked
+/// ellipse, with round joins and caps.
+///
+/// # Panics
+/// Panics if the renderer refuses the graph, which is a bug here.
+#[must_use]
+pub fn blur_and_stroke_hash() -> u64 {
+    let size = RenderSize::new(1920, 1080).expect("size");
+    // The picture does not depend on the thread count; more threads keep a debug run short.
+    let renderer = CpuRenderer::new(4);
+    let card = CpuSource::image(Arc::new(
+        CpuImage::from_premultiplied_rgba8(size, &test_card(size, false)).expect("card"),
+    ));
+    let mut graph = RenderGraph::new(size);
+    graph.set_blend_space(BlendSpace::LinearLight);
+    let source = graph.add_source(SourceView::cpu(&card));
+    let blurred = graph
+        .add_gaussian_pixels(source, 40.0, EffectRuntime::default())
+        .expect("blur");
+    let vertex = |x, y, in_tangent: [f64; 2], out_tangent: [f64; 2]| EvaluatedVertex {
+        point: Point::new(x, y),
+        in_tangent: Vec2::new(in_tangent[0], in_tangent[1]),
+        out_tangent: Vec2::new(out_tangent[0], out_tangent[1]),
+    };
+    // Control points mirrored across the chord put a cusp at the segment's middle.
+    let cusp = EvaluatedPath {
+        subpaths: vec![EvaluatedSubpath {
+            closed: false,
+            vertices: vec![
+                vertex(0.3, 0.6, [0.0, 0.0], [0.4, -0.2]),
+                vertex(0.7, 0.6, [-0.4, -0.2], [0.0, 0.0]),
+            ],
+        }],
+    };
+    let stroke = |width, color: [f32; 4]| EvaluatedItem::Stroke {
+        paint: Paint::Solid {
+            color: Rgba::new(color[0], color[1], color[2], color[3]),
+        },
+        width,
+        opacity: 0.9,
+        join: LineJoin::Round,
+        miter_limit: 4.0,
+        cap: LineCap::Round,
+        dash: Vec::new(),
+        dash_offset: 0.0,
+    };
+    let scene = Arc::new(build_scene(
+        &[
+            EvaluatedItem::Geometry(EvaluatedGeometry::Path(Arc::new(cusp))),
+            stroke(0.03, [0.95, 0.8, 0.2, 1.0]),
+            EvaluatedItem::Geometry(EvaluatedGeometry::Ellipse {
+                center: Point::new(0.62, 0.38),
+                size: Vec2::new(0.37, 0.23),
+                rotation_degrees: 21.0,
+            }),
+            stroke(0.011, [0.2, 0.6, 0.95, 0.8]),
+        ],
+        CanvasSize::new(size.width, size.height),
+    ));
+    let shapes = graph.add_vector(scene);
+    let layer = |source, rotation: f32, scale: f32| GraphLayer {
+        source,
+        visual: LayerTransform {
+            position: [0.5, 0.5],
+            anchor: [0.5, 0.5],
+            scale: [scale, scale],
+            rotation_degrees: rotation,
+            opacity: 1.0,
+        },
+        blend_mode: BlendMode::Normal,
+    };
+    let output = graph
+        .add_composite_over(
+            vec![
+                layer(blurred, 0.0, 1.0),
+                layer(source, 23.0, 0.45),
+                layer(shapes, 0.0, 1.0),
+            ],
+            Color::rgba(0.05, 0.05, 0.08, 1.0),
+        )
+        .expect("composite");
+    graph.set_output(output).expect("output");
+    let mut planes = i420(size);
+    renderer
+        .render_graph_into_yuv420p(
+            &graph,
+            YuvEncoding::new(ColorMetadata::EXPORT, alpha2_media::ChromaLocation::Left),
+            &mut targets(&mut planes, size),
+        )
+        .expect("render");
+    fnv(FNV_OFFSET, &planes)
+}
+
 /// Every source of the parity project shows one card at every time: the
 /// translucent card for the video, the opaque one for the still.
 struct Cards {
@@ -265,6 +375,14 @@ pub fn cpu_graph_hash() -> u64 {
     graph_hash()
 }
 
+/// The wasm entry point for [`blur_and_stroke_hash`], a `BigInt` in JavaScript.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen(js_name = cpuBlurAndStrokeHash)]
+#[must_use]
+pub fn cpu_blur_and_stroke_hash() -> u64 {
+    blur_and_stroke_hash()
+}
+
 /// The wasm entry point for [`project_hash`], a `BigInt` in JavaScript.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen(js_name = cpuProjectHash)]
@@ -278,5 +396,18 @@ mod tests {
     #[test]
     fn the_fixed_graph_draws_its_pinned_frame() {
         assert_eq!(super::graph_hash(), super::PINNED_GRAPH_HASH);
+    }
+
+    #[test]
+    fn a_multi_pass_blur_and_a_stroke_hash_to_their_pin() {
+        assert_eq!(
+            super::blur_and_stroke_hash(),
+            super::PINNED_BLUR_AND_STROKE_HASH
+        );
+    }
+
+    #[test]
+    fn the_every_effect_project_hashes_to_its_pin() {
+        assert_eq!(super::project_hash(), super::PINNED_PROJECT_HASH);
     }
 }

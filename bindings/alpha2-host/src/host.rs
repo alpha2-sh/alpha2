@@ -121,8 +121,10 @@ pub struct Host {
     /// What the adapter choice at start leaves the GPU-resident export to
     /// say: why the renderer's adapter has no shared device, and which other
     /// adapter could encode.
-    #[cfg(all(target_os = "windows", feature = "hwencode"))]
     pub encode_adapters: crate::adapter_choice::EncodeAdapterNotes,
+    /// Which adapter the renderer is on and why, with what every adapter
+    /// considered does; `None` on a host that renders on the CPU.
+    pub adapter_choice: Option<crate::adapter_choice::AdapterChoiceReport>,
     /// The fonts text draws with, from the export request, and the captions
     /// and text generators drawn with them. Behind a lock because export
     /// stages borrow the host from several threads; only the render loop
@@ -131,10 +133,13 @@ pub struct Host {
     /// The files the export being run supplies to its extension sources:
     /// their own files, image sequences' frames, and the fonts.
     pub provider_files: crate::providers::ProviderFiles,
-    /// Luma samples in each video source's stored frames, by source ID, as
-    /// the conform of the export being run probed them; `None` for an export
-    /// not conformed here, whose decode plan probes the files itself.
-    pub conformed_video_pixels: Option<HashMap<String, u64>>,
+    /// Each video source's stored frames, by source ID, as the conform of
+    /// the export being run probed them; `None` for an export not conformed
+    /// here, whose decode plan probes the files itself.
+    pub conformed_video_frames: Option<HashMap<String, crate::assets::VideoFrameSize>>,
+    /// The largest video frames of the export being run, once its admission
+    /// read them ([`Self::admit_render`]).
+    pub largest_video_frames: std::sync::Mutex<Option<crate::assets::VideoFrameSize>>,
     /// The render cache the export being run asked for, and its snapshot's
     /// identity.
     pub render_cache: Option<(crate::render_cache::RenderCacheRequest, [u8; 32])>,
@@ -217,6 +222,8 @@ impl Host {
             runtime_effects: HashMap::new(),
             decode_policy,
             hardware_decode_unavailable: None,
+            encode_adapters: crate::adapter_choice::EncodeAdapterNotes::default(),
+            adapter_choice: None,
             #[cfg(all(target_os = "linux", feature = "hwdevice"))]
             shared_vulkan: None,
             #[cfg(all(target_os = "macos", feature = "hwdevice"))]
@@ -225,7 +232,8 @@ impl Host {
             shared_d3d12: None,
             texts: std::sync::Mutex::new(TextTextures::new()),
             provider_files: crate::providers::ProviderFiles::default(),
-            conformed_video_pixels: None,
+            conformed_video_frames: None,
+            largest_video_frames: std::sync::Mutex::new(None),
             render_cache: None,
             input_policy: crate::config::VideoInputPolicy::Auto,
             strategy: crate::config::ExportStrategy::Render,
@@ -251,10 +259,13 @@ impl Host {
             runtime_effects: HashMap::new(),
             decode_policy,
             hardware_decode_unavailable: None,
+            encode_adapters: crate::adapter_choice::EncodeAdapterNotes::default(),
+            adapter_choice: None,
             shared_metal,
             texts: std::sync::Mutex::new(TextTextures::new()),
             provider_files: crate::providers::ProviderFiles::default(),
-            conformed_video_pixels: None,
+            conformed_video_frames: None,
+            largest_video_frames: std::sync::Mutex::new(None),
             render_cache: None,
             input_policy: crate::config::VideoInputPolicy::Auto,
             strategy: crate::config::ExportStrategy::Render,
@@ -280,12 +291,13 @@ impl Host {
             runtime_effects: HashMap::new(),
             decode_policy,
             hardware_decode_unavailable: None,
-            shared_d3d12,
-            #[cfg(feature = "hwencode")]
             encode_adapters: crate::adapter_choice::EncodeAdapterNotes::default(),
+            adapter_choice: None,
+            shared_d3d12,
             texts: std::sync::Mutex::new(TextTextures::new()),
             provider_files: crate::providers::ProviderFiles::default(),
-            conformed_video_pixels: None,
+            conformed_video_frames: None,
+            largest_video_frames: std::sync::Mutex::new(None),
             render_cache: None,
             input_policy: crate::config::VideoInputPolicy::Auto,
             strategy: crate::config::ExportStrategy::Render,
@@ -311,10 +323,13 @@ impl Host {
             runtime_effects: HashMap::new(),
             decode_policy,
             hardware_decode_unavailable: None,
+            encode_adapters: crate::adapter_choice::EncodeAdapterNotes::default(),
+            adapter_choice: None,
             shared_vulkan,
             texts: std::sync::Mutex::new(TextTextures::new()),
             provider_files: crate::providers::ProviderFiles::default(),
-            conformed_video_pixels: None,
+            conformed_video_frames: None,
+            largest_video_frames: std::sync::Mutex::new(None),
             render_cache: None,
             input_policy: crate::config::VideoInputPolicy::Auto,
             strategy: crate::config::ExportStrategy::Render,
@@ -346,8 +361,7 @@ impl Host {
             decode
                 .as_ref()
                 .is_some_and(SharedMetalContext::supports_ten_bit),
-            // VideoToolbox reports what it can decode per stream, not as a device-wide codec list.
-            None,
+            decode.as_ref().map(SharedMetalContext::decode_codecs),
         );
         #[cfg(all(target_os = "windows", feature = "hwdecode"))]
         let decode = self.decode_d3d12();
@@ -487,17 +501,18 @@ impl Host {
             runtime_effects: HashMap::new(),
             decode_policy: VideoDecodePolicy::Software,
             hardware_decode_unavailable: None,
+            encode_adapters: crate::adapter_choice::EncodeAdapterNotes::default(),
+            adapter_choice: None,
             #[cfg(all(target_os = "linux", feature = "hwdevice"))]
             shared_vulkan: None,
             #[cfg(all(target_os = "macos", feature = "hwdevice"))]
             shared_metal: None,
             #[cfg(all(target_os = "windows", feature = "hwdevice"))]
             shared_d3d12: None,
-            #[cfg(all(target_os = "windows", feature = "hwencode"))]
-            encode_adapters: crate::adapter_choice::EncodeAdapterNotes::default(),
             texts: std::sync::Mutex::new(TextTextures::new()),
             provider_files: crate::providers::ProviderFiles::default(),
-            conformed_video_pixels: None,
+            conformed_video_frames: None,
+            largest_video_frames: std::sync::Mutex::new(None),
             render_cache: None,
             input_policy: crate::config::VideoInputPolicy::Auto,
             strategy: crate::config::ExportStrategy::Render,
@@ -536,6 +551,20 @@ impl Host {
             crate::renderer_backend::describe_shader_compiler(&report.gpu.shader_compiler);
         report.decode = self.decode_capabilities();
         report.encode = encode;
+        report.adapters = self
+            .adapter_choice
+            .as_ref()
+            .map_or(Value::Null, crate::adapter_choice::adapter_choice_json);
+        let process = crate::failure::process_memory_json();
+        report.memory = json!({
+            "capacity": process["capacity"],
+            "process": {
+                "residentBytes": process["residentBytes"],
+                "peakResidentBytes": process["peakResidentBytes"],
+                "footprintBytes": process["footprintBytes"],
+                "peakFootprintBytes": process["peakFootprintBytes"],
+            },
+        });
         let cpu = self.renderer.cpu().is_some();
         let ten_bit = self.renderer.intermediate_format() == wgpu::TextureFormat::Rgba16Float;
         report.features.insert(
@@ -832,7 +861,7 @@ impl Host {
             fonts: Vec::new(),
             resources: inputs.resources.clone(),
         };
-        self.conformed_video_pixels = Some(resolved.video_pixels.clone());
+        self.conformed_video_frames = Some(resolved.video_frames.clone());
         Ok(PreparedRequest {
             resolved,
             selections,
@@ -990,8 +1019,107 @@ impl Host {
         0
     }
 
+    /// Refuses a render whose least working set ([`crate::memory::LeastWorkingSet`])
+    /// is more than this machine can give the host now
+    /// ([`crate::memory::admit`]), and keeps the largest video frames it read
+    /// for the decode plan, which would otherwise open the files again.
+    pub(crate) fn admit_render(
+        &self,
+        project: &Project,
+        assets: &HashMap<String, PathBuf>,
+        size: RenderSize,
+        range: TimeRange,
+    ) -> Result<(), String> {
+        let largest =
+            max_video_source_frames(project, assets, self.conformed_video_frames.as_ref());
+        *self
+            .largest_video_frames
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(largest);
+        let (videos, _) = crate::config::visual_decode_reads(project, range);
+        // The decoder threads a session runs once fitted to its budget, decoding in software,
+        // whose pictures are in this memory.
+        let mut threads =
+            alpha2_native::codec_thread_allocation(alpha2_native::CodecThreadRequest {
+                decode_concurrency: crate::config::configured_decode_concurrency(
+                    true, false, videos,
+                ),
+                hardware_decode: false,
+                source_frame_pixels: largest.pixels,
+                software_video_encoder: true,
+                encoder_fixed_threads: None,
+            });
+        crate::export_decode::fit_session_threads(
+            &mut threads,
+            false,
+            largest.bytes,
+            self.memory.decoder_sessions.byte_budget(),
+        );
+        // What the renderer keeps in system memory: its result cache and two pictures, the CPU
+        // renderer's f32 RGBA images or rgba16float textures on Apple silicon, whose GPU shares
+        // the memory. A discrete GPU's are in its own memory.
+        let picture_bytes_per_pixel = if self.renderer.cpu().is_some() {
+            32
+        } else if self
+            .renderer
+            .adapter()
+            .backend
+            .eq_ignore_ascii_case("metal")
+        {
+            16
+        } else {
+            0
+        };
+        let renderer = if picture_bytes_per_pixel == 0 {
+            0
+        } else {
+            (u64::from(size.width) * u64::from(size.height) * picture_bytes_per_pixel)
+                .saturating_add(result_cache_budget(
+                    size,
+                    self.renderer.intermediate_format(),
+                ))
+        };
+        crate::memory::admit(
+            crate::memory::LeastWorkingSet::estimate(
+                (size.width, size.height),
+                (videos, threads.decoder_threads),
+                largest.bytes,
+                renderer,
+            ),
+            &crate::memory::machine_capacity(),
+        )
+    }
+
+    /// The families this request's texts asked for that no supplied font has,
+    /// sorted; each is named on stderr once per process.
+    pub(crate) fn unmatched_font_families(&self) -> Vec<String> {
+        static REPORTED: std::sync::Mutex<std::collections::BTreeSet<String>> =
+            std::sync::Mutex::new(std::collections::BTreeSet::new());
+        let families = self
+            .texts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .unmatched_font_families();
+        let mut reported = REPORTED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for family in &families {
+            if reported.insert(family.clone()) {
+                alpha2_os::diagnostic!(
+                    "alpha2-host: no supplied font has the family \"{family}\"; text uses the \
+                     fallback order"
+                );
+            }
+        }
+        families
+    }
+
     fn end_export(&mut self) {
-        self.conformed_video_pixels = None;
+        self.conformed_video_frames = None;
+        *self
+            .largest_video_frames
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         self.render_cache = None;
         self.input_policy = crate::config::VideoInputPolicy::Auto;
         self.strategy = crate::config::ExportStrategy::Render;
@@ -1026,8 +1154,13 @@ impl Host {
         let decoding = crate::recovery::ExportDecoding::from_env()
             .map_err(|error| self.attach_failure(HostError::invalid_input(error), None))?;
         self.failure.begin_decoding(decoding);
-        self.memory = crate::memory::MemoryPolicy::resolve(memory)
-            .map_err(|error| self.attach_failure(HostError::invalid_input(error), None))?;
+        let gpu_budget = self.renderer.gpu().and_then(Renderer::gpu_memory_budget);
+        self.memory = crate::memory::MemoryPolicy::resolve_on(
+            memory,
+            &crate::memory::machine_capacity(),
+            gpu_budget,
+        )
+        .map_err(|error| self.attach_failure(HostError::invalid_input(error), None))?;
         self.failure.note("memoryPolicy", self.memory.to_json());
         Ok(())
     }
@@ -1120,7 +1253,7 @@ impl Host {
         diagnostics.insert("gpu".to_owned(), crate::failure::gpu_json(&gpu));
         diagnostics.insert("memory".to_owned(), self.memory_json());
         diagnostics.insert("environment".to_owned(), self.environment_json());
-        let failure = crate::failure::failure_json(
+        let mut failure = crate::failure::failure_json(
             error.code,
             &error.message,
             error.evidence,
@@ -1128,6 +1261,13 @@ impl Host {
             &gpu,
             diagnostics,
         );
+        if let Some(stage) = error
+            .details
+            .as_ref()
+            .and_then(|details| details.get("stage"))
+        {
+            failure["stage"] = stage.clone();
+        }
         error.with_failure(failure)
     }
 
@@ -1178,12 +1318,13 @@ impl Host {
     }
 
     /// The build and device this host runs on.
-    fn environment_json(&self) -> Value {
+    pub(crate) fn environment_json(&self) -> Value {
         let adapter = self.renderer.adapter();
         let ffmpeg = ffmpeg_runtime_identity();
         json!({
             "hostVersion": env!("CARGO_PKG_VERSION"),
             "os": std::env::consts::OS,
+            "osVersion": alpha2_os::os_version(),
             "arch": std::env::consts::ARCH,
             "features": {
                 "hwdecode": cfg!(feature = "hwdecode"),
@@ -1201,6 +1342,10 @@ impl Host {
             "renderer": self.renderer.name(),
             "videoDecodeMode": self.decode_policy.as_str(),
             "hardwareDecodeUnavailable": self.hardware_decode_unavailable,
+            "adapterChoice": self
+                .adapter_choice
+                .as_ref()
+                .map_or(Value::Null, crate::adapter_choice::adapter_choice_json),
         })
     }
 
@@ -1457,6 +1602,33 @@ impl Host {
         Ok(())
     }
 
+    /// Creates the pipelines of the built-in effects and transitions
+    /// `snapshot` draws before its first frame. Created when a frame first
+    /// draws them, they stall the export there, up to a second on DX12 (film
+    /// burn at 4K). Their time is the export's `pipelineCompileMs`, traced
+    /// against frame 0.
+    pub(crate) fn prepare_project_pipelines(
+        &self,
+        snapshot: &EngineProject,
+        metrics: &mut ExportMetrics,
+    ) {
+        let RendererBackend::Gpu(renderer) = &self.renderer else {
+            return;
+        };
+        // What an earlier request created is not this export's.
+        renderer.take_pipeline_creations();
+        let builtins = snapshot
+            .effects()
+            .into_iter()
+            .filter(|(id, version)| self.builtin_effects.contains(&((*id).to_owned(), *version)))
+            .map(|(id, version)| alpha2_render::EffectId::new(id.to_owned(), version))
+            .collect::<Vec<_>>();
+        // Each is registered: the project was validated. A refusal would only leave its
+        // pipeline to the frame that first draws it.
+        let _ = renderer.warmup(&builtins);
+        metrics.record_pipelines(0, &renderer.take_pipeline_creations());
+    }
+
     /// Checks that every effect the project draws is registered
     /// ([`EngineProject::effects`]): those of each composition a clip shows
     /// or draws as its source, and each transition's. A composition that
@@ -1532,6 +1704,8 @@ impl Host {
         // One record of the first failure, shared by every path and worker, so a cancellation that
         // failure caused elsewhere is never what is reported.
         let pipeline_failure = PipelineFailure::default();
+        // Stops the export, with a class, before the kernel's out-of-memory killer would.
+        let watchdog = crate::memory::MemoryWatchdog::start(pipeline_failure.clone());
         let mut result = self
             .export_once(
                 project,
@@ -1552,6 +1726,7 @@ impl Host {
                 progress,
             )
             .map_err(|error| pipeline_failure.report(error))?;
+        drop(watchdog);
         #[cfg(all(target_os = "linux", feature = "hwdecode"))]
         if let Some((before, after)) = tickets_before.zip(
             self.shared_vulkan
@@ -1566,6 +1741,7 @@ impl Host {
         }
         result["resultCache"] =
             result_cache_json(&cache_before, &self.renderer.result_cache_stats());
+        result["unmatchedFontFamilies"] = json!(self.unmatched_font_families());
         result["container"] = json!(format.container.as_str());
         result["output"] = json!(written_path(&output.path));
         Ok(result)
@@ -1745,6 +1921,9 @@ impl Host {
                 }
             }
         };
+        // A render that cannot fit in what the machine has left is refused before any output
+        // opens, rather than killed by the kernel part way through.
+        self.admit_render(&project, assets, size, exporter.effective_range())?;
         // On Linux the hardware encoder is not in `codec_capabilities` (the software sinks cannot
         // feed it), so the GPU path is decided here from the device, codec, pinned encoder and
         // input policy.
@@ -1806,7 +1985,7 @@ impl Host {
                             has_audio,
                             video_rate,
                             container,
-                            audio_codec,
+                            (audio_codec, audio_encoder_name.as_deref()),
                             audio_rate,
                             loudness,
                             output,
@@ -2082,12 +2261,13 @@ impl Host {
         // The split follows the encoder that opens: a hardware encoder can fail `avcodec_open2` and
         // fall through to a software one, which needs a software encoder's share of the CPU.
         let software_split = std::cell::OnceCell::new();
-        let decide_software_split = || {
+        let decide_software_split = |fixed: Option<usize>| {
             software_split.get_or_init(|| {
-                self.export_codec_split(&project, assets, range, pipeline_enabled, true)
+                self.export_codec_split(&project, assets, range, pipeline_enabled, (true, fixed))
             })
         };
-        let software_encoder_threads = || decide_software_split().codec_threads.encoder_threads;
+        let software_encoder_threads =
+            |fixed| decide_software_split(fixed).codec_threads.encoder_threads;
         // Every candidate refused: busy, or this output is too small for each of them.
         let sink_refused = |error: alpha2_media::EncodeError| {
             if let alpha2_media::EncodeError::EncodersRefused { refusals, .. } = &error
@@ -2132,9 +2312,10 @@ impl Host {
         };
         let video_encoder_hardware = sink.video_selection().hardware_accelerated;
         let split = if video_encoder_hardware {
-            self.export_codec_split(&project, assets, range, pipeline_enabled, false)
+            self.export_codec_split(&project, assets, range, pipeline_enabled, (false, None))
         } else {
-            decide_software_split().clone()
+            // The software encoder's open decided it, with its fixed threads where it has them.
+            decide_software_split(None).clone()
         };
         let plan = ExportDecodePlan::new(split, providers);
         let hardware_decode = plan.hardware_decode;
@@ -2235,6 +2416,8 @@ impl Host {
         let lose_device_at = crate::config::configured_lose_device_at_frame();
         let total_frames = exporter.progress().total;
         let graph_before = self.renderer.gpu().map(Renderer::diagnostics);
+        // What frames sampled before this export measured is not its own.
+        let _ = self.renderer.gpu().map(Renderer::take_frame_gpu_times);
         let cpu_before = self.renderer.cpu().map(CpuRenderer::stats);
         let mut pending_media = VecDeque::<PendingMedia>::new();
         let mut pending_videos = 0_usize;
@@ -2255,6 +2438,7 @@ impl Host {
             trace: ExportTrace::from_env(started),
             ..ExportMetrics::default()
         };
+        self.prepare_project_pipelines(&snapshot, &mut metrics);
         if let Some(worker) = decode_worker.as_ref() {
             decode_scheduler.refill(&exporter, &snapshot, worker, &mut metrics)?;
         }
@@ -2343,9 +2527,9 @@ impl Host {
                         metrics.hardware_decoded_frames = metrics
                             .hardware_decoded_frames
                             .saturating_add(decoded.hardware_decoded_frames);
-                        metrics.hardware_fallbacks = metrics
+                        metrics
                             .hardware_fallbacks
-                            .merged(decoded.hardware_fallbacks);
+                            .merge(&decoded.hardware_fallbacks);
                         metrics.reverse_windows_built = metrics
                             .reverse_windows_built
                             .saturating_add(decoded.reverse_windows_built);
@@ -2611,6 +2795,10 @@ impl Host {
                                 frame_trace.submitted = trace.now();
                             }
                             frame_trace.index = index;
+                            metrics.record_pipelines(
+                                index,
+                                &self.gpu_renderer().take_pipeline_creations(),
+                            );
                             pending_media.push_back(PendingMedia::Video {
                                 index,
                                 time,
@@ -2951,17 +3139,8 @@ impl Host {
         result["videoEncoderLibrary"] =
             crate::protocol::encoder_library_json(&selection.encoder_name);
         result["videoEncoderPreferred"] = json!(video_encoder_name);
-        result["videoEncoderFallbacks"] = json!(
-            selection
-                .rejected
-                .iter()
-                .map(|fallback| json!({
-                    "encoder": fallback.encoder_name,
-                    "reason": fallback.reason.as_str(),
-                    "detail": fallback.detail,
-                }))
-                .collect::<Vec<_>>()
-        );
+        result["videoEncoderFallbacks"] =
+            crate::encoder_refusal::fallbacks_json(&selection.rejected);
         result["videoPipeline"] = json!(VideoPipeline::Readback.as_str());
         result["gpuOutputPathUnavailable"] = json!(gpu_output_unavailable);
         result["gpuOutputPathFallback"] = gpu_output_path_fallback;
@@ -3013,6 +3192,18 @@ impl Host {
             graph_before.as_ref().zip(graph_after.as_ref()),
             &pipeline_limits,
         );
+        crate::metrics::add_gpu_time_metrics(&mut result["performance"], self.renderer.gpu());
+        // A hardware encoder fed CPU frames (NVENC, VideoToolbox, a Media Foundation hardware
+        // MFT) copies each one to its device inside the driver, where nothing counts it: the
+        // frame's bytes are the estimate.
+        let estimated = selection.hardware_accelerated;
+        if estimated {
+            let frames = encode_state.completed_video;
+            result["performance"]["encoderInputCopyOperations"] = json!(frames);
+            result["performance"]["encoderInputCopyBytes"] =
+                json!(frames.saturating_mul(pipeline_limits.packed_bytes_per_frame));
+        }
+        result["performance"]["encoderInputCopyEstimated"] = json!(estimated);
         if let (Some(before), Some(after)) =
             (cpu_before, self.renderer.cpu().map(CpuRenderer::stats))
         {
@@ -3059,6 +3250,7 @@ impl Host {
                 "driver": adapter.driver,
                 "driverInfo": adapter.driver_info,
                 "shaderCompiler": adapter.shader_compiler,
+                "osVersion": alpha2_os::os_version(),
                 "ffmpegVersion": ffmpeg.version,
                 "ffmpegConfiguration": ffmpeg.configuration,
                 "ffmpegPinnedSdkRelease": ffmpeg.pinned_sdk_release,
@@ -3081,6 +3273,7 @@ impl Host {
             "shaderCompiler": crate::renderer_backend::describe_shader_compiler(
                 &diagnostics.adapter.shader_compiler
             ),
+            "osVersion": alpha2_os::os_version(),
             "ffmpegVersion": ffmpeg.version,
             "ffmpegConfiguration": ffmpeg.configuration,
             "ffmpegPinnedSdkRelease": ffmpeg.pinned_sdk_release,
@@ -3183,20 +3376,22 @@ thread_local! {
     pub(crate) static SOURCE_REPROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-/// Luma samples in the largest video source this project uses.
+/// The largest video frames this project's sources store: the most luma
+/// samples and, apart, the most bytes a decoded picture holds (a smaller
+/// 10-bit stream may hold more than a larger 8-bit one).
 ///
-/// A software decode session is sized to the frames it will actually produce,
-/// which the project model does not carry. `conformed` has them as the
-/// export's conform probed them, which saves opening every file a second
-/// time, one after another, before the first frame; without it each video
-/// container is probed here. A source with no size is skipped rather than
-/// failing here: opening its decoder later reports the real error, and a
-/// missing size only costs that session the minimum worker count.
-pub(crate) fn max_video_source_pixels(
+/// A decode session is sized to the frames it will actually produce, which
+/// the project model does not carry. `conformed` has them as the export's
+/// conform probed them, which saves opening every file a second time, one
+/// after another, before the first frame; without it each video container is
+/// probed here. A source with no size is skipped rather than failing here:
+/// opening its decoder later reports the real error, and a missing size only
+/// costs that session the minimum worker count.
+pub(crate) fn max_video_source_frames(
     project: &Project,
     assets: &HashMap<String, PathBuf>,
-    conformed: Option<&HashMap<String, u64>>,
-) -> u64 {
+    conformed: Option<&HashMap<String, crate::assets::VideoFrameSize>>,
+) -> crate::assets::VideoFrameSize {
     project
         .sources
         .iter()
@@ -3209,11 +3404,15 @@ pub(crate) fn max_video_source_pixels(
             #[cfg(test)]
             SOURCE_REPROBES.with(|count| count.set(count.get() + 1));
             let probed = alpha2_native::probe(path).ok()?;
-            let (width, height) = probed.selected_video_stream()?.dimensions?;
-            Some(u64::from(width).saturating_mul(u64::from(height)))
+            crate::assets::VideoFrameSize::of(probed.selected_video_stream()?)
         })
-        .max()
-        .unwrap_or(0)
+        .fold(
+            crate::assets::VideoFrameSize::default(),
+            |largest, frames| crate::assets::VideoFrameSize {
+                pixels: largest.pixels.max(frames.pixels),
+                bytes: largest.bytes.max(frames.bytes),
+            },
+        )
 }
 
 /// Why an export asked to normalize its loudness has nothing to normalize:

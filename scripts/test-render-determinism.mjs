@@ -1,9 +1,9 @@
 // The CPU renderer must draw the same bytes everywhere: renders fixed frames natively and as wasm
 // under Node and compares the hashes. The fixed graph is the renderer's own determinism test (its
-// native hash is pinned in crates/alpha2-render/src/tests/cpu_determinism.rs); the parity project
-// (every built-in effect and transition) is drawn natively, by the same crate built for wasm32,
-// and by the packaged browser binding's CPU renderer (`createCpu`) as a page exports it. Run
-// `npm run build` first for the packaged binding.
+// native hash is pinned in crates/alpha2-render/src/tests/cpu_determinism.rs); the blur and stroke
+// graph and the parity project (every built-in effect and transition) are pinned in
+// tests/render_determinism. The parity project is also drawn by the packaged browser binding's CPU
+// renderer (`createCpu`) as a page exports it. Run `npm run build` first for the packaged binding.
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -23,7 +23,7 @@ const cargo = (args) =>
     stdio: ["ignore", "pipe", "inherit"],
   });
 
-const [nativeGraph, nativeProject, times] = cargo([
+const [nativeGraph, nativeProject, nativeBlurAndStroke, times] = cargo([
   "run",
   "--quiet",
   "--release",
@@ -92,6 +92,65 @@ assert.equal(
 );
 console.log(
   `verified the parity project's frames hash to ${nativeProject} natively and as wasm`,
+);
+const wasmBlurAndStroke = hex(determinism.cpuBlurAndStrokeHash());
+assert.equal(
+  wasmBlurAndStroke,
+  nativeBlurAndStroke,
+  `wasm blur and stroke graph ${wasmBlurAndStroke} != native`,
+);
+console.log(
+  `verified the blur and stroke graph hashes to ${nativeBlurAndStroke} natively and as wasm`,
+);
+
+// The extension rasters, each within its tolerance of its linux-x64 reference as wasm too.
+const rasterGlue = await mkdtemp(
+  join(tmpdir(), "alpha2-extension-raster-pins-"),
+);
+let drifts;
+try {
+  execFileSync(
+    "wasm-bindgen",
+    [
+      "--target",
+      "web",
+      "--out-dir",
+      rasterGlue,
+      join(
+        cargoTargetDirectory(),
+        "wasm32-unknown-unknown",
+        "release",
+        "alpha2_extension_raster_pins.wasm",
+      ),
+    ],
+    { cwd: root, stdio: ["ignore", "ignore", "inherit"] },
+  );
+  const pins = await import(
+    pathToFileURL(join(rasterGlue, "alpha2_extension_raster_pins.js")).href
+  );
+  await pins.default({
+    module_or_path: await readFile(
+      join(rasterGlue, "alpha2_extension_raster_pins_bg.wasm"),
+    ),
+  });
+  drifts = JSON.parse(pins.extensionRasterDrifts());
+} finally {
+  await rm(rasterGlue, { recursive: true, force: true });
+}
+for (const { name, max, differing } of drifts)
+  console.log(
+    `extension raster ${name} as wasm: ${differing} samples differ, by at most ${max}`,
+  );
+const far = drifts
+  .filter(({ max, tolerance }) => max > tolerance)
+  .map(({ name }) => name);
+assert.deepEqual(
+  far,
+  [],
+  "extension rasters further from their references as wasm than allowed",
+);
+console.log(
+  `verified ${drifts.length} extension rasters within their tolerance of their references as wasm`,
 );
 
 // The packaged binding, as a page without a GPU exports the same project.

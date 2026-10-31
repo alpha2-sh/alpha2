@@ -236,8 +236,8 @@ missing_venv() {
 }
 
 phase_e2e() {
-  # The host adapter where the machine names one: the GPU-resident path needs the GPU that holds
-  # the hardware encoder, which need not be the one the host renders on by default.
+  # The host adapter where the machine names one, stated even where it is the host's default:
+  # the GPU-resident path needs the GPU that holds the hardware encoder.
   local adapter=() host_adapter
   host_adapter=$(machine_value adapters.host)
   [ -n "$host_adapter" ] && adapter=(ALPHA2_GPU_ADAPTER="$host_adapter")

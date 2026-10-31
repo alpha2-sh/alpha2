@@ -109,6 +109,11 @@ pub enum ConformIssue {
     /// read as [`ColorMetadata::UNDECLARED`] (BT.709 limited-range SDR):
     /// declare the source's `color_metadata` if that is wrong.
     UndeclaredColor,
+    /// The original carries alpha the host does not decode, so its pictures are drawn opaque.
+    AlphaDropped {
+        /// Why, in words.
+        reason: String,
+    },
 }
 
 /// Checks every host-supplied source a render of `project` reads against
@@ -119,7 +124,8 @@ pub enum ConformIssue {
 /// original that differs from the project's fingerprint; a preview only
 /// warns about the latter. An HDR source in a project that refuses HDR
 /// blocks everything, as its render would fail. A video whose color neither
-/// the project nor its media declares is reported, blocking nothing.
+/// the project nor its media declares is reported, blocking nothing, as is an
+/// original whose alpha the host does not decode.
 #[must_use]
 pub fn conform(project: &Project, catalog: &AssetCatalog, purpose: MediaPurpose) -> ConformReport {
     // One lookup per source, so a catalog listing every source does not make this quadratic. The
@@ -242,12 +248,25 @@ fn conform_source(
             blocking: false,
         });
     }
+    issues.extend(alpha_dropped(entry, &selection));
     SourceConform {
         source_id: source.id.clone(),
         selection,
         usable_proxy,
         issues,
     }
+}
+
+/// The warning that the original's alpha is not decoded, when the purpose reads the original
+/// and the host decodes it without its alpha.
+fn alpha_dropped(entry: &AssetEntry, selection: &Selection) -> Option<ConformEntry> {
+    let reason = entry.alpha_dropped.as_ref()?;
+    (*selection == Selection::Original).then(|| ConformEntry {
+        issue: ConformIssue::AlphaDropped {
+            reason: reason.clone(),
+        },
+        blocking: false,
+    })
 }
 
 /// Whether the source declares HDR, or the evidence of what a render reads

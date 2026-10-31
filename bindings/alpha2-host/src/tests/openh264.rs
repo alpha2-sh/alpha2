@@ -179,3 +179,26 @@ fn an_openh264_export_reports_its_encoder_and_repeats_byte_for_byte() {
     let (_, second, _) = openh264_export(&directory, "second.mp4");
     assert_eq!(first, second, "two runs of one export differ");
 }
+
+/// `OpenH264` runs one thread per slice, and the export's codec split
+/// reserves exactly that for it: the encoder threads the result reports are
+/// the ones that ran, and decode keeps the rest.
+#[test]
+fn encoder_threads_report_what_the_encoder_runs() {
+    if alpha2_native::openh264_status().library().is_none() {
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::Openh264,
+            "OpenH264 is not installed: the OpenH264 export did not run"
+        );
+        return;
+    }
+    let _gpu = gpu_test_lock();
+    let directory = scratch_directory("openh264-threads");
+    let (result, _, _) = openh264_export(&directory, "threads.mp4");
+    assert_eq!(result["videoThreadCount"], json!(2), "720 rows: two slices");
+    assert_eq!(
+        result["performance"]["encoderThreads"], result["videoThreadCount"],
+        "{}",
+        result["performance"]
+    );
+}

@@ -178,6 +178,12 @@ pub struct HardwareEncodeCapability {
     /// Surfaces the encoder itself still holds after it has accepted them,
     /// until it has consumed them. Also allocated on top of the host's.
     pub codec_retained_surfaces: usize,
+    /// The encode channel depth an export runs at unless one is pinned
+    /// (`ALPHA2_ENCODE_QUEUE_DEPTH`): the smallest depth whose steady
+    /// milliseconds per frame were within 3 % of the best depth's on this
+    /// backend, so no surface is reserved for a queue that does not pay.
+    /// Each backend's constant names its measurement.
+    pub default_channel_depth: usize,
 }
 
 impl HardwareEncodeCapability {
@@ -366,7 +372,8 @@ impl HardwareEncodeDevice {
     /// What this device's hardware encoder accepts for `codec`.
     ///
     /// A device can encode one codec and not another, so each export asks
-    /// about its own. Linux and macOS have one hardware encoder, for H.264.
+    /// about its own. Windows and Linux ask the device per codec; macOS has
+    /// one hardware encoder, for H.264.
     ///
     /// # Errors
     /// Says why this device has no usable hardware encoder for `codec`.
@@ -377,7 +384,9 @@ impl HardwareEncodeDevice {
     pub fn capability(&self, codec: NativeVideoCodec) -> Result<HardwareEncodeCapability, String> {
         #[cfg(target_os = "windows")]
         return d3d12va::capability(&self.d3d12, codec);
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        #[cfg(target_os = "linux")]
+        return vulkan::capability(&self.vulkan, codec);
+        #[cfg(target_os = "macos")]
         {
             let capability = self.preferred_capability()?;
             if capability.codec == codec {
@@ -395,8 +404,9 @@ impl HardwareEncodeDevice {
         Err("this platform has no hardware encode backend yet".to_owned())
     }
 
-    /// The capability a report leads with: on Windows the first of H.264,
-    /// HEVC and AV1 this device encodes, elsewhere the one encoder there is.
+    /// The capability a report leads with: on Windows and Linux the first of
+    /// H.264, HEVC and AV1 this device encodes, on macOS the one encoder
+    /// there is.
     ///
     /// # Errors
     /// Says why this device has no usable hardware encoder at all.
@@ -406,7 +416,7 @@ impl HardwareEncodeDevice {
     )]
     pub fn preferred_capability(&self) -> Result<HardwareEncodeCapability, String> {
         #[cfg(target_os = "linux")]
-        return vulkan::capability(&self.vulkan);
+        return vulkan::preferred_capability(&self.vulkan);
         #[cfg(target_os = "macos")]
         return videotoolbox::capability(&self.metal);
         #[cfg(target_os = "windows")]
@@ -431,7 +441,7 @@ impl HardwareEncodeDevice {
         request: &HardwareEncodeRequest<'_>,
     ) -> Result<(HardwareEncodeSession, HardwareEncodeInput), HardwareEncodeOpenError> {
         let generation = NEXT_POOL_GENERATION.fetch_add(1, Ordering::Relaxed);
-        // These backends encode one codec; the D3D12VA one checks the codec it is asked for itself.
+        // The D3D12VA backend checks the codec it is asked for itself.
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         self.capability(request.codec)
             .map_err(HardwareEncodeOpenError::Refused)?;

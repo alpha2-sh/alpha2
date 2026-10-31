@@ -1392,6 +1392,64 @@ fn a_cli_export_resolves_its_container_as_the_protocol_does() {
     }
 }
 
+/// Every GPU host says which adapter it renders on, under which policy and
+/// why, with what each adapter it considered does; a CPU host made no choice.
+#[test]
+fn capabilities_report_the_adapter_choice() {
+    let _gpu = gpu_test_lock();
+    let host = create_host(VideoDecodePolicy::Software).expect("host");
+    let report = host.capability_report();
+    let adapters = &report.adapters;
+    if host.renderer.cpu().is_some() {
+        assert_eq!(*adapters, Value::Null);
+        return;
+    }
+    assert_eq!(
+        adapters["policy"],
+        json!(crate::adapter_choice::AdapterPolicy::from_env().report_name())
+    );
+    assert!(
+        matches!(
+            adapters["reason"].as_str(),
+            Some(
+                "most-gpu-encoders"
+                    | "decodes"
+                    | "high-performance-order"
+                    | "performance-policy"
+                    | "pinned"
+                    | "only-adapter"
+                    | "no-shared-device"
+            )
+        ),
+        "{adapters}"
+    );
+    let explanation = adapters["explanation"].as_str().expect("an explanation");
+    assert!(explanation.contains(&report.gpu.adapter), "{adapters}");
+    let candidates = adapters["candidates"].as_array().expect("candidates");
+    match adapters["chosen"].as_u64() {
+        // The chosen index names the adapter the renderer is on.
+        Some(index) => {
+            let chosen = candidates
+                .iter()
+                .find(|candidate| candidate["index"].as_u64() == Some(index))
+                .expect("the chosen adapter is a candidate");
+            assert_eq!(chosen["name"], json!(report.gpu.adapter), "{adapters}");
+            assert_eq!(chosen["renders"], json!(true), "{adapters}");
+        }
+        None => assert_eq!(adapters["reason"], json!("no-shared-device"), "{adapters}"),
+    }
+    for candidate in candidates {
+        for key in [
+            "index", "name", "backend", "luid", "software", "renders", "decodes",
+        ] {
+            assert!(candidate.get(key).is_some(), "{key} in {candidate}");
+        }
+        assert!(candidate["gpuEncodes"].is_array(), "{candidate}");
+    }
+    let environment = host.environment_json();
+    assert_eq!(environment["adapterChoice"], *adapters);
+}
+
 #[test]
 fn capabilities_are_the_shared_capability_report() {
     let _gpu = gpu_test_lock();
@@ -1404,7 +1462,7 @@ fn capabilities_are_the_shared_capability_report() {
     let result = host.handle(request, &mut |_| Ok(())).expect("capabilities");
     let report = &result["capabilities"];
     assert_eq!(report["schema"], json!("alpha2-capabilities"));
-    assert_eq!(report["version"], json!(1));
+    assert_eq!(report["version"], json!(2));
     assert_eq!(report["runtime"], json!("native"));
     assert!(matches!(report["gpu"]["tier"].as_str(), Some("a" | "b")));
     assert_eq!(report["color"]["workingSpace"], json!("linear_bt709_sdr"));

@@ -29,6 +29,8 @@ png.workspace = true
 rustybuzz = "0.20.1"
 unicode-bidi = "0.3.18"
 unicode-linebreak = "0.1.5"
+# NFC, so a family name matches whatever normalization the project or the font spelled it in.
+unicode-normalization = "0.1.25"
 unicode-script = "0.5.8"
 unicode-segmentation = "1.13.3"
 

@@ -1138,6 +1138,8 @@ jobs:
       - run: cargo test -p alpha2-audio -p alpha2-audio-determinism -p alpha2-eval -p alpha2-text --no-fail-fast
       - name: CPU renderer frames (no GPU needed)
         run: cargo test -p alpha2-render --lib cpu_determinism --no-fail-fast
+      - name: CPU renderer pins and extension rasters
+        run: cargo test -p alpha2-render-determinism -p alpha2-extension-raster-pins --no-fail-fast
 
   security:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',security,') }}

@@ -116,10 +116,10 @@ fn posterize_matches() {
     check(
         "posterize",
         &[
-            (Vec::new(), Tolerance::Unstable),
-            (vec![("levels", float(2.0))], Tolerance::Unstable),
-            (vec![("levels", float(4.5))], Tolerance::Unstable),
-            (vec![("levels", float(64.0))], Tolerance::Unstable),
+            (Vec::new(), Tolerance::Steps),
+            (vec![("levels", float(2.0))], Tolerance::Steps),
+            (vec![("levels", float(4.5))], Tolerance::Steps),
+            (vec![("levels", float(64.0))], Tolerance::Steps),
         ],
     );
 }
@@ -288,7 +288,8 @@ fn color_isolate_matches() {
             (Vec::new(), Tolerance::Edges),
             (isolate(240.0, 60.0, 40.0, 0.5), Tolerance::Edges),
             (isolate(10.0, 90.0, 180.0, 1.0), Tolerance::Edges),
-            (isolate(0.0, 20.0, 0.0, 1.0), Tolerance::Unstable),
+            // No softness: a hue on the edge of the range is kept or turned gray.
+            (isolate(0.0, 20.0, 0.0, 1.0), Tolerance::Steps),
         ],
     );
 }

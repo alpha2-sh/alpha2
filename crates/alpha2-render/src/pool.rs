@@ -483,10 +483,29 @@ impl UploadTexturePool {
     /// Sets the idle byte budget, so a test can reach it with small textures.
     #[cfg(test)]
     pub(crate) fn set_budget_bytes(&self, bytes: u64) {
-        self.state
+        self.set_budget(bytes);
+    }
+
+    /// Sets the idle byte budget; idle textures past it are destroyed.
+    pub(crate) fn set_budget(&self, budget_bytes: u64) {
+        let mut state = self
+            .state
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .budget_bytes = bytes;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.budget_bytes = budget_bytes;
+        let mut retired = Vec::new();
+        while state.available_bytes > state.budget_bytes {
+            let Some(idle) = state.available.pop_front() else {
+                state.available_bytes = 0;
+                break;
+            };
+            state.available_bytes = state.available_bytes.saturating_sub(idle.key.byte_len());
+            state.discarded = state.discarded.saturating_add(1);
+            retired.push(idle);
+        }
+        drop(state);
+        self.retirement
+            .retire(retired.into_iter().map(UploadTextureEntry::retired));
     }
 
     fn release(&self, entry: UploadTextureEntry) {

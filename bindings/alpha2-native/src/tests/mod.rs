@@ -63,6 +63,7 @@ pub(crate) fn encoder_capability(name: &str) -> Option<alpha2_test_support::Capa
     }
 }
 
+mod alpha;
 mod audio_io;
 mod containers;
 mod copies;

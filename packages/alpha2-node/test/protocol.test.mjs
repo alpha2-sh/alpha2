@@ -874,6 +874,61 @@ createInterface({ input: process.stdin }).once("line", (line) => {
   );
 });
 
+test(
+  "a host the kernel's out-of-memory killer ended is HOST_OOM_KILLED, class OUT_OF_MEMORY",
+  { skip: process.platform === "win32" && "Windows has no SIGKILL" },
+  async () => {
+    const root = await scratch("alpha2-node-oom-");
+    const events = join(root, "memory.events");
+    await writeFile(
+      events,
+      "low 0\nhigh 0\nmax 3\noom 1\noom_kill 1\noom_group_kill 0\n",
+    );
+    // The fake host raises the cgroup's count, as the kernel does when it kills, when asked to.
+    const executable = await fakeHost(
+      root,
+      `import { createInterface } from "node:readline";
+import { readFileSync, writeFileSync } from "node:fs";
+createInterface({ input: process.stdin }).once("line", (line) => {
+  const request = JSON.parse(line);
+  process.stdout.write(JSON.stringify({ protocolVersion: 1, type: "progress", requestId: request.requestId, phase: "frames", completed: 3, total: 9 }) + "\\n", () => {
+    if (process.env.RAISE_OOM_KILL === "1") {
+      const path = process.env.ALPHA2_TEST_MEMORY_EVENTS;
+      writeFileSync(path, readFileSync(path, "utf8").replace("oom_kill 1", "oom_kill 2"));
+    }
+    process.kill(process.pid, "SIGKILL");
+  });
+});
+`,
+    );
+    const client = new Alpha2NodeClient({ hostPath: executable });
+    process.env.ALPHA2_TEST_MEMORY_EVENTS = events;
+    try {
+      process.env.RAISE_OOM_KILL = "1";
+      await assert.rejects(
+        client.exportProject(exportRequest(join(root, "output.mp4"))),
+        (error) => {
+          assert.equal(error.code, "HOST_OOM_KILLED");
+          assert.equal(error.signal, "SIGKILL");
+          assert.equal(error.failure.code, "OUT_OF_MEMORY");
+          assert.equal(error.failure.resource, "cpu");
+          assert.equal(error.failure.origin, "node");
+          return true;
+        },
+      );
+      // The same death without a rise claims no cause.
+      process.env.RAISE_OOM_KILL = "0";
+      await assert.rejects(
+        client.exportProject(exportRequest(join(root, "again.mp4"))),
+        { code: "HOST_EXITED" },
+      );
+    } finally {
+      delete process.env.ALPHA2_TEST_MEMORY_EVENTS;
+      delete process.env.RAISE_OOM_KILL;
+    }
+  },
+);
+
 test("a host the loader refuses to start is HOST_LOAD_FAILED, which no retry mends", async () => {
   // glibc's ld.so writes this and exits 127 when a library the host links (FFmpeg's) is missing or
   // of another major, before main and before the host can answer.

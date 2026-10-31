@@ -1,3 +1,5 @@
+import { PEAK_CODES } from "../../parity-tolerance.mjs";
+
 // Renders the parity project's one frame with the packaged engine and compares it, in I420 code
 // space, with the golden converted as the GPU pass converts it; the native export's frame, as the
 // media CLI decodes it, is compared with the golden itself.
@@ -5,6 +7,7 @@ export function parityPage() {
   return `<!doctype html>
 <html><head><title>pending</title></head><body><script type="module">
 import init, { WebEffectRegistry } from "/packages/alpha2/wasm/alpha2_wasm.js";
+const PEAK_CODES = ${PEAK_CODES};
 const done = (value) => { document.title = encodeURIComponent(JSON.stringify(value)); };
 try {
   document.title = "stage-init";
@@ -63,12 +66,14 @@ function difference(actual, expected) {
   }
   let max = 0;
   let sum = 0;
+  let outliers = 0;
   for (let index = 0; index < actual.length; index += 1) {
     const delta = Math.abs(actual[index] - expected[index]);
     max = Math.max(max, delta);
     sum += delta;
+    if (delta > PEAK_CODES) outliers += 1;
   }
-  return { max, mean: sum / actual.length };
+  return { max, mean: sum / actual.length, outliers, samples: actual.length };
 }
 function planeDifferences(actual, expected, width, height) {
   const luma = width * height;

@@ -259,8 +259,17 @@ fn capability_with(rate_control_modes: Vec<&'static str>) -> HardwareEncodeCapab
         plane_ring_slots: 0,
         handoff_retained_surfaces: 0,
         codec_retained_surfaces: CODEC_RETAINED_SURFACES,
+        default_channel_depth: DEFAULT_CHANNEL_DEPTH,
     }
 }
+
+/// `h264_videotoolbox` encodes as fast at depth 0 as at any deeper one: on an
+/// M4 (the perf project P1, 240 frames, three alternating rounds) depths 0,
+/// 1, 2, 4 and 8 ran 4.353, 4.351, 4.354, 4.356 and 4.358 ms a frame at 1080p
+/// and 16.311, 16.311, 16.310, 16.310 and 16.316 at 4K: the encoder paces the
+/// export, and each step deeper only holds another surface (lease peaks 2
+/// to 10).
+const DEFAULT_CHANNEL_DEPTH: usize = 0;
 
 /// Surfaces `h264_videotoolbox` holds after `avcodec_send_frame` has returned,
 /// until its output callback consumes them. Measured on an M4: the pool
@@ -404,7 +413,7 @@ fn open_encoder(
     let (context, applied, quantizer_refused) =
         match crate::rate_control::quantizer_request(ENCODER, rate_control) {
             Some(Ok(quantized)) => match open(Some(&quantized)) {
-                Ok(context) => (context, crate::AppliedRateControl::Quantizer, None),
+                Ok(context) => (context, crate::AppliedRateControl::Quality, None),
                 Err(error) => (
                     open(None)?,
                     crate::AppliedRateControl::Bitrate,
@@ -653,10 +662,11 @@ impl VideoToolboxEncodeSession {
                 )));
             }
         }
+        let mark = alpha2_ffmpeg_bridge::log_mark();
         timed(&mut self.stages.video_send_frame, || {
             self.context.send_frame(Some(&frame.frame))
         })
-        .map_err(encode_adapter_error)?;
+        .map_err(|error| with_encoder_log(encode_adapter_error(error), mark))?;
         self.drain()
     }
 
@@ -689,17 +699,38 @@ impl VideoToolboxEncodeSession {
 
     fn drain(&mut self) -> Result<(), EncodeError> {
         loop {
+            let mark = alpha2_ffmpeg_bridge::log_mark();
             let received = timed(&mut self.stages.video_receive_packet, || {
                 self.context.receive_packet()
             });
             match received {
-                Ok(mut packet) => self.muxer.write_video(&mut packet, self.time_base)?,
+                Ok(mut packet) => {
+                    crate::vt_sei::strip_vt_user_data_sei(&mut packet)?;
+                    self.muxer.write_video(&mut packet, self.time_base)?;
+                }
                 Err(RsmpegError::EncoderDrainError | RsmpegError::EncoderFlushedError) => {
                     return self.muxer.write_ready_audio(false, &mut self.stages);
                 }
-                Err(error) => return Err(encode_adapter_error(error)),
+                Err(error) => return Err(with_encoder_log(encode_adapter_error(error), mark)),
             }
         }
+    }
+}
+
+/// `error` with the lines `h264_videotoolbox` logged since `mark` appended, so
+/// the `OSStatus` its session failed with reaches the typed error.
+fn with_encoder_log(error: EncodeError, mark: alpha2_ffmpeg_bridge::LogMark) -> EncodeError {
+    let detail =
+        alpha2_ffmpeg_bridge::log_detail(&alpha2_ffmpeg_bridge::log_since(mark, &[ENCODER]));
+    match error {
+        EncodeError::Adapter(message) if !detail.is_empty() => {
+            EncodeError::Adapter(format!("{message}{detail}"))
+        }
+        EncodeError::Gpu { fault, message } if !detail.is_empty() => EncodeError::Gpu {
+            fault,
+            message: format!("{message}{detail}"),
+        },
+        other => other,
     }
 }
 

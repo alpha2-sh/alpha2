@@ -641,3 +641,31 @@ fn the_presentation_slack_reads_no_more_than_16_mib_of_first_packets() {
     drop(decoder);
     let _ = fs::remove_file(&path);
 }
+
+/// The probe reports what one decoded picture holds in the decoder's own
+/// format: 1.5 bytes a pixel for 8-bit 4:2:0, twice that at 10 bits, which a
+/// decoder session's memory estimate counts.
+#[test]
+fn the_probe_reports_decoded_frame_bytes() {
+    for (name, bytes_per_two_pixels) in [
+        ("h264-1080p.mp4", 3),
+        ("h264-high10.mp4", 6),
+        ("hevc-main10-padded.mp4", 6),
+    ] {
+        let probed = probe(corpus(name)).expect("probe");
+        let video = probed.selected_video_stream().expect("video");
+        let (width, height) = video.dimensions.expect("size");
+        assert_eq!(
+            video.frame_bytes,
+            Some(u64::from(width) * u64::from(height) * bytes_per_two_pixels / 2),
+            "{name}"
+        );
+    }
+    let audio = probe(corpus("audio-adts.aac")).expect("probe");
+    assert!(
+        audio
+            .streams
+            .iter()
+            .all(|stream| stream.frame_bytes.is_none())
+    );
+}

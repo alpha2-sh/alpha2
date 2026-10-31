@@ -80,7 +80,7 @@ impl Host {
         let last = exporters[order[order.len() - 1]].effective_range().end();
         let range = TimeRange::new(first, last).map_err(error_message)?;
         let plan = ExportDecodePlan::new(
-            self.export_codec_split(&project, assets, range, true, false),
+            self.export_codec_split(&project, assets, range, true, (false, None)),
             providers,
         );
         let mut worker = DecodeWorker::spawn(
@@ -197,6 +197,7 @@ impl Host {
         let mut result = self.response_metadata(started.elapsed().as_secs_f64() * 1_000.0);
         result["stills"] = Value::Array(answers);
         result["timings"] = timings.to_json();
+        result["unmatchedFontFamilies"] = json!(self.unmatched_font_families());
         Ok(result)
     }
 }

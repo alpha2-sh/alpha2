@@ -6,11 +6,33 @@
 
 use std::sync::Arc;
 
+use super::device_precision::device_precision;
 use super::{adapter_gpu, gpu_test_lock};
 use crate::{
     CpuImage, CpuRenderer, CpuSource, GraphError, RenderControls, RenderGraph, RenderNodeId,
     RenderSize, Renderer, SourceView, UploadTexture,
 };
+
+/// [`Parity::class`] widens on a device whose sRGB `pow` is off by more than
+/// this many codes: a hundred times the least precise one measured (the
+/// table in `device_precision.rs`).
+const POW_WIDEN: f64 = 0.01;
+
+/// [`Parity::class`] widens on a device that filters 8-bit pictures with
+/// fewer bits of weight than this: the M4 (5) and the software rasterizers
+/// (1), whose every sampled picture is off, filtered or not.
+const COARSE_FILTER_BITS: u32 = 6;
+
+/// [`Parity::filtered`] widens on a device that filters 8-bit pictures with
+/// fewer bits of weight than this: NVIDIA (8) and WARP (7), not RADV or the
+/// Iris Xe (9).
+const WEIGHT_WIDEN: u32 = 9;
+
+/// No sample of an [`Tolerance::Unstable`] comparison may differ by more
+/// than this many codes: the smallest power of two over the largest
+/// difference measured on hardware (a halftone cell edge, 34 codes on RADV,
+/// the Iris Xe and the M4).
+const UNSTABLE_CAP: usize = 64;
 
 /// How far the CPU picture may be from the GPU's, in 8-bit codes.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -22,14 +44,28 @@ pub(crate) enum Tolerance {
     /// At most four codes; at most four samples up to eight: antialiased
     /// edges, cascaded blurs, rotations.
     Edges,
-    /// At most four codes but for 0.2 % of the samples: math with a
-    /// discontinuity a rounding error can cross (a gray test, a division
-    /// by what is left of white), where two GPUs disagree as much.
+    /// At most four codes but for 0.2 % of the samples, and those by at most
+    /// [`UNSTABLE_CAP`]: math with a discontinuity a rounding error can cross
+    /// (a gray test, a division by what is left of white), where two GPUs
+    /// disagree as much.
     Unstable,
+    /// As [`Tolerance::Unstable`], by any amount: a step function (posterize
+    /// levels, a hard hue edge), where a sample on a step lands on either
+    /// side and the step can be most of the range.
+    Steps,
 }
 
-impl Tolerance {
-    fn check(self, gpu: &[u8], cpu: &[u8]) -> Result<(), String> {
+/// How far apart two pictures are, sample by sample.
+struct Differences {
+    /// Samples by their difference in codes.
+    histogram: [usize; 256],
+    /// The largest difference and the first sample that has it.
+    worst: (u8, usize),
+    samples: usize,
+}
+
+impl Differences {
+    fn of(gpu: &[u8], cpu: &[u8]) -> Self {
         assert_eq!(gpu.len(), cpu.len());
         let mut histogram = [0_usize; 256];
         let mut worst = (0_u8, 0_usize);
@@ -40,18 +76,39 @@ impl Tolerance {
                 worst = (difference, index);
             }
         }
-        let samples = gpu.len();
-        let over = |limit: usize| histogram[limit + 1..].iter().sum::<usize>();
-        let allowed = match self {
+        Self {
+            histogram,
+            worst,
+            samples: gpu.len(),
+        }
+    }
+
+    /// Samples more than `limit` codes apart.
+    fn over(&self, limit: usize) -> usize {
+        self.histogram[limit + 1..].iter().sum()
+    }
+}
+
+impl Tolerance {
+    fn allows(self, differences: &Differences) -> bool {
+        let over = |limit| differences.over(limit);
+        match self {
             Self::Exact => over(0) == 0,
-            Self::Close => over(2) == 0 && over(1) <= samples.div_ceil(10_000),
+            Self::Close => over(2) == 0 && over(1) <= differences.samples.div_ceil(10_000),
             Self::Edges => over(8) == 0 && over(4) <= 4,
-            Self::Unstable => over(4) <= samples.div_ceil(500),
-        };
-        if allowed {
+            Self::Unstable => {
+                over(4) <= differences.samples.div_ceil(500) && over(UNSTABLE_CAP) == 0
+            }
+            Self::Steps => over(4) <= differences.samples.div_ceil(500),
+        }
+    }
+
+    fn check(self, gpu: &[u8], cpu: &[u8], differences: &Differences) -> Result<(), String> {
+        if self.allows(differences) {
             return Ok(());
         }
-        let (difference, index) = worst;
+        let (difference, index) = differences.worst;
+        let histogram = &differences.histogram;
         Err(format!(
             "{self:?}: worst difference {difference} at pixel {} channel {} (gpu {} cpu {}); \
              samples differing by 1: {}, 2: {}, 3-4: {}, more: {}",
@@ -62,7 +119,7 @@ impl Tolerance {
             histogram[1],
             histogram[2],
             histogram[3] + histogram[4],
-            over(4),
+            differences.over(4),
         ))
     }
 }
@@ -104,6 +161,8 @@ impl Parity {
     /// applies, which a Tier-B device (GL) caps at 16.
     pub(crate) fn new() -> Self {
         let lock = gpu_test_lock();
+        let precision = device_precision();
+        eprintln!("parity classes: {precision:?}");
         let mut gpu = Renderer::new(adapter_gpu());
         gpu.register_builtins().expect("built-ins register");
         let cpu = CpuRenderer::new(3);
@@ -116,33 +175,34 @@ impl Parity {
         }
     }
 
-    /// `tolerance` against this GPU. A software rasterizer (lavapipe in CI)
-    /// computes `pow` with less precision than the hardware the classes
-    /// were set on, and lands up to a few codes from it near black in linear
-    /// light: there the classes widen one step. Metal does the same: wgpu
-    /// compiles its shaders with Metal's default fast math, whose `pow` and
-    /// division are approximate.
+    /// `tolerance` against this GPU. A device that filters 8-bit pictures
+    /// coarsely (at half precision, or rounding the result to 8 bits) is a
+    /// code or two off in every picture it samples, filtered or not, and
+    /// crosses a discontinuity more often; one whose `pow` is imprecise lands
+    /// a few codes off near black in linear light. There the class widens one
+    /// step.
+    #[allow(clippy::unused_self)] // The precision measured is that of this parity's GPU device.
     pub(crate) fn class(&self, tolerance: Tolerance) -> Tolerance {
-        let capabilities = self.gpu.gpu_capabilities();
-        if tolerance == Tolerance::Close
-            && (capabilities.software_rasterizer || capabilities.backend == "Metal")
+        let precision = device_precision();
+        if precision.filter_weight_bits >= COARSE_FILTER_BITS
+            && precision.pow_error_codes <= POW_WIDEN
         {
-            Tolerance::Edges
-        } else {
-            tolerance
+            return tolerance;
+        }
+        match tolerance {
+            Tolerance::Close => Tolerance::Edges,
+            Tolerance::Unstable => Tolerance::Steps,
+            other => other,
         }
     }
 
     /// `tolerance` for a pass that samples a source texture between texels
-    /// with the hardware filter. NVIDIA filters with fewer bits of weight
-    /// (and of 16-bit normalized texels) than RADV, lavapipe or the CPU, and
-    /// a noisy test picture turns that into a code or two after the YCbCr
-    /// matrix; there the class widens one step.
+    /// with the hardware filter. A device that filters with fewer bits of
+    /// weight than RADV turns a noisy test picture into a code or two after
+    /// the YCbCr matrix; there the class widens one step.
     pub(crate) fn filtered(&self, tolerance: Tolerance) -> Tolerance {
         let tolerance = self.class(tolerance);
-        if tolerance == Tolerance::Close
-            && self.gpu.gpu_capabilities().adapter_name.contains("NVIDIA")
-        {
+        if tolerance == Tolerance::Close && device_precision().filter_weight_bits < WEIGHT_WIDEN {
             Tolerance::Edges
         } else {
             tolerance
@@ -183,6 +243,62 @@ impl Parity {
         let cpu_pixels = image.read_rgba8();
         assert_close(name, size, self.class(tolerance), &gpu_pixels, &cpu_pixels);
     }
+
+    /// Draws the graph `build` builds where the two renderers are not
+    /// expected to agree on color (an effect's input past the precision its
+    /// shader computes in): the GPU's picture, drawn twice from nothing
+    /// cached, must be the same bytes. With `keeps_alpha` (the effect passes
+    /// its source's alpha through), the CPU's alpha must also be the GPU's.
+    pub(crate) fn check_gpu_determinism<'a>(
+        &self,
+        name: &str,
+        size: RenderSize,
+        keeps_alpha: bool,
+        build: impl Fn(&mut RenderGraph<'a>, Side) -> Result<RenderNodeId, GraphError>,
+    ) {
+        let draw = |side: Side| {
+            let mut graph = RenderGraph::new(size);
+            let output = build(&mut graph, side).expect("graph builds");
+            graph.set_output(output).expect("output");
+            graph
+        };
+        let gpu_graph = draw(Side::Gpu);
+        let gpu_pixels = [0, 1].map(|_| {
+            self.gpu.clear_result_cache();
+            self.gpu.clear_texture_pool();
+            let texture = self.gpu.execute_graph(&gpu_graph).expect("GPU draws");
+            self.gpu.read_rgba8(&texture).expect("GPU readback")
+        });
+        assert!(
+            gpu_pixels[0] == gpu_pixels[1],
+            "{name}: the GPU draws different pictures from one graph"
+        );
+        if !keeps_alpha {
+            return;
+        }
+        let cpu_graph = draw(Side::Cpu);
+        let cpu_pixels = self
+            .cpu
+            .execute_graph(&cpu_graph)
+            .expect("CPU draws")
+            .read_rgba8();
+        // Each picture's alpha as an opaque gray picture, so a failure writes it out to look at.
+        let alpha = |pixels: &[u8]| {
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|pixel| [pixel[3], pixel[3], pixel[3], 255])
+                .collect::<Vec<_>>()
+        };
+        assert_close(
+            &format!("{name}-alpha"),
+            size,
+            Tolerance::Exact,
+            &alpha(&gpu_pixels[0]),
+            &alpha(&cpu_pixels),
+        );
+    }
 }
 
 /// Fails with the comparison when `cpu` is not within `tolerance` of `gpu`,
@@ -194,7 +310,11 @@ pub(crate) fn assert_close(
     gpu: &[u8],
     cpu: &[u8],
 ) {
-    if let Err(message) = tolerance.check(gpu, cpu) {
+    let differences = Differences::of(gpu, cpu);
+    if let Some(path) = std::env::var_os("ALPHA2_PARITY_REPORT") {
+        report(std::path::Path::new(&path), name, tolerance, &differences);
+    }
+    if let Err(message) = tolerance.check(gpu, cpu, &differences) {
         let directory =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/cpu-parity");
         let _ = std::fs::create_dir_all(&directory);
@@ -214,6 +334,45 @@ pub(crate) fn assert_close(
             "{name}: CPU differs from GPU: {message} (pictures in {})",
             directory.display()
         );
+    }
+}
+
+/// Appends one JSON line describing a comparison to `path`: the class it was
+/// held to, its worst difference and where, how many samples differ by how
+/// much, and the device with its measured precision.
+fn report(path: &std::path::Path, name: &str, tolerance: Tolerance, differences: &Differences) {
+    use std::io::Write as _;
+
+    let precision = device_precision();
+    let adapter = super::SHARED_GPU
+        .get()
+        .map(|gpu| gpu.capabilities().summary())
+        .unwrap_or_default();
+    let line = serde_json::json!({
+        "name": name,
+        "class": format!("{tolerance:?}"),
+        "worst": differences.worst.0,
+        "at": differences.worst.1,
+        "histogram_1": differences.histogram[1],
+        "histogram_2": differences.histogram[2],
+        "histogram_3_4": differences.histogram[3] + differences.histogram[4],
+        "over_4": differences.over(4),
+        "over_8": differences.over(8),
+        "over_16": differences.over(16),
+        "over_32": differences.over(32),
+        "over_64": differences.over(64),
+        "samples": differences.samples,
+        "adapter": adapter,
+        "filter_weight_bits": precision.filter_weight_bits,
+        "pow_error_codes": precision.pow_error_codes,
+    });
+    let written = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .and_then(|mut file| writeln!(file, "{line}"));
+    if let Err(error) = written {
+        panic!("ALPHA2_PARITY_REPORT {}: {error}", path.display());
     }
 }
 

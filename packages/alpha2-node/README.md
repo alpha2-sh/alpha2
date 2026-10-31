@@ -62,7 +62,7 @@ if (encode.h264.status !== "available") console.warn(encode.h264.reason, encode.
 
 The first `getCapabilities` call for a decode mode and renderer starts a host; calls made while it runs share it, and its answer serves later calls for those modes.
 
-`videoDecode` (`software`, `auto`, `hardware-required`) chooses how the host decodes video, as a client option or per export; by default the host decides, `auto` on Linux and `software` on macOS and Windows. Under `auto`, an export whose hardware decoder stalls runs once more decoding in software.
+`videoDecode` (`software`, `auto`, `hardware-required`) chooses how the host decodes video, as a client option or per export; by default the host decides, `auto` on Linux and macOS and `software` on Windows. Under `auto`, an export whose hardware decoder stalls runs once more decoding in software.
 
 `renderer` (`auto`, `gpu`, `cpu`) chooses what draws the frames, as a client option or per export; unset, the host reads `ALPHA2_RENDERER`, else uses `auto`. `auto` renders on a hardware GPU when there is one and on the CPU otherwise, never on a software GPU adapter (lavapipe, llvmpipe, WARP, SwiftShader); `gpu` takes whatever adapter the host finds and fails with `GPU_INIT_FAILED` without one; `cpu` opens no graphics driver. Results and capabilities report `renderer` (`gpu` or `cpu`), `rendererReason` (why the host renders on the CPU) and, on the CPU, `rendererThreads`; `capabilities.features` has `renderer.gpu`, `renderer.cpu` and `effects.runtime`. A runtime WGSL effect cannot run on the CPU renderer: such an export fails with `EFFECT_ERROR`.
 
@@ -84,7 +84,7 @@ The library is Cisco's binary, under [Cisco's terms](https://www.openh264.org/BI
 
 ## Errors
 
-Every rejection is an `Alpha2HostError` with a `code`, the protocol's error codes and the client's own (`HOST_NOT_FOUND`, `HOST_EXITED`, `HOST_LOAD_FAILED`, `HOST_START_TIMEOUT`, `HOST_QUARANTINED`, `HOST_BLOCKED`, `ABORTED`, and others). Its `failure` classifies it for a retry policy (`alpha2/export-failure`, `alpha2/export-retry`): the step and frame it failed at, and whether it is evidence of a lost device, running out of memory or bad input. `stderr` holds the end of the host's standard error. Subclasses:
+Every rejection is an `Alpha2HostError` with a `code`, the protocol's error codes and the client's own (`HOST_NOT_FOUND`, `HOST_EXITED`, `HOST_OOM_KILLED` (a host the kernel's out-of-memory killer ended, on Linux), `HOST_LOAD_FAILED`, `HOST_START_TIMEOUT`, `HOST_QUARANTINED`, `HOST_BLOCKED`, `ABORTED`, and others). Its `failure` classifies it for a retry policy (`alpha2/export-failure`, `alpha2/export-retry`): the step and frame it failed at, and whether it is evidence of a lost device, running out of memory or bad input. `stderr` holds the end of the host's standard error. Subclasses:
 
 - `Alpha2ProjectValidationError`: the project is invalid (`problems`).
 - `Alpha2ConformError`: the media is not ready, so nothing was rendered (`report` says, per source, what is missing, offline or not the media the project recorded). `client.conform({ project, assets })` asks the same question without exporting.

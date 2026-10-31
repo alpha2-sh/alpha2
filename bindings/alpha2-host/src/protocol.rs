@@ -1106,10 +1106,15 @@ impl HostError {
     pub fn classify(message: String) -> Self {
         let (evidence, message) = crate::failure::take_evidence_tag(message);
         let (kept, message) = take_kept_path(message);
+        let stage = crate::memory::take_stage(&message);
         let mut error = Self::classify_code(message);
         error.evidence = evidence;
         if let Some(kept) = kept {
             error.details = Some(json!({ "keptPath": kept }));
+        }
+        // A memory refusal's step, which its `failure.stage` repeats.
+        if let Some(stage) = stage {
+            error.details = Some(json!({ "stage": stage.as_str() }));
         }
         error
     }
@@ -1433,7 +1438,19 @@ pub fn decode_capabilities_json(
             "hardwareConfig": capability.hardware_config,
             "softwareDecoder": capability.software_decoder,
         })).collect::<Vec<_>>(),
+        "alpha": alpha_decode_codecs(),
     })
+}
+
+/// The source codecs whose alpha this host decodes: `ProRes` 4444 always, VP9 where the runtime
+/// has libvpx's VP9 decoder, the one that reads a `WebM`'s alpha. HEVC's auxiliary alpha layer is
+/// not decoded.
+fn alpha_decode_codecs() -> Vec<&'static str> {
+    let mut codecs = vec!["prores"];
+    if alpha2_native::decodes_vp9_alpha() {
+        codecs.push("vp9");
+    }
+    codecs
 }
 
 /// Whether the `OpenH264` encoder loaded, for `capabilities`: its status

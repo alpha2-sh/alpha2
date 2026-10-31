@@ -12,7 +12,9 @@ mod encoder;
 mod ffi;
 mod library;
 
-pub(crate) use encoder::{OpenH264Encoder, OpenH264Rate, OpenH264Settings};
+pub(crate) use encoder::{
+    OpenH264Encoder, OpenH264Rate, OpenH264Settings, slice_count, thread_count,
+};
 pub use library::{
     OPENH264_INSTALL_COMMAND, OPENH264_NOTICE, OPENH264_VERSION, OpenH264Library, OpenH264Provider,
     OpenH264Status, openh264_status,

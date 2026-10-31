@@ -18,9 +18,13 @@
 //! header back until the first packet out of this chain brings the
 //! parameter sets.
 
-// The D3D12VA backend, which exists on Windows only, and the tests run their packets through this.
+// The D3D12VA and Vulkan HEVC backends, which exist on Windows and Linux only, and the tests run
+// their packets through this.
 #![cfg_attr(
-    not(any(test, all(feature = "hwencode", target_os = "windows"))),
+    not(any(
+        test,
+        all(feature = "hwencode", any(target_os = "windows", target_os = "linux"))
+    )),
     allow(dead_code)
 )]
 

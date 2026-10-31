@@ -763,7 +763,7 @@ impl ProductAttempt {
 /// adapter, in the order a product request tries them.
 #[cfg(not(target_arch = "wasm32"))]
 async fn product_candidates(request: &ProductRequest) -> Result<Vec<Candidate>, GpuError> {
-    let pin = crate::AdapterPin::from_env();
+    let pin = crate::AdapterPolicy::from_env();
     let mut listed = Vec::new();
     let mut software = Vec::new();
     let mut refusals = Vec::new();

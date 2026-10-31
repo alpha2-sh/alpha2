@@ -4,14 +4,19 @@
 //!
 //! It executes the same [`crate::RenderGraph`] the GPU renderer does, stage
 //! for stage, and keeps the same bits between stages: premultiplied,
-//! sRGB-encoded RGBA stored as half floats rounded toward zero. Its output
-//! is the same for any thread count and on every target.
+//! sRGB-encoded RGBA stored as half floats rounded toward zero, as a GPU's
+//! half-float targets store them. The one stage it models rather than
+//! matches is the fixed-function premultiplied `over` blend of vector and
+//! quad passes: computed in `f32`, then stored, which is exact on lavapipe,
+//! llvmpipe, WARP and Metal and within 16 half-float steps (under a quarter of
+//! a code) on NVIDIA, RADV and the Iris Xe. Its output is the same for any
+//! thread count and on every target.
 
 mod blend;
 mod composite;
 mod curves;
 mod execute;
-mod half;
+pub(crate) mod half;
 
 /// The value a stored half float holds.
 pub(crate) fn half_value(bits: u16) -> f32 {
@@ -30,6 +35,9 @@ mod renderer;
 mod source;
 mod vector;
 mod workers;
+
+#[cfg(test)]
+pub(crate) use vector::over as premultiplied_over;
 
 pub use image::CpuImage;
 pub use pack::pack_cpu_image;

@@ -80,12 +80,15 @@ const _: () = {
     assert!(offset_of!(Metal, clean_width) == 32);
     assert!(offset_of!(Metal, clean_height) == 36);
     assert!(offset_of!(Metal, pixel_format) == 40);
+    assert!(offset_of!(Metal, plane_count) == 44);
     assert!(offset_of!(Metal, io_surface) == 48);
 };
 #[cfg(all(target_os = "windows", feature = "hwdevice"))]
 mod d3d12;
 mod import;
 mod lifetime;
+#[cfg(feature = "hwdevice")]
+mod memory_budget;
 #[cfg(all(target_os = "macos", feature = "hwdevice"))]
 mod metal;
 #[cfg(feature = "hwdevice")]
@@ -104,18 +107,22 @@ pub use d3d12::{
 };
 pub use import::{ImportedPlaneDescriptor, NativePlaneLayout};
 pub use lifetime::{NativeSurfaceLease, SurfaceIdentity};
+#[cfg(feature = "hwdevice")]
+pub use memory_budget::adapter_memory_budget;
 #[cfg(all(target_os = "macos", feature = "hwdevice"))]
 pub use metal::{
     ImportedMetalFrame, MetalEncoderPlanes, MetalImportLease, SharedMetalContext, SharedMetalError,
     VideoToolboxCodec, gpu_wait_timeout as metal_wait_timeout, videotoolbox_hardware_decodes,
+    videotoolbox_surface_id,
 };
 pub use surface_budget::{SurfaceBudget, SurfaceBudgetError, SurfaceReservation, SurfaceUsage};
 pub use sync::{ExternalSyncPoint, NativeImageState};
 #[cfg(all(target_os = "linux", feature = "hwdevice"))]
 pub use vulkan::{
-    ImportTicketStats, ImportedVulkanFrame, SharedVulkanContext, SharedVulkanError,
-    VideoEncodeExtent, VulkanEncodeCopier, VulkanImportLease, VulkanLayerVersion,
-    probe_vulkan_submission, shared_device_index,
+    ImportTicketStats, ImportedVulkanFrame, SharedVulkanChoice, SharedVulkanContext,
+    SharedVulkanError, VideoEncodeExtent, VulkanCandidate, VulkanEncodeCopier, VulkanImportLease,
+    VulkanLayerVersion, adapter_pinned, choose_shared_vulkan, probe_vulkan_submission,
+    shared_device_index, vulkan_candidates,
 };
 
 /// Sets how long the platform interop helpers wait on GPU work before they

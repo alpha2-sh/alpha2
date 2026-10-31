@@ -44,6 +44,7 @@
     "HOST_BLOCKED": { "code": "INVALID_INPUT", "resource": "unknown" },
     "HOST_WRITE_FAILED": { "code": "UNKNOWN", "resource": "unknown" },
     "HOST_EXITED": { "code": "HOST_EXITED", "resource": "unknown" },
+    "HOST_OOM_KILLED": { "code": "OUT_OF_MEMORY", "resource": "cpu" },
     "INVALID_RESPONSE": { "code": "UNKNOWN", "resource": "unknown" },
     "PROGRESS_CALLBACK_FAILED": { "code": "UNKNOWN", "resource": "unknown" },
     "ABORTED": { "code": "CANCELLED", "resource": "unknown" }

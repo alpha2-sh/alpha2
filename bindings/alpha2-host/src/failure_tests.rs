@@ -160,6 +160,10 @@ fn a_start_that_failed_carries_a_failure_report() {
         env!("CARGO_PKG_VERSION")
     );
     assert_eq!(
+        failure["diagnostics"]["environment"]["osVersion"],
+        alpha2_os::os_version()
+    );
+    assert_eq!(
         startup_failure_json("GPU_INIT_FAILED", "no adapter", None)["code"],
         "UNKNOWN"
     );

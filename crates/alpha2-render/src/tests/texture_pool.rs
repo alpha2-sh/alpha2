@@ -300,3 +300,43 @@ fn an_upload_texture_larger_than_the_idle_budget_is_dropped_without_evicting_the
     );
     assert_eq!(pool.stats().reused, reused + 2, "the newest two were kept");
 }
+
+/// With the adapter's device memory budget known, the idle pools are held to a
+/// quarter of it: a profile's texture budget and the upload pool's default are
+/// lowered when they would exceed it, and left alone when they would not.
+#[test]
+fn a_gpu_memory_budget_holds_the_idle_pools_to_a_quarter_of_it() {
+    let _lock = gpu_test_lock();
+    let renderer = Renderer::new(gpu());
+    let mib = 1024 * 1024;
+    renderer.set_texture_budget_bytes(512 * mib);
+    let upload_default = renderer.upload_textures.stats().budget_bytes;
+    assert_eq!(upload_default, 128 * mib);
+
+    // No budget: nothing is lowered.
+    assert!(!renderer.set_gpu_memory_budget(None));
+    assert_eq!(renderer.gpu_memory_budget(), None);
+    assert_eq!(renderer.texture_pool_stats().budget_bytes, 512 * mib);
+
+    // A roomy adapter: a quarter of 24 GiB holds both.
+    assert!(!renderer.set_gpu_memory_budget(Some(24 * 1024 * mib)));
+    assert_eq!(renderer.texture_pool_stats().budget_bytes, 512 * mib);
+    assert_eq!(renderer.upload_textures.stats().budget_bytes, 128 * mib);
+
+    // 1 GiB: the texture pool drops to 256 MiB, the upload pool's 128 MiB stays.
+    assert!(renderer.set_gpu_memory_budget(Some(1024 * mib)));
+    assert_eq!(renderer.gpu_memory_budget(), Some(1024 * mib));
+    assert_eq!(renderer.texture_pool_stats().budget_bytes, 256 * mib);
+    assert_eq!(renderer.upload_textures.stats().budget_bytes, 128 * mib);
+    // A profile setting its budget again is held to the same quarter.
+    renderer.set_texture_budget_bytes(512 * mib);
+    assert_eq!(renderer.texture_pool_stats().budget_bytes, 256 * mib);
+    renderer.set_texture_budget_bytes(64 * mib);
+    assert_eq!(renderer.texture_pool_stats().budget_bytes, 64 * mib);
+
+    // 256 MiB: both pools at 64 MiB.
+    renderer.set_texture_budget_bytes(512 * mib);
+    assert!(renderer.set_gpu_memory_budget(Some(256 * mib)));
+    assert_eq!(renderer.texture_pool_stats().budget_bytes, 64 * mib);
+    assert_eq!(renderer.upload_textures.stats().budget_bytes, 64 * mib);
+}

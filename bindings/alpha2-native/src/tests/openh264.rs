@@ -97,8 +97,9 @@ fn encode_pattern(
     frames: u32,
 ) -> crate::NativeVideoEncoderSelection {
     let _ = fs::remove_file(path);
-    let mut sink = NativeVideoEncodeSink::create_with_encoder_threads(path, config, encoder, &|| 2)
-        .expect("an OpenH264 sink");
+    let mut sink =
+        NativeVideoEncodeSink::create_with_encoder_threads(path, config, encoder, &|_| 2)
+            .expect("an OpenH264 sink");
     let width = i32::try_from(config.width).unwrap();
     let height = i32::try_from(config.height).unwrap();
     let mut frame = Yuv420pFrameBuffer::new(width, height).expect("frame");

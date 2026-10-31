@@ -512,7 +512,7 @@ fn a_copy_and_a_gpu_resident_export_report_the_render_cache_unavailable() {
 
     #[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "hwencode"))]
     {
-        let mut host = create_gpu_test_host(VideoDecodePolicy::Auto).expect("host");
+        let mut host = create_gpu_media_host(VideoDecodePolicy::Auto).expect("host");
         match host.gpu_output_capability() {
             Ok(_) => {
                 let shows = [("a", "auto"), ("a", "auto")];

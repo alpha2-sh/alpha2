@@ -284,6 +284,9 @@ const CODE_CLASSES: Readonly<Record<string, FailureClass>> = Object.freeze({
   HOST_BLOCKED: permanent,
   HOST_WRITE_FAILED: unknown,
   HOST_EXITED: { code: "HOST_EXITED", resource: "unknown" },
+  // The kernel's out-of-memory killer ended the host (its cgroup's `oom_kill` count rose): a retry
+  // with a smaller `memory.scale` asks for less.
+  HOST_OOM_KILLED: { code: "OUT_OF_MEMORY", resource: "cpu" },
   INVALID_RESPONSE: unknown,
   PROGRESS_CALLBACK_FAILED: unknown,
   ABORTED: { code: "CANCELLED", resource: "unknown" },

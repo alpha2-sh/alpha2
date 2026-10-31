@@ -70,6 +70,10 @@ pub struct ExportMetrics {
     pub encode_worker_idle: Duration,
     /// Per-frame handoff timestamps, when `ALPHA2_EXPORT_TRACE` asked for them.
     pub trace: Option<crate::trace::ExportTrace>,
+    /// CPU time the renderer spent creating effect and composite pipelines
+    /// during the export (`pipelineCompileMs`): the first frame that draws a
+    /// built-in compiles its shaders.
+    pub pipeline_compile: Duration,
     pub frame_submit: Duration,
     pub frame_submit_stages: alpha2_engine::ExportStepTimings,
     pub readback_map_latency: Duration,
@@ -166,6 +170,17 @@ pub struct ExportMetrics {
     /// The most surfaces the host held at once, which its bound caps. Not
     /// what the pool allocated: that is `encoder_frames_allocated`.
     pub encoder_surface_lease_peak: u64,
+    /// GPU-resident path: the coordinator's waits for an encoder surface
+    /// (the lease bound, the pool) after a frame's sources were installed
+    /// (`encoderSurfaceWaitMs`), and for the plane pair the handoff last read
+    /// to be free once it held one (`encoderPlaneWaitMs`).
+    pub encoder_surface_wait: Duration,
+    pub encoder_plane_wait: Duration,
+    /// Bytes and time of decoded surfaces downloaded to the CPU because the
+    /// renderer could not import them (`sourceDownloadBytes`,
+    /// `sourceDownloadMs`).
+    pub source_download_bytes: u64,
+    pub source_download: Duration,
 }
 
 impl ExportMetrics {
@@ -191,6 +206,10 @@ impl ExportMetrics {
             alpha2_native::HardwareDecodeFallback::ImportFailed,
             upload.import_fallbacks,
         );
+        self.source_download_bytes = self
+            .source_download_bytes
+            .saturating_add(upload.source_download_bytes);
+        self.source_download = self.source_download.saturating_add(upload.source_download);
         self.hardware_copy_frames = self
             .hardware_copy_frames
             .saturating_add(upload.hardware_copy_frames);
@@ -211,6 +230,19 @@ impl ExportMetrics {
     pub fn record_native_surfaces(&mut self, bytes: u64, surfaces: u32) {
         self.peak_native_surface_bytes = self.peak_native_surface_bytes.max(bytes);
         self.peak_native_surfaces = self.peak_native_surfaces.max(surfaces);
+    }
+
+    /// Adds the pipelines the renderer created while drawing frame `frame`
+    /// (or before it), and traces each when a trace is kept.
+    pub fn record_pipelines(&mut self, frame: u64, creations: &[alpha2_render::PipelineCreation]) {
+        for creation in creations {
+            self.pipeline_compile = self
+                .pipeline_compile
+                .saturating_add(creation.finished.duration_since(creation.started));
+        }
+        if let Some(trace) = self.trace.as_mut() {
+            trace.push_pipelines(frame, creations);
+        }
     }
 
     /// Takes the decode pool's byte peak and its waits, which only it saw.
@@ -351,20 +383,6 @@ impl GpuEncodeBudget {
     }
 }
 
-/// The GPU-resident path's encode channel depth when none is pinned.
-///
-/// Depth 0 hands each frame over when the worker takes it, so the coordinator
-/// waits for the encoder and never for a polling interval. Two is kept as the
-/// default for throughput when the encoder is not the bottleneck: it keeps a
-/// frame queued behind the one being encoded, so the encoder never waits on
-/// the coordinator's next submission, while each further step reserves another
-/// surface (142 MiB at depth 2 against 214 MiB at 8 for 4K). On the RTX 4090
-/// (`h264_vulkan`, the host-parity complex composition at 4K, 150 frames) one
-/// CPU at depth 0 ran at 135.5 fps against 137 fps for two CPUs at depth 2; the
-/// readback path with `mpeg4` ran at 31.6 against 33.1 fps.
-#[cfg(feature = "hwencode")]
-pub const GPU_DEFAULT_ENCODE_CHANNEL_DEPTH: usize = 2;
-
 /// Encoder surfaces the GPU-resident path may hold, from the same byte budget
 /// the readback path divides between readbacks and packed frames.
 ///
@@ -372,8 +390,9 @@ pub const GPU_DEFAULT_ENCODE_CHANNEL_DEPTH: usize = 2;
 /// plane ring and then for surfaces (see [`GpuEncodeBudget`]). Two surfaces are
 /// never in the channel (the one being handed a frame and the one being
 /// encoded), so the channel depth can be at most what is left after those two
-/// and the handoff's retention, and is [`GPU_DEFAULT_ENCODE_CHANNEL_DEPTH`]
-/// below that ceiling unless pinned. A pinned depth is clamped by the same
+/// and the handoff's retention, and is the backend's measured default
+/// (`HardwareEncodeCapability::default_channel_depth`) below that ceiling
+/// unless pinned. A pinned depth is clamped by the same
 /// ceiling rather than trusted.
 ///
 /// # Errors
@@ -413,7 +432,7 @@ pub fn gpu_encode_pipeline_limits(
     }
     let ceiling = (affordable - minimum).min(MAX_ENCODE_CHANNEL_DEPTH);
     let encode_channel_depth = requested_encode_depth
-        .map_or(ceiling.min(GPU_DEFAULT_ENCODE_CHANNEL_DEPTH), |depth| {
+        .map_or(ceiling.min(capability.default_channel_depth), |depth| {
             depth.min(ceiling)
         });
     Ok(ExportPipelineLimits {
@@ -491,6 +510,13 @@ fn add_decode_path_metrics(value: &mut Value, metrics: &ExportMetrics) {
             .map(|(reason, count)| (reason.to_owned(), json!(count)))
             .collect(),
     );
+    value["hardwareFallbackMessages"] = Value::Object(
+        metrics
+            .hardware_fallbacks
+            .messages()
+            .map(|(reason, message)| (reason.to_owned(), json!(message)))
+            .collect(),
+    );
     value["hardwareImportFrames"] = json!(metrics.hardware_import_frames);
     value["hardwareCopyFrames"] = json!(metrics.hardware_copy_frames);
     value["hardwareDirectFrames"] = json!(
@@ -506,9 +532,10 @@ fn add_decode_path_metrics(value: &mut Value, metrics: &ExportMetrics) {
     );
     value["sourceUploadBytes"] = json!(metrics.source_upload_bytes);
     // The decoder writes software planes once and that buffer is uploaded: one set of bytes at two
-    // stages. No path reads pixels back, so the download count is zero.
+    // stages. A hardware surface the renderer could not import is downloaded first, and counted.
     value["sourceCpuPlaneCopyBytes"] = json!(metrics.source_upload_bytes);
-    value["sourceDownloadBytes"] = json!(0);
+    value["sourceDownloadBytes"] = json!(metrics.source_download_bytes);
+    value["sourceDownloadMs"] = milliseconds(metrics.source_download);
     value["sourceGpuCopyBytes"] = json!(metrics.source_gpu_copy_bytes);
     // The output side: what crossed to the CPU and what the CPU wrote into encoder frames, or on
     // the GPU-resident path the plane copies into the encoder's input image.
@@ -525,6 +552,45 @@ fn add_decode_path_metrics(value: &mut Value, metrics: &ExportMetrics) {
     value["encoderFramesAllocated"] = json!(metrics.encoder_frames_allocated);
     value["encoderSurfaceAcquires"] = json!(metrics.encoder_surface_acquires);
     value["encoderSurfaceLeasePeak"] = json!(metrics.encoder_surface_lease_peak);
+    value["encoderSurfaceWaitMs"] = milliseconds(metrics.encoder_surface_wait);
+    value["encoderPlaneWaitMs"] = milliseconds(metrics.encoder_plane_wait);
+}
+
+/// Adds the GPU time of the export's sampled frames
+/// ([`alpha2_render::Renderer::take_frame_gpu_times`]): `gpuRenderMsPerFrame` (the graph) and
+/// `gpuPackMsPerFrame` (from the graph's end through the pack into the encoder's planes or the
+/// readback), means over `gpuTimeSampledFrames`, or `gpuTimeUnavailable` saying why there are
+/// none. The GPU waits other fields contain are backend-specific: `readbackWaitMs` on the readback
+/// path, `encoderPlaneWaitMs` on D3D12 and Vulkan, `encoderInputReadyWaitMs` on `VideoToolbox`.
+pub fn add_gpu_time_metrics(value: &mut Value, renderer: Option<&alpha2_render::Renderer>) {
+    let times = renderer.map_or(Err("the CPU renderer runs no GPU work"), |renderer| {
+        renderer.take_frame_gpu_times()
+    });
+    let (render, pack, sampled, unavailable) = match times {
+        Ok(times) if times.sampled_frames > 0 => (
+            times.render_ms_per_frame(),
+            times.pack_ms_per_frame(),
+            times.sampled_frames,
+            None,
+        ),
+        Ok(times) if times.flat_frames > 0 => (
+            None,
+            None,
+            0,
+            Some("the device's timestamps did not advance across the frame's passes"),
+        ),
+        Ok(_) => (
+            None,
+            None,
+            0,
+            Some("no sampled frame's timestamps were read back before the export ended"),
+        ),
+        Err(reason) => (None, None, 0, Some(reason)),
+    };
+    value["gpuRenderMsPerFrame"] = json!(render);
+    value["gpuPackMsPerFrame"] = json!(pack);
+    value["gpuTimeSampledFrames"] = json!(sampled);
+    value["gpuTimeUnavailable"] = json!(unavailable);
 }
 
 fn milliseconds(duration: Duration) -> Value {
@@ -656,6 +722,7 @@ pub fn export_metrics_json(
         "audioMixMs": metrics.audio_mix.as_secs_f64() * 1_000.0,
         "audioEncodeMs": metrics.audio_encode.as_secs_f64() * 1_000.0,
         "sourceConvertUploadMs": metrics.source_prepare.as_secs_f64() * 1_000.0,
+        "pipelineCompileMs": metrics.pipeline_compile.as_secs_f64() * 1_000.0,
         "frameSubmitMs": metrics.frame_submit.as_secs_f64() * 1_000.0,
         "readbackMapLatencyMs": metrics.readback_map_latency.as_secs_f64() * 1_000.0,
         "readbackWaitMs": metrics.readback_wait.as_secs_f64() * 1_000.0,

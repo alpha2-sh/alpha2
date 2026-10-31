@@ -1021,6 +1021,38 @@ pub struct StreamInfo {
     pub sample_aspect_ratio: SampleAspectRatio,
     /// Declared video color.
     pub color: Option<ColorMetadata>,
+    /// Bytes one decoded picture of a video stream holds in the decoder's
+    /// output format (`av_image_get_buffer_size` of its pixel format at the
+    /// coded size): 1.5 bytes a pixel for 8-bit 4:2:0, twice that at 10 bits,
+    /// four times at 10-bit 4:4:4. `None` when the format is not known.
+    pub frame_bytes: Option<u64>,
+    /// How a video stream carries alpha, when it does; `None` for an opaque stream.
+    pub alpha: Option<SourceAlpha>,
+}
+
+/// How a video stream carries an alpha channel.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum SourceAlpha {
+    /// VP9 in Matroska or `WebM` with `alpha_mode` 1: a second VP9 stream of the alpha plane in
+    /// each block's additions, which only libvpx's VP9 decoder reads.
+    Vp9SideData,
+    /// HEVC whose video parameter set declares an auxiliary alpha layer (Apple's HEVC with alpha),
+    /// which no decoder alpha2 opens reads: the base layer decodes opaque.
+    HevcAuxiliaryLayer,
+    /// A pixel format with an alpha plane (`ProRes` 4444, PNG, `QuickTime` Animation).
+    Planar,
+}
+
+impl SourceAlpha {
+    /// The name a report gives it.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Vp9SideData => "vp9-side-data",
+            Self::HevcAuxiliaryLayer => "hevc-auxiliary-layer",
+            Self::Planar => "planar",
+        }
+    }
 }
 
 /// Kind of decoder cache/refill operation.

@@ -406,6 +406,27 @@ report({ ok: running && shown, adapter, frames });
 `;
 }
 
+// The adapter as the browser describes it (`GPUAdapterInfo`), which wgpu reduces to a name that
+// Chrome leaves empty: the engine's diagnostics carry every field, and a name from them. The
+// values may be empty (SwiftShader); the keys may not be missing.
+export function webgpuAdapterInfo() {
+  return `
+if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");
+const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+await init();
+const engine = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(64, 48));
+webgpuAdapter(engine);
+const adapter = JSON.parse(engine.diagnostics()).adapter;
+const info = (await navigator.gpu.requestAdapter())?.info ?? {};
+const texts = ["vendor", "architecture", "device", "description"];
+const keys = texts.every((key) => typeof adapter[key] === "string") &&
+  typeof adapter.isFallbackAdapter === "boolean";
+const same = texts.every((key) => adapter[key] === (info[key] ?? ""));
+const named = adapter.name !== "" || (info.vendor ?? "") === "" && (info.architecture ?? "") === "";
+report({ ok: keys && same && named, adapter, info: Object.fromEntries(texts.map((key) => [key, info[key]])) });
+`;
+}
+
 // Headless Chrome and SwiftShader can lose WebGPU on shared-image presentation.
 export function smoke(webgl) {
   return `

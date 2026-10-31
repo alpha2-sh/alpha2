@@ -80,18 +80,7 @@ fn d3d12va_test_encode_child() {
 #[test]
 fn software_decode_does_not_decode_on_the_encode_device() {
     let _gpu = gpu_test_lock();
-    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
-    if host.shared_d3d12.is_none() {
-        // The adapter wgpu prefers makes no shared device here (an NVIDIA MX450 does not), and
-        // `software` keeps that adapter. The device `auto` decodes on is the same kind of device,
-        // and switching the host's mode is what makes it one only encode wants.
-        eprintln!(
-            "the software-decode host has no shared device ({}); using the auto host's",
-            host.encode_adapters.no_device.clone().unwrap_or_default()
-        );
-        host = create_host(VideoDecodePolicy::Auto).expect("host");
-        host.decode_policy = VideoDecodePolicy::Software;
-    }
+    let mut host = create_media_host(VideoDecodePolicy::Software).expect("host");
     let Some(shared) = host.shared_d3d12.clone() else {
         alpha2_test_support::skip!(
             alpha2_test_support::Capability::D3d12Encode,
@@ -168,7 +157,7 @@ fn software_decode_does_not_decode_on_the_encode_device() {
 #[test]
 fn the_d3d12va_test_encode_runs_in_a_child_process() {
     let _gpu = gpu_test_lock();
-    let host = create_host(VideoDecodePolicy::Auto).expect("host");
+    let host = create_media_host(VideoDecodePolicy::Auto).expect("host");
     let Some(shared) = host.shared_d3d12.clone() else {
         alpha2_test_support::skip!(
             alpha2_test_support::Capability::D3d12Encode,
@@ -227,7 +216,7 @@ fn every_d3d12va_refusal_falls_back_with_its_reason() {
     use crate::d3d12va_probe::InjectedRefusal;
     let _gpu = gpu_test_lock();
     let started = Instant::now();
-    let host = create_host(VideoDecodePolicy::Auto).expect("host");
+    let host = create_media_host(VideoDecodePolicy::Auto).expect("host");
     let unforced_start = started.elapsed();
     let Some(shared) = host.shared_d3d12.clone() else {
         alpha2_test_support::skip!(
@@ -277,7 +266,7 @@ fn every_d3d12va_refusal_falls_back_with_its_reason() {
         let case = format!("{refusal:?}");
         let _forced = crate::d3d12va_probe::inject(refusal, timeout);
         let started = Instant::now();
-        let mut host = create_host(VideoDecodePolicy::Auto).expect("host");
+        let mut host = create_media_host(VideoDecodePolicy::Auto).expect("host");
         let start = started.elapsed();
         assert!(
             start <= unforced_start + timeout + Duration::from_secs(5),
@@ -347,6 +336,101 @@ fn every_d3d12va_refusal_falls_back_with_its_reason() {
     }
 }
 
+/// With `ALPHA2_GPU_ADAPTER` unset, a Windows host renders by the
+/// high-performance order (`performance`): on a hybrid laptop the discrete
+/// GPU, whose D3D12 device has no video encoder, and the report says why and
+/// where `auto` would render. Asked for, `auto` renders on the adapter that
+/// encodes the most codecs on the GPU (the integrated one there), and its
+/// HEVC export takes the GPU path.
+#[cfg(all(target_os = "windows", feature = "hwencode"))]
+#[test]
+#[allow(clippy::too_many_lines)]
+fn the_windows_default_renders_by_performance_and_auto_on_the_adapter_that_encodes() {
+    use crate::adapter_choice::AdapterPolicy;
+    use crate::config::VideoInputPolicy;
+    let _gpu = gpu_test_lock();
+    if AdapterPolicy::set_in_env().is_none() {
+        let host = create_host(VideoDecodePolicy::Software).expect("host");
+        let report = host.adapter_choice.clone().expect("a DX12 host's choice");
+        assert_eq!(report.policy, AdapterPolicy::Performance, "{report:?}");
+        assert_eq!(
+            report.reason,
+            alpha2_gpu::ChoiceReason::PerformancePolicy,
+            "{report:?}"
+        );
+        let first_hardware = report
+            .records
+            .iter()
+            .find(|record| !record.software && record.renders.is_ok())
+            .expect("a hardware adapter");
+        assert_eq!(first_hardware.name, host.renderer.adapter().name);
+        assert!(
+            report.explanation.contains("ALPHA2_GPU_ADAPTER is unset"),
+            "{}",
+            report.explanation
+        );
+    }
+    let mut host = crate::create_host_on(
+        VideoDecodePolicy::Software,
+        crate::config::RendererPolicy::Gpu,
+        &AdapterPolicy::Auto,
+    )
+    .expect("an auto host");
+    let report = host.adapter_choice.clone().expect("a DX12 host's choice");
+    let hardware: Vec<_> = report
+        .records
+        .iter()
+        .filter(|record| !record.software && record.renders.is_ok())
+        .collect();
+    if hardware.len() < 2 {
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::MultiAdapter,
+            "one hardware DX12 adapter renders here: {}",
+            report.explanation
+        );
+        return;
+    }
+    let chosen = report.chosen_record().expect("a chosen adapter");
+    let most = chosen.encoded_codecs().len();
+    assert!(
+        hardware
+            .iter()
+            .all(|record| record.encoded_codecs().len() <= most),
+        "{report:?}"
+    );
+    if hardware
+        .iter()
+        .any(|record| record.encoded_codecs().len() < most)
+    {
+        assert_eq!(
+            report.reason,
+            alpha2_gpu::ChoiceReason::MostGpuEncoders,
+            "{report:?}"
+        );
+    }
+    assert_eq!(chosen.name, host.renderer.adapter().name);
+    if !chosen.encodes("hevc") {
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::D3d12Encode,
+            "{} encodes no HEVC on the GPU",
+            chosen.name
+        );
+        return;
+    }
+    let directory = scratch_directory("d3d12va-auto-adapter");
+    let output = directory.join("hevc.mp4");
+    let result = export_fill(
+        &mut host,
+        NativeVideoCodec::Hevc,
+        None,
+        VideoInputPolicy::GpuRequired,
+        &output,
+    )
+    .expect("a GPU-resident HEVC export");
+    assert_eq!(result["videoPipeline"], json!("gpu-resident"), "{result}");
+    assert_eq!(result["videoEncoder"], json!("hevc_d3d12va"), "{result}");
+}
+
 /// Each codec an export asks for gets the D3D12VA encoder for that codec or
 /// a refusal that names it: a device decides per codec, and a
 /// `gpu-required` export of one codec is never served by another's encoder.
@@ -355,7 +439,7 @@ fn every_d3d12va_refusal_falls_back_with_its_reason() {
 fn each_codec_takes_the_gpu_path_or_says_why_not() {
     use crate::config::VideoInputPolicy;
     let _gpu = gpu_test_lock();
-    let mut host = create_host(VideoDecodePolicy::Auto).expect("host");
+    let mut host = create_media_host(VideoDecodePolicy::Auto).expect("host");
     let directory = scratch_directory("d3d12va-per-codec");
     for codec in crate::adapter_choice::ENCODE_CODECS {
         let output = directory.join(format!("{}.mp4", codec.as_str()));

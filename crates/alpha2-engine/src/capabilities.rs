@@ -12,7 +12,7 @@ use crate::PlaybackPolicy;
 /// The report's schema name.
 pub const CAPABILITY_SCHEMA: &str = "alpha2-capabilities";
 /// The report's schema version.
-pub const CAPABILITY_VERSION: u32 = 1;
+pub const CAPABILITY_VERSION: u32 = 2;
 
 /// Where the engine runs.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize)]
@@ -49,6 +49,13 @@ pub struct CapabilityReport {
     pub encode: serde_json::Value,
     /// Named features, each available or not, with why not.
     pub features: BTreeMap<String, Feature>,
+    /// Which adapter the renderer is on, under which `ALPHA2_GPU_ADAPTER` policy and why, with
+    /// what every adapter considered renders, decodes and encodes: a host-specific description,
+    /// `null` where the runtime made no choice (a browser page, the CPU renderer).
+    pub adapters: serde_json::Value,
+    /// The machine's memory and what this process uses of it: a host-specific
+    /// description, `null` where the runtime does not read it (a browser page).
+    pub memory: serde_json::Value,
 }
 
 /// The GPU the renderer drives.
@@ -78,6 +85,19 @@ pub struct GpuReport {
     pub timestamp_queries: bool,
     /// The idle-texture pool's byte budget.
     pub texture_budget_bytes: u64,
+    /// The adapter's device memory.
+    pub memory: GpuMemoryReport,
+}
+
+/// The device memory the adapter may use.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GpuMemoryReport {
+    /// The budget its graphics API reports (DXGI's local segment budget,
+    /// Vulkan's `VK_EXT_memory_budget` device-local heaps, Metal's
+    /// recommended working set); `None` where it reports none, in a browser
+    /// and on the CPU. The idle pools are held to a quarter of it.
+    pub budget_bytes: Option<u64>,
 }
 
 /// How color is handled.
@@ -166,6 +186,9 @@ impl CapabilityReport {
                 max_texture_dimension_2d: capabilities.max_texture_dimension_2d,
                 timestamp_queries: capabilities.timestamp_queries,
                 texture_budget_bytes: renderer.diagnostics().textures.budget_bytes,
+                memory: GpuMemoryReport {
+                    budget_bytes: renderer.gpu_memory_budget(),
+                },
             },
             color: ColorReport {
                 working_space: "linear_bt709_sdr",
@@ -181,6 +204,8 @@ impl CapabilityReport {
             decode: serde_json::Value::Null,
             encode: serde_json::Value::Null,
             features: BTreeMap::new(),
+            adapters: serde_json::Value::Null,
+            memory: serde_json::Value::Null,
         }
     }
 
@@ -204,6 +229,7 @@ impl CapabilityReport {
                 max_texture_dimension_2d: alpha2_render::RenderSize::MAX_DIMENSION,
                 timestamp_queries: false,
                 texture_budget_bytes: 0,
+                memory: GpuMemoryReport::default(),
             },
             color: ColorReport {
                 working_space: "linear_bt709_sdr",
@@ -219,6 +245,8 @@ impl CapabilityReport {
             decode: serde_json::Value::Null,
             encode: serde_json::Value::Null,
             features: BTreeMap::new(),
+            adapters: serde_json::Value::Null,
+            memory: serde_json::Value::Null,
         }
     }
 

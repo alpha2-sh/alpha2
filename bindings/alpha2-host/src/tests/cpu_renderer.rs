@@ -12,6 +12,24 @@ fn complex_export(
     effects: Vec<EffectRequest>,
     project: Option<Value>,
 ) -> Result<Value, String> {
+    complex_export_with(
+        renderer,
+        output,
+        effects,
+        project,
+        (NativeVideoCodec::Mpeg4Part2, None),
+    )
+}
+
+/// [`complex_export`] in `video`'s codec, through its encoder when one is
+/// named.
+fn complex_export_with(
+    renderer: crate::config::RendererPolicy,
+    output: &Path,
+    effects: Vec<EffectRequest>,
+    project: Option<Value>,
+    video: (NativeVideoCodec, Option<&str>),
+) -> Result<Value, String> {
     let project = project.unwrap_or_else(|| {
         serde_json::from_str(include_str!(
             "../../../../tests/cases/host-parity-complex-project.json"
@@ -37,11 +55,11 @@ fn complex_export(
         false,
         crate::protocol::ResolvedFormat {
             container: alpha2_media::Container::Mp4,
-            video: NativeVideoCodec::Mpeg4Part2,
+            video: video.0,
             audio: NativeAudioCodec::Aac,
             pixels: alpha2_media::PixelLayout::YUV420P,
         },
-        None,
+        video.1,
         VideoQualityRequest::Level(QualityLevel::VeryHigh),
         AudioQualityRequest::Level(QualityLevel::High),
         None,
@@ -167,5 +185,35 @@ fn capabilities_say_which_renderer_draws() {
     assert_eq!(
         report["features"]["effects.runtime"]["available"],
         json!(false)
+    );
+}
+
+/// Two exports of one project through `VideoToolbox` are the same bytes: the
+/// user data SEI the encoder writes, which differs between runs, is removed
+/// before the muxer, so an export can be compared against another build's.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_videotoolbox_export_is_byte_repeatable() {
+    let directory = scratch_directory("videotoolbox-repeat");
+    let export = |name: &str| {
+        complex_export_with(
+            crate::config::RendererPolicy::Cpu,
+            &directory.join(name),
+            Vec::new(),
+            None,
+            (NativeVideoCodec::H264, Some("h264_videotoolbox")),
+        )
+    };
+    let Some(first) = alpha2_test_support::available!(
+        alpha2_test_support::Capability::Videotoolbox,
+        export("first.mp4")
+    ) else {
+        return;
+    };
+    assert_eq!(first["videoEncoder"], json!("h264_videotoolbox"), "{first}");
+    export("second.mp4").expect("a second VideoToolbox export");
+    assert_eq!(
+        sha256_hex(&directory.join("first.mp4")),
+        sha256_hex(&directory.join("second.mp4"))
     );
 }

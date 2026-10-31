@@ -276,6 +276,14 @@ impl TextTextures {
         self.rasterizer.font_count()
     }
 
+    /// The families texts asked for that no registered font has, sorted, as
+    /// the project spelled them: those texts drew in the fallback order
+    /// ([`alpha2_text::TextRasterizer::unmatched_families`]).
+    #[must_use]
+    pub fn unmatched_font_families(&self) -> Vec<String> {
+        self.rasterizer.unmatched_families()
+    }
+
     /// Rasterizes and uploads every text `frame` shows at `size` that is not
     /// already held: its captions and the text generators its clips draw.
     /// Resolves every layout it draws that is not already held, and

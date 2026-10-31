@@ -545,9 +545,9 @@ pub fn probe_vulkan_submission(lease: &VulkanFrameLease) -> Result<(), BridgeErr
 /// Coded extents and coding limits one video-encode profile has on a device.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VideoEncodeExtent {
-    /// The H.264 profile these are the limits of: the one `h264_vulkan`
-    /// opens its session with on this device (`constrained_baseline`,
-    /// `main`, or `high`).
+    /// The profile these are the limits of: the one the codec's Vulkan
+    /// encoder opens its session with on this device (H.264
+    /// `constrained_baseline`, `main` or `high`; HEVC `main`).
     pub profile: &'static str,
     /// Smallest accepted width and height, in samples.
     pub minimum: (u32, u32),
@@ -562,15 +562,15 @@ pub struct VideoEncodeExtent {
     /// and the second does not. Comparing an output size against `minimum`
     /// without aligning it first gets that case wrong in the strict direction.
     pub granularity: (u32, u32),
-    /// `VkVideoEncodeH264CapabilitiesKHR::maxPPictureL0ReferenceCount`: how
-    /// many references a P picture may use.
+    /// The codec capabilities' `maxPPictureL0ReferenceCount`: how many
+    /// references a P picture may use.
     pub max_p_picture_l0_references: u32,
-    /// `VkVideoEncodeH264CapabilitiesKHR::maxBPictureL0ReferenceCount`: the
-    /// forward references a B picture may use. Zero, together with
+    /// The codec capabilities' `maxBPictureL0ReferenceCount`: the forward
+    /// references a B picture may use. Zero, together with
     /// `max_l1_references`, means the device encodes no B pictures.
     pub max_b_picture_l0_references: u32,
-    /// `VkVideoEncodeH264CapabilitiesKHR::maxL1ReferenceCount`: the backward
-    /// references a B picture may use.
+    /// The codec capabilities' `maxL1ReferenceCount`: the backward references
+    /// a B picture may use.
     pub max_l1_references: u32,
     /// `VkVideoEncodeCapabilitiesKHR::rateControlModes`, as the mode names
     /// the device reports: `cbr`, `vbr`, `disabled` (constant QP).
@@ -644,21 +644,103 @@ fn last_supported_profile<T>(
         .last()
 }
 
-/// Queries the coded extents this device's 8-bit 4:2:0 H.264 encoder accepts,
-/// for the profile `h264_vulkan` opens on it.
+/// The codecs the shared device encodes where the adapter has their extension: the codec a report
+/// names, the extension, and the operation `FFmpeg` is told the encode queue does. AV1 is left
+/// out: `libsvtav1` encodes it on every OS.
+const ENCODE_EXTENSIONS: [(&str, &CStr, vk::VideoCodecOperationFlagsKHR); 2] = [
+    (
+        "h264",
+        ash::khr::video_encode_h264::NAME,
+        vk::VideoCodecOperationFlagsKHR::ENCODE_H264,
+    ),
+    (
+        "hevc",
+        ash::khr::video_encode_h265::NAME,
+        vk::VideoCodecOperationFlagsKHR::ENCODE_H265,
+    ),
+];
+
+/// The encode operations `codecs` take, for `FFmpeg`'s encode queue.
+fn encode_operations(codecs: &[&str]) -> vk::VideoCodecOperationFlagsKHR {
+    ENCODE_EXTENSIONS
+        .iter()
+        .filter(|(codec, _, _)| codecs.contains(codec))
+        .fold(
+            vk::VideoCodecOperationFlagsKHR::empty(),
+            |operations, (_, _, operation)| operations | *operation,
+        )
+}
+
+/// Queries the coded extents this device's 8-bit 4:2:0 encoder of each of
+/// `codecs` accepts, for the profile its Vulkan encoder opens on it; a codec
+/// whose query fails is left out.
 ///
 /// Asked of the physical device rather than of `FFmpeg`, because `FFmpeg` only
 /// answers by failing to open a session at a size, after the fact, and a
 /// caller needs the answer before it exports.
 ///
 /// Only call this for a device that exposes `VK_KHR_video_queue`,
-/// `VK_KHR_video_encode_queue`, and `VK_KHR_video_encode_h264`.
-fn h264_encode_extent(
+/// `VK_KHR_video_encode_queue`, and each codec's encode extension.
+fn encode_extents(
     entry: &ash::Entry,
     instance: &ash::Instance,
     physical: vk::PhysicalDevice,
-) -> Option<VideoEncodeExtent> {
+    codecs: &[&'static str],
+) -> Vec<(&'static str, VideoEncodeExtent)> {
     let video = ash::khr::video_queue::Instance::new(entry, instance);
+    codecs
+        .iter()
+        .filter_map(|&codec| {
+            let extent = match codec {
+                "h264" => h264_encode_extent(&video, physical),
+                "hevc" => hevc_encode_extent(&video, physical),
+                _ => None,
+            }?;
+            Some((codec, extent))
+        })
+        .collect()
+}
+
+/// The 8-bit 4:2:0 capabilities `video` answers for `profile` with the codec
+/// capabilities `per_codec` chained in, or `None` when the device lacks the
+/// profile.
+fn encode_capabilities<'a>(
+    video: &ash::khr::video_queue::Instance,
+    physical: vk::PhysicalDevice,
+    profile: &vk::VideoProfileInfoKHR<'_>,
+    per_codec: &mut (impl vk::ExtendsVideoCapabilitiesKHR + 'a),
+) -> Option<(
+    (vk::Extent2D, vk::Extent2D),
+    vk::VideoEncodeCapabilitiesKHR<'a>,
+)> {
+    let mut encode = vk::VideoEncodeCapabilitiesKHR::default();
+    let mut capabilities = vk::VideoCapabilitiesKHR::default()
+        .push_next(&mut encode)
+        .push_next(per_codec);
+    // SAFETY: the profile chain lives for the call and the device is this instance's. The caller
+    // has checked that the device exposes `VK_KHR_video_queue`, `VK_KHR_video_encode_queue`, and
+    // the codec's encode extension; without them the loader dispatches to a null driver entry
+    // point. With them, a device that lacks this profile answers with an error rather than writing
+    // anything.
+    let result = unsafe {
+        (video.fp().get_physical_device_video_capabilities_khr)(
+            physical,
+            std::ptr::from_ref(profile),
+            &raw mut capabilities,
+        )
+    };
+    let extents = (capabilities.min_coded_extent, capabilities.max_coded_extent);
+    (result == vk::Result::SUCCESS).then(|| {
+        encode.p_next = std::ptr::null_mut();
+        (extents, encode)
+    })
+}
+
+/// The limits of the H.264 profile `h264_vulkan` opens on the device.
+fn h264_encode_extent(
+    video: &ash::khr::video_queue::Instance,
+    physical: vk::PhysicalDevice,
+) -> Option<VideoEncodeExtent> {
     let (profile, mut extent) = last_supported_profile(|idc| {
         let mut h264 = vk::VideoEncodeH264ProfileInfoKHR::default().std_profile_idc(idc);
         let profile = vk::VideoProfileInfoKHR::default()
@@ -668,39 +750,59 @@ fn h264_encode_extent(
             .chroma_bit_depth(vk::VideoComponentBitDepthFlagsKHR::TYPE_8)
             .push_next(&mut h264);
         let mut h264_capabilities = vk::VideoEncodeH264CapabilitiesKHR::default();
-        let mut encode = vk::VideoEncodeCapabilitiesKHR::default();
-        let mut capabilities = vk::VideoCapabilitiesKHR::default()
-            .push_next(&mut encode)
-            .push_next(&mut h264_capabilities);
-        // SAFETY: the profile chain lives for the call and the device is this instance's. The
-        // caller has checked that the device exposes `VK_KHR_video_queue`,
-        // `VK_KHR_video_encode_queue`, and `VK_KHR_video_encode_h264`; without them the loader
-        // dispatches to a null driver entry point. With them, a device that lacks this profile
-        // answers with an error rather than writing anything.
-        let result = unsafe {
-            (video.fp().get_physical_device_video_capabilities_khr)(
-                physical,
-                &raw const profile,
-                &raw mut capabilities,
-            )
-        };
-        if result != vk::Result::SUCCESS {
-            return None;
-        }
-        let coded = (capabilities.min_coded_extent, capabilities.max_coded_extent);
-        Some(encode_extent(coded, &encode, &h264_capabilities))
+        let (coded, encode) =
+            encode_capabilities(video, physical, &profile, &mut h264_capabilities)?;
+        Some(encode_extent(
+            coded,
+            &encode,
+            (
+                h264_capabilities.max_p_picture_l0_reference_count,
+                h264_capabilities.max_b_picture_l0_reference_count,
+                h264_capabilities.max_l1_reference_count,
+            ),
+        ))
     })?;
     extent.profile = profile;
     Some(extent)
 }
 
+/// The limits of HEVC Main, the profile `hevc_vulkan` opens for 8-bit 4:2:0
+/// input (`vulkan_encode_h265.c`).
+fn hevc_encode_extent(
+    video: &ash::khr::video_queue::Instance,
+    physical: vk::PhysicalDevice,
+) -> Option<VideoEncodeExtent> {
+    let mut hevc = vk::VideoEncodeH265ProfileInfoKHR::default()
+        .std_profile_idc(vk::native::StdVideoH265ProfileIdc_STD_VIDEO_H265_PROFILE_IDC_MAIN);
+    let profile = vk::VideoProfileInfoKHR::default()
+        .video_codec_operation(vk::VideoCodecOperationFlagsKHR::ENCODE_H265)
+        .chroma_subsampling(vk::VideoChromaSubsamplingFlagsKHR::TYPE_420)
+        .luma_bit_depth(vk::VideoComponentBitDepthFlagsKHR::TYPE_8)
+        .chroma_bit_depth(vk::VideoComponentBitDepthFlagsKHR::TYPE_8)
+        .push_next(&mut hevc);
+    let mut hevc_capabilities = vk::VideoEncodeH265CapabilitiesKHR::default();
+    let (coded, encode) = encode_capabilities(video, physical, &profile, &mut hevc_capabilities)?;
+    let mut extent = encode_extent(
+        coded,
+        &encode,
+        (
+            hevc_capabilities.max_p_picture_l0_reference_count,
+            hevc_capabilities.max_b_picture_l0_reference_count,
+            hevc_capabilities.max_l1_reference_count,
+        ),
+    );
+    extent.profile = "main";
+    Some(extent)
+}
+
 /// The limits one profile's capabilities describe: `coded`, its minimum and
-/// maximum coded extents, and its encode and H.264 capabilities. `profile`
-/// is left for the caller to name.
+/// maximum coded extents, its encode capabilities, and the codec's P-picture
+/// L0, B-picture L0 and L1 reference counts. `profile` is left for the caller
+/// to name.
 fn encode_extent(
     (minimum, maximum): (vk::Extent2D, vk::Extent2D),
     encode: &vk::VideoEncodeCapabilitiesKHR<'_>,
-    h264: &vk::VideoEncodeH264CapabilitiesKHR<'_>,
+    (p_l0, b_l0, l1): (u32, u32, u32),
 ) -> VideoEncodeExtent {
     VideoEncodeExtent {
         profile: "",
@@ -712,9 +814,9 @@ fn encode_extent(
             encode.encode_input_picture_granularity.width.max(1),
             encode.encode_input_picture_granularity.height.max(1),
         ),
-        max_p_picture_l0_references: h264.max_p_picture_l0_reference_count,
-        max_b_picture_l0_references: h264.max_b_picture_l0_reference_count,
-        max_l1_references: h264.max_l1_reference_count,
+        max_p_picture_l0_references: p_l0,
+        max_b_picture_l0_references: b_l0,
+        max_l1_references: l1,
         rate_control_modes: [
             (vk::VideoEncodeRateControlModeFlagsKHR::CBR, "cbr"),
             (vk::VideoEncodeRateControlModeFlagsKHR::VBR, "vbr"),
@@ -852,6 +954,14 @@ impl fmt::Display for SharedVulkanError {
 }
 
 impl Error for SharedVulkanError {}
+
+impl SharedVulkanError {
+    /// The error `message` says.
+    #[must_use]
+    pub fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+}
 
 /// An imported bi-planar 4:2:0 image and its two wgpu plane views.
 #[derive(Debug)]
@@ -1435,30 +1545,38 @@ impl Drop for VulkanImportLease {
 /// `FFmpeg` enables these itself on a device it creates. On this one, which
 /// wgpu creates, `FFmpeg` uses them whether or not they are on: every decode
 /// and encode submission is `vkQueueSubmit2`, which needs `synchronization2`,
-/// its YCbCr conversion needs `samplerYcbcrConversion`, and its
-/// profile-independent images need `videoMaintenance1`.
+/// its YCbCr conversion needs `samplerYcbcrConversion`, its
+/// profile-independent images need `videoMaintenance1`, and a VP9 decode
+/// session needs `videoDecodeVP9`. Each flag is one Vulkan feature bit.
 #[derive(Clone, Copy, Debug, Default)]
+#[allow(clippy::struct_excessive_bools)]
 struct FfmpegDeviceFeatures {
     synchronization2: bool,
     sampler_ycbcr_conversion: bool,
     video_maintenance1: bool,
+    video_decode_vp9: bool,
 }
 
-/// The [`FfmpegDeviceFeatures`] `physical` supports; `video_maintenance1` is
-/// only asked for when its extension is being enabled.
+/// The [`FfmpegDeviceFeatures`] `physical` supports; `video_maintenance1` and
+/// `video_decode_vp9` are only asked for when their extensions are being enabled.
 fn ffmpeg_device_features(
     instance: &ash::Instance,
     physical: vk::PhysicalDevice,
     video_maintenance1: bool,
+    video_decode_vp9: bool,
 ) -> FfmpegDeviceFeatures {
     let mut synchronization2 = vk::PhysicalDeviceSynchronization2Features::default();
     let mut ycbcr = vk::PhysicalDeviceSamplerYcbcrConversionFeatures::default();
     let mut maintenance = vk::PhysicalDeviceVideoMaintenance1FeaturesKHR::default();
+    let mut vp9 = VideoDecodeVp9Features::default();
     let mut features = vk::PhysicalDeviceFeatures2::default()
         .push_next(&mut synchronization2)
         .push_next(&mut ycbcr);
     if video_maintenance1 {
         features = features.push_next(&mut maintenance);
+    }
+    if video_decode_vp9 {
+        features = features.push_next(&mut vp9);
     }
     // SAFETY: `physical` was enumerated from `instance`, and every structure in the chain outlives
     // the call.
@@ -1467,14 +1585,48 @@ fn ffmpeg_device_features(
         synchronization2: synchronization2.synchronization2 == vk::TRUE,
         sampler_ycbcr_conversion: ycbcr.sampler_ycbcr_conversion == vk::TRUE,
         video_maintenance1: video_maintenance1 && maintenance.video_maintenance1 == vk::TRUE,
+        video_decode_vp9: video_decode_vp9 && vp9.video_decode_vp9 == vk::TRUE,
     }
 }
+
+/// `VK_KHR_video_decode_vp9`, which ash 0.38 (Vulkan 1.3.281) predates. The values are
+/// `vulkan_core.h` 1.4.330's: `VK_KHR_VIDEO_DECODE_VP9_EXTENSION_NAME` (line 13214),
+/// `VK_VIDEO_CODEC_OPERATION_DECODE_VP9_BIT_KHR` (line 9226) and
+/// `VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VIDEO_DECODE_VP9_FEATURES_KHR` (line 1200).
+const VIDEO_DECODE_VP9_NAME: &CStr = c"VK_KHR_video_decode_vp9";
+const DECODE_VP9: vk::VideoCodecOperationFlagsKHR = vk::VideoCodecOperationFlagsKHR::from_raw(0x8);
+const VIDEO_DECODE_VP9_FEATURES: vk::StructureType = vk::StructureType::from_raw(1_000_514_000);
+
+/// `VkPhysicalDeviceVideoDecodeVP9FeaturesKHR` (`vulkan_core.h` 1.4.330, line 13215).
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+struct VideoDecodeVp9Features {
+    s_type: vk::StructureType,
+    p_next: *mut c_void,
+    video_decode_vp9: vk::Bool32,
+}
+
+impl Default for VideoDecodeVp9Features {
+    fn default() -> Self {
+        Self {
+            s_type: VIDEO_DECODE_VP9_FEATURES,
+            p_next: std::ptr::null_mut(),
+            video_decode_vp9: vk::FALSE,
+        }
+    }
+}
+
+// SAFETY: the structure is the C one, starting with `sType` and `pNext` as every chained structure
+// does, and the specification lists it as extending both.
+unsafe impl vk::ExtendsPhysicalDeviceFeatures2 for VideoDecodeVp9Features {}
+// SAFETY: as above.
+unsafe impl vk::ExtendsDeviceCreateInfo for VideoDecodeVp9Features {}
 
 impl FfmpegDeviceFeatures {
     /// Adds the supported features to the device's creation chain.
     ///
     /// wgpu builds its own feature structures after this callback and uses
-    /// none of these three, so they are appended rather than merged. They
+    /// none of these, so they are appended rather than merged. They
     /// live for the process: the chain is read after the callback returns.
     fn enable(self, create_info: &mut vk::DeviceCreateInfo<'_>) {
         let mut info = std::mem::take(create_info);
@@ -1494,6 +1646,12 @@ impl FfmpegDeviceFeatures {
                 vk::PhysicalDeviceVideoMaintenance1FeaturesKHR::default().video_maintenance1(true),
             )));
         }
+        if self.video_decode_vp9 {
+            info = info.push_next(Box::leak(Box::new(VideoDecodeVp9Features {
+                video_decode_vp9: vk::TRUE,
+                ..VideoDecodeVp9Features::default()
+            })));
+        }
         *create_info = info;
     }
 }
@@ -1511,7 +1669,7 @@ pub struct SharedVulkanContext {
     identity: NativeGpuIdentity,
     decode_codecs: Vec<&'static str>,
     encode_codecs: Vec<&'static str>,
-    encode_extent: Option<VideoEncodeExtent>,
+    encode_extents: Vec<(&'static str, VideoEncodeExtent)>,
     validation_layer: Option<VulkanLayerVersion>,
 }
 
@@ -1527,167 +1685,69 @@ impl fmt::Debug for SharedVulkanContext {
 }
 
 impl SharedVulkanContext {
-    /// Creates a Vulkan 1.3 device with wgpu, video-decode, and NV12 support.
+    /// Creates the shared device where the host's adapter choice makes it by default
+    /// ([`choose_shared_vulkan`] under `ALPHA2_GPU_ADAPTER`, decode allowed).
     ///
     /// # Errors
-    /// Returns a capability or initialization failure suitable for auto-mode fallback.
-    #[allow(clippy::too_many_lines)]
+    /// Returns why no adapter carries the shared device.
     pub fn create() -> Result<Self, SharedVulkanError> {
+        let choice = choose_shared_vulkan(&alpha2_gpu::AdapterPolicy::from_env(), true, true)?;
+        choice.context.ok_or_else(|| {
+            SharedVulkanError(
+                choice
+                    .unavailable
+                    .unwrap_or_else(|| choice.report.explanation.clone()),
+            )
+        })
+    }
+
+    /// Creates the shared Vulkan 1.3 device, with wgpu, video decode, and NV12 support, on the
+    /// adapter at `index` of the Vulkan enumeration (the index `ALPHA2_GPU_ADAPTER` names).
+    ///
+    /// # Errors
+    /// Returns why the adapter cannot carry the shared device, or the initialization step that
+    /// failed.
+    #[allow(clippy::too_many_lines)]
+    pub fn create_on(index: usize) -> Result<Self, SharedVulkanError> {
         let _turn = alpha2_gpu::serialize_acquisition();
         let hal_instance = hal_instance()?;
         // SAFETY: adapter enumeration does not require a surface.
         let mut adapters = unsafe { hal_instance.enumerate_adapters(None) };
-        let position = choose_adapter(
-            &mut adapters,
-            std::env::var("ALPHA2_VULKAN_DEVICE").ok().as_deref(),
-        )?;
-        let exposed = adapters.swap_remove(position);
+        if index >= adapters.len() {
+            return Err(SharedVulkanError(format!(
+                "there is no Vulkan adapter {index}; there are {}",
+                adapters.len()
+            )));
+        }
+        let exposed = adapters.swap_remove(index);
         let physical = exposed.adapter.raw_physical_device();
         let shared_instance = exposed.adapter.shared_instance();
         let raw_instance = shared_instance.raw_instance().handle();
         let validation_layer = activated_validation_layer(shared_instance.raw_instance(), physical);
-        // SAFETY: `physical` was enumerated from this instance.
-        let queue_properties = unsafe {
-            shared_instance
-                .raw_instance()
-                .get_physical_device_queue_family_properties(physical)
-        };
-        let graphics_family = u32::try_from(
-            queue_properties
-                .iter()
-                .position(|family| {
-                    family.queue_flags.contains(vk::QueueFlags::GRAPHICS) && family.queue_count > 0
-                })
-                .ok_or_else(|| SharedVulkanError("Vulkan adapter has no graphics queue".into()))?,
-        )
-        .map_err(|_| SharedVulkanError("graphics queue index is out of range".into()))?;
-        if graphics_family != 0 {
-            return Err(SharedVulkanError(
-                "wgpu-hal shared-device path requires graphics queue family 0".into(),
-            ));
-        }
-        let graphics_flags = queue_properties[0].queue_flags;
-        if !graphics_flags.contains(vk::QueueFlags::COMPUTE | vk::QueueFlags::TRANSFER) {
-            return Err(SharedVulkanError(
-                "graphics queue family lacks FFmpeg compute/transfer capabilities".into(),
-            ));
-        }
-        let decode_family = u32::try_from(
-            queue_properties
-                .iter()
-                .position(|family| {
-                    family
-                        .queue_flags
-                        .contains(vk::QueueFlags::VIDEO_DECODE_KHR)
-                        && family.queue_count > 0
-                })
-                .ok_or_else(|| {
-                    SharedVulkanError("Vulkan adapter has no video-decode queue".into())
-                })?,
-        )
-        .map_err(|_| SharedVulkanError("video-decode queue index is out of range".into()))?;
-        if decode_family == graphics_family {
-            return Err(SharedVulkanError(
-                "shared Vulkan device requires a decode queue separate from wgpu graphics".into(),
-            ));
-        }
-        // The encode family is optional: a device that decodes but cannot encode still runs every
-        // other path.
-        let encode_family = queue_properties
-            .iter()
-            .position(|family| {
-                family
-                    .queue_flags
-                    .contains(vk::QueueFlags::VIDEO_ENCODE_KHR)
-                    && family.queue_count > 0
-            })
-            .and_then(|index| u32::try_from(index).ok());
-        // SAFETY: `physical` was enumerated from this instance.
-        let extension_properties = unsafe {
-            shared_instance
-                .raw_instance()
-                .enumerate_device_extension_properties(physical)
-        }
-        .map_err(|error| SharedVulkanError(format!("Vulkan extensions: {error}")))?;
-        let supports = |name: &CStr| {
-            extension_properties.iter().any(|property| {
-                property
-                    .extension_name_as_c_str()
-                    .is_ok_and(|candidate| candidate == name)
-            })
-        };
-        let mut video_extensions = vec![
-            ash::khr::video_queue::NAME,
-            ash::khr::video_decode_queue::NAME,
-        ];
-        for extension in [
-            ash::khr::video_decode_h264::NAME,
-            ash::khr::video_decode_h265::NAME,
-            ash::khr::video_decode_av1::NAME,
-        ] {
-            if supports(extension) {
-                video_extensions.push(extension);
-            }
-        }
-        if !video_extensions.iter().all(|extension| supports(extension))
-            || !video_extensions.contains(&ash::khr::video_decode_h264::NAME)
-        {
-            return Err(SharedVulkanError(
-                "Vulkan H.264 video decode is unavailable".into(),
-            ));
-        }
-        // FFmpeg's Vulkan encoder refuses to open without both of these, and wgpu asks for neither,
-        // so they are added to the device it creates. `video_maintenance1` is what lets the encoder
-        // use a video session without pre-allocating its own DPB images.
-        let encode_extensions = [
-            ash::khr::video_encode_queue::NAME,
-            ash::khr::video_maintenance1::NAME,
-            ash::khr::video_encode_h264::NAME,
-        ];
-        let encode_family = encode_family.filter(|_| {
-            encode_extensions
-                .iter()
-                .all(|extension| supports(extension))
-        });
-        // Asked only now that the device is known to expose the video queue and H.264 encode
-        // extensions: the query is an extension entry point, and a driver without them has no
+        let VideoPlan {
+            decode_family,
+            encode_family,
+            mut video_extensions,
+            mut decode_caps,
+            mut decode_codecs,
+            encode_codecs,
+        } = adapter_video_plan(shared_instance.raw_instance(), &exposed)
+            .map_err(SharedVulkanError)?;
+        let graphics_family = 0;
+        // Asked only now that the device is known to expose the video queue and each codec's encode
+        // extension: the query is an extension entry point, and a driver without them has no
         // function behind the loader's trampoline. Asked here because `shared_instance` borrows the
         // adapter, which is moved into wgpu once the device exists.
-        let h264_extent = encode_family.and_then(|_| {
-            h264_encode_extent(
+        let encode_extents = if encode_family.is_some() {
+            encode_extents(
                 shared_instance.entry(),
                 shared_instance.raw_instance(),
                 physical,
+                &encode_codecs,
             )
-        });
-        if let Some(family) = encode_family {
-            video_extensions.extend_from_slice(&encode_extensions);
-            let _ = family;
-        }
-        let mut decode_caps = vk::VideoCodecOperationFlagsKHR::empty();
-        let mut decode_codecs = Vec::new();
-        for (extension, cap, label) in [
-            (
-                ash::khr::video_decode_h264::NAME,
-                vk::VideoCodecOperationFlagsKHR::DECODE_H264,
-                "h264",
-            ),
-            (
-                ash::khr::video_decode_h265::NAME,
-                vk::VideoCodecOperationFlagsKHR::DECODE_H265,
-                "hevc",
-            ),
-            (
-                ash::khr::video_decode_av1::NAME,
-                vk::VideoCodecOperationFlagsKHR::DECODE_AV1,
-                "av1",
-            ),
-        ] {
-            if video_extensions.contains(&extension) {
-                decode_caps |= cap;
-                decode_codecs.push(label);
-            }
-        }
+        } else {
+            Vec::new()
+        };
         // P010 is optional: an adapter without it still decodes 8-bit streams, and 10-bit sources
         // fall back to software on that device.
         let required_features = (exposed.features
@@ -1708,7 +1768,15 @@ impl SharedVulkanContext {
             shared_instance.raw_instance(),
             physical,
             video_extensions.contains(&ash::khr::video_maintenance1::NAME),
+            video_extensions.contains(&VIDEO_DECODE_VP9_NAME),
         );
+        // A VP9 session needs the extension's feature as well; a driver that lists the extension
+        // without it decodes VP9 in software.
+        if !ffmpeg_features.video_decode_vp9 {
+            video_extensions.retain(|extension| *extension != VIDEO_DECODE_VP9_NAME);
+            decode_caps &= !DECODE_VP9;
+            decode_codecs.retain(|codec| *codec != "vp9");
+        }
         let extra_family = decode_family;
         let extra_encode_family =
             encode_family.filter(|family| *family != graphics_family && *family != decode_family);
@@ -1772,7 +1840,7 @@ impl SharedVulkanContext {
                 encode_queue_family: encode_family.unwrap_or(0),
                 encode_queue_count: u32::from(encode_family.is_some()),
                 encode_video_caps: encode_family
-                    .map_or(0, |_| vk::VideoCodecOperationFlagsKHR::ENCODE_H264.as_raw()),
+                    .map_or(0, |_| encode_operations(&encode_codecs).as_raw()),
                 core_features: [
                     core.shader_image_gather_extended,
                     core.fragment_stores_and_atomics,
@@ -1782,6 +1850,7 @@ impl SharedVulkanContext {
                 synchronization2: u32::from(ffmpeg_features.synchronization2),
                 sampler_ycbcr_conversion: u32::from(ffmpeg_features.sampler_ycbcr_conversion),
                 video_maintenance1: u32::from(ffmpeg_features.video_maintenance1),
+                video_decode_vp9: u32::from(ffmpeg_features.video_decode_vp9),
                 instance_extensions,
                 device_extensions,
             })
@@ -1820,12 +1889,8 @@ impl SharedVulkanContext {
                 epoch: 1,
             },
             decode_codecs,
-            encode_extent: h264_extent,
-            encode_codecs: if encode_family.is_some() {
-                vec!["h264"]
-            } else {
-                Vec::new()
-            },
+            encode_extents,
+            encode_codecs,
             validation_layer,
         })
     }
@@ -1857,8 +1922,8 @@ impl SharedVulkanContext {
             .contains(wgpu::Features::TEXTURE_FORMAT_P010)
     }
 
-    /// Decode codecs (`h264`, `hevc`, `av1`) whose extensions the device was
-    /// created with.
+    /// Decode codecs (`h264`, `hevc`, `av1`, `vp9`) whose extensions the device
+    /// was created with.
     #[must_use]
     pub fn decode_codecs(&self) -> &[&'static str] {
         &self.decode_codecs
@@ -1903,19 +1968,22 @@ impl SharedVulkanContext {
         &self.encode_codecs
     }
 
-    /// Output sizes this device's H.264 encoder accepts.
+    /// Output sizes this device's encoder of `codec` (`h264`, `hevc`) accepts.
     ///
-    /// `h264_vulkan` refuses anything outside it, and an export that asks for
-    /// one silently takes the readback path instead. The limit is the
+    /// The codec's Vulkan encoder refuses anything outside it, and an export
+    /// that asks for one takes the readback path instead. The limit is the
     /// device's, not the encoder list's: it comes from
     /// `vkGetPhysicalDeviceVideoCapabilitiesKHR`, and on the adapter this was
-    /// developed against the minimum is 160x64.
+    /// developed against the H.264 minimum is 160x64.
     ///
-    /// `None` when the device has no encode queue, or when the query itself
-    /// failed, in which case no size can be promised either way.
+    /// `None` when the device does not encode `codec`, or when the query
+    /// itself failed, in which case no size can be promised either way.
     #[must_use]
-    pub const fn encode_extent(&self) -> Option<&VideoEncodeExtent> {
-        self.encode_extent.as_ref()
+    pub fn encode_extent(&self, codec: &str) -> Option<&VideoEncodeExtent> {
+        self.encode_extents
+            .iter()
+            .find(|(encoded, _)| *encoded == codec)
+            .map(|(_, extent)| extent)
     }
 
     /// Allocation counters of the import tickets this device reuses.
@@ -2116,86 +2184,429 @@ impl SharedVulkanContext {
     }
 }
 
-/// The adapter the shared device opens among `adapters`, which this sorts in
-/// the order it chooses in ([`adapter_rank`]): the first that supports NV12
-/// plane views and, with a `selector` (`ALPHA2_VULKAN_DEVICE`), whose name
-/// contains it.
-fn choose_adapter(
-    adapters: &mut [wgpu_hal::ExposedAdapter<wgpu_hal::api::Vulkan>],
-    selector: Option<&str>,
-) -> Result<usize, SharedVulkanError> {
-    let preference = wgpu::PowerPreference::from_env();
-    adapters.sort_by_key(|adapter| adapter_rank(adapter.info.device_type, preference));
-    adapters
-        .iter()
-        .position(|adapter| {
-            selector.is_none_or(|needle| adapter.info.name.contains(needle))
-                && adapter
-                    .features
-                    .contains(wgpu::Features::TEXTURE_FORMAT_NV12)
-        })
-        .ok_or_else(|| {
-            SharedVulkanError(selector.map_or_else(
-                || "no Vulkan adapter supports NV12 plane views".to_owned(),
-                |needle| {
-                    format!(
-                        "no Vulkan adapter whose name contains ALPHA2_VULKAN_DEVICE={needle:?} \
-                         supports NV12 plane views"
-                    )
-                },
-            ))
-        })
+/// What one Vulkan adapter offers the shared device: its queue families and the video extensions
+/// the device is created with, read without opening it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct VideoPlan {
+    decode_family: u32,
+    /// The video-encode queue family, when the adapter has one with every extension
+    /// `FFmpeg`'s Vulkan encoder needs.
+    encode_family: Option<u32>,
+    video_extensions: Vec<&'static CStr>,
+    decode_caps: vk::VideoCodecOperationFlagsKHR,
+    /// The codecs the decode extensions cover (`h264`, `hevc`, `av1`, `vp9`).
+    decode_codecs: Vec<&'static str>,
+    /// The codecs the encode extensions cover; empty without an encode queue.
+    encode_codecs: Vec<&'static str>,
 }
 
-/// Where the device [`SharedVulkanContext::create`] opens is in the
-/// loader's physical-device order, for `selector` as `ALPHA2_VULKAN_DEVICE`
-/// names it (`None` unset): the index `FFmpeg` takes for a Vulkan device of
-/// its own (`av_hwdevice_ctx_create`'s `device`). A probe that opens its own
-/// device passes this, so it opens the device an export renders, decodes, and
-/// encodes on. `FFmpeg` reads a name that starts with a digit as an index,
-/// so passing the variable on would pick another device, or none.
+/// The decode extensions the shared device enables where the adapter has them: the extension,
+/// the operation `FFmpeg` is told the decode queue does, and the codec a report names.
+const DECODE_EXTENSIONS: [(&CStr, vk::VideoCodecOperationFlagsKHR, &str); 4] = [
+    (
+        ash::khr::video_decode_h264::NAME,
+        vk::VideoCodecOperationFlagsKHR::DECODE_H264,
+        "h264",
+    ),
+    (
+        ash::khr::video_decode_h265::NAME,
+        vk::VideoCodecOperationFlagsKHR::DECODE_H265,
+        "hevc",
+    ),
+    (
+        ash::khr::video_decode_av1::NAME,
+        vk::VideoCodecOperationFlagsKHR::DECODE_AV1,
+        "av1",
+    ),
+    (VIDEO_DECODE_VP9_NAME, DECODE_VP9, "vp9"),
+];
+
+/// One queue family, as the plan reads it.
+#[derive(Clone, Copy, Debug)]
+struct QueueFamily {
+    flags: vk::QueueFlags,
+    count: u32,
+}
+
+/// Whether the shared device can be made on an adapter with `families`, the extensions
+/// `supports` answers for, and NV12 plane views (`nv12`), and with what queues and extensions.
+///
+/// The renderer's graphics queue must be family 0 (wgpu-hal's shared-device path) and carry the
+/// compute and transfer work `FFmpeg` submits to it; decode needs a queue family of its own and
+/// H.264 decode at least. Encode is optional: an adapter without an encode queue and all of its
+/// extensions still decodes and renders.
+fn video_plan(
+    families: &[QueueFamily],
+    supports: impl Fn(&CStr) -> bool,
+    nv12: bool,
+) -> Result<VideoPlan, String> {
+    if !nv12 {
+        return Err("Vulkan adapter does not support NV12 plane views".to_owned());
+    }
+    let family = |flag: vk::QueueFlags| {
+        families
+            .iter()
+            .position(|family| family.flags.contains(flag) && family.count > 0)
+            .and_then(|index| u32::try_from(index).ok())
+    };
+    let graphics_family =
+        family(vk::QueueFlags::GRAPHICS).ok_or("Vulkan adapter has no graphics queue")?;
+    if graphics_family != 0 {
+        return Err("wgpu-hal shared-device path requires graphics queue family 0".to_owned());
+    }
+    if !families[0]
+        .flags
+        .contains(vk::QueueFlags::COMPUTE | vk::QueueFlags::TRANSFER)
+    {
+        return Err("graphics queue family lacks FFmpeg compute/transfer capabilities".to_owned());
+    }
+    let decode_family = family(vk::QueueFlags::VIDEO_DECODE_KHR)
+        .ok_or("Vulkan adapter has no video-decode queue")?;
+    if decode_family == graphics_family {
+        return Err(
+            "shared Vulkan device requires a decode queue separate from wgpu graphics".to_owned(),
+        );
+    }
+    let base = [
+        ash::khr::video_queue::NAME,
+        ash::khr::video_decode_queue::NAME,
+    ];
+    if !base.iter().all(|extension| supports(extension))
+        || !supports(ash::khr::video_decode_h264::NAME)
+    {
+        return Err("Vulkan H.264 video decode is unavailable".to_owned());
+    }
+    let mut video_extensions = base.to_vec();
+    let mut decode_caps = vk::VideoCodecOperationFlagsKHR::empty();
+    let mut decode_codecs = Vec::new();
+    for (extension, operation, codec) in DECODE_EXTENSIONS {
+        if supports(extension) {
+            video_extensions.push(extension);
+            decode_caps |= operation;
+            decode_codecs.push(codec);
+        }
+    }
+    // FFmpeg's Vulkan encoders refuse to open without the encode queue and `video_maintenance1`,
+    // and wgpu asks for neither, so they are added to the device it creates. `video_maintenance1`
+    // is what lets the encoder use a video session without pre-allocating its own DPB images.
+    let encode_base = [
+        ash::khr::video_encode_queue::NAME,
+        ash::khr::video_maintenance1::NAME,
+    ];
+    let encoded: Vec<(&'static str, &'static CStr)> = ENCODE_EXTENSIONS
+        .iter()
+        .filter(|(_, extension, _)| supports(extension))
+        .map(|(codec, extension, _)| (*codec, *extension))
+        .collect();
+    let encode_family = family(vk::QueueFlags::VIDEO_ENCODE_KHR)
+        .filter(|_| encode_base.iter().all(|extension| supports(extension)) && !encoded.is_empty());
+    let encode_codecs = if encode_family.is_some() {
+        video_extensions.extend_from_slice(&encode_base);
+        video_extensions.extend(encoded.iter().map(|(_, extension)| *extension));
+        encoded.iter().map(|(codec, _)| *codec).collect()
+    } else {
+        Vec::new()
+    };
+    Ok(VideoPlan {
+        decode_family,
+        encode_family,
+        video_extensions,
+        decode_caps,
+        decode_codecs,
+        encode_codecs,
+    })
+}
+
+/// [`video_plan`] for `exposed`, read from its instance.
+fn adapter_video_plan(
+    instance: &ash::Instance,
+    exposed: &wgpu_hal::ExposedAdapter<wgpu_hal::api::Vulkan>,
+) -> Result<VideoPlan, String> {
+    let physical = exposed.adapter.raw_physical_device();
+    // SAFETY: `physical` was enumerated from this instance.
+    let families: Vec<QueueFamily> =
+        unsafe { instance.get_physical_device_queue_family_properties(physical) }
+            .iter()
+            .map(|family| QueueFamily {
+                flags: family.queue_flags,
+                count: family.queue_count,
+            })
+            .collect();
+    // SAFETY: `physical` was enumerated from this instance.
+    let extensions = unsafe { instance.enumerate_device_extension_properties(physical) }
+        .map_err(|error| format!("Vulkan extensions: {error}"))?;
+    let supports = |name: &CStr| {
+        extensions.iter().any(|property| {
+            property
+                .extension_name_as_c_str()
+                .is_ok_and(|candidate| candidate == name)
+        })
+    };
+    video_plan(
+        &families,
+        supports,
+        exposed
+            .features
+            .contains(wgpu::Features::TEXTURE_FORMAT_NV12),
+    )
+}
+
+/// One Vulkan adapter as the shared device's choice sees it, read without opening a device.
+#[derive(Clone, Debug)]
+pub struct VulkanCandidate {
+    /// Its position in the Vulkan enumeration, which `ALPHA2_GPU_ADAPTER` names and
+    /// [`SharedVulkanContext::create_on`] takes.
+    pub index: usize,
+    /// Its position in the loader's physical-device order, which `FFmpeg` takes for a device of
+    /// its own.
+    pub loader_index: Option<usize>,
+    /// The adapter's name, which a name pin matches.
+    pub name: String,
+    /// Its kind, which places it in the high-performance order.
+    pub device_type: wgpu::DeviceType,
+    /// Whether the shared device can be made on it, or why not.
+    pub shares: Result<(), String>,
+    /// The codecs its decode extensions cover.
+    pub decode_codecs: Vec<&'static str>,
+    /// The codecs its encode queue and extensions cover.
+    pub encode_codecs: Vec<&'static str>,
+}
+
+/// Every Vulkan adapter, in enumeration order, with what it offers the shared device.
 ///
 /// # Errors
-/// Returns why no device is chosen: no Vulkan instance, or no adapter the
-/// shared device could open.
-pub fn shared_device_index(selector: Option<&str>) -> Result<usize, SharedVulkanError> {
+/// Returns why there is no Vulkan instance.
+pub fn vulkan_candidates() -> Result<Vec<VulkanCandidate>, SharedVulkanError> {
     let _turn = alpha2_gpu::serialize_acquisition();
     let hal_instance = hal_instance()?;
     // SAFETY: adapter enumeration does not require a surface.
-    let mut adapters = unsafe { hal_instance.enumerate_adapters(None) };
-    let position = choose_adapter(&mut adapters, selector)?;
-    let chosen = &adapters[position];
-    let physical = chosen.adapter.raw_physical_device();
-    // SAFETY: the instance is alive for the call; enumeration has no other precondition.
-    let order = unsafe {
-        chosen
-            .adapter
-            .shared_instance()
-            .raw_instance()
-            .enumerate_physical_devices()
-    }
-    .map_err(|error| SharedVulkanError(format!("Vulkan device enumeration: {error}")))?;
-    order
+    let adapters = unsafe { hal_instance.enumerate_adapters(None) };
+    Ok(adapters
         .iter()
-        .position(|device| *device == physical)
-        .ok_or_else(|| SharedVulkanError("the chosen adapter is not in the device list".into()))
+        .enumerate()
+        .map(|(index, exposed)| {
+            let instance = exposed.adapter.shared_instance().raw_instance();
+            let physical = exposed.adapter.raw_physical_device();
+            // SAFETY: the instance is alive for the call; enumeration has no other precondition.
+            let loader_index = unsafe { instance.enumerate_physical_devices() }
+                .ok()
+                .and_then(|order| order.iter().position(|device| *device == physical));
+            let plan = adapter_video_plan(instance, exposed);
+            VulkanCandidate {
+                index,
+                loader_index,
+                name: exposed.info.name.clone(),
+                device_type: exposed.info.device_type,
+                decode_codecs: plan
+                    .as_ref()
+                    .map(|plan| plan.decode_codecs.clone())
+                    .unwrap_or_default(),
+                encode_codecs: plan
+                    .as_ref()
+                    .map(|plan| plan.encode_codecs.clone())
+                    .unwrap_or_default(),
+                shares: plan.map(|_| ()),
+            }
+        })
+        .collect())
 }
 
-/// Where an adapter of `device_type` comes in the shared device's choice,
-/// lowest first: a discrete GPU before an integrated one, unless
-/// `WGPU_POWER_PREF` asks for low power, which puts the integrated one first,
-/// as `wgpu` orders the renderer's adapters. The shared device is the
-/// renderer's on Linux, so ignoring the variable here would ignore it for
-/// every export. `ALPHA2_VULKAN_DEVICE` still picks by name among them.
-fn adapter_rank(device_type: wgpu::DeviceType, preference: Option<wgpu::PowerPreference>) -> u8 {
-    let low_power = preference == Some(wgpu::PowerPreference::LowPower);
-    match device_type {
-        wgpu::DeviceType::IntegratedGpu if low_power => 0,
-        wgpu::DeviceType::DiscreteGpu if low_power => 1,
-        wgpu::DeviceType::DiscreteGpu => 0,
-        wgpu::DeviceType::IntegratedGpu => 1,
-        _ => 2,
+/// The record the adapter choice ranks `candidate` by. Decoding and encoding on the GPU both
+/// need the shared device, so an adapter that cannot carry it does neither, for that reason.
+fn candidate_record(
+    candidate: &VulkanCandidate,
+    decode_allowed: bool,
+) -> alpha2_gpu::AdapterRecord {
+    let mut record = alpha2_gpu::AdapterRecord::unasked(
+        candidate.index,
+        candidate.name.clone(),
+        "vulkan",
+        candidate.device_type == wgpu::DeviceType::Cpu,
+    );
+    record.renders = Ok(());
+    record.decodes = match (&candidate.shares, decode_allowed) {
+        (Err(reason), _) => Err(reason.clone()),
+        (Ok(()), false) => Err("decode is in software".to_owned()),
+        (Ok(()), true) => Ok(()),
+    };
+    record.gpu_encodes = alpha2_gpu::GPU_ENCODE_CODECS
+        .iter()
+        .map(|&codec| {
+            let answer = match &candidate.shares {
+                Err(reason) => Err(reason.clone()),
+                Ok(()) if candidate.encode_codecs.contains(&codec) => Ok(()),
+                Ok(()) => Err(format!(
+                    "{} has no Vulkan video encoder for {codec}",
+                    candidate.name
+                )),
+            };
+            (codec, answer)
+        })
+        .collect();
+    record
+}
+
+/// The shared device the adapter choice made, the report of that choice, and why there is no
+/// shared device when there is none.
+pub struct SharedVulkanChoice<T = SharedVulkanContext> {
+    /// The shared device, when one was made.
+    pub context: Option<T>,
+    /// Which adapter the policy took and why, with every Vulkan adapter's record.
+    pub report: alpha2_gpu::AdapterChoiceReport,
+    /// Why no shared device was made although one was wanted: the adapter the policy takes
+    /// cannot carry one, or making it failed.
+    pub unavailable: Option<String>,
+}
+
+/// Makes the shared Vulkan device on the adapter `policy` takes, ranked as every host ranks its
+/// adapters ([`alpha2_gpu::rank_adapters`]): under `auto`, the adapter that encodes the most
+/// codecs on the GPU, then one that decodes when `decode_allowed`, then the high-performance
+/// order. `wanted` is whether decode or encode wants a shared device at all; without it nothing
+/// is made and the report says where the product device renders.
+///
+/// When making the device fails on the adapter taken, the failure goes into that adapter's
+/// record and the choice is made again: under `auto` the next adapter that can carry the device
+/// is tried, while `performance` and a pin keep their adapter and render on it without one.
+///
+/// # Errors
+/// Returns why there is no Vulkan instance to choose on.
+pub fn choose_shared_vulkan(
+    policy: &alpha2_gpu::AdapterPolicy,
+    decode_allowed: bool,
+    wanted: bool,
+) -> Result<SharedVulkanChoice, SharedVulkanError> {
+    let candidates = vulkan_candidates()?;
+    Ok(choose_over(
+        candidates,
+        policy,
+        decode_allowed,
+        wanted,
+        |index| SharedVulkanContext::create_on(index).map_err(|error| error.to_string()),
+    ))
+}
+
+/// [`choose_shared_vulkan`] over `candidates`, making the device with `create_on` (a hal
+/// enumeration index in, a device or why not out).
+fn choose_over<T>(
+    mut candidates: Vec<VulkanCandidate>,
+    policy: &alpha2_gpu::AdapterPolicy,
+    decode_allowed: bool,
+    wanted: bool,
+    mut create_on: impl FnMut(usize) -> Result<T, String>,
+) -> SharedVulkanChoice<T> {
+    // In the order a product request tries them, so that a choice nothing tells apart renders
+    // where the product device would.
+    let kinds: Vec<(usize, wgpu::DeviceType)> = candidates
+        .iter()
+        .enumerate()
+        .map(|(at, candidate)| (at, candidate.device_type))
+        .collect();
+    let order = alpha2_gpu::product_order(&kinds);
+    let mut ordered: Vec<Option<VulkanCandidate>> = candidates.drain(..).map(Some).collect();
+    let mut candidates: Vec<VulkanCandidate> = order
+        .into_iter()
+        .filter_map(|at| ordered[at].take())
+        .collect();
+    loop {
+        let records: Vec<alpha2_gpu::AdapterRecord> = candidates
+            .iter()
+            .map(|candidate| candidate_record(candidate, decode_allowed))
+            .collect();
+        let ranked = match alpha2_gpu::rank_adapters(&records, policy, decode_allowed) {
+            Ok(ranked) => ranked,
+            Err(reason) => {
+                return SharedVulkanChoice {
+                    context: None,
+                    report: alpha2_gpu::AdapterChoiceReport {
+                        policy: policy.clone(),
+                        chosen: None,
+                        reason: alpha2_gpu::ChoiceReason::NoSharedDevice,
+                        explanation: reason.clone(),
+                        records,
+                    },
+                    unavailable: wanted.then_some(reason),
+                };
+            }
+        };
+        let mut report = alpha2_gpu::AdapterChoiceReport::ranked(policy.clone(), records, &ranked);
+        let first = ranked.order[0];
+        if !wanted {
+            return SharedVulkanChoice {
+                context: None,
+                report,
+                unavailable: None,
+            };
+        }
+        let candidate = &mut candidates[first];
+        if let Err(reason) = &candidate.shares {
+            let unavailable = format!(
+                "{} cannot share a device with the video decoder and encoder: {reason}",
+                candidate.name
+            );
+            if !policy.is_pin() {
+                report.reason = alpha2_gpu::ChoiceReason::NoSharedDevice;
+            }
+            report.explanation = format!("{}; {unavailable}", report.explanation);
+            return SharedVulkanChoice {
+                context: None,
+                report,
+                unavailable: Some(unavailable),
+            };
+        }
+        match create_on(candidate.index) {
+            Ok(context) => {
+                return SharedVulkanChoice {
+                    context: Some(context),
+                    report,
+                    unavailable: None,
+                };
+            }
+            Err(reason) => candidate.shares = Err(format!("the shared device failed: {reason}")),
+        }
     }
+}
+
+/// Whether `ALPHA2_GPU_ADAPTER` pins one adapter, which a probe that opens devices of its own then
+/// keeps to.
+#[must_use]
+pub fn adapter_pinned() -> bool {
+    alpha2_gpu::AdapterPolicy::from_env().is_pin()
+}
+
+/// Where the device the host's adapter choice makes the shared device on
+/// ([`choose_shared_vulkan`] under `ALPHA2_GPU_ADAPTER`) is in the loader's physical-device order:
+/// the index `FFmpeg` takes for a Vulkan device of its own (`av_hwdevice_ctx_create`'s
+/// `device`). A probe that opens its own device passes this, so it opens the device an export
+/// renders, decodes, and encodes on.
+///
+/// # Errors
+/// Returns why no device is chosen: no Vulkan instance, or no adapter the policy takes that
+/// could carry the shared device.
+pub fn shared_device_index() -> Result<usize, SharedVulkanError> {
+    let candidates = vulkan_candidates()?;
+    let mut chosen = None;
+    let choice = choose_over(
+        candidates.clone(),
+        &alpha2_gpu::AdapterPolicy::from_env(),
+        true,
+        true,
+        |index| {
+            chosen = Some(index);
+            Ok(())
+        },
+    );
+    let index = chosen.ok_or_else(|| {
+        SharedVulkanError(
+            choice
+                .unavailable
+                .unwrap_or_else(|| "no Vulkan adapter could carry the shared device".to_owned()),
+        )
+    })?;
+    candidates
+        .iter()
+        .find(|candidate| candidate.index == index)
+        .and_then(|candidate| candidate.loader_index)
+        .ok_or_else(|| SharedVulkanError("the chosen adapter is not in the device list".into()))
 }
 
 #[cfg(test)]
