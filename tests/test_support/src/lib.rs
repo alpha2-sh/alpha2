@@ -76,10 +76,14 @@ pub enum Capability {
     Python,
     /// A built alpha2-host.
     Host,
+    /// A host that renders on the GPU.
+    GpuRenderer,
     /// H.264 output from the host.
     H264,
     /// `WebGPU` in the browser.
     Webgpu,
+    /// A hardware WebGPU adapter in the browser.
+    HardwareWebgpu,
     /// The engine's `WebGL2` backend.
     Webgl2,
     /// Presenting a `WebGPU` canvas.
@@ -142,8 +146,10 @@ impl Capability {
         Self::Browser,
         Self::Python,
         Self::Host,
+        Self::GpuRenderer,
         Self::H264,
         Self::Webgpu,
+        Self::HardwareWebgpu,
         Self::Webgl2,
         Self::WebgpuPresent,
         Self::WebgpuVideoImport,
@@ -193,8 +199,10 @@ impl Capability {
             Self::Browser => "browser",
             Self::Python => "python",
             Self::Host => "host",
+            Self::GpuRenderer => "gpu-renderer",
             Self::H264 => "h264",
             Self::Webgpu => "webgpu",
+            Self::HardwareWebgpu => "hardware-webgpu",
             Self::Webgl2 => "webgl2",
             Self::WebgpuPresent => "webgpu-present",
             Self::WebgpuVideoImport => "webgpu-video-import",

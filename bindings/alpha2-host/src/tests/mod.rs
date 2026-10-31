@@ -99,6 +99,10 @@ fn media_adapter() -> crate::adapter_choice::AdapterPolicy {
 }
 
 /// [`create_host`] on [`media_adapter`].
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos", target_os = "windows"),
+    feature = "hwencode"
+))]
 fn create_media_host(policy: VideoDecodePolicy) -> Result<Host, HostError> {
     let renderer = crate::config::RendererPolicy::from_env().map_err(HostError::invalid_input)?;
     crate::create_host_on(policy, renderer, &media_adapter())
@@ -107,6 +111,15 @@ fn create_media_host(policy: VideoDecodePolicy) -> Result<Host, HostError> {
 /// [`create_gpu_test_host`] on [`media_adapter`].
 fn create_gpu_media_host(policy: VideoDecodePolicy) -> Result<Host, HostError> {
     crate::create_host_on(policy, crate::config::RendererPolicy::Gpu, &media_adapter())
+}
+
+/// Asserts that `budget` (a `memoryPolicy` entry) is one no request set: the default, or the
+/// default fitted to a small machine or to the device's memory.
+fn assert_unrequested(budget: &Value) {
+    assert!(
+        ["default", "machine", "gpu"].contains(&budget["source"].as_str().unwrap_or_default()),
+        "{budget}"
+    );
 }
 
 /// A file of the checked-in corpus. Like [`gpu_test_lock`] and

@@ -358,12 +358,14 @@ fn the_windows_default_renders_by_performance_and_auto_on_the_adapter_that_encod
             alpha2_gpu::ChoiceReason::PerformancePolicy,
             "{report:?}"
         );
-        let first_hardware = report
+        // The first hardware adapter that renders, or the software one where there is none.
+        let first = report
             .records
             .iter()
             .find(|record| !record.software && record.renders.is_ok())
-            .expect("a hardware adapter");
-        assert_eq!(first_hardware.name, host.renderer.adapter().name);
+            .or_else(|| report.records.iter().find(|record| record.renders.is_ok()))
+            .expect("an adapter that renders");
+        assert_eq!(first.name, host.renderer.adapter().name);
         assert!(
             report.explanation.contains("ALPHA2_GPU_ADAPTER is unset"),
             "{}",

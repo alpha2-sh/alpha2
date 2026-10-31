@@ -44,6 +44,8 @@ cargo([
   "--release",
   "-p",
   "alpha2-render-determinism",
+  "-p",
+  "alpha2-extension-raster-pins",
   "--target",
   "wasm32-unknown-unknown",
 ]);

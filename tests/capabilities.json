@@ -115,6 +115,10 @@
     "description": "A built alpha2-host.",
     "probe": "ALPHA2_HOST_BINARY or the cargo-built alpha2-host exists"
   },
+  "gpu-renderer": {
+    "description": "A host that renders on the GPU.",
+    "probe": "the host's capabilities report renderer gpu"
+  },
   "h264": {
     "description": "H.264 output from the host.",
     "probe": "the host produces H.264 (a runtime encoder or the GPU path)"
@@ -122,6 +126,10 @@
   "webgpu": {
     "description": "WebGPU in the browser.",
     "probe": "navigator.gpu.requestAdapter() gives an adapter and the engine reports adapter.backend BrowserWebGpu"
+  },
+  "hardware-webgpu": {
+    "description": "A hardware WebGPU adapter in the browser.",
+    "probe": "navigator.gpu gives an adapter that is neither a fallback adapter nor SwiftShader"
   },
   "webgl2": {
     "description": "The engine's WebGL2 backend.",

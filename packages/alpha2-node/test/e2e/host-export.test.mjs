@@ -42,7 +42,8 @@ const project = JSON.parse(await readFile(projectPath, "utf8"));
 // The pinned LGPL FFmpeg has no software H.264 encoder, so H.264 tests skip on hosts without a
 // platform or GPU encoder. ALPHA2_REQUIRE=h264 turns the skip into a failure.
 const requireH264 = required("h264");
-const encode = (await client.getCapabilities()).capabilities.encode;
+const probed = await client.getCapabilities();
+const encode = probed.capabilities.encode;
 const h264Available =
   encode.video.some((codec) => codec.id === "h264") ||
   (encode.gpuOutputPath?.available === true &&
@@ -53,6 +54,15 @@ const h264Absence = `this host cannot produce H.264: the runtime offers ${encode
 const skipWithoutH264 = h264Available
   ? false
   : missingCapability("h264", suiteOf(import.meta.url), h264Absence);
+// The failure is injected into the GPU's readback, which a host rendering on the CPU has not.
+const skipWithoutGpuRenderer =
+  probed.renderer === "gpu"
+    ? false
+    : missingCapability(
+        "gpu-renderer",
+        suiteOf(import.meta.url),
+        `this host renders on the ${probed.renderer} renderer: ${probed.rendererReason ?? "as asked"}`,
+      );
 
 /**
  * Asserts that `performance` has the shapes @alpha2-sh/node declares (`ExportPerformance`): a scalar or
@@ -538,53 +548,60 @@ test("a still is the PNG of the frame of the grid that holds its time", async ()
   }
 });
 
-test("a failed readback reaches the client classified, at its frame, with the host's evidence", async () => {
-  const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-e2e-failure-"));
-  const output = join(scratch, "failed.mp4");
-  const previous = process.env.ALPHA2_EXPORT_FAIL_READBACK_AT_FRAME;
-  process.env.ALPHA2_EXPORT_FAIL_READBACK_AT_FRAME = "1";
-  try {
-    await assert.rejects(
-      client.exportProject({
-        project,
-        assets: { "image-source": assetPath },
-        startTicks: 0,
-        endTicks: 15_000,
-        frameRate: { num: 24, den: 1 },
-        includeAudio: false,
-        videoCodec: "mpeg4-part2",
-        inputPolicy: "cpu-readback",
-        output,
-      }),
-      (error) => {
-        assert.equal(error.code, "ALPHA2_ERROR");
-        assert.match(error.message, /GPU texture readback failed: map-failed/);
-        assert.equal(error.failure.code, "READBACK_FAILED");
-        assert.equal(error.failure.resource, "unknown");
-        assert.equal(error.failure.phase, "readback");
-        assert.equal(error.failure.stage, "map-failed");
-        assert.equal(error.failure.frameIndex, 1);
-        assert.equal(error.failure.origin, "native-host");
-        const diagnostics = error.failure.diagnostics;
-        assert.equal(diagnostics.videoPipeline, "readback");
-        assert.equal(diagnostics.request.startTicks, "0");
-        assert.equal(diagnostics.gpu.deviceLost, false);
-        assert.equal(
-          typeof diagnostics.memory.gpu.textures.highWaterBytes,
-          "number",
-        );
-        assert.equal(typeof diagnostics.environment.adapter.name, "string");
-        assert.equal(typeof error.stderr, "string");
-        return true;
-      },
-    );
-  } finally {
-    if (previous === undefined)
-      delete process.env.ALPHA2_EXPORT_FAIL_READBACK_AT_FRAME;
-    else process.env.ALPHA2_EXPORT_FAIL_READBACK_AT_FRAME = previous;
-    await rm(scratch, { recursive: true, force: true });
-  }
-});
+test(
+  "a failed readback reaches the client classified, at its frame, with the host's evidence",
+  { skip: skipWithoutGpuRenderer },
+  async () => {
+    const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-e2e-failure-"));
+    const output = join(scratch, "failed.mp4");
+    const previous = process.env.ALPHA2_EXPORT_FAIL_READBACK_AT_FRAME;
+    process.env.ALPHA2_EXPORT_FAIL_READBACK_AT_FRAME = "1";
+    try {
+      await assert.rejects(
+        client.exportProject({
+          project,
+          assets: { "image-source": assetPath },
+          startTicks: 0,
+          endTicks: 15_000,
+          frameRate: { num: 24, den: 1 },
+          includeAudio: false,
+          videoCodec: "mpeg4-part2",
+          inputPolicy: "cpu-readback",
+          output,
+        }),
+        (error) => {
+          assert.equal(error.code, "ALPHA2_ERROR");
+          assert.match(
+            error.message,
+            /GPU texture readback failed: map-failed/,
+          );
+          assert.equal(error.failure.code, "READBACK_FAILED");
+          assert.equal(error.failure.resource, "unknown");
+          assert.equal(error.failure.phase, "readback");
+          assert.equal(error.failure.stage, "map-failed");
+          assert.equal(error.failure.frameIndex, 1);
+          assert.equal(error.failure.origin, "native-host");
+          const diagnostics = error.failure.diagnostics;
+          assert.equal(diagnostics.videoPipeline, "readback");
+          assert.equal(diagnostics.request.startTicks, "0");
+          assert.equal(diagnostics.gpu.deviceLost, false);
+          assert.equal(
+            typeof diagnostics.memory.gpu.textures.highWaterBytes,
+            "number",
+          );
+          assert.equal(typeof diagnostics.environment.adapter.name, "string");
+          assert.equal(typeof error.stderr, "string");
+          return true;
+        },
+      );
+    } finally {
+      if (previous === undefined)
+        delete process.env.ALPHA2_EXPORT_FAIL_READBACK_AT_FRAME;
+      else process.env.ALPHA2_EXPORT_FAIL_READBACK_AT_FRAME = previous;
+      await rm(scratch, { recursive: true, force: true });
+    }
+  },
+);
 
 test("the smallest budget that holds one frame writes the same file as the default", async () => {
   const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-e2e-budget-"));
@@ -610,7 +627,13 @@ test("the smallest budget that holds one frame writes the same file as the defau
   };
   try {
     const roomy = await run("roomy.mp4");
-    assert.equal(roomy.result.memoryPolicy.inFlightBytes.source, "default");
+    // Not asked for: the default, or the default fitted to a small machine or device.
+    assert.ok(
+      ["default", "machine", "gpu"].includes(
+        roomy.result.memoryPolicy.inFlightBytes.source,
+      ),
+      roomy.result.memoryPolicy.inFlightBytes.source,
+    );
     const { stagingBytesPerFrame, packedBytesPerFrame } =
       roomy.result.performance;
     // One readback, the frame being packed, and the frame being encoded: a rendezvous channel.
@@ -637,63 +660,67 @@ test("the smallest budget that holds one frame writes the same file as the defau
   }
 });
 
-test("a retry after a failure takes the frames already rendered and writes what an uninterrupted run writes", async () => {
-  const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-e2e-resume-"));
-  const frames = 12;
-  const exportTo = async (name, renderCache) => {
-    let result;
-    const output = join(scratch, name);
-    await client.exportProject({
-      project,
-      assets: { "image-source": assetPath },
-      startTicks: 0,
-      endTicks: (frames * 120_000) / 24,
-      frameRate: { num: 24, den: 1 },
-      includeAudio: false,
-      videoCodec: "mpeg4-part2",
-      inputPolicy: "cpu-readback",
-      output,
-      ...(renderCache ? { renderCache } : {}),
-      onResult: (value) => {
-        result = value;
-      },
-    });
-    return { result, bytes: await readFile(output) };
-  };
-  try {
-    const clean = await exportTo("clean.mp4");
-    for (const failAt of [1, frames - 1]) {
-      const renderCache = {
-        directory: join(scratch, `cache-${failAt}`),
-        quotaBytes: 64 * 1024 * 1024,
-        backlog: "wait",
-      };
-      process.env.ALPHA2_EXPORT_FAIL_READBACK_AT_FRAME = String(failAt);
-      process.env.ALPHA2_EXPORT_FAIL_ONCE_MARKER = join(
-        scratch,
-        `failed-${failAt}`,
-      );
-      try {
-        await assert.rejects(
-          exportTo(`interrupted-${failAt}.mp4`, renderCache),
-          (error) =>
-            error.failure?.code === "READBACK_FAILED" &&
-            error.failure.frameIndex === failAt,
+test(
+  "a retry after a failure takes the frames already rendered and writes what an uninterrupted run writes",
+  { skip: skipWithoutGpuRenderer },
+  async () => {
+    const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-e2e-resume-"));
+    const frames = 12;
+    const exportTo = async (name, renderCache) => {
+      let result;
+      const output = join(scratch, name);
+      await client.exportProject({
+        project,
+        assets: { "image-source": assetPath },
+        startTicks: 0,
+        endTicks: (frames * 120_000) / 24,
+        frameRate: { num: 24, den: 1 },
+        includeAudio: false,
+        videoCodec: "mpeg4-part2",
+        inputPolicy: "cpu-readback",
+        output,
+        ...(renderCache ? { renderCache } : {}),
+        onResult: (value) => {
+          result = value;
+        },
+      });
+      return { result, bytes: await readFile(output) };
+    };
+    try {
+      const clean = await exportTo("clean.mp4");
+      for (const failAt of [1, frames - 1]) {
+        const renderCache = {
+          directory: join(scratch, `cache-${failAt}`),
+          quotaBytes: 64 * 1024 * 1024,
+          backlog: "wait",
+        };
+        process.env.ALPHA2_EXPORT_FAIL_READBACK_AT_FRAME = String(failAt);
+        process.env.ALPHA2_EXPORT_FAIL_ONCE_MARKER = join(
+          scratch,
+          `failed-${failAt}`,
         );
-        const resumed = await exportTo(`resumed-${failAt}.mp4`, renderCache);
-        assert.equal(resumed.result.renderCache.hits, failAt);
-        assert.equal(resumed.result.renderCache.writes, frames - failAt);
-        assert.equal(resumed.result.frames, clean.result.frames);
-        assert.ok(resumed.bytes.equals(clean.bytes), `resumed at ${failAt}`);
-      } finally {
-        delete process.env.ALPHA2_EXPORT_FAIL_READBACK_AT_FRAME;
-        delete process.env.ALPHA2_EXPORT_FAIL_ONCE_MARKER;
+        try {
+          await assert.rejects(
+            exportTo(`interrupted-${failAt}.mp4`, renderCache),
+            (error) =>
+              error.failure?.code === "READBACK_FAILED" &&
+              error.failure.frameIndex === failAt,
+          );
+          const resumed = await exportTo(`resumed-${failAt}.mp4`, renderCache);
+          assert.equal(resumed.result.renderCache.hits, failAt);
+          assert.equal(resumed.result.renderCache.writes, frames - failAt);
+          assert.equal(resumed.result.frames, clean.result.frames);
+          assert.ok(resumed.bytes.equals(clean.bytes), `resumed at ${failAt}`);
+        } finally {
+          delete process.env.ALPHA2_EXPORT_FAIL_READBACK_AT_FRAME;
+          delete process.env.ALPHA2_EXPORT_FAIL_ONCE_MARKER;
+        }
       }
+    } finally {
+      await rm(scratch, { recursive: true, force: true });
     }
-  } finally {
-    await rm(scratch, { recursive: true, force: true });
-  }
-});
+  },
+);
 
 test("a second export of the same snapshot takes its frames from the render cache", async () => {
   const scratch = await mkdtemp(join(tmpdir(), "alpha2-node-bake-"));

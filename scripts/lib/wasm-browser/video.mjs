@@ -450,7 +450,7 @@ const yuv = (x, y) => {
     : [sample(0, x, y), sample(1, cx, cy, 2, 0), sample(1, cx, cy, 2, 1)];
 };
 const adapter = await navigator.gpu?.requestAdapter();
-if (!adapter) throw new Error("this Chrome exposes no WebGPU adapter");
+if (!adapter) skip("webgpu", "this browser exposes no WebGPU adapter");
 const device = await adapter.requestDevice();
 const texture = device.createTexture({
   size: [width, height], format: "rgba8unorm",

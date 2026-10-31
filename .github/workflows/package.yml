@@ -92,6 +92,7 @@ jobs:
           npm ci
           npm run build:js --workspace alpha2
           npm run build --workspace @alpha2-sh/node
+          mkdir -p target/npm-pack
           npm pack --workspace @alpha2-sh/node --pack-destination target/npm-pack
 
       # windows-latest's ANSI code page is 1252: Hangul and the emoji are outside it.

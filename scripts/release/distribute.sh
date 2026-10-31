@@ -31,9 +31,9 @@ cp "$archive" "$published"
 # alpha2-host wheel and the release's checksums.sha256. A step that changes the archive, such as
 # signing the binaries in it, runs before this point.
 if command -v sha256sum > /dev/null; then
-  sha256=$(sha256sum "$published" | cut -d ' ' -f 1)
+  sha256=$(sha256sum < "$published" | cut -d ' ' -f 1)
 else
-  sha256=$(shasum -a 256 "$published" | cut -d ' ' -f 1)
+  sha256=$(shasum -a 256 < "$published" | cut -d ' ' -f 1)
 fi
 echo "$name $sha256"
 

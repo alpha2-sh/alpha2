@@ -493,7 +493,7 @@ const software = capabilities.webgpuFallbackAdapter === true ||
   (!capabilities.webgpu && capabilities.webgl2 && capabilities.renderer === "cpu");
 const details = { auto, gpu, capabilities: { webgpu: capabilities.webgpu, webgpuFallbackAdapter: capabilities.webgpuFallbackAdapter,
   webgl2: capabilities.webgl2, webgl2Renderer: capabilities.webgl2Renderer, renderer: capabilities.renderer } };
-if (!capabilities.webgpu && !capabilities.webgl2) skip("software-adapter", "the browser offers no GPU adapter at all", details);
+if (!capabilities.webgpu && !capabilities.webgl2) skip("webgl2", "the browser offers no GPU adapter at all", details);
 const ok = software
   ? auto.renderer === "cpu" && /software adapter .+, which renderer "auto" does not draw on/.test(auto.rendererReason ?? "") &&
     gpu.renderer === "gpu" && gpu.rendererReason === null

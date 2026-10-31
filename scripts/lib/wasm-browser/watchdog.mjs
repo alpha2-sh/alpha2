@@ -14,7 +14,7 @@ const engine = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(64, 4
 const adapter = webgpuAdapter(engine);
 const described = JSON.parse(engine.diagnostics()).adapter ?? {};
 if (described.isFallbackAdapter || described.architecture === "swiftshader")
-  skip("webgpu", "a software WebGPU adapter draws a 4K heavy frame in minutes", { adapter });
+  skip("hardware-webgpu", "a software WebGPU adapter draws a 4K heavy frame in minutes", { adapter });
 const [heavy] = await fetch("/tests/cases/gpu-watchdog/heavy-effects.json").then((response) => response.json());
 engine.registerCompiledEffect(await engine.compileEffect(JSON.stringify(heavy)));
 const project = await fetch("/tests/cases/gpu-watchdog/heavy-3840x2160.json").then((response) => response.json());

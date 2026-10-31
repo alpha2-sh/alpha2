@@ -173,7 +173,7 @@ fn extension_sources_export_through_their_providers() {
 
     // A budget that cannot hold one frame is refused before anything renders or any output opens,
     // as the budget's, not as an engine failure.
-    assert_eq!(result["memoryPolicy"]["inFlightBytes"]["source"], "default");
+    assert_unrequested(&result["memoryPolicy"]["inFlightBytes"]);
     let mut starved = parse_request(
         &json!({
             "protocolVersion": 1, "requestId": "starved", "operation": "export",
@@ -1269,10 +1269,7 @@ fn an_export_closes_provider_sources_past_its_budget_and_writes_the_same_file() 
     };
     let open = directory.join("open.mp4");
     let kept = export(json!({}), &open);
-    assert_eq!(
-        kept["memoryPolicy"]["providerSourceBytes"]["source"],
-        "default"
-    );
+    assert_unrequested(&kept["memoryPolicy"]["providerSourceBytes"]);
     assert_eq!(kept["performance"]["providerSourceReopens"], 0, "{kept}");
     let held = kept["performance"]["peakProviderSourceBytes"]
         .as_u64()

@@ -28,9 +28,9 @@ target_value() {
 
 hash_file() {
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | awk '{print $1}'
+    sha256sum < "$1" | awk '{print $1}'
   else
-    shasum -a 256 "$1" | awk '{print $1}'
+    shasum -a 256 < "$1" | awk '{print $1}'
   fi
 }
 

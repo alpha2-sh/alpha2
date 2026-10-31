@@ -899,6 +899,7 @@ fn take_kept_path(mut message: String) -> (Option<String>, String) {
 
 /// The frame `message` says the encoder rejected ([`encoder_rejected_tag`]),
 /// and `message` without that tag.
+#[cfg(feature = "hwencode")]
 pub fn take_encoder_rejected(mut message: String) -> (Option<u64>, String) {
     let mut frame = None;
     while let Some(start) = message.find(encoder_rejected_tag_open()) {
@@ -1033,6 +1034,7 @@ impl Progress {
     }
 
     /// The event that starts an export over from frame 0 on the readback path.
+    #[cfg(feature = "hwencode")]
     pub const fn restarted(total: u64) -> Self {
         Self {
             phase: ProgressPhase::Frames,

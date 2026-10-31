@@ -11,8 +11,15 @@ publish = false
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = ["rasters"]
+# The rasterizers the pins draw with. A feature of this crate rather than of its dependency, so that
+# a workspace build without default features does not hand SVG and Lottie to every crate that links
+# alpha2-extensions, as feature unification would.
+rasters = ["alpha2-extensions/svg", "alpha2-extensions/lottie"]
+
 [dependencies]
-alpha2-extensions = { workspace = true, features = ["svg", "lottie"] }
+alpha2-extensions.workspace = true
 alpha2-model.workspace = true
 alpha2-time.workspace = true
 png.workspace = true

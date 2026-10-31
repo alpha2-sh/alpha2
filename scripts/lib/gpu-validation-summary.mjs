@@ -95,6 +95,9 @@ export function backendEnvironment(backend, options) {
       VK_KHRONOS_VALIDATION_VALIDATE_SYNC: "true",
       VK_KHRONOS_VALIDATION_DEBUG_ACTION: "VK_DBG_LAYER_ACTION_LOG_MSG",
       VK_KHRONOS_VALIDATION_REPORT_FLAGS: "error,warn,perf,info",
+      // Test binaries run side by side, and each instance writes the layer's shader cache file
+      // as it ends: the writers race and the layer warns that it cannot open the file.
+      VK_KHRONOS_VALIDATION_CHECK_SHADERS_CACHING: "false",
     });
     // A log file named here would be truncated by each instance.
     delete environment.VK_KHRONOS_VALIDATION_LOG_FILENAME;

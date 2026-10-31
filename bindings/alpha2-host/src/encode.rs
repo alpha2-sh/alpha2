@@ -558,6 +558,7 @@ pub struct PipelineFailure {
 
 impl PipelineFailure {
     /// Forgets the recorded failure, for an export that starts over on another path.
+    #[cfg(feature = "hwencode")]
     pub fn clear(&self) {
         self.cause
             .lock()

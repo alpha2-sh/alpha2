@@ -114,7 +114,7 @@ use crate::{
     protocol::MAX_REQUEST_LINE_BYTES,
     serve_io::{RequestLine, read_request_line},
 };
-use alpha2_gpu::{GpuContext, GpuDiagnostic};
+use alpha2_gpu::GpuDiagnostic;
 use alpha2_native::ffmpeg_runtime_identity;
 use alpha2_render::Renderer;
 use serde_json::{Value, json};
@@ -425,7 +425,7 @@ fn probe_gpu_encode(args: Vec<String>) -> Result<(), HostError> {
     feature = "hwencode"
 ))]
 fn render_gpu_encode_slice(
-    gpu: &GpuContext,
+    gpu: &alpha2_gpu::GpuContext,
     device: &alpha2_native::HardwareEncodeDevice,
     width: u32,
     height: u32,
@@ -526,7 +526,7 @@ fn probe_metal_gpu_encode(args: Vec<String>) -> Result<(), HostError> {
     if args.next().is_some() {
         return Err(HostError::invalid_input(usage()));
     }
-    let gpu = pollster::block_on(GpuContext::request_product())
+    let gpu = pollster::block_on(alpha2_gpu::GpuContext::request_product())
         .map_err(|error| HostError::new("GPU_INIT_FAILED", error_message(error)))?;
     let shared = alpha2_native_gpu::SharedMetalContext::from_gpu(gpu)
         .map_err(|error| HostError::new("GPU_ERROR", format!("shared Metal device: {error}")))?;
@@ -743,7 +743,7 @@ pub(crate) fn create_gpu_host_with_adapter(
     // Windows renders on the scan's DX12 device or refuses to start; it never asks for another.
     #[cfg(not(all(target_os = "windows", feature = "hwdevice")))]
     let request_default = || {
-        pollster::block_on(GpuContext::request_product_with(
+        pollster::block_on(alpha2_gpu::GpuContext::request_product_with(
             &alpha2_gpu::ProductRequest {
                 software,
                 ..alpha2_gpu::ProductRequest::default()

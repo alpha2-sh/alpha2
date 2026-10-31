@@ -56,6 +56,14 @@ export function timelineIndex(document: EditorDocument): readonly IndexEntry[] {
   const names = new Map(
     Object.values(document.assets).map((asset) => [asset.id, asset.name]),
   );
+  // A Map, not a property read per clip: a keyed read of thousands of distinct ids from an
+  // object costs more per clip the more clips there are.
+  const clipNames = new Map(
+    Object.entries(document.metadata.clips).map(([id, clip]) => [
+      id,
+      clip.name,
+    ]),
+  );
   const entries: IndexEntry[] = [];
   for (const track of document.project.timeline.tracks) {
     for (const clip of track.clips ?? [])
@@ -63,9 +71,7 @@ export function timelineIndex(document: EditorDocument): readonly IndexEntry[] {
         kind: "clip",
         id: clip.id,
         name:
-          document.metadata.clips[clip.id]?.name ??
-          names.get(clip.source_id) ??
-          clip.source_id,
+          clipNames.get(clip.id) ?? names.get(clip.source_id) ?? clip.source_id,
         trackId: track.id,
         start: clip.timeline_range.start,
         end: clip.timeline_range.end,

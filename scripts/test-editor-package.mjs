@@ -153,9 +153,18 @@ try {
   ]);
   const files = await readdir(join(dir, "dist/assets"));
   let jsBytes = 0;
+  // Each chunk's size and every installed copy of mediabunny: what tells a bundle that holds the
+  // media library twice from one that holds it once.
+  const chunkBytes = {};
+  const mediabunnyCopies = (
+    await readdir(join(dir, "node_modules"), { recursive: true })
+  )
+    .map((path) => path.replaceAll("\\", "/"))
+    .filter((path) => /(^|\/)mediabunny\/package\.json$/.test(path));
   for (const file of files.filter((f) => f.endsWith(".js"))) {
     const bytes = await readFile(join(dir, "dist/assets", file));
     jsBytes += bytes.length;
+    chunkBytes[file] = bytes.length;
     if (/\/packages\/|node:fs|@alpha2-sh\/node/.test(bytes.toString()))
       throw Error("Private path leaked into bundle: " + file);
   }
@@ -343,6 +352,8 @@ export const app=<EditorProvider editor={editor}><Selected/><EditorPreview bridg
     reactPublicEntrypoint: true,
     typecheck: true,
     javascriptBytes: jsBytes,
+    chunkBytes,
+    mediabunnyCopies,
     browser,
     fallback,
     contextLoss,

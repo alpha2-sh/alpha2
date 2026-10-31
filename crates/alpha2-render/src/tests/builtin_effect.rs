@@ -1048,12 +1048,14 @@ fn every_builtin_effect_draws_its_reviewed_picture() {
     let labels: Vec<&str> = effects.iter().map(|(id, _)| *id).collect();
     assert_rgba8_golden_tiles(
         // Thresholds (solarize, halftone, VHS) land on either side of a step on other GPUs; Metal
-        // compiles with fast math as well, and GL is a few levels off every other backend.
+        // compiles with fast math as well, and GL is a few levels off every other backend. A
+        // virtual machine's paravirtual Metal device puts the halftone's dot edges elsewhere again.
         &[
             alpha2_golden_support::Variant::everywhere("builtin_effects"),
             super::golden::on_adapter("builtin_effects_lavapipe", "Vulkan", "llvmpipe"),
             super::golden::on_adapter("builtin_effects_radv", "Vulkan", "RADV"),
             super::golden::on_backend("builtin_effects_metal", "Metal"),
+            super::golden::on_adapter("builtin_effects_paravirtual", "Metal", "Paravirtual"),
             super::golden::on_backend("builtin_effects_gl", "Gl"),
             super::golden::on_backend("builtin_effects_dx12", "Dx12"),
         ],

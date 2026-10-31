@@ -198,7 +198,7 @@ export const cases = {
     underSimulation(
       ["quality-silent"],
       exportEveryContainer(),
-      `(result) => { const modes = Object.values(result.results).filter((entry) => entry?.videoCodec === "avc").map((entry) => entry.latencyProbe?.mode); return modes.length > 0 && modes.every((mode) => mode === "realtime") ? result : { ...result, ok: false, simulation: "the H.264 encoders did not open in realtime mode", modes }; }`,
+      `(result) => { const modes = Object.values(result.results).filter((entry) => entry?.videoCodec === "avc").map((entry) => entry.latencyProbe?.mode); if (modes.length === 0) return { skipped: "this browser has no H.264 encoder, which the simulation is about", capability: "webcodecs-video" }; return modes.every((mode) => mode === "realtime") ? result : { ...result, ok: false, simulation: "the H.264 encoders did not open in realtime mode", modes }; }`,
     ),
   // The probe's noise burst follows a frame of silence, which the simulated drop removes: the
   // measured priming is the encoder's own plus 2112, less 1024.

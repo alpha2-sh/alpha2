@@ -1952,9 +1952,11 @@ impl Host {
             candidate
         };
         // The GPU-resident export the readback path started over from, when one did.
+        #[cfg_attr(not(feature = "hwencode"), allow(unused_mut))]
         let mut gpu_output_path_fallback = Value::Null;
         // The GPU-resident path's encoder, when it had no session free, and the smallest output
         // it takes: what a readback path that opens nothing either reports.
+        #[cfg_attr(not(feature = "hwencode"), allow(unused_mut))]
         let mut gpu_busy: Option<alpha2_native::EncoderRefusal> = None;
         #[cfg(feature = "hwencode")]
         let gpu_minimum = candidate

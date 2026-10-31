@@ -57,6 +57,19 @@ def encode(client: HostClient) -> dict[str, Any]:
     return client.capabilities()["capabilities"]["encode"]  # type: ignore[no-any-return]
 
 
+@pytest.fixture(scope="module")
+def gpu_renderer(client: HostClient) -> None:
+    """A host that renders on the GPU: a failed readback is injected into the GPU's readback,
+    which a host rendering on the CPU has not."""
+    probed = client.capabilities()
+    if probed["renderer"] != "gpu":
+        require_or_skip(
+            "gpu-renderer",
+            f"this host renders on the {probed['renderer']} renderer: "
+            f"{probed.get('rendererReason') or 'as asked'}",
+        )
+
+
 def h264_available(encode: dict[str, Any]) -> bool:
     gpu = encode.get("gpuOutputPath") or {}
     return any(codec["id"] == "h264" for codec in encode["video"]) or (
@@ -331,6 +344,7 @@ def test_a_compose_spec_compiles_from_the_hosts_facts_and_exports(
         c.Video(c.Media(tmp_path / "missing.mp4")).compile(client=client)
 
 
+@pytest.mark.usefixtures("gpu_renderer")
 def test_a_failed_readback_reaches_the_client_classified_with_the_hosts_evidence(
     client: HostClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -378,7 +392,8 @@ def test_the_smallest_budget_that_holds_one_frame_writes_the_same_file_as_the_de
         return result, output.read_bytes()
 
     roomy, roomy_bytes = run("roomy.mp4")
-    assert roomy["memoryPolicy"]["inFlightBytes"]["source"] == "default"
+    # Not asked for: the default, or the default fitted to a small machine or device.
+    assert roomy["memoryPolicy"]["inFlightBytes"]["source"] in ("default", "machine", "gpu")
     performance = roomy["performance"]
     # One readback, the frame being packed, and the frame being encoded: a rendezvous channel.
     least = performance["stagingBytesPerFrame"] + 2 * performance["packedBytesPerFrame"]
@@ -399,6 +414,7 @@ def test_the_smallest_budget_that_holds_one_frame_writes_the_same_file_as_the_de
     assert caught.value.failure["code"] == "RESOURCE_LIMIT"
 
 
+@pytest.mark.usefixtures("gpu_renderer")
 def test_a_retry_after_a_failure_takes_the_frames_already_rendered(
     client: HostClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

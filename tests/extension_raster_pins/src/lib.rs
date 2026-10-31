@@ -11,7 +11,9 @@
 //! checks them under Node.
 //!
 //! `ALPHA2_UPDATE_RASTER_PINS=1 cargo test -p alpha2-extension-raster-pins`
-//! rewrites the references (on linux-x64 only).
+//! rewrites the references (on linux-x64 only). Without the `rasters`
+//! feature the crate is empty.
+#![cfg(feature = "rasters")]
 
 use std::sync::Arc;
 

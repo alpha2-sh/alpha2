@@ -7,8 +7,9 @@
 
 use super::*;
 
-/// The child half of the tests below: a two-effect 1080p export whose frame 1
-/// is lost, answered on stdout as the protocol answers it.
+/// The child half of the tests below: a two-effect export whose frame 1 is
+/// lost, answered on stdout as the protocol answers it. `DEVICE_HUNG_EXPORT_SIZE`
+/// (`<width>x<height>`) sets its size, 1920x1080 when unset.
 #[test]
 #[ignore = "run by the device-hung tests with ALPHA2_EXPORT_LOSE_DEVICE_AT_FRAME set"]
 fn export_that_loses_its_device() {
@@ -16,8 +17,15 @@ fn export_that_loses_its_device() {
     let directory = scratch_directory("device-hung");
     let mut host = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
     let mut project = still_project([0.2, 0.3, 0.4], "bypass");
-    project["settings"]["width"] = json!(1920);
-    project["settings"]["height"] = json!(1080);
+    let (width, height) = std::env::var("DEVICE_HUNG_EXPORT_SIZE")
+        .ok()
+        .and_then(|size| {
+            let (width, height) = size.split_once('x')?;
+            Some((width.parse::<u32>().ok()?, height.parse::<u32>().ok()?))
+        })
+        .unwrap_or((1920, 1080));
+    project["settings"]["width"] = json!(width);
+    project["settings"]["height"] = json!(height);
     let param = |name: &str, value: f64| json!({name: {"mode": "constant", "value": {"type": "float", "value": value}}});
     project["compositions"] = json!([{"id": "heavy", "output": "grain", "nodes": [
         {"id": "clip", "op": {"type": "clip"}},
@@ -55,8 +63,8 @@ fn export_that_loses_its_device() {
 }
 
 /// Runs [`export_that_loses_its_device`] in a child with `watchdog_ms`, when
-/// given, and returns its answer.
-fn lost_export(watchdog_ms: Option<&str>) -> Value {
+/// given, at `size`, and returns its answer.
+fn lost_export(watchdog_ms: Option<&str>, size: &str) -> Value {
     let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"));
     child
         .args([
@@ -67,6 +75,7 @@ fn lost_export(watchdog_ms: Option<&str>) -> Value {
             "--test-threads=1",
         ])
         .env("ALPHA2_EXPORT_LOSE_DEVICE_AT_FRAME", "1")
+        .env("DEVICE_HUNG_EXPORT_SIZE", size)
         .env_remove("ALPHA2_EXPORT_FAIL_ONCE_MARKER")
         .env_remove("ALPHA2_GPU_WATCHDOG_MS")
         .stdin(std::process::Stdio::null());
@@ -89,7 +98,7 @@ fn lost_export(watchdog_ms: Option<&str>) -> Value {
 fn an_injected_loss_after_a_heavy_frame_is_device_hung() {
     // A 1 ms watchdog puts the line at 0 ms. A longer one would not do: a heavy frame is cut into
     // submissions of an eighth of the watchdog, so on a fast GPU none of them reaches half of it.
-    let answer = lost_export(Some("1"));
+    let answer = lost_export(Some("1"), "1920x1080");
     let error = &answer["error"];
     assert_eq!(answer["ok"], false, "{answer}");
     assert_eq!(error["code"], "GPU_DEVICE_HUNG", "{answer}");
@@ -114,7 +123,9 @@ fn an_injected_loss_after_a_heavy_frame_is_device_hung() {
 
 #[test]
 fn an_injected_loss_after_light_frames_stays_device_lost() {
-    let answer = lost_export(None);
+    // Light on any adapter: the blur's radius follows the frame's size, so its cost grows with the
+    // cube of the width, and at 1080p a software rasterizer takes longer than the watchdog.
+    let answer = lost_export(None, "480x270");
     let error = &answer["error"];
     assert_eq!(answer["ok"], false, "{answer}");
     assert_eq!(error["code"], "GPU_DEVICE_LOST", "{answer}");

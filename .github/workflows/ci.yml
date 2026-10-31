@@ -1339,6 +1339,9 @@ jobs:
       - run: npm run test:editor:package
       - name: The wasm-browser cases in Firefox (the image's Firefox and geckodriver)
         if: ${{ !cancelled() }}
+        # The image's Firefox offers no WebGPU, WebGL2 or H.264 here: those cases skip.
+        env:
+          ALPHA2_REQUIRE: browser,wasm
         run: node scripts/test-wasm-browser.mjs --browser firefox
       - name: With no GPU in the browser, auto renders on the CPU (page and worker)
         if: ${{ !cancelled() }}

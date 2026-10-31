@@ -18,6 +18,7 @@ pub const ENCODE_CODECS: [NativeVideoCodec; 3] = [
 
 /// The codec an export encodes when its request names none, which a report of another adapter
 /// that could encode names first.
+#[cfg_attr(not(feature = "hwencode"), allow(dead_code))]
 pub const DEFAULT_ENCODE_CODEC: NativeVideoCodec = NativeVideoCodec::H264;
 
 /// How the renderer's adapter is chosen (`ALPHA2_GPU_ADAPTER`), parsed in alpha2-gpu so that
@@ -70,6 +71,7 @@ pub fn duplicate_rows(rows: &[RowIdentity]) -> Vec<(usize, usize)> {
 
 /// What the start-up choice leaves the GPU-resident export to say.
 #[derive(Clone, Debug, Default)]
+#[cfg_attr(not(feature = "hwencode"), allow(dead_code))]
 pub struct EncodeAdapterNotes {
     /// Why the renderer's adapter has no device shared with a hardware
     /// encoder, when it has none.
@@ -101,6 +103,7 @@ impl EncodeAdapterNotes {
 
     /// `reason`, why `codec` is not encoded on the GPU here, with the
     /// adapter that could encode it, when one could.
+    #[cfg_attr(not(feature = "hwencode"), allow(dead_code))]
     pub fn explain(&self, codec: NativeVideoCodec, reason: String) -> String {
         match self.elsewhere.iter().find(|(other, _)| *other == codec) {
             Some((_, hint)) => format!("{reason}; {hint}"),

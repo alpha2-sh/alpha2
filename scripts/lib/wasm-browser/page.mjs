@@ -76,10 +76,11 @@ const described = (error) => {
   const stack = String(error?.stack ?? "");
   return stack.includes(message) ? stack : stack ? message + "\\n" + stack : message;
 };
-// A device or instance lost while a VideoFrame is imported into WebGPU: headless Chrome and
-// SwiftShader's WebGPU do this. A loss the case saw before it imported anything is the engine's.
+// A device or instance lost while a VideoFrame is imported into WebGPU (headless Chrome and
+// SwiftShader's WebGPU do this), or a copy of the video the browser refuses (Chrome on Windows'
+// software adapter). A loss the case saw before it imported anything is the engine's.
 const importUnavailable = (error) =>
-  /external Instance reference no longer exists|device was lost|Device was destroyed/i.test(String(error?.message ?? error));
+  /external Instance reference no longer exists|device was lost|Device was destroyed|Failed to copy content from video element/i.test(String(error?.message ?? error));
 ${LUMA_AT}
 // The positive control of a presentation case, run before the engine: a canvas of the same kind
 // filled with one colour without the engine (\`webgpu\`: a render pass that only clears, on the
@@ -130,11 +131,26 @@ const webgpuAdapter = (engine) => {
     skip("webgpu", "the engine runs on " + (backend || "no backend") + ", not WebGPU", { adapter: { name, backend } });
   return { name, backend };
 };
+// Whether the browser offers a GPU the engine could draw with at all: a WebGPU adapter or a WebGL2
+// context.
+const offersGpu = async () =>
+  Boolean(await navigator.gpu?.requestAdapter().catch(() => null)) ||
+  Boolean(new OffscreenCanvas(1, 1).getContext("webgl2"));
 try {
 ${body}
 } catch (error) {
+  const message = String(error?.message ?? error);
   if (error instanceof CaseSkip)
     report({ skipped: error.message, capability: error.capability, ...error.details });
+  // A case the engine draws on a GPU, in a browser that offers none.
+  else if (/the canvas takes no GPU surface/.test(message) && !(await offersGpu()))
+    report({ skipped: "this browser offers no WebGPU adapter and no WebGL2 context", capability: "webgl2" });
+  // A source the case reads that this browser does not decode, which the SDK refuses as such.
+  else if (error?.code === "DECODE_UNAVAILABLE" && error.facts?.kind)
+    report({
+      skipped: "this browser does not decode the case's source: " + message,
+      capability: error.facts.kind === "audio" ? "webcodecs-audio" : "webcodecs-video",
+    });
   else if (VIDEO_IMPORT && !error?.beforeImport && importUnavailable(error))
     report({
       skipped: "this browser lost WebGPU importing a VideoFrame (" + String(error?.message ?? error) + ")",

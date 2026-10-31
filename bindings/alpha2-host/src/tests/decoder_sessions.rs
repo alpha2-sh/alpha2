@@ -47,10 +47,7 @@ fn an_export_opens_a_session_for_each_video_it_reads_at_once_and_short_of_them_w
     assert_eq!(performance["decoderSessionLimit"], "workload");
     assert_eq!(performance["decoderSessionReopens"], 0);
     assert_eq!(result["decodeDiagnostics"], json!([]), "{result}");
-    assert_eq!(
-        result["memoryPolicy"]["decoderSessionBytes"]["source"],
-        "default"
-    );
+    assert_unrequested(&result["memoryPolicy"]["decoderSessionBytes"]);
 
     // A budget no session fits: one session, which every cursor takes in turn.
     let short = directory.join("short.mp4");
