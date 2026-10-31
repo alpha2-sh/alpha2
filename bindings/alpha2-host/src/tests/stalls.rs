@@ -159,11 +159,24 @@ fn a_stall_in_a_shard_with_a_hardware_session_is_reported_on_the_gpu() {
 /// the source to software, and a stall there is not the GPU's. Reported on the
 /// GPU, it would make a client retry the whole export in software to meet the
 /// same stall.
-#[cfg(all(target_os = "linux", feature = "hwdecode"))]
+#[cfg(all(any(target_os = "linux", target_os = "windows"), feature = "hwdecode"))]
 #[test]
 fn a_stall_after_a_failed_hardware_open_is_not_reported_on_the_gpu() {
     let _gpu = gpu_test_lock();
+    #[cfg(target_os = "linux")]
     let Some(context) = vulkan_video_context() else {
+        return;
+    };
+    // D3D12VA has no MPEG-4 Part 2 decoder either.
+    #[cfg(target_os = "windows")]
+    let Some(context) = create_gpu_test_host(VideoDecodePolicy::Auto)
+        .expect("host")
+        .decode_d3d12()
+    else {
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::D3d12Video,
+            "this host has no D3D12VA decode"
+        );
         return;
     };
     let started = Instant::now();
@@ -173,7 +186,16 @@ fn a_stall_after_a_failed_hardware_open_is_not_reported_on_the_gpu() {
         2,
         Duration::from_millis(200),
         1,
-        |config| config.shared_vulkan = Some(context),
+        |config| {
+            #[cfg(target_os = "linux")]
+            {
+                config.shared_vulkan = Some(context);
+            }
+            #[cfg(target_os = "windows")]
+            {
+                config.shared_d3d12 = Some(context);
+            }
+        },
     );
     worker
         .send(stalling_job(0))

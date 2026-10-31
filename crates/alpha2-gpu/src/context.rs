@@ -159,6 +159,7 @@ impl GpuContext {
         queue_lock: Option<Arc<dyn ExternalQueueLock>>,
     ) -> Self {
         let capabilities = Arc::new(Capabilities::from_device(&adapter, &device));
+        crate::validation_log::watch_device(&device, &capabilities.summary());
         let diagnostics = Arc::new(DiagnosticHook::new());
         install_device_callbacks(&device, &diagnostics);
         Self {
@@ -550,6 +551,7 @@ impl GpuContext {
             .await
             .map_err(GpuError::device)?;
         let capabilities = Arc::new(Capabilities::from_device(&adapter, &device));
+        crate::validation_log::watch_device(&device, &capabilities.summary());
         let diagnostics = Arc::new(DiagnosticHook::new());
         install_device_callbacks(&device, &diagnostics);
         Ok(Self {

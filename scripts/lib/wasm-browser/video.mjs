@@ -7,7 +7,7 @@ export function yuvAnamorphic() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
-const engine = await WebEffectRegistry.create();
+const engine = await gpuEngine(WebEffectRegistry);
 engine.loadProject(JSON.stringify({
   schema_version: 1, id: "anamorphic", name: "Anamorphic",
   settings: { width: 64, height: 48, frame_rate: { num: 30, den: 1 }, sample_rate: 48000 },
@@ -101,7 +101,7 @@ export function presentationCacheResize() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
-const engine = await WebEffectRegistry.create();
+const engine = await gpuEngine(WebEffectRegistry);
 const project = await fetch("/tests/cases/host-video-export-project.json").then(r => r.json());
 project.sources.push({ id: "audio-extra", locator: "fixture://audio", kind: "audio" });
 project.settings.width = 64;
@@ -162,8 +162,10 @@ const width = video.videoWidth;
 const height = video.videoHeight;
 const source = new VideoFrame(video, { timestamp: 0 });
 const layout = { format: source.format, colorSpace: source.colorSpace.toJSON() };
-if (source.format !== "I420" && source.format !== "NV12")
-  throw new Error("the decoded frame is " + source.format + ", not 8-bit 4:2:0");
+if (source.format !== "I420" && source.format !== "NV12") {
+  source.close();
+  skip("yuv-video-frames", "the browser decodes this fixture to " + layout.format + ", not 8-bit 4:2:0");
+}
 const raw = new Uint8Array(source.allocationSize());
 const planes = await source.copyTo(raw);
 const plane = (index, w, h, step = 1, phase = 0) => {
@@ -327,8 +329,11 @@ await new Promise((resolve, reject) => {
 });
 const frame = new VideoFrame(video, { timestamp: 0 });
 const width = frame.displayWidth, height = frame.displayHeight;
-if (frame.format !== "I420" && frame.format !== "NV12")
-  throw new Error("the decoded frame is " + frame.format + ", not 8-bit 4:2:0");
+if (frame.format !== "I420" && frame.format !== "NV12") {
+  const format = frame.format;
+  frame.close();
+  skip("yuv-video-frames", "the browser decodes this fixture to " + format + ", not 8-bit 4:2:0");
+}
 const raw = new Uint8Array(frame.allocationSize());
 const planes = await frame.copyTo(raw);
 const sample = (index, x, y, step = 1, phase = 0) =>
@@ -410,6 +415,59 @@ report({
   contract: summary(contract),
   reencodedToSrgb: summary(reencoded),
   adapter: adapter.info?.description || adapter.info?.vendor || "",
+});
+`;
+}
+
+// A decoder the browser picks may fail on a stream it claims to decode (Chromium's VA-API decoders
+// on Linux); the package's decoder must then decode again in software. Every decoder the page makes
+// is wrapped so that the first one configured without asking for software fails its first decode
+// with an EncodingError, as such a decoder does, whatever this browser's own decoders would do.
+export function decoderSoftwareFallback() {
+  return `
+const Native = globalThis.VideoDecoder;
+if (Native === undefined) skip("webcodecs-video", "this browser has no WebCodecs VideoDecoder");
+let injected = 0;
+const configured = [];
+globalThis.VideoDecoder = class extends Native {
+  #error;
+  #failing = false;
+  #reported = false;
+  constructor(init) {
+    super(init);
+    this.#error = init.error;
+  }
+  configure(config) {
+    configured.push(config.hardwareAcceleration ?? "no-preference");
+    this.#failing = config.hardwareAcceleration !== "prefer-software" && injected === 0;
+    if (this.#failing) injected += 1;
+    return super.configure(config);
+  }
+  decode(chunk) {
+    if (!this.#failing) return super.decode(chunk);
+    if (!this.#reported) {
+      this.#reported = true;
+      setTimeout(() => this.#error(new DOMException("injected decoder failure", "EncodingError")), 0);
+    }
+  }
+};
+const { MediabunnyVideoDecoder } = await import("/packages/alpha2/dist/mediabunny.js");
+const bytes = new Uint8Array(await (await fetch("/tests/corpus/h264-long-gop.mp4")).arrayBuffer());
+const decoder = await MediabunnyVideoDecoder.open("clip", bytes);
+let decoded;
+try {
+  decoded = await decoder.refill({ sourceId: "clip", mediaTimeTicks: 0n, reason: "seek", generation: 0 });
+} finally {
+  globalThis.VideoDecoder = Native;
+}
+const frame = decoded.frame;
+const size = [frame.displayWidth, frame.displayHeight];
+frame.close();
+const softwareFallback = decoder.softwareFallback ?? null;
+decoder.close();
+report({
+  ok: injected === 1 && JSON.stringify(size) === "[128,96]" && /^EncodingError/.test(softwareFallback ?? ""),
+  injected, configured, size, softwareFallback,
 });
 `;
 }

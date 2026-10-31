@@ -41,6 +41,7 @@ try {
   frame.close();
   const native = await pixels("/native.png");
   done({
+    adapter: JSON.parse(engine.diagnostics()).adapter,
     wasm: difference(wasm, expected),
     wasmPlanes: planeDifferences(wasm, expected, rendered.width, rendered.height),
     native: difference(native, golden),

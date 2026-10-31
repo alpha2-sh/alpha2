@@ -205,6 +205,40 @@ test(
 );
 
 test(
+  "an archive installs into a cache and a temporary folder named in Devanagari with an emoji",
+  { skip: !supported && "no archive is published for this platform" },
+  async () => {
+    const release = await serveRelease();
+    // A letter outside Windows' ANSI code pages for East Asian locales (cp949 among them), and a
+    // character outside the Basic Multilingual Plane: the archive is unpacked (by tar.exe on
+    // Windows) into a staging folder under this name.
+    const named = join(await scratch("alpha2-node-named-"), "\u0915\u{1F600}");
+    const cacheDirectory = join(named, "cache");
+    const temporary = join(named, "temp");
+    await mkdir(cacheDirectory, { recursive: true });
+    await mkdir(temporary);
+    // Windows reads TEMP and TMP, the others TMPDIR.
+    const names = ["TEMP", "TMP", "TMPDIR"];
+    const saved = names.map((name) => process.env[name]);
+    for (const name of names) process.env[name] = temporary;
+    try {
+      const result = await installHost({
+        cacheDirectory,
+        downloadUrl: release.downloadUrl,
+      });
+      assert.equal(result.downloaded, true);
+      assert.equal(result.hostPath.startsWith(cacheDirectory), true);
+      assert.equal(await readFile(result.hostPath, "utf8"), "host");
+    } finally {
+      names.forEach((name, index) => {
+        if (saved[index] === undefined) delete process.env[name];
+        else process.env[name] = saved[index];
+      });
+    }
+  },
+);
+
+test(
   "an archive whose checksum does not match is refused and leaves nothing in the cache",
   { skip: !supported && "no archive is published for this platform" },
   async () => {

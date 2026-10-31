@@ -28,16 +28,11 @@ import {
   required,
   suiteOf,
 } from "../../../../scripts/lib/capabilities.mjs";
+import { executable } from "../../../../scripts/lib/cargo-target.mjs";
 
 const root = resolve(import.meta.dirname, "..", "..", "..", "..");
 const hostPath =
-  process.env.ALPHA2_HOST_BINARY ??
-  join(
-    root,
-    "target",
-    "debug",
-    `alpha2-host${process.platform === "win32" ? ".exe" : ""}`,
-  );
+  process.env.ALPHA2_HOST_BINARY ?? executable("alpha2-host", "debug");
 const projectPath = join(root, "tests", "cases", "host-parity-project.json");
 const assetPath = join(root, "tests", "corpus", "cross_topology_parity.png");
 
@@ -744,9 +739,11 @@ test(
       "hiding every GPU from the host this way (no Vulkan ICD, the Vulkan backend forced) is Linux's",
   },
   async () => {
+    // The renderer is named too: the clients below that name none take the environment's.
     const hidden = {
       VK_ICD_FILENAMES: "/nonexistent",
       WGPU_BACKEND: "vulkan",
+      ALPHA2_RENDERER: "auto",
     };
     const saved = Object.fromEntries(
       Object.keys(hidden).map((key) => [key, process.env[key]]),

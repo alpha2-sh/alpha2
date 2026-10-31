@@ -288,6 +288,61 @@ pub(crate) fn process_memory() -> ProcessMemory {
     }
 }
 
+/// Opts the calling thread out of execution-speed power throttling (`EcoQoS`),
+/// under which Windows may run it on efficiency cores at a lower clock; the
+/// result is ignored.
+pub(crate) fn prefer_fast_cores() {
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentThread, SetThreadInformation, THREAD_POWER_THROTTLING_CURRENT_VERSION,
+        THREAD_POWER_THROTTLING_EXECUTION_SPEED, THREAD_POWER_THROTTLING_STATE,
+        ThreadPowerThrottling,
+    };
+    // Controlled, and off: the thread is never throttled.
+    let state = THREAD_POWER_THROTTLING_STATE {
+        Version: THREAD_POWER_THROTTLING_CURRENT_VERSION,
+        ControlMask: THREAD_POWER_THROTTLING_EXECUTION_SPEED,
+        StateMask: 0,
+    };
+    // SAFETY: the pseudo-handle of the current thread needs no closing; `state` is the structure
+    // this information class reads, of the size passed, and outlives the call.
+    let _ = unsafe {
+        SetThreadInformation(
+            GetCurrentThread(),
+            ThreadPowerThrottling,
+            (&raw const state).cast(),
+            u32::try_from(std::mem::size_of::<THREAD_POWER_THROTTLING_STATE>()).unwrap_or(0),
+        )
+    };
+}
+
+/// Kernel plus user CPU time of the process, from `GetProcessTimes`.
+pub(crate) fn process_cpu_time() -> Option<std::time::Duration> {
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+    let zero = || FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let (mut created, mut exited, mut kernel, mut user) = (zero(), zero(), zero(), zero());
+    // SAFETY: the pseudo-handle of the current process needs no closing; the four structures
+    // outlive the call, which writes only them.
+    let read = unsafe {
+        GetProcessTimes(
+            GetCurrentProcess(),
+            &raw mut created,
+            &raw mut exited,
+            &raw mut kernel,
+            &raw mut user,
+        )
+    } != 0;
+    // FILETIME durations count 100 ns intervals.
+    let hundreds =
+        |time: FILETIME| u64::from(time.dwHighDateTime) << 32 | u64::from(time.dwLowDateTime);
+    read.then(|| {
+        std::time::Duration::from_nanos((hundreds(kernel) + hundreds(user)).saturating_mul(100))
+    })
+}
+
 /// CPU cycles the calling thread has run.
 pub(crate) fn thread_cpu_work() -> Option<u64> {
     use windows_sys::Win32::System::Threading::GetCurrentThread;

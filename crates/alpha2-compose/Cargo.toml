@@ -43,5 +43,5 @@ workspace = true
 schema = ["dep:schemars", "alpha2-model/schema", "alpha2-media/schema", "alpha2-time/schema"]
 
 [[example]]
-name = "emit-schema"
+name = "emit-compose-schema"
 required-features = ["schema"]

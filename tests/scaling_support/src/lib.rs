@@ -41,6 +41,16 @@ const READINGS: usize = 3;
 /// large input when it holds more; a batch of small inputs holds as many.
 const BATCH_ITEMS: usize = 1 << 20;
 
+/// The longest the inputs of one reading take to make before the small
+/// size stops growing its runs, once those runs take [`LEAST_MEASURED`]: a
+/// step that is quick next to its input's making would otherwise spend
+/// most of a test making inputs.
+const MOST_SETUP: Duration = Duration::from_secs(1);
+
+/// The least the runs of a reading take for [`MOST_SETUP`] to end the
+/// calibration: still many times the resolution of the clock.
+const LEAST_MEASURED: Duration = Duration::from_millis(5);
+
 /// The calling thread's work so far: its CPU work where the operating system
 /// reports it, else the time since `origin`.
 fn work(origin: Instant) -> u64 {
@@ -48,31 +58,70 @@ fn work(origin: Instant) -> u64 {
         .unwrap_or_else(|| u64::try_from(origin.elapsed().as_nanos()).unwrap_or(u64::MAX))
 }
 
-/// The work of `run` over `repeats` inputs of `size`, made by `setup` and
-/// dropped `batch` at a time, the making and dropping outside the reading.
+/// One reading: the work of the runs, the wall time they took, and the wall
+/// time making and dropping their inputs took.
+#[derive(Clone, Copy, Default)]
+struct Reading {
+    work: u64,
+    measured: Duration,
+    setup: Duration,
+}
+
+/// How a reading gives its runs their inputs.
+#[derive(Clone, Copy)]
+enum Inputs {
+    /// Every run an input of its own, made `batch` at a time.
+    Own,
+    /// Inputs that every run of the reading reads only, made once per
+    /// reading: [`GROWTH`] of the small size, read in turn, and one of the
+    /// large. Both sizes then read as many bytes between two runs over one
+    /// input, so the small one does not run from a cache the large one
+    /// overflows.
+    Shared,
+}
+
+/// The reading of `run` over `repeats` inputs of `size`, made by `setup` and
+/// dropped `batch` at a time (or `batch` inputs read in turn by all of them,
+/// [`Inputs::Shared`]), the making and dropping outside the reading.
 fn measure<T>(
     size: usize,
     repeats: usize,
     batch: usize,
+    inputs: Inputs,
     origin: Instant,
     setup: &mut impl FnMut(usize) -> T,
     run: &mut impl FnMut(&mut T),
-) -> (u64, Duration) {
-    let (mut work_done, mut elapsed) = (0, Duration::ZERO);
+) -> Reading {
+    let mut reading = Reading::default();
     let mut left = repeats;
     while left > 0 {
-        let count = left.min(batch);
-        let mut inputs: Vec<T> = (0..count).map(|_| setup(size)).collect();
+        let count = match inputs {
+            Inputs::Own => left.min(batch),
+            // The shared inputs hold no more memory however many runs read them.
+            Inputs::Shared => left,
+        };
+        let made = Instant::now();
+        let mut batch_inputs: Vec<T> = match inputs {
+            Inputs::Own => (0..count).map(|_| setup(size)).collect(),
+            Inputs::Shared => (0..batch).map(|_| setup(size)).collect(),
+        };
+        reading.setup += made.elapsed();
         let (started, wall) = (work(origin), Instant::now());
-        for input in &mut inputs {
-            run(input);
+        match inputs {
+            Inputs::Own => batch_inputs.iter_mut().for_each(&mut *run),
+            Inputs::Shared => {
+                let shared = batch_inputs.len();
+                (0..count).for_each(|index| run(&mut batch_inputs[index % shared]));
+            }
         }
-        work_done += work(origin).saturating_sub(started);
-        elapsed += wall.elapsed();
-        drop(inputs);
+        reading.work += work(origin).saturating_sub(started);
+        reading.measured += wall.elapsed();
+        let dropped = Instant::now();
+        drop(batch_inputs);
+        reading.setup += dropped.elapsed();
         left -= count;
     }
-    (work_done, elapsed)
+    reading
 }
 
 /// Asserts that `run` over an input `setup` makes of [`GROWTH`] times `small`
@@ -84,8 +133,10 @@ fn measure<T>(
 /// gets an input of its own, so a step that caches what it computed is
 /// measured computing it; the inputs are made a batch at a time, so no more
 /// than about a million items' worth are held at once. The small input is
-/// run as many times as takes [`LEAST_RUN`] together, and the large one as
-/// many times.
+/// run as many times as takes [`LEAST_RUN`] together (or fewer, when making
+/// their inputs takes over a second), and the large one as many times. A
+/// step that only reads its input takes [`assert_linear_shared`], which makes
+/// far fewer.
 ///
 /// # Panics
 /// When the large input takes [`BOUND`] times the small one's work or more,
@@ -113,39 +164,110 @@ pub fn assert_growth_below<T>(
     mut setup: impl FnMut(usize) -> T,
     mut run: impl FnMut(&mut T),
 ) {
+    compare(what, small, bound, Inputs::Own, &mut setup, &mut run);
+}
+
+/// [`assert_linear`] for a step that only reads its input: the runs of a
+/// reading share a few inputs ([`GROWTH`] small ones, one large), so a test
+/// whose inputs take far longer to make than to run is not spent making them.
+///
+/// # Panics
+/// When the large input takes [`BOUND`] times the small one's work or more,
+/// naming `what`.
+pub fn assert_linear_shared<T>(
+    what: &str,
+    small: usize,
+    setup: impl FnMut(usize) -> T,
+    run: impl FnMut(&T),
+) {
+    assert_growth_below_shared(what, small, BOUND, setup, run);
+}
+
+/// [`assert_growth_below`] for a step that only reads its input, as
+/// [`assert_linear_shared`] is to [`assert_linear`].
+///
+/// # Panics
+/// When the large input takes `bound` times the small one's work or more,
+/// naming `what`.
+pub fn assert_growth_below_shared<T>(
+    what: &str,
+    small: usize,
+    bound: u64,
+    mut setup: impl FnMut(usize) -> T,
+    mut run: impl FnMut(&T),
+) {
+    compare(
+        what,
+        small,
+        bound,
+        Inputs::Shared,
+        &mut setup,
+        &mut |input: &mut T| run(input),
+    );
+}
+
+/// The comparison behind every assertion here.
+fn compare<T>(
+    what: &str,
+    small: usize,
+    bound: u64,
+    inputs: Inputs,
+    setup: &mut impl FnMut(usize) -> T,
+    run: &mut impl FnMut(&mut T),
+) {
+    // Both sizes are read on one kind of core on a CPU that has two.
+    alpha2_os::prefer_fast_cores();
     let origin = Instant::now();
     let large = small * GROWTH;
     let large_batch = (BATCH_ITEMS / large).max(1);
     let small_batch = large_batch * GROWTH;
+    let (mut setup_total, mut measured_total) = (Duration::ZERO, Duration::ZERO);
+    let mut read = |size: usize, repeats: usize| {
+        let batch = match (inputs, size == large) {
+            (Inputs::Own, true) => large_batch,
+            (Inputs::Own, false) => small_batch,
+            (Inputs::Shared, true) => 1,
+            (Inputs::Shared, false) => GROWTH,
+        };
+        let reading = measure(size, repeats, batch, inputs, origin, setup, run);
+        setup_total += reading.setup;
+        measured_total += reading.measured;
+        reading
+    };
     let mut repeats = 1;
     // The run that reaches the least time is the first reading of the small size.
     let mut least_small = loop {
-        let (work, wall) = measure(small, repeats, small_batch, origin, &mut setup, &mut run);
-        if wall >= LEAST_RUN || repeats >= 1 << 16 {
-            break work;
+        let reading = read(small, repeats);
+        if reading.measured >= LEAST_RUN
+            || (reading.setup > MOST_SETUP && reading.measured >= LEAST_MEASURED)
+            || repeats >= 1 << 16
+        {
+            break reading.work;
         }
         repeats *= 2;
     };
     let mut least_large = u64::MAX;
     // Alternated, so a slow stretch of the machine falls on both sizes.
     for reading in 0..READINGS {
-        least_large =
-            least_large.min(measure(large, repeats, large_batch, origin, &mut setup, &mut run).0);
+        least_large = least_large.min(read(large, repeats).work);
         if reading + 1 < READINGS {
-            least_small = least_small
-                .min(measure(small, repeats, small_batch, origin, &mut setup, &mut run).0);
+            least_small = least_small.min(read(small, repeats).work);
         }
     }
     // Precision does not matter in a ratio for a message.
     #[allow(clippy::cast_precision_loss)]
     let ratio = least_large as f64 / least_small.max(1) as f64;
+    let (setup_ms, measured_ms) = (setup_total.as_millis(), measured_total.as_millis());
     // Shown with `--nocapture`, and with a failure.
-    eprintln!("{what}: {GROWTH}x the input took {ratio:.2}x the work ({repeats} runs each)");
+    eprintln!(
+        "{what}: {GROWTH}x the input took {ratio:.2}x the work ({repeats} runs each; setup \
+         {setup_ms} ms / measured {measured_ms} ms)"
+    );
     assert!(
         least_large < least_small.saturating_mul(bound),
         "{what}: {GROWTH}x the input ({small} -> {large}, {repeats} runs each) took {ratio:.1}x the \
          work ({least_small} -> {least_large}); the bound is {bound}x (linear work takes about \
-         {GROWTH}x, quadratic {}x)",
+         {GROWTH}x, quadratic {}x); setup {setup_ms} ms / measured {measured_ms} ms",
         GROWTH * GROWTH
     );
 }
@@ -177,6 +299,51 @@ mod tests {
             200_000,
             |size| (0..size as u64).collect::<Vec<_>>(),
             |values| sum_pairs(values, false),
+        );
+    }
+
+    #[test]
+    fn linear_work_over_a_shared_input_passes() {
+        assert_linear_shared(
+            "a sum over a shared input",
+            200_000,
+            |size| (0..size as u64).collect::<Vec<_>>(),
+            |values| sum_pairs(values, false),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "a shared sum over every pair")]
+    fn quadratic_work_over_a_shared_input_fails() {
+        assert_linear_shared(
+            "a shared sum over every pair",
+            500,
+            |size| (0..size as u64).collect::<Vec<_>>(),
+            |values| sum_pairs(values, true),
+        );
+    }
+
+    #[test]
+    fn a_shared_input_is_made_once_per_reading() {
+        let made = std::cell::Cell::new(0_usize);
+        let ran = std::cell::Cell::new(0_usize);
+        assert_linear_shared(
+            "a sum over a counted input",
+            200_000,
+            |size| {
+                made.set(made.get() + 1);
+                (0..size as u64).collect::<Vec<_>>()
+            },
+            |values| {
+                ran.set(ran.get() + 1);
+                sum_pairs(values, false);
+            },
+        );
+        assert!(
+            made.get() * 4 <= ran.get(),
+            "{} inputs for {} runs",
+            made.get(),
+            ran.get()
         );
     }
 

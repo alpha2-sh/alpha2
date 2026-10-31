@@ -1,7 +1,11 @@
-// Which browser a page check opens its pages in: Chrome through DevTools (the default), or Safari
-// or Firefox through WebDriver. Both runners share one page contract.
+// Which browser a page check opens its pages in: Chrome (the default) or Edge through DevTools, or
+// Safari or Firefox through WebDriver. Both runners share one page contract.
 
-import { browserForCheck, runChromePage } from "./chrome-cdp.mjs";
+import {
+  browserForCheck,
+  edgeExecutable,
+  runChromePage,
+} from "./chrome-cdp.mjs";
 import {
   runWebDriverPage,
   webDriverBrowser,
@@ -9,14 +13,19 @@ import {
 } from "./webdriver.mjs";
 
 /** The browsers `--browser` takes. */
-export const PAGE_BROWSERS = Object.freeze(["chrome", ...WEBDRIVER_BROWSERS]);
+export const PAGE_BROWSERS = Object.freeze([
+  "chrome",
+  "edge",
+  ...WEBDRIVER_BROWSERS,
+]);
 
 /**
  * The browser a run asked for: `--browser <name>` in `argv`, else ALPHA2_BROWSER, else Chrome. Null
  * means this machine has no Chrome and the check skips its browser half, unless `required` or
- * ALPHA2_REQUIRE naming `browser` makes it throw. A missing Safari or Firefox driver always throws.
+ * ALPHA2_REQUIRE naming `browser` makes it throw. A missing Edge, or a missing Safari or Firefox
+ * driver, always throws: a browser asked for by name must run.
  *
- * @returns {{ kind: "chrome", name: "chrome", command: string } |
+ * @returns {{ kind: "chrome", name: "chrome" | "edge", command: string } |
  *   { kind: "webdriver", name: string, webdriver: ReturnType<typeof webDriverBrowser> } | null}
  */
 export function browserForRun({
@@ -36,6 +45,12 @@ export function browserForRun({
       exists,
     });
     return command === null ? null : { kind: "chrome", name, command };
+  }
+  if (name === "edge") {
+    const command = edgeExecutable({ env, platform, exists });
+    if (command === null)
+      throw new Error("no Edge found: set ALPHA2_EDGE to an Edge executable");
+    return { kind: "chrome", name, command };
   }
   return {
     kind: "webdriver",

@@ -6,6 +6,11 @@ use super::*;
 
 /// An export request of a one-second clip of the corpus video to `output`.
 fn export_request(output: &Path, overwrite: bool) -> Request {
+    export_request_from(&corpus("h264-bt709-copy.mp4"), output, overwrite)
+}
+
+/// An export request of a one-second clip of the video at `input` to `output`.
+fn export_request_from(input: &Path, output: &Path, overwrite: bool) -> Request {
     let second = alpha2_time::TICKS_PER_SECOND;
     parse_request(
         &json!({
@@ -20,7 +25,7 @@ fn export_request(output: &Path, overwrite: bool) -> Request {
                     "source_range": {"start": 0, "end": second}
                 }]}]}
             },
-            "assets": {"video": corpus("h264-bt709-copy.mp4")},
+            "assets": {"video": input},
             "startTicks": 0, "endTicks": second,
             "frameRate": {"num": 30, "den": 1},
             "includeAudio": false,
@@ -220,5 +225,67 @@ fn two_overwriting_exports_to_one_path_do_not_both_write_it() {
         .expect("the first export");
     let refused = refused.expect("the second export ran");
     assert_eq!(refused.code, "OUTPUT_IN_USE", "{refused:?}");
+    assert_eq!(decoded_luma(&output).len(), 30);
+}
+
+/// Hangul, a word of it: the test data of the non-ASCII path tests.
+const HANGUL_SCENE: &str = "\u{c7a5}\u{ba74}";
+
+/// A video read from a folder and file named in Hangul with an emoji, which
+/// is outside the Basic Multilingual Plane, exports to another such folder.
+#[test]
+fn an_export_reads_and_writes_paths_in_hangul_with_an_emoji() {
+    let _gpu = gpu_test_lock();
+    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let directory = scratch_directory("non-ascii-paths");
+    let sources = directory.join("\u{c601}\u{c0c1}\u{1f600}");
+    let results = directory.join("\u{acb0}\u{acfc}\u{1f600}");
+    std::fs::create_dir(&sources).expect("source folder");
+    std::fs::create_dir(&results).expect("output folder");
+    let input = sources.join(format!("{HANGUL_SCENE}.mov"));
+    std::fs::copy(corpus("h264-long-gop.mp4"), &input).expect("input");
+    let output = results.join(format!("{HANGUL_SCENE}.mp4"));
+    let result = host
+        .handle(export_request_from(&input, &output, false), &mut |_| Ok(()))
+        .expect("export");
+    let named = PathBuf::from(result["output"].as_str().expect("output"));
+    assert!(names_written_file(&named, &output), "{named:?}");
+    assert_eq!(decoded_luma(&output).len(), 30);
+}
+
+/// A name of 81 Hangul syllables (243 bytes in UTF-8, 247 with `.mp4`, under
+/// the 255 bytes a file name may take) is written whole: the partial file the
+/// export writes first must not make it too long.
+#[test]
+fn an_output_named_by_81_hangul_syllables_is_written() {
+    let _gpu = gpu_test_lock();
+    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let directory = scratch_directory("long-name");
+    let output = directory.join(format!("{}.mp4", "\u{d55c}".repeat(81)));
+    let result = host
+        .handle(export_request(&output, false), &mut |_| Ok(()))
+        .expect("export");
+    let named = PathBuf::from(result["output"].as_str().expect("output"));
+    assert!(names_written_file(&named, &output), "{named:?}");
+    assert_eq!(decoded_luma(&output).len(), 30);
+}
+
+/// A file whose name is stored decomposed (NFD, as older macOS tools wrote
+/// it) is the file a request names composed: APFS looks names up either way.
+#[cfg(target_os = "macos")]
+#[test]
+fn an_input_stored_decomposed_is_read_by_its_composed_name() {
+    let _gpu = gpu_test_lock();
+    let mut host = create_host(VideoDecodePolicy::Software).expect("host");
+    let directory = scratch_directory("nfd-input");
+    // The syllable U+D55C as its three jamo, then composed.
+    let decomposed = directory.join("\u{1112}\u{1161}\u{11ab}.mov");
+    std::fs::copy(corpus("h264-long-gop.mp4"), &decomposed).expect("input");
+    let composed = directory.join("\u{d55c}.mov");
+    let output = directory.join("out.mp4");
+    host.handle(export_request_from(&composed, &output, false), &mut |_| {
+        Ok(())
+    })
+    .expect("export");
     assert_eq!(decoded_luma(&output).len(), 30);
 }

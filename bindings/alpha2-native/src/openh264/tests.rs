@@ -278,36 +278,66 @@ fn an_unverified_file_that_is_not_a_library_is_reported_with_the_loader_message(
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// A shared object built from `source` with the system C compiler, or `None`
-/// where there is none (the tests that need one say so and pass).
-#[cfg(unix)]
+/// A shared library built from `source` with the system C compiler, or `None`
+/// where there is none (the tests that need one record a `c-compiler` skip).
+/// On Windows the compiler is `cl` when the developer environment puts it on
+/// `PATH`, else `clang` or `gcc`, building a DLL; elsewhere `$CC` or `cc`.
 fn fake_library(dir: &std::path::Path, name: &str, source: &str) -> Option<PathBuf> {
     let c = dir.join(format!("{name}.c"));
     std::fs::write(&c, source).unwrap();
-    let library = dir.join(format!("{name}.so"));
-    let built = {
-        let _child = crate::tests::child_process_lock();
-        std::process::Command::new(std::env::var("CC").unwrap_or_else(|_| "cc".into()))
-            .args(["-shared", "-fPIC", "-o"])
-            .arg(&library)
-            .arg(&c)
+    let library = dir.join(format!("{name}.{}", std::env::consts::DLL_EXTENSION));
+    let _child = crate::tests::child_process_lock();
+    let compilers: Vec<String> = std::env::var("CC")
+        .ok()
+        .into_iter()
+        .chain(if cfg!(windows) {
+            ["cl", "clang", "gcc"].map(str::to_owned).to_vec()
+        } else {
+            vec!["cc".to_owned()]
+        })
+        .collect();
+    compilers.into_iter().find_map(|compiler| {
+        let mut command = std::process::Command::new(&compiler);
+        if compiler == "cl" {
+            // Its objects go to the working directory.
+            command
+                .current_dir(dir)
+                .args(["/nologo", "/LD"])
+                .arg(&c)
+                .arg(format!("/Fe:{}", library.display()));
+        } else if cfg!(windows) {
+            command.args(["-shared", "-o"]).arg(&library).arg(&c);
+        } else {
+            command
+                .args(["-shared", "-fPIC", "-o"])
+                .arg(&library)
+                .arg(&c);
+        }
+        let built = command
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status()
-            .ok()?
-    };
-    built.success().then_some(library)
+            .is_ok_and(|status| status.success());
+        built.then(|| library.clone())
+    })
 }
 
-#[cfg(unix)]
+/// A stand-in for the encoder library: `MAJOR` and `MINOR` are defined before
+/// it. `cl` exports only what `__declspec(dllexport)` marks.
 const FAKE_ENCODER: &str = "
+#ifdef _WIN32
+#define EXPORT __declspec(dllexport)
+#else
+#define EXPORT
+#endif
 typedef struct { unsigned major, minor, revision, reserved; } Version;
-int WelsCreateSVCEncoder(void **encoder) { *encoder = 0; return 1; }
-void WelsDestroySVCEncoder(void *encoder) { (void)encoder; }
-void WelsGetCodecVersionEx(Version *version) {
+EXPORT int WelsCreateSVCEncoder(void **encoder) { *encoder = 0; return 1; }
+EXPORT void WelsDestroySVCEncoder(void *encoder) { (void)encoder; }
+EXPORT void WelsGetCodecVersionEx(Version *version) {
   version->major = MAJOR; version->minor = MINOR; version->revision = 0; version->reserved = 0;
 }
 ";
 
-#[cfg(unix)]
 #[test]
 fn a_library_of_another_api_version_or_without_the_entry_points_is_refused() {
     let dir = tempdir("fake-libraries");
@@ -351,7 +381,7 @@ fn a_library_of_another_api_version_or_without_the_entry_points_is_refused() {
     let decoder_only = fake_library(
         &dir,
         "decoder",
-        "int WelsCreateDecoder(void **d) { return 0; }",
+        "#ifdef _WIN32\n__declspec(dllexport)\n#endif\nint WelsCreateDecoder(void **d) { return 0; }",
     )
     .unwrap();
     let OpenH264Status::Unusable(reason) = unverified(decoder_only) else {

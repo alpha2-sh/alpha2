@@ -188,6 +188,8 @@ class Alpha2Processor extends AudioWorkletProcessor {
   #channels = 0;
   #ring?: RingReader;
   #underruns = 0;
+  /** Whether the context frame of the first ring read was reported. */
+  #firstReadReported = false;
   #shapeReported = false;
   #views: ChannelViews[] = [];
   // Once set, `process` returns false so the audio thread retires the node.
@@ -490,12 +492,25 @@ class Alpha2Processor extends AudioWorkletProcessor {
     this.#readRing(this.#ring, targets, frames);
   }
 
-  /** Reads the next `frames` ring samples into `targets`, reporting a gap. */
+  /**
+   * Reads the next `frames` ring samples into `targets`, reporting a gap. The first read of the
+   * processor's life also reports the context frame it starts at (`currentFrame`, the quantum's
+   * first frame: a ring read always starts a quantum), the origin on which a host lines the ring's
+   * samples up with the context's output timestamps.
+   */
   #readRing(
     ring: RingReader,
     targets: readonly Float32Array[],
     frames: number,
   ): void {
+    if (!this.#firstReadReported) {
+      this.#firstReadReported = true;
+      const frame = (globalThis as { currentFrame?: unknown }).currentFrame;
+      this.port.postMessage({
+        type: "alpha2-first-read",
+        frame: typeof frame === "number" ? frame : null,
+      });
+    }
     const produced = ring.read(targets, frames);
     if (produced < frames) {
       this.#underruns += 1;

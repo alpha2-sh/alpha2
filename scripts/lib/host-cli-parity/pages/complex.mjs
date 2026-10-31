@@ -98,7 +98,7 @@ try {
   }
   const metric = ([max, sum, count]) => ({ max, mean: sum / count });
   const outliers = frameOutliers.reduce((total, count) => total + count, 0);
-  done({ frames: native.length, y: metric(totals.y), u: metric(totals.u), v: metric(totals.v), histogram, worstFrames, frameMeans, frameOver, frameOutliers, outliers, unused });
+  done({ adapter: JSON.parse(engine.diagnostics()).adapter, frames: native.length, y: metric(totals.y), u: metric(totals.u), v: metric(totals.v), histogram, worstFrames, frameMeans, frameOver, frameOutliers, outliers, unused });
 } catch (error) {
   done({ error: error?.stack ?? String(error) });
 }

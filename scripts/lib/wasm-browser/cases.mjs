@@ -59,6 +59,7 @@ import {
   exportWaitingFrames,
   exportWorkingSet,
 } from "./export.mjs";
+import { exportPerf } from "./export-perf.mjs";
 import {
   extensionModuleRestart,
   extensionProviderContract,
@@ -76,6 +77,7 @@ import {
 import { previewFullResolution, previewUnchangedFrame } from "./preview.mjs";
 import {
   browserVideoConversion,
+  decoderSoftwareFallback,
   presentationCacheColor,
   presentationCacheResize,
   sdrChromaSiting,
@@ -92,6 +94,7 @@ export const cases = {
   "webgpu-rejected-frame": webgpuRejectedFrame,
   "video-color-contract": videoColorContract,
   "browser-video-conversion": browserVideoConversion,
+  "decoder-software-fallback": decoderSoftwareFallback,
   "sdr-chroma-siting": sdrChromaSiting,
   "audio-clock-tracking": () => audioClockTracking(48_000),
   "audio-clock-tracking-other-rate": () => audioClockTracking(44_100),
@@ -164,6 +167,11 @@ export const cases = {
   "cpu-grid-1080p": cpuGrid,
   "cpu-runtime-effect-refused": cpuRuntimeEffectRefused,
   "cpu-fixed-audio-mix": () => fixedAudioMix(true),
+};
+
+// Cases run only when `--case` names them: they need inputs the default run does not make.
+export const perfCases = {
+  "export-perf": exportPerf,
 };
 
 // Cases that import a VideoFrame into WebGPU, which some browsers cannot do.

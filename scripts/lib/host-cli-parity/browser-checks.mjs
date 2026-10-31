@@ -8,9 +8,9 @@ import { peakExcess } from "../parity-tolerance.mjs";
 import { browserParity } from "./browser-server.mjs";
 import { effectsProjectPath } from "./fixtures.mjs";
 
-/** Runs every page in `chrome` against the native frames `nativeFrames` wrote. */
+/** Runs every page in `browser` against the native frames `nativeFrames` wrote. */
 export async function browserChecks(
-  chrome,
+  browser,
   {
     nativeFrame,
     complexFrames,
@@ -22,7 +22,7 @@ export async function browserChecks(
     extensionFrames,
   },
 ) {
-  const metrics = await browserParity(chrome, nativeFrame);
+  const metrics = await browserParity(browser, nativeFrame);
   console.log(`cross-topology parity metrics: ${JSON.stringify(metrics)}`);
   // Measured in I420 code space: one code of unorm8 rounding on each side plus the renderer's error.
   assert.ok(
@@ -44,9 +44,9 @@ export async function browserChecks(
     `native encoded mean channel error ${metrics.native.mean} exceeds 5`,
   );
   console.log(
-    `verified wasm/native parity against one golden: ${JSON.stringify(metrics)}`,
+    `verified wasm/native parity against one golden${on(metrics)}: ${JSON.stringify(metrics)}`,
   );
-  const complex = await browserParity(chrome, nativeFrame, "/complex", {
+  const complex = await browserParity(browser, nativeFrame, "/complex", {
     "/native.y4m": complexFrames,
   });
   console.log(`complex project parity metrics: ${JSON.stringify(complex)}`);
@@ -70,11 +70,11 @@ export async function browserChecks(
     `more than 1 in 1000 samples are over a code apart: ${JSON.stringify(complex.histogram)}`,
   );
   console.log(
-    "verified wasm/native parity on every frame of the complex project",
+    `verified wasm/native parity on every frame of the complex project${on(complex)}`,
   );
   // Shapes: coverage is the same bits on both sides; paint and compositing are the GPU's, held to
   // the complex project's bounds.
-  const shapes = await browserParity(chrome, nativeFrame, "/shapes", {
+  const shapes = await browserParity(browser, nativeFrame, "/shapes", {
     "/native.y4m": shapesFrames,
   });
   console.log(`shapes project parity metrics: ${JSON.stringify(shapes)}`);
@@ -96,11 +96,11 @@ export async function browserChecks(
     `shapes: more than 1 in 1000 samples are over a code apart: ${JSON.stringify(shapes.histogram)}`,
   );
   console.log(
-    "verified wasm/native parity on every frame of the shapes project",
+    `verified wasm/native parity on every frame of the shapes project${on(shapes)}`,
   );
   // Layouts: the same layout from the same font on both sides; text, fills and composites held to
   // the shapes project's bounds.
-  const layouts = await browserParity(chrome, nativeFrame, "/layout", {
+  const layouts = await browserParity(browser, nativeFrame, "/layout", {
     "/native.y4m": layoutFrames,
   });
   console.log(`layout project parity metrics: ${JSON.stringify(layouts)}`);
@@ -125,9 +125,9 @@ export async function browserChecks(
     `layout: more than 1 in 1000 samples are over a code apart: ${JSON.stringify(layouts.histogram)}`,
   );
   console.log(
-    "verified wasm/native parity on every frame of the layout project",
+    `verified wasm/native parity on every frame of the layout project${on(layouts)}`,
   );
-  const effects = await browserParity(chrome, nativeFrame, "/effects", {
+  const effects = await browserParity(browser, nativeFrame, "/effects", {
     "/native.y4m": effectsFrames,
   });
   console.log(`effects parity metrics: ${JSON.stringify(effects)}`);
@@ -177,9 +177,9 @@ export async function browserChecks(
     `more than 1 in 1000 samples are over a code apart: ${checkedOver} of ${checkedSamples}`,
   );
   console.log(
-    "verified wasm/native parity on every built-in effect and transition",
+    `verified wasm/native parity on every built-in effect and transition${on(effects)}`,
   );
-  const hdr = await browserParity(chrome, nativeFrame, "/hdr", {
+  const hdr = await browserParity(browser, nativeFrame, "/hdr", {
     "/native.y4m": hdrFrames,
   });
   console.log(`HDR project parity metrics: ${JSON.stringify(hdr)}`);
@@ -219,9 +219,9 @@ export async function browserChecks(
     );
   }
   console.log(
-    "verified wasm/native parity on PQ and HLG tone mapping, signalled chroma siting, and a declared color",
+    `verified wasm/native parity on PQ and HLG tone mapping, signalled chroma siting, and a declared color${on(hdr)}`,
   );
-  const extensions = await browserParity(chrome, nativeFrame, "/extensions", {
+  const extensions = await browserParity(browser, nativeFrame, "/extensions", {
     "/native.y4m": extensionFrames,
   });
   console.log(
@@ -238,10 +238,17 @@ export async function browserChecks(
       `extensions ${plane} mean code error ${extensions[plane].mean} exceeds 0.25`,
     );
   }
-  console.log("verified wasm/native parity on every extension source");
-  const orientation = await browserParity(chrome, nativeFrame, "/orientation", {
-    "/native.y4m": orientationFrames,
-  });
+  console.log(
+    `verified wasm/native parity on every extension source${on(extensions)}`,
+  );
+  const orientation = await browserParity(
+    browser,
+    nativeFrame,
+    "/orientation",
+    {
+      "/native.y4m": orientationFrames,
+    },
+  );
   console.log(`orientation parity metrics: ${JSON.stringify(orientation)}`);
   assert.equal(orientation.frames, 16, "every frame of the project");
   assert.deepEqual(
@@ -284,9 +291,9 @@ export async function browserChecks(
     );
   }
   console.log(
-    "verified wasm/native parity on stills' Exif orientation and colour, mirroring display matrices, and pixel aspect ratios",
+    `verified wasm/native parity on stills' Exif orientation and colour, mirroring display matrices, and pixel aspect ratios${on(orientation)}`,
   );
-  const sink = await browserParity(chrome, nativeFrame, "/sink");
+  const sink = await browserParity(browser, nativeFrame, "/sink");
   for (const level of ["low", "high"]) {
     const { videoRateControl, applied } = sink[level];
     // The browser may take the quantizer or fall back to the bitrate, but the number must be the
@@ -318,6 +325,12 @@ export async function browserChecks(
   console.log(
     `verified the browser sink encodes at the engine's rate: ${JSON.stringify(sink)}`,
   );
+}
+
+/** ` on <backend> (<adapter>)`: what a page's engine ran on, for its verified line. */
+function on(result) {
+  const { backend = "", name = "" } = result.adapter ?? {};
+  return ` on ${backend || "no backend"} (${name})`;
 }
 
 /** The frames of `project`'s timeline, to the end of its last clip. */

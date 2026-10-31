@@ -93,7 +93,7 @@ impl TestPicture {
 pub(crate) struct Parity {
     pub(crate) gpu: Renderer,
     pub(crate) cpu: CpuRenderer,
-    _lock: std::sync::MutexGuard<'static, ()>,
+    _lock: super::GpuTurn,
 }
 
 impl Parity {

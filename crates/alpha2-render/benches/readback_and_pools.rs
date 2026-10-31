@@ -25,6 +25,12 @@ const FRAMES: u32 = 30;
 
 fn main() {
     let gpu = pollster::block_on(GpuContext::request_product()).expect("GPU adapter");
+    // The adapter first: a time means nothing without the GPU it was measured on.
+    let adapter = gpu.capabilities();
+    println!(
+        "adapter: {} on {} ({} {})",
+        adapter.adapter_name, adapter.backend, adapter.driver, adapter.driver_info
+    );
     let renderer = Renderer::new(gpu);
     for (width, height) in [(1_920, 1_080), (3_840, 2_160)] {
         readback(&renderer, RenderSize::new(width, height).expect("size"));

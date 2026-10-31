@@ -51,6 +51,8 @@ struct SurfaceDescriptor {
 /// The renderer's D3D12 device as the host shares it, on the first adapter
 /// D3D12VA opens on, or `None` (a recorded skip).
 fn shared_context() -> Option<SharedD3D12Context> {
+    // Before the device, so the collector watches its debug-layer queue.
+    alpha2_gpu::validation_log::install_unless_off();
     let made = pollster::block_on(alpha2_gpu::GpuContext::request_product_accepted(|gpu| {
         SharedD3D12Context::from_gpu(gpu.clone())
     }))
@@ -347,8 +349,10 @@ fn assert_child_ran(output: &std::process::Output) {
 }
 
 /// Runs `test` inside a validation error scope on `context`'s device; any
-/// validation error fails it.
+/// validation error fails it. What the debug layer reports meanwhile is
+/// reported, or fails it, as `ALPHA2_VALIDATION_LOG` says.
 fn validated<T>(context: &SharedD3D12Context, test: impl FnOnce() -> T) -> T {
+    let _turn = alpha2_gpu::validation_log::TestTurn::new(());
     let scope = context
         .gpu
         .device()
@@ -1641,17 +1645,29 @@ fn encode_plane_state_child() {
     let layer = debug_layer(&context);
     match &layer {
         Some(queue) => {
-            // The check below reads what this reads; show that an error reaches it.
-            // SAFETY: a live queue and a NUL-terminated message.
-            unsafe {
-                queue
-                    .AddApplicationMessage(
-                        D3D12_MESSAGE_SEVERITY_ERROR,
-                        windows::core::s!("alpha2 debug-layer probe"),
-                    )
-                    .expect("probe message");
-            }
+            // The check below reads what this reads; show that an error reaches it. The
+            // validation collector reads it too, as an error this test made on purpose.
+            let ((), collected) = alpha2_gpu::validation_log::expect_errors(|| {
+                // SAFETY: a live queue and a NUL-terminated message.
+                unsafe {
+                    queue
+                        .AddApplicationMessage(
+                            D3D12_MESSAGE_SEVERITY_ERROR,
+                            windows::core::s!("alpha2 debug-layer probe"),
+                        )
+                        .expect("probe message");
+                }
+            });
             assert_eq!(debug_layer_errors(queue), ["alpha2 debug-layer probe"]);
+            if alpha2_gpu::validation_log::mode() != alpha2_gpu::validation_log::ValidationMode::Off
+            {
+                assert!(
+                    collected
+                        .iter()
+                        .any(|record| record.message == "alpha2 debug-layer probe"),
+                    "the validation collector missed the probe: {collected:?}"
+                );
+            }
             // SAFETY: a live queue.
             unsafe { queue.ClearStoredMessages() };
             eprintln!("note: the D3D12 debug layer is on, with GPU-based validation asked for");

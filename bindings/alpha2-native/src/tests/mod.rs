@@ -251,6 +251,8 @@ impl<T> std::ops::Deref for HeldDevice<T> {
 /// a `videotoolbox` one where `VideoToolbox` decodes no H.264 in hardware.
 #[cfg(all(target_os = "macos", feature = "hwdecode"))]
 fn hardware_decode_context() -> Option<alpha2_native_gpu::SharedMetalContext> {
+    // Before the device, so the validation collector watches it.
+    alpha2_gpu::validation_log::install_unless_off();
     let made = pollster::block_on(alpha2_gpu::GpuContext::request_product())
         .map_err(|error| format!("{error:?}"))
         .and_then(|gpu| {
@@ -275,6 +277,8 @@ fn hardware_decode_context() -> Option<alpha2_native_gpu::SharedMetalContext> {
 /// `None` (a recorded `d3d12-video` skip).
 #[cfg(all(target_os = "windows", feature = "hwdecode"))]
 fn hardware_decode_context() -> Option<alpha2_native_gpu::SharedD3D12Context> {
+    // Before the device, so the validation collector watches it.
+    alpha2_gpu::validation_log::install_unless_off();
     let made = pollster::block_on(alpha2_gpu::GpuContext::request_product_accepted(|gpu| {
         alpha2_native_gpu::SharedD3D12Context::from_gpu(gpu.clone())
     }))

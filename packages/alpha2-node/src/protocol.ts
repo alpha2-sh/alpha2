@@ -123,6 +123,36 @@ const WINDOWS_LOADER_STATUSES = new Set([
 ]);
 
 /**
+ * The statuses Windows ends a crashed process with, by name, so a crash reads as one rather than
+ * as a ten-digit exit code.
+ */
+const WINDOWS_CRASH_STATUSES = new Map([
+  [0xc0000005, "STATUS_ACCESS_VIOLATION"],
+  [0xc0000409, "STATUS_STACK_BUFFER_OVERRUN"],
+  [0xc00000fd, "STATUS_STACK_OVERFLOW"],
+  [0xc0000374, "STATUS_HEAP_CORRUPTION"],
+  [0xc000001d, "STATUS_ILLEGAL_INSTRUCTION"],
+  [0xc0000094, "STATUS_INTEGER_DIVIDE_BY_ZERO"],
+  [0xc000013a, "STATUS_CONTROL_C_EXIT"],
+]);
+
+/**
+ * A process's end for a message: `exit SIGKILL`, `exit 1`, or `exit 3221226505 (0xC0000409
+ * STATUS_STACK_BUFFER_OVERRUN)` for a Windows crash status.
+ */
+export function describeExit(
+  exitCode: number | null,
+  signal: string | null,
+): string {
+  if (signal !== null) return `exit ${signal}`;
+  if (exitCode === null) return "exit unknown";
+  const status = exitCode < 0 ? exitCode + 2 ** 32 : exitCode;
+  const name = WINDOWS_CRASH_STATUSES.get(status);
+  if (name === undefined) return `exit ${exitCode}`;
+  return `exit ${exitCode} (0x${status.toString(16).toUpperCase().padStart(8, "0")} ${name})`;
+}
+
+/**
  * What the dynamic loaders write when they refuse a program, before it runs a line of its own:
  * glibc's ld.so (a missing library, one without a version the program names, a symbol it lacks),
  * musl's, and macOS's dyld.

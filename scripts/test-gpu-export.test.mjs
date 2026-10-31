@@ -104,6 +104,13 @@ test("a GPU error the host reports fails the run on any backend, not only Vulkan
   );
 });
 
+/** This process's environment without the run's capability contract, which the cases set. */
+function fixtureEnv() {
+  const env = { ...process.env };
+  delete env.ALPHA2_REQUIRE;
+  return env;
+}
+
 /**
  * Runs the harness against the protocol fixture, which ends a cancel the way `scenario` says, and
  * returns its output and the line of the cancel check.
@@ -121,7 +128,7 @@ function againstFixture(scenario, env = {}) {
     ],
     {
       cwd: root,
-      env: { ...process.env, GPU_EXPORT_FIXTURE: scenario, ...env },
+      env: { ...fixtureEnv(), GPU_EXPORT_FIXTURE: scenario, ...env },
       encoding: "utf8",
       // This bounds the test, not the harness: a harness waiting forever on a hung host is the bug.
       timeout: 60_000,
@@ -223,7 +230,7 @@ function unavailableAgainstFixture(scenario) {
     ],
     {
       cwd: root,
-      env: { ...process.env, GPU_EXPORT_FIXTURE: scenario },
+      env: { ...fixtureEnv(), GPU_EXPORT_FIXTURE: scenario },
       encoding: "utf8",
       timeout: 60_000,
       killSignal: "SIGKILL",

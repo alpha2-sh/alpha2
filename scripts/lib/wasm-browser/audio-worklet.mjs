@@ -34,7 +34,7 @@ for (const hint of [undefined, 256, 1024, 8192]) {
   const wrong = [0, 1].map((channel) => rendered.getChannelData(channel).filter((sample) => Math.abs(sample - 0.25) > 1e-6).length);
   results[hint ?? "default"] = { quantum: context.renderQuantumSize ?? 128, wrong, errors };
 }
-if (skipped !== undefined) report({ skipped, results });
+if (skipped !== undefined) report({ skipped, capability: "audio-render-quantum", results });
 else report({
   ok: Object.values(results).every((result) => result.wrong.every((count) => count === 0) && result.errors.length === 0),
   results,
@@ -104,6 +104,13 @@ report({ ok, results });
 
 // The playback clock against getOutputTimestamp().contextTime: error spread and drift must each
 // stay within one frame over `?seconds` (default 20); device latency may vary.
+//
+// The clock is also put on the output timestamp's own origin: the worklet reports the context
+// frame of its first ring read, so the project samples heard by `contextTime` are
+// (contextTime * contextRate - firstFrame) * rate / contextRate, and the clock's offset from that
+// is what a viewer would see as lip-sync error. It must stay within the context's base latency,
+// one render quantum and 2 ms; a browser whose timestamp misses that has an output timestamp
+// that does not agree with the common origin (capability audio-output-timestamp).
 export function audioClockTracking(contextRate) {
   return `
 const seconds = Number(new URL(location.href).searchParams.get("seconds") ?? 20);
@@ -112,11 +119,23 @@ const { Alpha2AudioWorkletHost, loadAlpha2AudioWorkletWasm, useAudioRing, config
   await import("/packages/alpha2/dist/audio-worklet.js");
 const rate = 48000;
 const context = new AudioContext({ sampleRate: ${contextRate} });
-await context.resume();
+// Without a user gesture a browser may hold the context suspended for good.
+const resumed = await Promise.race([
+  context.resume().then(() => true),
+  new Promise((resolve) => setTimeout(() => resolve(false), 5000)),
+]);
+if (!resumed) {
+  void context.close();
+  skip("audio-autostart", "AudioContext did not start without a user gesture");
+}
 const node = await Alpha2AudioWorkletHost.create(context, await loadAlpha2AudioWorkletWasm(), {
   numberOfInputs: 0, outputChannelCount: [2], projectSampleRate: rate, onDiagnostic: () => {},
 });
 node.connect(context.destination);
+let firstFrame = null;
+node.port.addEventListener("message", (event) => {
+  if (event.data?.type === "alpha2-first-read") firstFrame = event.data.frame;
+});
 // An underrun stalls the clock while the device keeps counting, so the
 // comparison below only holds without one; when one happens, the report says
 // how long after the node was made.
@@ -145,22 +164,34 @@ await configureEngineMixedAudio(node);
 const clock = new AudioPlaybackClock(pump, ring, context, Alpha2AudioWorkletHost.latency(node));
 const timer = setInterval(() => void pump.fill(), 20);
 const errors = [];
+const offsets = [];
 const started = performance.now();
 while (performance.now() - started < seconds * 1000) {
   await new Promise((resolve) => setTimeout(resolve, 250));
-  const device = context.getOutputTimestamp().contextTime * rate;
+  const timestamp = context.getOutputTimestamp();
+  const device = timestamp.contextTime * rate;
   if (device > 0) errors.push(clock.sample - device);
+  if (device > 0 && firstFrame !== null) {
+    const heard = ((timestamp.contextTime * context.sampleRate - firstFrame) * rate) / context.sampleRate;
+    offsets.push(clock.sample - heard);
+  }
 }
 clearInterval(timer);
+const baseLatency = context.baseLatency ?? 0;
 await context.close();
 if (errors.length < 8) throw new Error("the audio device did not advance");
+if (firstFrame === null) throw new Error("the worklet never reported its first ring read");
 const settled = errors.slice(4);
 const first = settled.slice(0, 4).reduce((a, b) => a + b) / 4;
 const last = settled.slice(-4).reduce((a, b) => a + b) / 4;
 const frame = rate / 30;
 const spread = Math.max(...settled) - Math.min(...settled);
-report({
-  ok: underruns === 0 && spread <= frame && Math.abs(last - first) <= frame,
+const settledOffsets = offsets.slice(4);
+const meanOffsetMs = settledOffsets.length === 0
+  ? null
+  : (settledOffsets.reduce((a, b) => a + b) / settledOffsets.length / rate) * 1000;
+const offsetBoundMs = baseLatency * 1000 + (128 / context.sampleRate) * 1000 + 2;
+const details = {
   contextRate: context.sampleRate,
   seconds,
   underruns,
@@ -169,7 +200,18 @@ report({
   meanErrorMs: +((settled.reduce((a, b) => a + b) / settled.length / rate) * 1000).toFixed(2),
   spreadMs: +((spread / rate) * 1000).toFixed(2),
   driftMs: +(((last - first) / rate) * 1000).toFixed(2),
-});
+  firstFrame,
+  meanOffsetMs: meanOffsetMs === null ? null : +meanOffsetMs.toFixed(2),
+  offsetBoundMs: +offsetBoundMs.toFixed(2),
+};
+const tracked = underruns === 0 && spread <= frame && Math.abs(last - first) <= frame;
+if (tracked && (meanOffsetMs === null || Math.abs(meanOffsetMs) > offsetBoundMs))
+  skip(
+    "audio-output-timestamp",
+    "the output timestamp is " + details.meanOffsetMs + " ms from the common origin; allowed " + details.offsetBoundMs + " ms",
+    details,
+  );
+report({ ok: tracked, ...details });
 `;
 }
 

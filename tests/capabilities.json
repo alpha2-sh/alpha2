@@ -27,6 +27,10 @@
     "description": "D3D12VA H.264 encode on an accepted adapter.",
     "probe": "a D3D12VA H.264 encode session opens on an accepted adapter"
   },
+  "d3d12-debug-layer": {
+    "description": "The D3D12 debug layer (the Graphics Tools optional feature).",
+    "probe": "a DX12 device made with InstanceFlags::VALIDATION casts to ID3D12InfoQueue"
+  },
   "metal": {
     "description": "A Metal device shared with VideoToolbox.",
     "probe": "SharedMetalContext::from_gpu(request_high_performance()) is Ok"
@@ -150,5 +154,13 @@
   "audio-output-timestamp": {
     "description": "An AudioContext output timestamp on the common origin.",
     "probe": "the browser's getOutputTimestamp agrees with the common origin"
+  },
+  "audio-autostart": {
+    "description": "An AudioContext that starts without a user gesture.",
+    "probe": "AudioContext.resume() settles within 5 s with no gesture"
+  },
+  "yuv-video-frames": {
+    "description": "Decoded VideoFrames in 8-bit 4:2:0.",
+    "probe": "a VideoFrame made from a decoded video element is I420 or NV12"
   }
 }

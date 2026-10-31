@@ -6,7 +6,8 @@
 // Lines read `<name> <key>=<value> ...`. Keys with an `ns`, `us` or `ms` word are measurements;
 // `ratio` and `realtime_pct` are skipped; other keys are parameters identifying the case. Each
 // measurement compares the fastest value per file (load only adds time), and a change of one unit
-// in the last printed digit is rounding and never counts.
+// in the last printed digit is rounding and never counts. A time printed as `n/a` (a clock this
+// machine does not have) is not measured: it is listed, never compared.
 //
 // Exit status: 0 when nothing grew past the threshold (default 5 %), 1 when something did, 2 on a
 // usage error or when the files share no measurement.
@@ -23,9 +24,10 @@ export function isTime(key) {
 
 /**
  * The fastest value of every measurement in a benchmark output, keyed by
- * `<name> <parameters> <measurement key>`, with the unit of its last printed digit.
+ * `<name> <parameters> <measurement key>`, with the unit of its last printed digit. A measurement
+ * printed only as `n/a` has the value null.
  *
- * @returns {Map<string, {value: number, step: number}>}
+ * @returns {Map<string, {value: number | null, step: number}>}
  */
 export function measurements(text) {
   const fastest = new Map();
@@ -42,11 +44,15 @@ export function measurements(text) {
       else parameters.push(pair);
     }
     for (const [key, text] of times) {
+      const id = [name, ...parameters, key].join(" ");
+      const seen = fastest.get(id);
+      if (text === "n/a") {
+        if (seen === undefined) fastest.set(id, { value: null, step: 0 });
+        continue;
+      }
       const value = Number(text);
       if (!Number.isFinite(value)) continue;
       const step = 10 ** -(text.split(".")[1]?.length ?? 0);
-      const id = [name, ...parameters, key].join(" ");
-      const seen = fastest.get(id);
       fastest.set(id, {
         value: Math.min(value, seen?.value ?? Infinity),
         step: Math.max(step, seen?.step ?? 0),
@@ -60,15 +66,21 @@ export function measurements(text) {
  * Every measurement of `current` against `baseline`.
  *
  * @returns {{regressions: {id: string, baseline: number, current: number, change: number}[],
- *   improvements: number, unchanged: number, missing: string[], added: string[]}}
+ *   improvements: number, unchanged: number, missing: string[], added: string[],
+ *   notMeasured: string[]}}
  */
 export function compare(baseline, current, threshold = 5) {
   const regressions = [];
+  const notMeasured = [];
   let improvements = 0;
   let unchanged = 0;
   for (const [id, { value: before, step }] of baseline) {
     if (!current.has(id)) continue;
     const { value: after, step: currentStep } = current.get(id);
+    if (before === null || after === null) {
+      notMeasured.push(id);
+      continue;
+    }
     // A zero baseline (a time under the printed precision) has no ratio; any time above it counts.
     const change =
       before > 0 ? ((after - before) / before) * 100 : after > 0 ? Infinity : 0;
@@ -85,12 +97,14 @@ export function compare(baseline, current, threshold = 5) {
     unchanged,
     missing: [...baseline.keys()].filter((id) => !current.has(id)),
     added: [...current.keys()].filter((id) => !baseline.has(id)),
+    notMeasured,
   };
 }
 
 /** The report's lines; the first says whether anything regressed. */
 export function report(result, threshold = 5) {
-  const { regressions, improvements, unchanged, missing, added } = result;
+  const { regressions, improvements, unchanged, missing, added, notMeasured } =
+    result;
   const compared = regressions.length + improvements + unchanged;
   const lines = [
     regressions.length
@@ -105,6 +119,8 @@ export function report(result, threshold = 5) {
   );
   for (const id of missing) lines.push(`  not measured any more: ${id}`);
   for (const id of added) lines.push(`  new, no baseline: ${id}`);
+  for (const id of notMeasured)
+    lines.push(`  not measured (n/a on this machine): ${id}`);
   return lines;
 }
 

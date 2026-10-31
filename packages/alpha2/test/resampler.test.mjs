@@ -7,6 +7,7 @@ import {
   missingCapability,
   suiteOf,
 } from "../../../scripts/lib/capabilities.mjs";
+import { minOf } from "../../../scripts/lib/timing.mjs";
 
 const wasmDirectory = join(resolve(import.meta.dirname, ".."), "wasm");
 
@@ -36,15 +37,25 @@ test(
   { skip: needsWasm },
   () => {
     // 768 kHz to 1 Hz would build a 94 MiB table in linear memory, and take seconds doing it.
-    const started = performance.now();
     assert.throws(
       () => new binding.AudioResampler(768_000, 1),
       /8192 times the target rate/,
     );
     assert.throws(() => new binding.AudioResampler(768_000, 93));
-    assert.ok(performance.now() - started < 1_000);
     // A fall of at most 8192 converts.
     new binding.AudioResampler(768_000, 94).free();
     new binding.AudioResampler(44_100, 48_000).free();
+    // Refused before any table is built: a refusal costs a small part of building the largest
+    // table that fits (about a thousandth here).
+    const refusal = minOf(5, () =>
+      assert.throws(() => new binding.AudioResampler(768_000, 1)),
+    );
+    const largest = minOf(5, () =>
+      new binding.AudioResampler(768_000, 94).free(),
+    );
+    assert.ok(
+      refusal < largest / 20,
+      `refused in ${refusal.toFixed(3)} ms, built the largest table in ${largest.toFixed(3)} ms`,
+    );
   },
 );

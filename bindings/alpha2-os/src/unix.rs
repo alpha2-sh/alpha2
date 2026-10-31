@@ -392,6 +392,37 @@ pub(crate) fn process_memory() -> ProcessMemory {
     ProcessMemory::default()
 }
 
+/// Puts the calling thread in the `QOS_CLASS_USER_INTERACTIVE` class, which
+/// the scheduler keeps on the performance cores; the result is ignored.
+#[cfg(target_os = "macos")]
+pub(crate) fn prefer_fast_cores() {
+    unsafe extern "C" {
+        fn pthread_set_qos_class_self_np(qos_class: u32, relative_priority: i32) -> i32;
+    }
+    /// `QOS_CLASS_USER_INTERACTIVE` from `<sys/qos.h>`.
+    const USER_INTERACTIVE: u32 = 0x21;
+    // SAFETY: a libSystem call with constant arguments that changes only the calling thread's
+    // scheduling class.
+    let _ = unsafe { pthread_set_qos_class_self_np(USER_INTERACTIVE, 0) };
+}
+
+/// User plus system CPU time of the process, from `getrusage(RUSAGE_SELF)`.
+pub(crate) fn process_cpu_time() -> Option<std::time::Duration> {
+    // SAFETY: an all-zero `rusage` is valid; the call fills it.
+    let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+    // SAFETY: `usage` outlives the call, which writes only it.
+    if unsafe { libc::getrusage(libc::RUSAGE_SELF, &raw mut usage) } != 0 {
+        return None;
+    }
+    let time = |value: libc::timeval| {
+        Some(
+            std::time::Duration::from_secs(u64::try_from(value.tv_sec).ok()?)
+                + std::time::Duration::from_micros(u64::try_from(value.tv_usec).ok()?),
+        )
+    };
+    Some(time(usage.ru_utime)? + time(usage.ru_stime)?)
+}
+
 /// CPU nanoseconds the calling thread has run.
 pub(crate) fn thread_cpu_work() -> Option<u64> {
     // SAFETY: an all-zero `timespec` is valid; the call fills it.

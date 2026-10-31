@@ -8,7 +8,12 @@ import { createServer } from "node:http";
 import { join, resolve } from "node:path";
 
 import { runBrowserPage } from "./browser-page.mjs";
-import { chromeGpuMode, fromThisMachine, servedFile } from "./chrome-cdp.mjs";
+import {
+  browserSettingsMode,
+  chromeGpuMode,
+  fromThisMachine,
+  servedFile,
+} from "./chrome-cdp.mjs";
 
 const root = resolve(import.meta.dirname, "..", "..");
 
@@ -166,9 +171,10 @@ export function browserSettings(browser, version, env = process.env) {
     name: browser.name,
     version,
     path: chrome ? browser.command : browser.webdriver.driver,
-    headed: browser.name === "safari" || env.ALPHA2_CHROME_HEADED === "1",
+    // Safari has no headless mode.
+    headed: browser.name === "safari" || env.ALPHA2_BROWSER_HEADED === "1",
     gpu: gpu.mode,
-    settings: env.ALPHA2_BROWSER_SETTINGS === "stock" ? "stock" : "harness",
+    settings: browserSettingsMode(env),
     flags: gpu.flags,
   };
 }

@@ -92,12 +92,17 @@ fn a_render_on_another_thread_never_gets_an_intermediate_a_frame_still_to_be_sub
             .expect("the frame encodes");
         // Encoded, not submitted: another thread renders a picture of the same size.
         let (done_sender, done) = std::sync::mpsc::channel();
+        let at_render = Arc::new(std::sync::Barrier::new(2));
+        let other_at_render = Arc::clone(&at_render);
         let other = scope.spawn(move || {
+            other_at_render.wait();
             let solid = shared.render_solid(size, blue).expect("solid");
             let _ = done_sender.send(());
             solid
         });
-        // Give it time to finish if nothing holds it back, then let the frame submit.
+        // Once the other thread is at its render, however slowly it started, give the render
+        // time to finish if nothing holds it back, then let the frame submit.
+        at_render.wait();
         let _ = done.recv_timeout(std::time::Duration::from_millis(500));
         release.send(()).expect("the frame waits");
         frame
@@ -171,11 +176,16 @@ fn a_render_on_another_thread_waits_for_a_source_conversion_another_frame_is_enc
             .recv_timeout(std::time::Duration::from_secs(10))
             .expect("the first frame encodes");
         let (done_sender, done) = std::sync::mpsc::channel();
+        let at_render = Arc::new(std::sync::Barrier::new(2));
+        let other_at_render = Arc::clone(&at_render);
         let other = scope.spawn(move || {
+            other_at_render.wait();
             let drawn = shared.render_graph(&second, &[pending]);
             let _ = done_sender.send(());
             drawn
         });
+        // The window opens once the second frame is at its render, however slowly it started.
+        at_render.wait();
         let _ = done.recv_timeout(std::time::Duration::from_millis(500));
         release.send(()).expect("the first frame waits");
         (

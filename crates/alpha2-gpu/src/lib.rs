@@ -19,6 +19,7 @@ mod context;
 mod diagnostic;
 mod error;
 mod instance;
+pub mod validation_log;
 
 pub use acquisition::{AcquisitionGuard, serialize_acquisition};
 pub use adapter_pin::{AdapterPin, gl_version_supported, high_performance_rank, product_order};

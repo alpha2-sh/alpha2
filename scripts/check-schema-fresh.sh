@@ -10,7 +10,7 @@ trap 'rm -rf "$fresh"' EXIT
 cargo run --quiet --manifest-path "$root/Cargo.toml" -p alpha2-model \
   --features schema --example emit-schema -- "$fresh"
 cargo run --quiet --manifest-path "$root/Cargo.toml" -p alpha2-compose \
-  --features schema --example emit-schema -- "$fresh"
+  --features schema --example emit-compose-schema -- "$fresh"
 status=0
 for name in project.v1.schema.json project-limits.v1.json compose.v1.schema.json; do
   if ! diff -u "$root/schema/$name" "$fresh/$name"; then

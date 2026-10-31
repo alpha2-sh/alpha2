@@ -72,6 +72,7 @@ fn shared_context() -> Option<SharedMetalContext> {
 
 /// [`shared_context`] on a device opened without the optional features in `withheld`.
 fn shared_context_without(withheld: wgpu::Features) -> Option<SharedMetalContext> {
+    alpha2_gpu::validation_log::install_unless_off();
     let made = pollster::block_on(alpha2_gpu::GpuContext::request_product_with(
         &alpha2_gpu::ProductRequest {
             withheld,
@@ -416,8 +417,10 @@ fn sample(
 }
 
 /// Runs `test` inside a validation error scope on `context`'s device; any
-/// validation error fails it.
+/// validation error fails it. What `wgpu-hal` logs meanwhile is reported, or
+/// fails it, as `ALPHA2_VALIDATION_LOG` says.
 fn validated<T>(context: &SharedMetalContext, test: impl FnOnce() -> T) -> T {
+    let _turn = alpha2_gpu::validation_log::TestTurn::new(());
     let scope = context
         .gpu
         .device()

@@ -124,7 +124,7 @@ mod tests {
             with_sources("file://new", count),
         );
         assert_eq!(stale_sources(&before, &after).len(), count);
-        alpha2_scaling_support::assert_linear(
+        alpha2_scaling_support::assert_linear_shared(
             "stale sources",
             count / alpha2_scaling_support::GROWTH,
             |count| {

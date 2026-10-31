@@ -2,22 +2,13 @@
 
 import { join, resolve } from "node:path";
 
+import { executable as cargoExecutable } from "../cargo-target.mjs";
+
 export const root = resolve(import.meta.dirname, "..", "..", "..");
 export const executable = resolve(
-  process.env.ALPHA2_HOST_BINARY ??
-    join(
-      root,
-      "target",
-      "debug",
-      `alpha2-host${process.platform === "win32" ? ".exe" : ""}`,
-    ),
+  process.env.ALPHA2_HOST_BINARY ?? cargoExecutable("alpha2-host", "debug"),
 );
-export const mediaExecutable = join(
-  root,
-  "target",
-  "debug",
-  `alpha2${process.platform === "win32" ? ".exe" : ""}`,
-);
+export const mediaExecutable = cargoExecutable("alpha2", "debug");
 export const projectPath = join(
   root,
   "tests",

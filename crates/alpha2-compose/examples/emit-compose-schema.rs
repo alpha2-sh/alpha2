@@ -1,6 +1,6 @@
 //! Writes the published compose spec schema.
 //!
-//! `cargo run -p alpha2-compose --features schema --example emit-schema -- <dir>`
+//! `cargo run -p alpha2-compose --features schema --example emit-compose-schema -- <dir>`
 //! writes `<dir>/compose.v1.schema.json`. `scripts/check-schema-fresh.sh`
 //! regenerates it and compares it with the committed copy under `schema/`.
 

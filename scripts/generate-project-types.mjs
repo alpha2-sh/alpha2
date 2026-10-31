@@ -8,8 +8,8 @@
 // `packages/alpha2/src/generated/project-schema.ts` and `project-shape.ts`, and the Python package's
 // `python/alpha2/src/alpha2/types.py` (scripts/lib/python-project-types.mjs). From
 // `schema/compose.v1.schema.json` (`cargo run -p alpha2-compose --features schema --example
-// emit-schema`) it writes the Python package's `compose_types.py`. With `--check` it writes nothing
-// and exits non-zero when a committed file is stale.
+// emit-compose-schema`) it writes the Python package's `compose_types.py`. With `--check` it writes
+// nothing and exits non-zero when a committed file is stale.
 //
 // Unsupported schema constructs are rejected rather than emitted as incorrect types.
 

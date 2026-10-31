@@ -98,7 +98,7 @@ try {
     worstFrames.push(worst);
   }
   const metric = ([max, sum, count]) => ({ max, mean: sum / count });
-  done({ frames: native.length, orientations, displaySizes, worstFrames, y: metric(totals.y), u: metric(totals.u), v: metric(totals.v) });
+  done({ adapter: JSON.parse(engine.diagnostics()).adapter, frames: native.length, orientations, displaySizes, worstFrames, y: metric(totals.y), u: metric(totals.u), v: metric(totals.v) });
 } catch (error) {
   done({ error: error?.stack ?? String(error) });
 }

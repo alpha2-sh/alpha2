@@ -27,6 +27,7 @@ import {
   validateProjectJson,
 } from "../dist/project.js";
 import { readValidationCorpus } from "../../../scripts/lib/validation-corpus.mjs";
+import { assertScalesBelow } from "../../../scripts/lib/timing.mjs";
 
 /** `document`'s first clip shown through one effect node. */
 function withEffect(document, effect) {
@@ -155,20 +156,22 @@ test("a chain of compositions as long as a project holds is validated without ex
   assert.deepEqual(validateProject(document), ["composition c0 uses itself"]);
 });
 
-/** How long `run` takes, in milliseconds, and what it returned. */
-function timed(run) {
-  const started = performance.now();
-  const value = run();
-  return { value, ms: performance.now() - started };
-}
-
 /**
- * Validation of a document as big as a project holds: well under a second where the engine's own
- * model takes milliseconds.
+ * Asserts that validating the document `make` builds for a size grows linearly with it. Validation
+ * keeps what it checked per object, so each run validates a document of its own.
  */
-const LINEAR_MS = 2_000;
+const assertValidationScales = (what, small, make) =>
+  assertScalesBelow(
+    what,
+    small,
+    make,
+    (document) => validateProject(document),
+    {
+      fresh: true,
+    },
+  );
 
-test("clips that all overlap are refused for their first uncovered overlap, in time linear in the clips", () => {
+test("clips that all overlap are refused for their first uncovered overlap, in time linear in the clips", async () => {
   const clips = (count) =>
     Array.from({ length: count }, (_, index) => ({
       id: `c${index}`,
@@ -179,17 +182,24 @@ test("clips that all overlap are refused for their first uncovered overlap, in t
   // As many as a track holds: the engine refuses it for c0 and c1.
   const full = project();
   full.timeline.tracks[0].clips = clips(4_096);
-  const within = timed(() => validateProject(full));
-  assert.deepEqual(within.value, [
+  assert.deepEqual(validateProject(full), [
     "clips c0 and c1 overlap without a transition",
   ]);
-  assert.ok(within.ms < LINEAR_MS, `${within.ms} ms`);
+  const withClips = (count) => {
+    const document = project();
+    document.timeline.tracks[0].clips = clips(count);
+    return document;
+  };
+  await assertValidationScales("overlapping clips", 512, withClips);
   // More than a track holds: refused for the count before anything is compared.
-  const over = project();
-  over.timeline.tracks[0].clips = clips(8_000);
-  const beyond = timed(() => validateProject(over));
-  assert.deepEqual(beyond.value, ["track v1 has too many clips"]);
-  assert.ok(beyond.ms < LINEAR_MS, `${beyond.ms} ms`);
+  assert.deepEqual(validateProject(withClips(8_000)), [
+    "track v1 has too many clips",
+  ]);
+  await assertValidationScales(
+    "more clips than a track holds",
+    4_097,
+    withClips,
+  );
 });
 
 test("a value of a union is walked by its forms only until one fits", async () => {
@@ -240,54 +250,61 @@ test("a document with more shape problems than a call takes arguments is reporte
   assert.equal(keyframes.length, 200_000);
 });
 
-test("group nodes are checked against their target's controls in time linear in the document", () => {
-  const document = project();
-  const controls = Array.from({ length: 20_000 }, (_, index) => ({
-    name: `c${index}`,
-    node: "fx",
-    param: `p${index}`,
-  }));
-  document.compositions = [
-    {
-      id: "target",
-      nodes: [
-        { id: "clip", op: { type: "clip" } },
-        {
-          id: "fx",
+test("group nodes are checked against their target's controls in time linear in the document", async () => {
+  // Controls and groups grow together, so a check of every group against every control grows
+  // with the square of the size.
+  const withGroups = (groups) => {
+    const document = project();
+    const controls = Array.from({ length: groups * 500 }, (_, index) => ({
+      name: `c${index}`,
+      node: "fx",
+      param: `p${index}`,
+    }));
+    document.compositions = [
+      {
+        id: "target",
+        nodes: [
+          { id: "clip", op: { type: "clip" } },
+          {
+            id: "fx",
+            op: {
+              type: "effect",
+              input: "clip",
+              effect: { id: "alpha2.effect.brightness", version: 1 },
+            },
+          },
+        ],
+        output: "fx",
+        controls,
+      },
+      ...Array.from({ length: groups }, (_, index) => ({
+        id: `groups${index}`,
+        nodes: Array.from({ length: 256 }, (_, node) => ({
+          id: `g${node}`,
           op: {
-            type: "effect",
-            input: "clip",
-            effect: { id: "alpha2.effect.brightness", version: 1 },
+            type: "group",
+            composition: "target",
+            controls: {
+              c1: { mode: "constant", value: { type: "float", value: 0.5 } },
+            },
           },
-        },
-      ],
-      output: "fx",
-      controls,
-    },
-    ...Array.from({ length: 40 }, (_, index) => ({
-      id: `groups${index}`,
-      nodes: Array.from({ length: 256 }, (_, node) => ({
-        id: `g${node}`,
-        op: {
-          type: "group",
-          composition: "target",
-          controls: {
-            c1: { mode: "constant", value: { type: "float", value: 0.5 } },
-          },
-        },
+        })),
+        output: "g0",
       })),
-      output: "g0",
-    })),
-  ];
-  const { value, ms } = timed(() => validateProject(document));
+    ];
+    return document;
+  };
+  const problems = validateProject(withGroups(40));
   assert.ok(
-    value.includes("composition target has invalid group inputs or controls"),
-    value.join("\n"),
+    problems.includes(
+      "composition target has invalid group inputs or controls",
+    ),
+    problems.join("\n"),
   );
-  assert.ok(ms < LINEAR_MS, `${ms} ms`);
+  await assertValidationScales("group nodes and controls", 5, withGroups);
 });
 
-test("more tracks than a project holds are refused before their ducking is followed", () => {
+test("more tracks than a project holds are refused before their ducking is followed", async () => {
   // Every track ducks from a, and a and b duck from each other: every walk is as long as the track list.
   const ducking = (sidechain_track) => ({
     ducking: {
@@ -309,13 +326,19 @@ test("more tracks than a project holds are refused before their ducking is follo
     { id: "a", name: "A", kind: "audio", clips: [], audio: ducking("b") },
     { id: "b", name: "B", kind: "audio", clips: [], audio: ducking("a") },
   ];
-  const over = project();
-  over.timeline.tracks = tracks(2_000);
-  const beyond = timed(() => validateProject(over));
-  assert.deepEqual(beyond.value, [
+  const withTracks = (count) => {
+    const document = project();
+    document.timeline.tracks = tracks(count);
+    return document;
+  };
+  assert.deepEqual(validateProject(withTracks(2_000)), [
     "project must not contain more than 256 tracks",
   ]);
-  assert.ok(beyond.ms < LINEAR_MS, `${beyond.ms} ms`);
+  await assertValidationScales(
+    "more tracks than a project holds",
+    300,
+    withTracks,
+  );
   // Within the limit the cycle is still found, for the two tracks on it only.
   const within = project();
   within.timeline.tracks = tracks(254);

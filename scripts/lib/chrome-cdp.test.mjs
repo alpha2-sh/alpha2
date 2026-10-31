@@ -4,15 +4,19 @@ import test from "node:test";
 
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, posix, win32 } from "node:path";
 
 import { BrowserStartError } from "./browser-errors.mjs";
 import {
   browserForCheck,
+  chromeArguments,
   chromeExecutable,
   chromeGpuMode,
+  edgeExecutable,
   fromThisMachine,
+  reportSkippedBrowser,
   runChromePage,
   servedFile,
   skippedCasesSummary,
@@ -63,6 +67,17 @@ test("Chrome or Chromium is found where each platform installs it", () => {
     }),
     "/Applications/Chromium.app/Contents/MacOS/Chromium",
   );
+  // An app in the user's own Applications folder counts too.
+  assert.equal(
+    chromeExecutable({
+      env: { HOME: "/Users/a" },
+      platform: "darwin",
+      exists: only(
+        "/Users/a/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      ),
+    }),
+    "/Users/a/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  );
   assert.equal(
     chromeExecutable({
       env: { ALPHA2_PARITY_CHROME: "/opt/chrome" },
@@ -70,6 +85,59 @@ test("Chrome or Chromium is found where each platform installs it", () => {
       exists: () => false,
     }),
     "/opt/chrome",
+  );
+});
+
+test("Edge is found where Windows and macOS install it", () => {
+  const windows = {
+    PROGRAMFILES: "C:\\Program Files",
+    "PROGRAMFILES(X86)": "C:\\Program Files (x86)",
+  };
+  for (const path of [
+    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+  ])
+    assert.equal(
+      edgeExecutable({ env: windows, platform: "win32", exists: only(path) }),
+      path,
+    );
+  const mac = "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge";
+  assert.equal(
+    edgeExecutable({ env: {}, platform: "darwin", exists: only(mac) }),
+    mac,
+  );
+  assert.equal(
+    edgeExecutable({
+      env: {},
+      platform: "linux",
+      exists: only("/usr/bin/microsoft-edge-stable"),
+    }),
+    "/usr/bin/microsoft-edge-stable",
+  );
+  assert.equal(
+    edgeExecutable({ env: { ALPHA2_EDGE: "/opt/edge" }, exists: () => false }),
+    "/opt/edge",
+  );
+  assert.equal(
+    edgeExecutable({ env: windows, platform: "win32", exists: only() }),
+    null,
+  );
+  // A run without Chrome is told about the Edge it could use instead, never switched to it.
+  assert.match(
+    reportSkippedBrowser("the check", "suite", windows, {
+      platform: "win32",
+      exists: only(
+        "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+      ),
+    }),
+    /no Chrome found; set ALPHA2_PARITY_CHROME to a Chrome executable, or run Edge with --browser edge$/,
+  );
+  assert.match(
+    reportSkippedBrowser("the check", "suite", windows, {
+      platform: "win32",
+      exists: only(),
+    }),
+    /a Chrome executable$/,
   );
 });
 
@@ -128,11 +196,14 @@ test("chrome picks the machine GPU on macOS and Windows and SwiftShader on Linux
       /unknown ALPHA2_CHROME_GPU "hardware": expected machine, swiftshader, none/,
     );
   }
+  const headed = {
+    ALPHA2_CHROME_GPU: "machine",
+    ALPHA2_BROWSER_HEADED: "1",
+    DISPLAY: ":1",
+  };
+  const dri3 = () => ({ tool: true, opened: true, dri3: true });
   assert.deepEqual(
-    chromeGpuMode({
-      env: { ALPHA2_CHROME_GPU: "machine", ALPHA2_CHROME_HEADED: "1" },
-      platform: "linux",
-    }),
+    chromeGpuMode({ env: headed, platform: "linux", extensions: dri3 }),
     {
       mode: "machine",
       flags: [
@@ -142,16 +213,124 @@ test("chrome picks the machine GPU on macOS and Windows and SwiftShader on Linux
       ],
     },
   );
+  const startError = (pattern) => (error) =>
+    error instanceof BrowserStartError && pattern.test(error.message);
+  // Headless, or headed without a display.
+  for (const env of [
+    { ALPHA2_CHROME_GPU: "machine", DISPLAY: ":1" },
+    { ALPHA2_CHROME_GPU: "machine", ALPHA2_BROWSER_HEADED: "1" },
+  ])
+    assert.throws(
+      () => chromeGpuMode({ env, platform: "linux", extensions: dri3 }),
+      startError(/needs a headed browser on a DRI3 display/),
+    );
+  // Xvfb: Chrome's GPU process would hang on it.
   assert.throws(
     () =>
       chromeGpuMode({
-        env: { ALPHA2_CHROME_GPU: "machine" },
+        env: headed,
+        platform: "linux",
+        extensions: () => ({ tool: true, opened: true, dri3: false }),
+      }),
+    startError(/DISPLAY :1 has no DRI3 \(Xvfb\)/),
+  );
+  assert.throws(
+    () =>
+      chromeGpuMode({
+        env: headed,
+        platform: "linux",
+        extensions: () => ({ tool: true, opened: false, dri3: false }),
+      }),
+    startError(/DISPLAY :1 cannot be opened/),
+  );
+  // Without xdpyinfo the display goes unchecked, with a warning.
+  assert.equal(
+    chromeGpuMode({
+      env: headed,
+      platform: "linux",
+      extensions: () => ({ tool: false, opened: false, dri3: false }),
+    }).mode,
+    "machine",
+  );
+  assert.throws(
+    () =>
+      chromeGpuMode({
+        env: { ALPHA2_BROWSER_SETTINGS: "user" },
         platform: "linux",
       }),
-    (error) =>
-      error instanceof BrowserStartError && /DRI3 display/.test(error.message),
+    /unknown ALPHA2_BROWSER_SETTINGS "user": expected harness, stock/,
   );
 });
+
+test("stock settings pass no harness or GPU flag", () => {
+  const gpuFlags = ["--use-angle=metal"];
+  const profile = "/tmp/alpha2-chrome-x";
+  const stock = chromeArguments({
+    settings: "stock",
+    gpuFlags,
+    headed: false,
+    profile,
+  });
+  assert.deepEqual(stock, [
+    "--headless=new",
+    "--no-first-run",
+    "--password-store=basic",
+    "--remote-debugging-port=0",
+    "--user-data-dir=/tmp/alpha2-chrome-x",
+    "about:blank",
+  ]);
+  const harness = chromeArguments({
+    settings: "harness",
+    gpuFlags,
+    headed: true,
+    profile,
+  });
+  assert.ok(!harness.includes("--headless=new"));
+  for (const flag of [
+    "--no-sandbox",
+    "--disable-gpu-sandbox",
+    "--enable-unsafe-webgpu",
+    "--disable-domain-blocking-for-3d-apis",
+    "--autoplay-policy=no-user-gesture-required",
+    "--use-angle=metal",
+  ]) {
+    assert.ok(harness.includes(flag), flag);
+    assert.ok(!stock.includes(flag), flag);
+  }
+});
+
+test(
+  "a start error carries the tail of Chrome's stderr",
+  { skip: process.platform === "win32" && "the fake Chrome is a shell script" },
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), "alpha2-fake-chrome-"));
+    try {
+      const command = join(directory, "chrome");
+      await writeFile(
+        command,
+        '#!/bin/sh\nfor i in $(seq 1 20); do echo "line $i" >&2; done\nexit 2\n',
+      );
+      await chmod(command, 0o755);
+      await assert.rejects(
+        runChromePage(command, "about:blank", { timeoutMs: 5_000 }),
+        (error) => {
+          assert.ok(error instanceof BrowserStartError);
+          const lines = Array.from(
+            { length: 10 },
+            (_, index) => `line ${index + 11}`,
+          );
+          assert.equal(
+            error.message,
+            `Chrome exited 2; Chrome said: ${lines.join(" | ")}`,
+          );
+          return true;
+        },
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
 
 test("a Chrome that exits before its endpoint fails with a start error", async () => {
   // Node stands in for Chrome: it refuses Chrome's flags and exits 9 without the DevTools line.
@@ -195,8 +374,7 @@ test("a run's end lists each case the browser could not run, with its reason", (
     skippedCasesSummary([
       {
         name: "webgpu-video-frame",
-        reason:
-          "this browser cannot import a VideoFrame into WebGPU (Destroyed)",
+        reason: "this browser lost WebGPU importing a VideoFrame (Destroyed)",
       },
       {
         name: "audio-decoder",
@@ -205,7 +383,7 @@ test("a run's end lists each case the browser could not run, with its reason", (
     ]),
     [
       "2 case(s) skipped: this browser cannot run them; ALPHA2_REQUIRE fails the ones it names",
-      "  webgpu-video-frame: this browser cannot import a VideoFrame into WebGPU (Destroyed)",
+      "  webgpu-video-frame: this browser lost WebGPU importing a VideoFrame (Destroyed)",
       "  audio-decoder: this browser has no WebCodecs AudioDecoder",
       "",
     ].join("\n"),
@@ -306,18 +484,20 @@ test(
   "a page whose main thread never yields times out",
   { skip: chrome === null && "no Chrome on this machine" },
   async () => {
+    const timeoutMs = 3_000;
     const outcome = await settled(
       (onPage) =>
         runChromePage(chrome, page("setTimeout(() => { for (;;) {} }, 200);"), {
-          timeoutMs: 3_000,
+          timeoutMs,
           onPage,
         }),
       90_000,
     );
     assert.equal(outcome.hung, undefined, "the check never ended");
     assert.match(outcome.error, /browser page timed out/);
-    // The 3 s timeout, then up to 2 s to stop Chrome.
-    assert.ok(outcome.seconds < 10, `${outcome.seconds} s`);
+    // The timeout, then the time to stop Chrome: the bound catches a check that outlives it, not
+    // a slow machine.
+    assert.ok(outcome.seconds < timeoutMs / 1000 + 10, `${outcome.seconds} s`);
   },
 );
 
@@ -325,10 +505,11 @@ test(
   "a renderer that crashes ends the page with that reason",
   { skip: chrome === null && "no Chrome on this machine" },
   async () => {
+    const timeoutMs = 20_000;
     const outcome = await settled(
       (opened) =>
         runChromePage(chrome, page(""), {
-          timeoutMs: 20_000,
+          timeoutMs,
           onPage: (cdp, sessionId) => {
             opened();
             // Page.crash never answers: the renderer is gone.
@@ -338,8 +519,9 @@ test(
       90_000,
     );
     assert.equal(outcome.hung, undefined, "the check never ended");
+    // The reason, not the timeout, ended it; the bound catches only a check that hangs past both.
     assert.match(outcome.error, /crashed|closed/);
-    assert.ok(outcome.seconds < 15, `${outcome.seconds} s`);
+    assert.ok(outcome.seconds < timeoutMs / 1000 + 10, `${outcome.seconds} s`);
   },
 );
 

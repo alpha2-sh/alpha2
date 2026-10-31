@@ -72,7 +72,8 @@ test("an encoder that puts nothing out in quality mode opens in realtime mode wh
     ],
   );
   const waited = performance.now() - started;
-  assert.ok(waited >= 1_450 && waited < 2_500, `waited ${waited} ms`);
+  // The quality probe waits out its 1.5 s timeout; the upper bound catches only a probe that hangs.
+  assert.ok(waited >= 1_450 && waited < 1_500 + 10_000, `waited ${waited} ms`);
   assert.equal(await videoEncoderLatencyMode("avc"), "realtime");
   assert.equal(opened.filter(([codec]) => codec === "avc1").length, 2);
 });

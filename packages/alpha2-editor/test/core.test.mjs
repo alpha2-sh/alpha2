@@ -17,6 +17,7 @@ import {
   sequenceEnd,
 } from "../dist/index.js";
 import { validateProject } from "alpha2/project";
+import { assertScalesBelow, minOf } from "../../../scripts/lib/timing.mjs";
 const fixture = async (name) =>
   JSON.parse(
     await readFile(new URL(`./fixtures/${name}.json`, import.meta.url), "utf8"),
@@ -930,19 +931,15 @@ test("the track lock costs little when an edit leaves what it guards as it was",
       patch: { blend_mode: "screen" },
     })),
   };
-  const time = (document) => {
-    let best = Infinity;
-    for (let i = 0; i < 3; i += 1) {
-      const started = performance.now();
-      assert.equal(executeCommand(document, updates).ok, true);
-      best = Math.min(best, performance.now() - started);
-    }
-    return best;
-  };
+  // The fastest of five, so a GC pause or a busy machine is not the measurement.
+  const time = (document) =>
+    minOf(5, () => assert.equal(executeCommand(document, updates).ok, true));
   const free = time(unlocked);
   const guarded = time(locked);
+  // The lock's own check is a part of the edit's; a scan per locked composition was hundreds of
+  // times the edit.
   assert.ok(
-    guarded < free * 3 + 20,
+    guarded < free * 3,
     `${guarded.toFixed(1)} ms with three locked tracks, ${free.toFixed(1)} ms without`,
   );
 });
@@ -1386,21 +1383,11 @@ test("pasting with nothing copied, or any command that changes nothing, keeps th
   assert.equal(e.document.project.name, "Renamed");
 });
 
-test("a document of 10,000 clips is made and opened within its budget", () => {
+test("a document is made and opened in time linear in its clips", async () => {
   // Guards against quadratic mask naming (10 s for 10,000 clips).
   const S = 120000;
-  const tracks = [0, 1, 2].map((t) => ({
-    id: `V${t}`,
-    name: `Video ${t}`,
-    kind: "video",
-    clips: Array.from({ length: t < 2 ? 4_000 : 2_000 }, (_, i) => ({
-      id: `c${t}-${i}`,
-      source_id: "s",
-      timeline_range: { start: i * S, end: (i + 1) * S },
-      source_range: { start: 0, end: S },
-    })),
-  }));
-  const project = {
+  // Over three tracks, the third half as long; at 10,000 a track holds 4,000 of the most 4,096.
+  const withClips = (count) => ({
     schema_version: 1,
     id: "p",
     name: "Big",
@@ -1411,35 +1398,44 @@ test("a document of 10,000 clips is made and opened within its budget", () => {
       sample_rate: 48000,
     },
     sources: [{ id: "s", kind: "video", locator: "test://s" }],
-    timeline: { tracks },
-  };
-  // The fastest of three, each of a new project object so no check is skipped as known.
-  const best = (run) => {
-    let elapsed = Infinity;
-    let result;
-    for (let i = 0; i < 3; i += 1) {
-      const started = performance.now();
-      result = run();
-      elapsed = Math.min(elapsed, performance.now() - started);
-    }
-    return { elapsed, result };
-  };
-  const made = best(() => createDocument({ ...project }));
-  assert.equal(made.result.metadata.instanceIds["c0-0/masks"].length, 0);
+    timeline: {
+      tracks: [0, 1, 2].map((t) => ({
+        id: `V${t}`,
+        name: `Video ${t}`,
+        kind: "video",
+        clips: Array.from(
+          { length: (t < 2 ? 2 : 1) * (count / 5) },
+          (_, i) => ({
+            id: `c${t}-${i}`,
+            source_id: "s",
+            timeline_range: { start: i * S, end: (i + 1) * S },
+            source_range: { start: 0, end: S },
+          }),
+        ),
+      })),
+    },
+  });
   // A file without the ids gets them on open.
-  const file = JSON.parse(serializeDocument(made.result));
-  file.metadata.instanceIds = {};
-  const text = JSON.stringify(file);
-  const opened = best(() => parseDocument(text));
+  const withoutIds = (document) => {
+    const file = JSON.parse(serializeDocument(document));
+    file.metadata.instanceIds = {};
+    return JSON.stringify(file);
+  };
+  const made = createDocument(withClips(10_000));
+  assert.equal(made.metadata.instanceIds["c0-0/masks"].length, 0);
   assert.deepEqual(
-    opened.result.metadata.instanceIds,
-    made.result.metadata.instanceIds,
+    parseDocument(withoutIds(made)).metadata.instanceIds,
+    made.metadata.instanceIds,
   );
-  // About 0.1 s each here; the budget is for the quadratic regression, not for the machine.
-  assert.ok(made.elapsed < 1_000, `made in ${made.elapsed.toFixed(1)} ms`);
-  assert.ok(
-    opened.elapsed < 1_000,
-    `opened in ${opened.elapsed.toFixed(1)} ms`,
+  // Each run gets a new project object, so no check is skipped as known.
+  await assertScalesBelow("making a document", 1_250, withClips, (project) =>
+    createDocument({ ...project }),
+  );
+  await assertScalesBelow(
+    "opening a document",
+    1_250,
+    (count) => withoutIds(createDocument(withClips(count))),
+    (text) => parseDocument(text),
   );
 });
 

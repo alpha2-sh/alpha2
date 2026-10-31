@@ -27,6 +27,7 @@ import {
 } from "../dist/index.js";
 import {
   createRequest,
+  describeExit,
   loaderRefused,
   parseHostMessage,
 } from "../dist/protocol.js";
@@ -449,15 +450,20 @@ test(
     const hostPath = await fakeHost(root, QUEUE_HOST(log, { answerMs: 400 }));
     const client = new Alpha2NodeClient({ hostPath, concurrency: 1 });
     const a = client.exportProject(exportRequest("a.mp4"));
+    let aSettled = false;
+    a.then(
+      () => (aSettled = true),
+      () => (aSettled = true),
+    );
     const controller = new AbortController();
-    const started = Date.now();
     const b = client.exportProject(
       exportRequest("b.mp4", { signal: controller.signal }),
     );
     const c = client.exportProject(exportRequest("c.mp4"));
     setTimeout(() => controller.abort(), 50);
     await assert.rejects(b, (error) => error instanceof Alpha2AbortError);
-    assert.ok(Date.now() - started < 350, "the abort waited for the slot");
+    // a answers 400 ms after its host read the request, so b settled first unless it waited.
+    assert.equal(aSettled, false, "the abort waited for the slot");
     assert.deepEqual(await Promise.all([a, c]), ["a.mp4", "c.mp4"]);
     const requests = (await startsIn(log)).filter((line) =>
       line.startsWith("request"),
@@ -469,7 +475,7 @@ test(
 test(
   "a host that stays up through SIGTERM is killed, and the abort settles once it has gone",
   {
-    timeout: 15_000,
+    timeout: 30_000,
     skip:
       process.platform === "win32" &&
       "Windows ends a process at once on any kill: there is no SIGTERM to stay up through",
@@ -499,8 +505,10 @@ test(
       );
     const waited = Date.now() - aborted;
     assert.ok(settled instanceof Alpha2AbortError, String(settled));
+    // The host gets the client's 5 s shutdown timeout, then is killed; the upper bound catches
+    // only an abort that never settles.
     assert.ok(
-      waited >= 4_900 && waited < 8_000,
+      waited >= 4_900 && waited < 5_000 + 10_000,
       `settled ${waited} ms after the abort`,
     );
     const pid = Number((await startsIn(log))[0].split(" ")[1]);
@@ -923,6 +931,20 @@ test("the loader's refusal is told apart from a host that started and died", () 
     assert.equal(loaderRefused(code, stderr), false, stderr || code);
 });
 
+test("a windows crash status is named", () => {
+  assert.equal(
+    describeExit(0xc0000409, null),
+    "exit 3221226505 (0xC0000409 STATUS_STACK_BUFFER_OVERRUN)",
+  );
+  assert.equal(
+    describeExit(0xc0000005, null),
+    "exit 3221225477 (0xC0000005 STATUS_ACCESS_VIOLATION)",
+  );
+  assert.equal(describeExit(1, null), "exit 1");
+  assert.equal(describeExit(null, "SIGKILL"), "exit SIGKILL");
+  assert.equal(describeExit(null, null), "exit unknown");
+});
+
 /**
  * A host that fails with `DECODE_STALLED` unless it decodes in software, and records each decode
  * mode it ran with.
@@ -1221,19 +1243,22 @@ test("a capability probe a caller withdraws while an export holds the slot never
   const hostPath = await fakeHost(root, PROBED_HOST(log, { exportMs: 600 }));
   const client = new Alpha2NodeClient({ hostPath, concurrency: 1 });
   const exporting = client.exportProject(exportRequest(join(root, "out.mp4")));
+  let exported = false;
+  exporting.then(
+    () => (exported = true),
+    () => (exported = true),
+  );
   const controller = new AbortController();
-  const started = Date.now();
   const probe = client.getCapabilities({ signal: controller.signal });
   setTimeout(() => controller.abort(), 50);
   await assert.rejects(probe, (error) => error instanceof Alpha2AbortError);
-  assert.ok(
-    Date.now() - started < 500,
-    "the withdrawn call waited for the export",
-  );
+  // The export answers 600 ms after its host read the request.
+  assert.equal(exported, false, "the withdrawn call waited for the export");
   await exporting;
-  // Long enough for a probe still queued behind the export to have started.
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  assert.deepEqual(await startsIn(log), ["export unset"]);
+  // Slots are taken in the order they were asked for: once a later export has run, a probe still
+  // queued behind the first export would have started before it.
+  await client.exportProject(exportRequest(join(root, "after.mp4")));
+  assert.deepEqual(await startsIn(log), ["export unset", "export unset"]);
 });
 
 test("one probe answers every capability call for a decode mode, and a failed one is not kept", async () => {

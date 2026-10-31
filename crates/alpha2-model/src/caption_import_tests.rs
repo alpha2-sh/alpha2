@@ -355,7 +355,7 @@ fn a_line_of_ampersands_is_read_in_time_linear_in_its_length() {
         let imported = parse_webvtt(&file(1 << 20)).expect("a WebVTT file");
         // Longer than a cue holds, so it is skipped.
         assert_eq!((imported.cues.len(), imported.skipped), (0, 1));
-        alpha2_scaling_support::assert_linear(
+        alpha2_scaling_support::assert_linear_shared(
             &format!("a line of ampersands, shape {shape}"),
             (1 << 20) / alpha2_scaling_support::GROWTH,
             file,
@@ -444,9 +444,12 @@ fn cues_go_to_the_first_row_with_room_in_time_n_log_n() {
             maximum: MAX_TRACKS
         })
     );
+    // Measured an eighth of the way up: towards the limit the rows and their cues outgrow a core's
+    // cache, and the misses grow the work about 26 times in release for this linear step. A scan of
+    // the rows per cue still dominates there.
     alpha2_scaling_support::assert_linear(
         "caption rows for cues all at once",
-        MAX_CAPTION_FILE_CUES / alpha2_scaling_support::GROWTH,
+        MAX_CAPTION_FILE_CUES / alpha2_scaling_support::GROWTH.pow(2),
         |count| all_at_once[..count].to_vec(),
         |cues| {
             let _ = caption_rows(cues);

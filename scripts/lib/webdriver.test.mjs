@@ -9,8 +9,14 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { BrowserStartError } from "./browser-errors.mjs";
 import { browserForRun, PAGE_BROWSERS } from "./browser-page.mjs";
-import { runWebDriverPage, webDriverBrowser } from "./webdriver.mjs";
+import {
+  firefoxCandidates,
+  firefoxExecutable,
+  runWebDriverPage,
+  webDriverBrowser,
+} from "./webdriver.mjs";
 
 const only =
   (...paths) =>
@@ -67,8 +73,87 @@ test("a WebDriver browser runs the driver named for it, else the one on PATH, el
   );
 });
 
-test("a page check opens Chrome unless the run names Safari or Firefox", () => {
-  assert.deepEqual(PAGE_BROWSERS, ["chrome", "safari", "firefox"]);
+test("Firefox runs headed only when the run asks for it", () => {
+  const firefox = (env, platform = "linux") =>
+    webDriverBrowser("firefox", {
+      env: { ALPHA2_GECKODRIVER: "/opt/geckodriver", ...env },
+      platform,
+      exists: only(),
+    }).capabilities["moz:firefoxOptions"];
+  assert.deepEqual(firefox({}).args, ["-headless"]);
+  assert.deepEqual(
+    firefox({ ALPHA2_BROWSER_HEADED: "1", DISPLAY: ":0" }).args,
+    [],
+  );
+  assert.deepEqual(
+    firefox({ ALPHA2_BROWSER_HEADED: "1", WAYLAND_DISPLAY: "wayland-0" }).args,
+    [],
+  );
+  // macOS and Windows always have a display.
+  assert.deepEqual(firefox({ ALPHA2_BROWSER_HEADED: "1" }, "darwin").args, []);
+  assert.throws(
+    () => firefox({ ALPHA2_BROWSER_HEADED: "1" }),
+    (error) =>
+      error instanceof BrowserStartError &&
+      /needs DISPLAY or WAYLAND_DISPLAY/.test(error.message),
+  );
+  // Stock settings send no preference at all.
+  assert.equal(firefox({}).prefs["dom.webgpu.enabled"], true);
+  assert.equal(firefox({ ALPHA2_BROWSER_SETTINGS: "stock" }).prefs, undefined);
+});
+
+test("Firefox is found in its default install on every platform", () => {
+  const cases = [
+    ["darwin", {}, "/Applications/Firefox.app/Contents/MacOS/firefox"],
+    [
+      "win32",
+      { PROGRAMFILES: "C:\\Program Files" },
+      "C:\\Program Files\\Mozilla Firefox\\firefox.exe",
+    ],
+    ["linux", {}, "/usr/lib/firefox/firefox"],
+    ["linux", {}, "/snap/firefox/current/usr/lib/firefox/firefox"],
+  ];
+  for (const [platform, env, path] of cases) {
+    assert.equal(
+      firefoxExecutable({ env, platform, exists: only(path) }),
+      path,
+    );
+    // The install goes to geckodriver as the binary to run.
+    assert.equal(
+      webDriverBrowser("firefox", {
+        env: { ...env, ALPHA2_GECKODRIVER: "/opt/geckodriver" },
+        platform,
+        exists: only(path),
+      }).capabilities["moz:firefoxOptions"].binary,
+      path,
+    );
+  }
+  assert.equal(
+    firefoxExecutable({
+      env: { ALPHA2_FIREFOX: "/opt/firefox" },
+      platform: "linux",
+      exists: only(),
+    }),
+    "/opt/firefox",
+  );
+  // None found: geckodriver looks on its own.
+  assert.equal(
+    firefoxExecutable({ env: {}, platform: "linux", exists: only() }),
+    null,
+  );
+  assert.equal(
+    "binary" in
+      webDriverBrowser("firefox", {
+        env: { ALPHA2_GECKODRIVER: "/opt/geckodriver" },
+        platform: "linux",
+        exists: only(),
+      }).capabilities["moz:firefoxOptions"],
+    false,
+  );
+});
+
+test("a page check opens Chrome unless the run names Edge, Safari or Firefox", () => {
+  assert.deepEqual(PAGE_BROWSERS, ["chrome", "edge", "safari", "firefox"]);
   const machine = {
     env: { PATH: "/usr/bin" },
     platform: "linux",
@@ -114,7 +199,7 @@ test("a page check opens Chrome unless the run names Safari or Firefox", () => {
   );
   assert.throws(
     () => browserForRun({ argv: ["--browser", "opera"], ...machine }),
-    /unknown browser "opera": --browser takes chrome, safari, firefox/,
+    /unknown browser "opera": --browser takes chrome, edge, safari, firefox/,
   );
 });
 
@@ -287,6 +372,38 @@ test("a session that never starts fails at its timeout with what the driver logg
   assert.equal(outcome.driverRunning, false);
 });
 
+test("a locked Mac console fails Safari before its driver starts", async () => {
+  const locked = () =>
+    '+-o Root  <class IORegistryEntry>\n    {\n      "IOConsoleUsers" = ({"CGSSessionScreenIsLocked"=Yes,"kCGSSessionOnConsoleKey"=Yes})\n    }\n';
+  const outcome = await withFakeDriver("report", (browser) =>
+    runWebDriverPage(
+      { ...browser, name: "safari" },
+      "http://127.0.0.1:8123/case",
+      { platform: "darwin", readIoreg: locked },
+    ),
+  );
+  assert.match(
+    outcome.error,
+    /^the Mac's console is locked; Safari automation needs an unlocked console session$/,
+  );
+  // The driver never started: it logs its pid first thing.
+  assert.deepEqual(outcome.requests, []);
+  assert.equal(outcome.driverRunning, false);
+  assert.ok(outcome.seconds < 1, `${outcome.seconds} s`);
+  // Unlocked, the page runs.
+  const unlocked = await withFakeDriver("report", (browser) =>
+    runWebDriverPage(
+      { ...browser, name: "safari" },
+      "http://127.0.0.1:8123/case",
+      {
+        platform: "darwin",
+        readIoreg: () => locked().replace("=Yes", "=No"),
+      },
+    ),
+  );
+  assert.equal(unlocked.error, undefined);
+});
+
 test("a driver that dies fails the page with what it said", async () => {
   const outcome = await withFakeDriver("exit", (browser) =>
     runWebDriverPage(browser, "http://127.0.0.1:8123/case"),
@@ -300,22 +417,21 @@ test("a driver that dies fails the page with what it said", async () => {
 
 // A real Firefox through geckodriver, where both are installed.
 let firefox = null;
+let missingFirefox = false;
 try {
   firefox = webDriverBrowser("firefox");
 } catch {
-  // No geckodriver.
+  missingFirefox = "no geckodriver on PATH or ALPHA2_GECKODRIVER";
 }
-const hasFirefox =
-  firefox !== null &&
-  (process.env.ALPHA2_FIREFOX
-    ? existsSync(process.env.ALPHA2_FIREFOX)
-    : ["/usr/bin/firefox", "/snap/bin/firefox"].some((path) =>
-        existsSync(path),
-      ));
+if (firefox !== null) {
+  const binary = firefoxExecutable();
+  if (binary === null || !existsSync(binary))
+    missingFirefox = `no Firefox at ${process.env.ALPHA2_FIREFOX ?? firefoxCandidates().join(", ")}`;
+}
 
 test(
   "a Firefox page reports through geckodriver",
-  { skip: !hasFirefox && "no geckodriver and Firefox on this machine" },
+  { skip: missingFirefox },
   async () => {
     const server = createServer((request, response) => {
       response.setHeader("content-type", "text/html; charset=utf-8");

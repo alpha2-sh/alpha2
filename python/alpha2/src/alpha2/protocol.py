@@ -10,7 +10,9 @@ __all__ = [
     "PROTOCOL_VERSION",
     "UNREAD_REQUEST_ID",
     "create_request",
+    "describe_exit",
     "loader_refused",
+    "ntstatus_name",
     "parse_host_message",
 ]
 
@@ -92,6 +94,18 @@ def parse_host_message(line: str) -> dict[str, Any]:
 # STATUS_ENTRYPOINT_NOT_FOUND and STATUS_INVALID_IMAGE_FORMAT.
 _WINDOWS_LOADER_STATUSES = frozenset({0xC0000135, 0xC0000138, 0xC0000139, 0xC000007B})
 
+# The statuses Windows ends a crashed process with, by name, so a crash reads as one rather than as
+# a ten-digit exit code.
+_WINDOWS_CRASH_STATUSES = {
+    0xC0000005: "STATUS_ACCESS_VIOLATION",
+    0xC0000409: "STATUS_STACK_BUFFER_OVERRUN",
+    0xC00000FD: "STATUS_STACK_OVERFLOW",
+    0xC0000374: "STATUS_HEAP_CORRUPTION",
+    0xC000001D: "STATUS_ILLEGAL_INSTRUCTION",
+    0xC0000094: "STATUS_INTEGER_DIVIDE_BY_ZERO",
+    0xC000013A: "STATUS_CONTROL_C_EXIT",
+}
+
 # What the dynamic loaders write when they refuse a program, before it runs a line of its own:
 # glibc's ld.so (a missing library, one without a version the program names, a symbol it lacks),
 # musl's, and macOS's dyld.
@@ -102,6 +116,26 @@ _LOADER_WORDS = (
     re.compile(r"^Error loading shared library ", re.MULTILINE),
     re.compile(r"^dyld(?:\[\d+\])?: (?:Library not loaded|Symbol not found)", re.MULTILINE),
 )
+
+
+def ntstatus_name(exit_code: int | None) -> str | None:
+    """The name of the Windows crash status ``exit_code`` is, or ``None`` for any other code."""
+    if exit_code is None:
+        return None
+    return _WINDOWS_CRASH_STATUSES.get(exit_code % 2**32)
+
+
+def describe_exit(exit_code: int | None, signal_name: str | None) -> str:
+    """A process's end for a message: ``exit SIGKILL``, ``exit 1``, or ``exit 3221226505
+    (0xC0000409 STATUS_STACK_BUFFER_OVERRUN)`` for a Windows crash status."""
+    if signal_name is not None:
+        return f"exit {signal_name}"
+    if exit_code is None:
+        return "exit unknown"
+    name = ntstatus_name(exit_code)
+    if name is None:
+        return f"exit {exit_code}"
+    return f"exit {exit_code} (0x{exit_code % 2**32:08X} {name})"
 
 
 def loader_refused(exit_code: int | None, stderr: str) -> bool:

@@ -118,6 +118,21 @@ fn helper_error(operation: &'static str, step: i32, status: i32) -> BridgeError 
 #[cfg(test)]
 pub(crate) mod inject {
     use std::cell::Cell;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// How many waits for given-back tickets have begun in this process.
+    static RETIRES_BEGUN: AtomicU64 = AtomicU64::new(0);
+
+    /// Counts a wait for given-back tickets as begun.
+    pub(super) fn retire_begins() {
+        RETIRES_BEGUN.fetch_add(1, Ordering::Release);
+    }
+
+    /// How many waits for given-back tickets have begun in this process, on
+    /// any thread.
+    pub(crate) fn retires_begun() -> u64 {
+        RETIRES_BEGUN.load(Ordering::Acquire)
+    }
 
     /// An import helper a test can fail.
     #[derive(Clone, Copy, Debug)]
@@ -1049,6 +1064,8 @@ impl Drop for ImportTicketPool {
 /// Destroys tickets the pool owns once what they submitted has finished, all within one wait
 /// timeout from now; a ticket still unfinished when it runs out is leaked, not freed under the GPU.
 fn retire(tickets: impl IntoIterator<Item = PooledTicket>) {
+    #[cfg(test)]
+    inject::retire_begins();
     let deadline = std::time::Instant::now().checked_add(wait_timeout());
     for pooled in tickets {
         let left = deadline.map_or(std::time::Duration::MAX, |deadline| {

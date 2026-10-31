@@ -910,7 +910,7 @@ fn the_index_finds_each_clips_source_in_time_linear_in_the_clips() {
         project.timeline = alpha2_model::Timeline { tracks };
         project
     };
-    alpha2_scaling_support::assert_linear(
+    alpha2_scaling_support::assert_linear_shared(
         "the active index",
         10_000 / alpha2_scaling_support::GROWTH,
         with_clips,
@@ -1174,7 +1174,7 @@ fn the_planner_finds_each_composition_and_source_in_time_linear_in_the_plans() {
         project
     };
     // Up to as many clips as there can be compositions besides the shared grade.
-    alpha2_scaling_support::assert_linear(
+    alpha2_scaling_support::assert_linear_shared(
         "the active index's plans",
         (alpha2_model::MAX_COMPOSITIONS - 1) / alpha2_scaling_support::GROWTH,
         with_clips,

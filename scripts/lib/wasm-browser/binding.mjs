@@ -7,7 +7,7 @@ export function engineErrorCodes() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
-const engine = await WebEffectRegistry.create();
+const engine = await gpuEngine(WebEffectRegistry);
 const project = await fetch("/tests/cases/host-parity-project.json").then((response) => response.json());
 const refusal = (run) => {
   try { run(); return null; } catch (error) { return { code: error.code, fatal: error.fatal, message: String(error.message) }; }
@@ -43,7 +43,7 @@ export function bindingRefusalCodes() {
   return `
 const wasm = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await wasm.default();
-const engine = await wasm.WebEffectRegistry.create();
+const engine = await gpuEngine(wasm.WebEffectRegistry);
 const base = await fetch("/tests/cases/host-parity-project.json").then((response) => response.json());
 const refusal = (run) => {
   try { run(); return null; } catch (error) {
@@ -148,7 +148,7 @@ report({
 // neither traps nor leaves a promise unsettled.
 export function effectRegistrationOverlap() {
   return `
-if (!navigator.gpu) throw new Error("this browser offers no WebGPU");
+if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
 const effect = (id) => JSON.stringify({ id, version: 1, kind: "effect", params: [], wgslBody: "fn effect(uv: vec2f, src: vec4f) -> vec4f { return src; }" });
@@ -162,7 +162,7 @@ const settle = (promise) => Promise.race([
 ]);
 const pageErrors = [];
 addEventListener("error", (event) => pageErrors.push(String(event.message)));
-const engine = await WebEffectRegistry.create();
+const engine = await gpuEngine(WebEffectRegistry);
 const both = [register(engine, effect("test.a")), register(engine, effect("test.b"))];
 // The compiles have begun (the parent's future took its borrow on its first poll) and wait for the
 // GPU process.
@@ -172,7 +172,7 @@ try { meanwhile = { deviceLost: engine.deviceLost, catalog: engine.builtinCatalo
 const overlapped = await Promise.all(both.map(settle));
 const again = await settle(register(engine, effect("test.a")));
 engine.free();
-const other = await WebEffectRegistry.create();
+const other = await gpuEngine(WebEffectRegistry);
 const freed = settle(register(other, effect("test.c")));
 other.free();
 const afterFree = await freed;
@@ -207,7 +207,7 @@ report({
 `;
 }
 
-// Hashing on the page's thread must let frames and timers run between slices: Chrome ran a
+// Hashing on the page's thread must let timers (and so frames) run between slices: Chrome ran a
 // `scheduler.yield()` continuation ahead of both.
 export function sha256BlobYields() {
   return `
@@ -224,8 +224,17 @@ requestAnimationFrame(frame);
 await new Promise((resolve) => setTimeout(resolve, 200));
 gaps.length = 0;
 last = performance.now();
-let timers = 0, timing = true;
-const arm = () => setTimeout(() => { timers++; if (timing) arm(); }, 10);
+// A chain of 10 ms timers: the longest gap between two of them is the longest the hash held the
+// main thread. Animation frames are reported as well, but not judged: a headless or background
+// page may throttle them whatever the hash does.
+let timers = 0, timing = true, lastTimer = performance.now(), timerGapMax = 0;
+const arm = () => setTimeout(() => {
+  const now = performance.now();
+  timerGapMax = Math.max(timerGapMax, now - lastTimer);
+  lastTimer = now;
+  timers++;
+  if (timing) arm();
+}, 10);
 arm();
 const started = performance.now();
 await sha256Blob(file);
@@ -233,10 +242,11 @@ const hashMs = performance.now() - started;
 timing = false;
 running = false;
 const sorted = [...gaps].sort((a, b) => a - b);
-const p50 = sorted[Math.floor((sorted.length - 1) / 2)] ?? Infinity;
+const p50 = sorted[Math.floor((sorted.length - 1) / 2)] ?? null;
 report({
-  ok: timers >= 5 && p50 < 50,
-  hashMs: Math.round(hashMs), timers, frames: gaps.length, frameGapP50Ms: Math.round(p50),
+  ok: timers >= 5 && timerGapMax < 100,
+  hashMs: Math.round(hashMs), timers, timerGapMaxMs: Math.round(timerGapMax),
+  frames: gaps.length, frameGapP50Ms: p50 === null ? null : Math.round(p50),
   frameGapMaxMs: Math.round(sorted.at(-1) ?? 0),
 });
 `;

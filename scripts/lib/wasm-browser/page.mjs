@@ -1,5 +1,21 @@
-// The page every case runs in: what a case's body reports, and how an import the machine
-// cannot do is told from the engine's failure.
+// The page every case runs in: how a case reports, how it says it cannot run here (`skip`), and the
+// helpers several cases share.
+
+/**
+ * The luma of one pixel of a `VideoFrame`, as an async function's source (so a Node test can run
+ * it on fake frames). 4:2:0, 4:2:2 and 4:4:4 frames give their first plane's sample; RGB frames
+ * give BT.709 limited-range luma, rounded, which is what a decoder handing out YUV would have.
+ */
+export const LUMA_AT = `async function lumaAt(frame, x, y) {
+  const bytes = new Uint8Array(frame.allocationSize());
+  const [first] = await frame.copyTo(bytes);
+  const at = first.offset + y * first.stride;
+  if (/^(I4|NV12)/.test(frame.format)) return bytes[at + x];
+  const rgb = { RGBA: [0, 1, 2], RGBX: [0, 1, 2], BGRA: [2, 1, 0], BGRX: [2, 1, 0] }[frame.format];
+  if (rgb === undefined) throw new Error("no luma for a " + frame.format + " frame");
+  const [r, g, b] = rgb.map((channel) => bytes[at + 4 * x + channel]);
+  return Math.round(16 + (65.481 * r + 128.553 * g + 24.966 * b) / 255);
+}`;
 
 export function page(body, videoImport = false) {
   return `<!doctype html>
@@ -14,29 +30,52 @@ const report = (value) => {
   result.textContent = JSON.stringify(value, null, 2);
   document.body.append(result);
 };
-// Headless Chrome, and SwiftShader's WebGPU in any Chrome, lose the GPU
-// instance when a VideoFrame is imported. That is the machine, not the case.
-// gpu=machine on Linux: see scripts/run-with-gpu-display.sh.
-// Only there is a lost device a skip: anywhere else it is the engine's, and fails the case, as does
-// a loss the case saw before it imported anything.
+// What a case throws when it observed that this browser or machine lacks a capability: the run
+// records the skip under the capability's name, and fails it when ALPHA2_REQUIRE names it.
+class CaseSkip extends Error {
+  constructor(capability, reason, details) {
+    super(reason);
+    this.capability = capability;
+    this.details = details;
+  }
+}
+const skip = (capability, reason, details = {}) => {
+  throw new CaseSkip(capability, reason, details);
+};
 // Chrome's stack starts with the message; Firefox's and Safari's are the frames alone.
 const described = (error) => {
   const message = String(error?.message ?? error);
   const stack = String(error?.stack ?? "");
   return stack.includes(message) ? stack : stack ? message + "\\n" + stack : message;
 };
+// A device or instance lost while a VideoFrame is imported into WebGPU: headless Chrome and
+// SwiftShader's WebGPU do this. A loss the case saw before it imported anything is the engine's.
 const importUnavailable = (error) =>
   /external Instance reference no longer exists|device was lost|Device was destroyed/i.test(String(error?.message ?? error));
-const cannotImportHere = async () => {
-  if (/HeadlessChrome/.test(navigator.userAgent)) return true;
-  const info = (await navigator.gpu?.requestAdapter())?.info ?? {};
-  return /swiftshader/i.test([info.vendor, info.architecture, info.description].join(" "));
+${LUMA_AT}
+// The engine on the browser's WebGPU device, for cases whose subject is not the GPU. Without an
+// adapter the case cannot run here.
+const gpuEngine = async (Registry) => {
+  if (!(await navigator.gpu?.requestAdapter())) skip("webgpu", "no WebGPU adapter");
+  return Registry.create();
+};
+// The adapter an engine runs on; a case about WebGPU cannot run on another backend.
+const webgpuAdapter = (engine) => {
+  const { name = "", backend = "" } = JSON.parse(engine.diagnostics()).adapter ?? {};
+  if (backend !== "BrowserWebGpu")
+    skip("webgpu", "the engine runs on " + (backend || "no backend") + ", not WebGPU", { adapter: { name, backend } });
+  return { name, backend };
 };
 try {
 ${body}
 } catch (error) {
-  if (VIDEO_IMPORT && !error?.beforeImport && importUnavailable(error) && (await cannotImportHere()))
-    report({ skipped: "this browser cannot import a VideoFrame into WebGPU (" + String(error?.message ?? error) + ")" });
+  if (error instanceof CaseSkip)
+    report({ skipped: error.message, capability: error.capability, ...error.details });
+  else if (VIDEO_IMPORT && !error?.beforeImport && importUnavailable(error))
+    report({
+      skipped: "this browser lost WebGPU importing a VideoFrame (" + String(error?.message ?? error) + ")",
+      capability: "webgpu-video-import",
+    });
   else report({ error: described(error) });
 }
 </script></body></html>`;

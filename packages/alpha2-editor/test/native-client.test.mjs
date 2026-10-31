@@ -6,6 +6,7 @@ import {
   createNativeClient,
   nativeArtifactStatus,
 } from "../dist/native-client/index.js";
+import { assertScalesBelow } from "../../../scripts/lib/timing.mjs";
 
 test("native cancellation waits for acknowledged cleanup, including allocation race", async () => {
   let allocate,
@@ -337,72 +338,83 @@ const finished = {
 };
 
 test("an image sequence's frames map to their uploads in one pass, however long", async () => {
-  const count = 40000;
-  const locators = Array.from(
-    { length: count },
-    (_, i) => `browser://seq/frame/${i + 1}`,
-  );
-  const document = createDocument({
-    schema_version: 1,
-    id: "p",
-    name: "Sequence",
-    settings: {
-      width: 64,
-      height: 48,
-      frame_rate: { num: 30, den: 1 },
-      sample_rate: 48000,
-    },
-    sources: [
-      {
-        id: "seq",
-        kind: "video",
-        locator: "browser://seq",
-        provider: {
-          format: "image_sequence",
-          frames: locators,
-          frame_rate: { num: 30, den: 1 },
-          start_number: 1,
-          missing: "reject",
-        },
+  // An editor's snapshot of a sequence of `count` frames, and its uploads as the bridge's
+  // nativeAssets makes them: one per frame, in frame order.
+  const sequence = (count) => {
+    const locators = Array.from(
+      { length: count },
+      (_, i) => `browser://seq/frame/${i + 1}`,
+    );
+    const document = createDocument({
+      schema_version: 1,
+      id: "p",
+      name: "Sequence",
+      settings: {
+        width: 64,
+        height: 48,
+        frame_rate: { num: 30, den: 1 },
+        sample_rate: 48000,
       },
-    ],
-    timeline: { tracks: [] },
-  });
-  const editor = createEditor({ document });
-  // As the bridge's nativeAssets makes them: one upload per frame, in frame order.
-  const assets = locators.map((locator, i) => ({
-    id: `seq:${i}`,
-    kind: "frames",
-    blob: new Blob(["png"]),
-    name: `${i + 1}.png`,
-    locator,
-  }));
-  let lastUpload = 0;
-  let built = Infinity;
-  let sent;
-  const client = createNativeClient({
-    baseUrl: "http://host",
-    fetch: async (_url, init) => {
-      if (init?.method === "PUT") lastUpload = performance.now();
-      if (init?.method === "POST") {
-        built = performance.now() - lastUpload;
-        sent = JSON.parse(init.body);
-      }
-      return Response.json({
-        phase: "completed",
-        fraction: 1,
-        artifact: finished,
-      });
-    },
-  });
-  await client.startExport(editor.getSnapshot(), assets).result;
+      sources: [
+        {
+          id: "seq",
+          kind: "video",
+          locator: "browser://seq",
+          provider: {
+            format: "image_sequence",
+            frames: locators,
+            frame_rate: { num: 30, den: 1 },
+            start_number: 1,
+            missing: "reject",
+          },
+        },
+      ],
+      timeline: { tracks: [] },
+    });
+    const editor = createEditor({ document });
+    const snapshot = editor.getSnapshot();
+    editor.dispose();
+    const assets = locators.map((locator, i) => ({
+      id: `seq:${i}`,
+      kind: "frames",
+      blob: new Blob(["png"]),
+      name: `${i + 1}.png`,
+      locator,
+    }));
+    return { snapshot, assets };
+  };
+  // Exports the sequence through a service that answers every request at once; returns the
+  // export request's body.
+  const exported = async ({ snapshot, assets }) => {
+    let sent;
+    const client = createNativeClient({
+      baseUrl: "http://host",
+      fetch: async (_url, init) => {
+        if (init?.method === "POST") sent = JSON.parse(init.body);
+        return Response.json({
+          phase: "completed",
+          fraction: 1,
+          artifact: finished,
+        });
+      },
+    });
+    await client.startExport(snapshot, assets).result;
+    await client.dispose();
+    return sent;
+  };
+  const count = 40000;
+  const sent = await exported(sequence(count));
   assert.equal(sent.frames.seq.length, count);
   assert.equal(sent.frames.seq[0], "seq:0");
   assert.equal(sent.frames.seq[count - 1], `seq:${count - 1}`);
-  // Looking every frame up in the upload list took about 2 s at this length.
-  assert.ok(built < 250, `the request took ${built.toFixed(0)} ms to build`);
-  await client.dispose();
-  await editor.dispose();
+  // Looking every frame up in the upload list took about 2 s at this length, several times the
+  // rest of the export.
+  await assertScalesBelow(
+    "an image sequence's export",
+    count / 8,
+    sequence,
+    exported,
+  );
 });
 
 /**

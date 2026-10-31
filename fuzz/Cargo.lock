@@ -130,8 +130,10 @@ dependencies = [
 name = "alpha2-gpu"
 version = "0.5.0"
 dependencies = [
+ "log",
  "web-time",
  "wgpu",
+ "windows",
 ]
 
 [[package]]

@@ -30,6 +30,12 @@ fn main() {
         } else {
             pollster::block_on(GpuContext::request_product()).expect("GPU adapter")
         };
+        // The adapter first: a time means nothing without the GPU it was measured on.
+        let adapter = gpu.capabilities();
+        println!(
+            "adapter: {} on {} ({} {})",
+            adapter.adapter_name, adapter.backend, adapter.driver, adapter.driver_info
+        );
         let storage = if gpu
             .device()
             .features()

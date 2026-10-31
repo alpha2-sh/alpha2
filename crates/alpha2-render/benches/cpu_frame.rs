@@ -2,8 +2,10 @@
 //! I420 sources each shown at half scale in one quadrant, four text-sized
 //! labels over them, packed into I420. Each frame presents its sources anew,
 //! as an export does. Prints one `cpu_frame` line per thread count with the
-//! wall time per frame and the CPU time per frame. Times are recorded, never
-//! gated.
+//! wall time per frame and the process's CPU time per frame (`cpu_ms=n/a`
+//! where the operating system does not report it). Times are recorded, never
+//! gated. The thread counts are 1, 4, half the available parallelism and all
+//! of it, unless `CPU_FRAME_THREADS` lists others.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -79,18 +81,13 @@ fn planes(size: RenderSize, seed: u32) -> Arc<Planes> {
     })
 }
 
-fn cpu_seconds() -> f64 {
-    let stat = std::fs::read_to_string("/proc/self/stat").unwrap_or_default();
-    let fields: Vec<&str> = stat
-        .rsplit_once(')')
-        .map_or(Vec::new(), |(_, rest)| rest.split_whitespace().collect());
-    let ticks = |index: usize| {
-        fields
-            .get(index)
-            .and_then(|v| v.parse::<f64>().ok())
-            .unwrap_or(0.0)
-    };
-    (ticks(11) + ticks(12)) / 100.0
+/// The thread counts measured by default: 1, 4, half the machine and all of it.
+fn default_threads() -> Vec<usize> {
+    let available = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    let mut threads = vec![1, 4, (available / 2).max(1), available];
+    threads.sort_unstable();
+    threads.dedup();
+    threads
 }
 
 #[allow(clippy::too_many_lines)]
@@ -104,14 +101,13 @@ fn main() {
         CpuImage::from_premultiplied_rgba8(label_size, &[150_u8, 150, 150, 153].repeat(260 * 64))
             .expect("label"),
     );
-    let threads = std::env::var("CPU_FRAME_THREADS").ok().map_or_else(
-        || vec![1, 4, 8, 24],
-        |list| {
+    let threads = std::env::var("CPU_FRAME_THREADS")
+        .ok()
+        .map_or_else(default_threads, |list| {
             list.split(',')
                 .filter_map(|value| value.parse().ok())
                 .collect::<Vec<usize>>()
-        },
-    );
+        });
     let (width, height) = (size.width as usize, size.height as usize);
     let mut y = vec![0_u8; width * height];
     let mut u = vec![0_u8; width * height / 4];
@@ -189,13 +185,19 @@ fn main() {
                 .expect("render");
         };
         frame();
-        let cpu_started = cpu_seconds();
+        let cpu_started = alpha2_os::process_cpu_time();
         let started = Instant::now();
         for _ in 0..frames() {
             frame();
         }
         let wall = started.elapsed().as_secs_f64() * 1_000.0 / f64::from(frames());
-        let cpu = (cpu_seconds() - cpu_started) * 1_000.0 / f64::from(frames());
-        println!("cpu_frame grid 1080p threads={count} wall_ms={wall:.1} cpu_ms={cpu:.1}");
+        let cpu = match (cpu_started, alpha2_os::process_cpu_time()) {
+            (Some(before), Some(after)) => format!(
+                "{:.1}",
+                after.saturating_sub(before).as_secs_f64() * 1_000.0 / f64::from(frames())
+            ),
+            _ => "n/a".to_owned(),
+        };
+        println!("cpu_frame size=1920x1080 threads={count} wall_ms={wall:.1} cpu_ms={cpu}");
     }
 }

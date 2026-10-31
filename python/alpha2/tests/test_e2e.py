@@ -459,6 +459,8 @@ def test_without_a_gpu_the_host_still_conforms_auto_renders_on_the_cpu_and_gpu_f
 ) -> None:
     monkeypatch.setenv("VK_ICD_FILENAMES", "/nonexistent")
     monkeypatch.setenv("WGPU_BACKEND", "vulkan")
+    # The renderer is named too: a client that names none takes the environment's.
+    monkeypatch.setenv("ALPHA2_RENDERER", "auto")
     # A client of its own: this one's capability report is not the shared client's.
     gpuless = HostClient(host_path=HOST)
     conformed = gpuless.conform(PROJECT, assets={"image-source": ASSET})

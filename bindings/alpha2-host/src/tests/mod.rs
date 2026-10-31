@@ -64,13 +64,17 @@ mod stills;
 /// Serializes the tests that create a GPU device. Devices created and named
 /// from many threads at once crash inside the Vulkan loader (seen with
 /// loader 1.4.321 on NVIDIA, in `vkSetDebugUtilsObjectNameEXT`); the render
-/// and engine suites serialize their GPU tests the same way.
-fn gpu_test_lock() -> std::sync::MutexGuard<'static, ()> {
+/// and engine suites serialize their GPU tests the same way. The validation
+/// messages logged during the turn are reported (or fail the test) when it
+/// ends, as `ALPHA2_VALIDATION_LOG` says.
+fn gpu_test_lock() -> alpha2_gpu::validation_log::TestTurn<std::sync::MutexGuard<'static, ()>> {
     static GPU_TEST_LOCK: Mutex<()> = Mutex::new(());
     alpha2_native::require_pinned_ffmpeg_for_tests();
-    GPU_TEST_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    alpha2_gpu::validation_log::TestTurn::new(
+        GPU_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
 }
 
 /// A host that renders on the GPU whatever `ALPHA2_RENDERER` says: for the

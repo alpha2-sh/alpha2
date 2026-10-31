@@ -35,7 +35,7 @@ Issues = "https://github.com/alpha2-sh/alpha2/issues"
 alpha2 = "alpha2.__main__:main"
 
 [dependency-groups]
-dev = ["maturin==1.15.0", "mypy==2.4.0", "pytest==9.1.1", "ruff==0.17.2"]
+dev = ["maturin==1.15.0", "mypy==2.4.0", "pytest==9.1.1", "pytest-timeout==2.4.0", "ruff==0.17.2"]
 
 [tool.maturin]
 # The extension module is the Rust crate in bindings/; its version is the Cargo workspace's, so the
@@ -48,6 +48,8 @@ exclude = ["src/alpha2/__pycache__/**"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# A hung test fails alone, named, instead of holding the job until its timeout (pytest-timeout).
+timeout = 180
 
 [tool.ruff]
 line-length = 100

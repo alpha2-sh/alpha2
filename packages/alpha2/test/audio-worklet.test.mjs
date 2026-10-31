@@ -1030,6 +1030,42 @@ test(
 );
 
 test(
+  "the first ring read reports the context frame it starts at, once",
+  { timeout: 10_000 },
+  async (t) => {
+    const wasm = await workletWasm();
+    if (wasm === undefined) return t.skip("the worklet wasm is not built");
+    const processor = await readyProcessor(1, wasm);
+    await configure(processor, { limiter: null });
+    const posted = [];
+    processor.hostPort.onmessage = (event) => posted.push(event.data);
+    const output = [[new Float32Array(128)]];
+    // No ring yet: nothing is read from one.
+    globalThis.currentFrame = 256;
+    assert.equal(processor.process([[]], output), true);
+    const ring = await ringOf(1);
+    processor.port.onmessage({
+      data: { type: "alpha2-ring", ring: ring.transfer },
+    });
+    try {
+      for (const frame of [384, 512]) {
+        globalThis.currentFrame = frame;
+        ring.write([new Float32Array(128).fill(0.5)], 128);
+        assert.equal(processor.process([[]], output), true);
+      }
+    } finally {
+      delete globalThis.currentFrame;
+    }
+    processor.port.postMessage({ type: "marker" });
+    await eventually(() => posted.some((message) => message.type === "marker"));
+    assert.deepEqual(
+      posted.filter((message) => message.type === "alpha2-first-read"),
+      [{ type: "alpha2-first-read", frame: 384 }],
+    );
+  },
+);
+
+test(
   "a node told to drop its ring plays its WebAudio input again and reports no underrun",
   { timeout: 10_000 },
   async (t) => {
@@ -1061,7 +1097,11 @@ test(
       );
     }
     await pause(50);
-    assert.deepEqual(types, []);
+    // The ring's first read, above, is reported once; nothing after the ring is dropped.
+    assert.deepEqual(
+      types.filter((type) => type !== "alpha2-first-read"),
+      [],
+    );
   },
 );
 

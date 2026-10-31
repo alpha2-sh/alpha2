@@ -9,7 +9,7 @@ const wasm = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await wasm.default();
 const { MediabunnyAudioDecoder } = await import("/packages/alpha2/dist/mediabunny.js");
 if (typeof AudioDecoder === "undefined") {
-  report({ skipped: "this browser has no WebCodecs AudioDecoder" });
+  report({ skipped: "this browser has no WebCodecs AudioDecoder", capability: "webcodecs-audio" });
 } else {
   const ticks = (seconds) => BigInt(Math.round(seconds * 120000));
   const results = {};
@@ -60,7 +60,7 @@ const wasm = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await wasm.default();
 const { MediabunnyAudioDecoder } = await import("/packages/alpha2/dist/mediabunny.js");
 if (typeof AudioDecoder === "undefined") {
-  report({ skipped: "this browser has no WebCodecs AudioDecoder" });
+  report({ skipped: "this browser has no WebCodecs AudioDecoder", capability: "webcodecs-audio" });
 } else {
   const ticks = (seconds) => BigInt(Math.round(seconds * 120000));
   const decode = async (name) => {
@@ -179,7 +179,7 @@ if (typeof AudioDecoder === "undefined") {
     ok: Object.values(orders).every((order) => order !== null),
   };
 }
-const engine = await wasm.WebEffectRegistry.create();
+const engine = await gpuEngine(wasm.WebEffectRegistry);
 const mix = (layout, planes) => {
   const clip = { id: "c", source_id: "s", timeline_range: { start: 0, end: 120000 }, source_range: { start: 0, end: 120000 } };
   engine.loadProject(JSON.stringify({
@@ -204,10 +204,18 @@ let refused = null;
 try { engine.uploadAudioBlock("s", 0n, 48000, ["FL", "XX"], new Float32Array(2), false); } catch (error) { refused = error.code; }
 const close = (a, b) => a.length === b.length && a.every((value, index) => Math.abs(value - b[index]) < 1e-6);
 const mixed = close(lcr, folded) && close(counted, fronts) && Math.abs(lcr[0] - counted[0]) > 0.01 && refused === "INVALID_INPUT";
-report({
-  ok: mixed && Object.values(decoded).every((entry) => typeof entry === "string" || entry.ok),
-  decoded, lcr, folded, counted, fronts, refused,
-});
+const ok = mixed && Object.values(decoded).every((entry) => typeof entry === "string" || entry.ok);
+// Everything this browser could check passed: what it could not decode names the skip. DTS is no
+// capability: no browser's WebCodecs decodes it, and a browser need not.
+const notes = [
+  ...Object.values(decoded),
+  ...Object.values(decoded.measuredPlaneOrders?.orders ?? {}),
+].filter((entry) => typeof entry === "string" && /does not decode (ac3|eac3)$/.test(entry));
+if (ok && decoded.skipped !== undefined)
+  report({ skipped: decoded.skipped, capability: "webcodecs-audio", lcr, folded, counted, fronts, refused });
+else if (ok && notes.length > 0)
+  report({ skipped: "this browser does not decode AC-3 or E-AC-3", capability: "ac3-decode", decoded, lcr, folded, counted, fronts, refused });
+else report({ ok, decoded, lcr, folded, counted, fronts, refused });
 `;
 }
 
@@ -218,7 +226,7 @@ export function loudnessUnderLimiter() {
 const wasm = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await wasm.default();
 const { planLoudnessNormalization } = await import("/packages/alpha2/dist/loudness.js");
-const engine = await wasm.WebEffectRegistry.create();
+const engine = await gpuEngine(wasm.WebEffectRegistry);
 const rate = 48000, frames = rate * 4;
 const clip = { id: "c", source_id: "s", timeline_range: { start: 0, end: 480000 }, source_range: { start: 0, end: 480000 } };
 engine.loadProject(JSON.stringify({
@@ -281,7 +289,7 @@ const generate = {
   },
 };
 // The CPU renderer mixes as the GPU one does: the mix needs no GPU.
-const engine = ${cpu ? "WebEffectRegistry.createCpu()" : "await WebEffectRegistry.create()"};
+const engine = ${cpu ? "WebEffectRegistry.createCpu()" : "await gpuEngine(WebEffectRegistry)"};
 engine.loadProject(JSON.stringify(fixture.project));
 for (const source of fixture.sources) {
   const planes = generate[source.generator](source.channels);
@@ -318,7 +326,7 @@ export function audioSeekState() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
-const engine = await WebEffectRegistry.create();
+const engine = await gpuEngine(WebEffectRegistry);
 const results = [];
 for (const place of ["clip", "track", "master"]) {
   const effect = { type: "compressor", threshold_db: -18, ratio: 4, attack_ms: 50, release_ms: 100, lookahead_ms: 10 };
@@ -349,7 +357,7 @@ export function audioContinuity() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
-const engine = await WebEffectRegistry.create();
+const engine = await gpuEngine(WebEffectRegistry);
 const load = () => {
   const effect = { type: "compressor", threshold_db: -18, ratio: 4, attack_ms: 50, release_ms: 100, lookahead_ms: 10 };
   const clip = { id: "c", source_id: "tone", timeline_range: { start: 0, end: 120000 }, source_range: { start: 0, end: 120000 }, audio: { effects: [] } };
@@ -400,7 +408,7 @@ export function audioStoreCapacity() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
-const engine = await WebEffectRegistry.create();
+const engine = await gpuEngine(WebEffectRegistry);
 const SECOND = 120000;
 const load = (sources, clips, audio) => engine.loadProject(JSON.stringify({
   schema_version: 1, id: "store", name: "Store",

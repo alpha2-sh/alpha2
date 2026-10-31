@@ -1,10 +1,12 @@
 // Serves one parity page, the native frames it compares with and the repository's files, opens it
-// in Chrome, and returns what the page reported.
+// in the run's browser, and returns what the page reported.
 
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 
-import { fromThisMachine, runChromePage, servedFile } from "../chrome-cdp.mjs";
+import { runBrowserPage } from "../browser-page.mjs";
+import { recordSkip } from "../capabilities.mjs";
+import { fromThisMachine, servedFile } from "../chrome-cdp.mjs";
 import { root } from "./fixtures.mjs";
 import { complexPage } from "./pages/complex.mjs";
 import { extensionsPage } from "./pages/extensions.mjs";
@@ -13,8 +15,14 @@ import { orientationPage } from "./pages/orientation.mjs";
 import { parityPage } from "./pages/parity.mjs";
 import { sinkPage } from "./pages/sink.mjs";
 
+/**
+ * Opens `page` in `browser` (from `browserForRun`) with the native frame and `files` served beside
+ * it. A page has ALPHA2_CASE_TIMEOUT_MS, 120 s by default: the effects page draws over 600 frames.
+ * A page whose engine ran on another backend than WebGPU is recorded as a `webgpu` skip (a failure
+ * when the run requires it); its checks still run.
+ */
 export async function browserParity(
-  chrome,
+  browser,
   nativeFramePath,
   page = "/parity",
   files = {},
@@ -85,9 +93,19 @@ export async function browserParity(
     if (typeof address !== "object" || address === null)
       throw new Error("missing parity server address");
     const url = `http://127.0.0.1:${address.port}${page}`;
-    const encoded = await runChromePage(chrome, url);
+    const encoded = await runBrowserPage(browser, url, {
+      timeoutMs: Number(process.env.ALPHA2_CASE_TIMEOUT_MS ?? 120_000),
+    });
     const result = JSON.parse(decodeURIComponent(encoded));
     if (result.error) throw new Error(`browser parity failed: ${result.error}`);
+    const backend = result.adapter?.backend;
+    if (result.adapter !== undefined && backend !== "BrowserWebGpu")
+      recordSkip({
+        suite: "host-cli-parity",
+        test: page,
+        capability: "webgpu",
+        reason: `the ${page} page's engine ran on ${backend || "no backend"}, not WebGPU`,
+      });
     return result;
   } finally {
     await new Promise((resolveClose, reject) =>

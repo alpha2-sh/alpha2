@@ -844,14 +844,25 @@ fn the_render_cache_deletes_only_what_it_wrote() {
         std::fs::write(path, vec![7_u8; 50_000]).expect("foreign file");
         age(path, 3_600);
     }
-    #[cfg(unix)]
-    {
-        for link in [
-            cache.join("v1/ab"),
-            cache.join(format!("v2/{snapshot}/cd")),
-            cache.join(format!("v2/{}", "b".repeat(64))),
-        ] {
-            std::os::unix::fs::symlink(&outside, &link).expect("link");
+    // Joined a component at a time: `mklink` reads a `/` inside a path as a switch.
+    for link in [
+        cache.join("v1").join("ab"),
+        cache.join("v2").join(&snapshot).join("cd"),
+        cache.join("v2").join("b".repeat(64)),
+    ] {
+        std::fs::create_dir_all(link.parent().expect("parent")).expect("folder");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &link).expect("link");
+        // A junction: Windows makes a link to a folder without the privilege a symbolic link needs.
+        #[cfg(windows)]
+        {
+            let made = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&link)
+                .arg(&outside)
+                .output()
+                .expect("mklink");
+            assert!(made.status.success(), "{made:?}");
         }
     }
     let rate = alpha2_time::FrameRate::new(30, 1).expect("rate");

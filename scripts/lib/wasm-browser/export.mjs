@@ -11,7 +11,7 @@ const { audioEncoderSampleRate, MediabunnySink } = await import("/packages/alpha
 const { renderOfflineAudio } = await import("/packages/alpha2/dist/audio.js");
 const mb = await import("mediabunny");
 if (typeof AudioEncoder === "undefined" || typeof AudioDecoder === "undefined") {
-  report({ skipped: "this browser has no WebCodecs AudioEncoder and AudioDecoder" });
+  report({ skipped: "this browser has no WebCodecs AudioEncoder and AudioDecoder", capability: "webcodecs-audio" });
 } else {
   const AMPLITUDE = 0.25;
   // Half a second of a stereo 997 Hz tone at the project rate, exported and decoded again.
@@ -93,7 +93,10 @@ const { audioEncoderSampleRate, canEncodeVideoTrack, MediabunnySink } = await im
 const { renderOfflineAudio } = await import("/packages/alpha2/dist/audio.js");
 const mb = await import("mediabunny");
 if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined") {
-  report({ skipped: "this browser has no WebCodecs VideoEncoder and AudioEncoder" });
+  // The first capability missing names the skip.
+  report(typeof VideoEncoder === "undefined"
+    ? { skipped: "this browser has no WebCodecs VideoEncoder", capability: "webcodecs-video" }
+    : { skipped: "this browser has no WebCodecs AudioEncoder", capability: "webcodecs-audio" });
 } else {
   const WIDTH = 320;
   const HEIGHT = 240;
@@ -197,7 +200,7 @@ const mb = await import("mediabunny");
 const config = { sampleRate: 48000, numberOfChannels: 2, bitrate: 128000 };
 const rate = typeof AudioEncoder === "undefined" ? null : await audioEncoderSampleRate("aac", config);
 if (rate === null) {
-  report({ skipped: "this browser has no AAC encoder" });
+  report({ skipped: "this browser has no AAC encoder", capability: "aac-encode" });
 } else {
   const delay = await aacEncoderDelay({ ...config, sampleRate: rate });
   const results = {};
@@ -229,7 +232,12 @@ if (rate === null) {
       input.dispose();
     }
   }
-  report({ ok: delay > 0 && Object.values(results).every((value) => value.ok), rate, delay, results });
+  // An encoder without priming (delay 0) is allowed when no container's decoded onset shows any.
+  const maxAbsOnset = Math.max(...Object.values(results).map((value) => Math.abs(value.onset ?? Infinity)));
+  report({
+    ok: Object.values(results).every((value) => value.ok) && (delay > 0 || maxAbsOnset < 0.001),
+    rate, delay, results,
+  });
 }
 `;
 }
@@ -239,7 +247,7 @@ export function exportSchedule() {
   return `
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
-const engine = await WebEffectRegistry.create();
+const engine = await gpuEngine(WebEffectRegistry);
 const corpus = await (await fetch("/tests/golden/time-rules-corpus.json")).json();
 const mismatches = [];
 let checked = 0;

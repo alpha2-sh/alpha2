@@ -1,8 +1,8 @@
 // Packs alpha2 and @alpha2-sh/editor, installs the tarballs into the editor consumer fixture, and
 // checks what a downstream app sees: Node imports without a DOM, strict type checks, a Vite build
 // with no private paths, the built page in a browser, and the React entry point. Chrome by
-// default; `--browser safari|firefox` (or ALPHA2_BROWSER) picks a WebDriver browser, and the run
-// fails without it. Writes target/editor-reports/package.json.
+// default; `--browser edge|safari|firefox` (or ALPHA2_BROWSER) picks another, and the run fails
+// without it. Writes target/editor-reports/package.json.
 import {
   mkdtemp,
   readFile,
@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { resolve, join, extname } from "node:path";
 import { browserForRun, runBrowserPage } from "./lib/browser-page.mjs";
 import { probeRun } from "./lib/browser-probe.mjs";
+import { recordSkip } from "./lib/capabilities.mjs";
 import {
   animatedGif,
   largeLottie,
@@ -126,6 +127,10 @@ try {
     join(dir, "public/test-video.mp4"),
   );
   await cp(
+    "tests/corpus/h264-1080p.mp4",
+    join(dir, "public/test-video-1080p.mp4"),
+  );
+  await cp(
     "tests/corpus/audio-only-aac-priming.m4a",
     join(dir, "public/test-audio.m4a"),
   );
@@ -187,6 +192,27 @@ try {
       ),
     ),
   );
+  console.log(
+    `editor preview renderer: ${browser.rendererBackend ?? "unknown"}; the 1080p decode: ${JSON.stringify(browser.fullHdDecode ?? null)}`,
+  );
+  // A preview made again during the run lost its GPU, which a browser that loses WebGPU on
+  // presenting does: a failure when the run requires presentation, a skip otherwise.
+  let presentation;
+  if (
+    browser.ok &&
+    (browser.previewRecoveries > 0 || browser.playWithoutAudioRecoveries > 0)
+  ) {
+    try {
+      recordSkip({
+        suite: "editor-package",
+        test: "browser",
+        capability: "webgpu-present",
+        reason: `the preview lost its GPU and was made again (${browser.previewRecoveries} recoveries, ${browser.playWithoutAudioRecoveries} during playback without audio)`,
+      });
+    } catch (error) {
+      presentation = error.message;
+    }
+  }
   const fallback = JSON.parse(
     decodeURIComponent(
       await runBrowserPage(
@@ -278,7 +304,9 @@ export const app=<EditorProvider editor={editor}><Selected/><EditorPreview bridg
       webkitStorage.ok &&
       noAudioEncoder.ok &&
       exactRate.ok &&
-      exportButton.ok,
+      exportButton.ok &&
+      presentation === undefined,
+    ...(presentation === undefined ? {} : { presentation }),
     runner: pageBrowser.name,
     base: "/editor/",
     installedFromTarballs: true,

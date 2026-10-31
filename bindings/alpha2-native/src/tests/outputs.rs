@@ -223,8 +223,10 @@ fn an_existing_output_is_refused_unless_the_output_replaces_it() {
 fn a_replacing_output_renames_over_the_old_file() {
     let path = output_path("replacing-finished").with_extension("wav");
     fs::write(&path, b"old").expect("old file");
-    #[cfg(unix)]
-    let old_inode = std::os::unix::fs::MetadataExt::ino(&fs::metadata(&path).expect("old"));
+    // A second name for the old file, which shows afterwards whether the new one is another file.
+    let old = path.with_extension("old.wav");
+    let _ = fs::remove_file(&old);
+    fs::hard_link(&path, &old).expect("a second name for the old file");
     let cancel = CancelToken::default();
     let mut sink = NativeWavEncodeSink::create(crate::OutputTarget::replacing(&path), 48_000, 1)
         .expect("the sink opens");
@@ -246,13 +248,11 @@ fn a_replacing_output_renames_over_the_old_file() {
         "the old bytes are still there"
     );
     // A rename, not a truncation: whoever has the old file open keeps its bytes.
-    #[cfg(unix)]
-    assert_ne!(
-        std::os::unix::fs::MetadataExt::ino(&fs::metadata(&path).expect("new")),
-        old_inode
-    );
+    assert!(!alpha2_os::same_file_at(&path, &old).expect("file identities"));
+    assert_eq!(fs::read(&old).expect("the old file"), b"old");
     assert!(!partial_beside(&path).exists());
     fs::remove_file(path).expect("cleanup");
+    fs::remove_file(old).expect("cleanup");
 }
 
 #[test]
@@ -285,6 +285,29 @@ fn a_replacing_output_refuses_a_directory_or_a_symbolic_link_before_writing() {
         assert_eq!(fs::read(&target).expect("target"), b"linked");
         fs::remove_file(&link).expect("cleanup");
         fs::remove_file(&target).expect("cleanup");
+    }
+    // A file symbolic link needs a privilege on Windows; a junction (a link to a folder) does not,
+    // and is refused the same way.
+    #[cfg(windows)]
+    {
+        let target = output_path("replacing-junction-target");
+        let link = output_path("replacing-junction").with_extension("wav");
+        let _ = fs::remove_dir(&link);
+        fs::create_dir_all(&target).expect("target");
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&target)
+            .output()
+            .expect("mklink");
+        assert!(made.status.success(), "{made:?}");
+        let error = open_each_output(crate::OutputTarget::replacing(&link), "wav")
+            .expect_err("a junction was opened as an output");
+        assert!(error.to_string().contains("not a regular file"), "{error}");
+        assert!(!partial_beside(&link).exists());
+        assert_eq!(fs::read_dir(&target).expect("target").count(), 0);
+        fs::remove_dir(&link).expect("cleanup");
+        fs::remove_dir(&target).expect("cleanup");
     }
 }
 
@@ -422,7 +445,7 @@ fn a_source_that_names_other_files_is_refused() {
 }
 
 /// RGBA noise: frames an encoder cannot make small.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn noise_frame(pts: MediaTime, seed: u32, width: u32, height: u32) -> DecodedVideoFrame {
     let mut frame = rgba_frame_sized(pts, [0, 0, 0, 255], width, height);
     let mut state = seed.wrapping_mul(2_654_435_761).max(1);
@@ -443,7 +466,7 @@ fn noise_frame(pts: MediaTime, seed: u32, width: u32, height: u32) -> DecodedVid
 }
 
 /// Writes into `output` with the sink named `sink` until the export ends.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn export_until_it_fails(sink: &str, output: &Path) -> Result<(), EncodeError> {
     let cancel = CancelToken::default();
     let frames = (0..90).map(|index| {
@@ -529,7 +552,7 @@ fn export_until_it_fails(sink: &str, output: &Path) -> Result<(), EncodeError> {
 /// The child half of
 /// `a_write_past_the_file_size_limit_fails_the_export_and_leaves_no_partial`,
 /// which runs it under a file size limit.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 #[ignore = "run by a_write_past_the_file_size_limit_fails_the_export_and_leaves_no_partial in a child process whose file size is limited"]
 fn export_into_a_file_size_limit() {
@@ -548,7 +571,7 @@ fn export_into_a_file_size_limit() {
 /// file. The export fails instead and removes it. Each sink runs in a child
 /// process whose file size limit fails a write at once (the header) or
 /// part-way.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 #[test]
 fn a_write_past_the_file_size_limit_fails_the_export_and_leaves_no_partial() {
     for sink in ["video", "av", "copy"] {
@@ -557,11 +580,12 @@ fn a_write_past_the_file_size_limit_fails_the_export_and_leaves_no_partial() {
             let _ = fs::remove_file(&output);
             let _ = fs::remove_file(partial_beside(&output));
             // An ignored SIGXFSZ stays ignored across exec, so the write past the limit fails with
-            // EFBIG rather than killing the process.
+            // EFBIG rather than killing the process. A POSIX shell's `ulimit -f` counts 512-byte
+            // blocks.
             let spawning = child_process_lock();
             let child = std::process::Command::new("sh")
-                .args(["-c", "trap '' XFSZ; exec prlimit --fsize=\"$0\" \"$@\""])
-                .arg(limit.to_string())
+                .args(["-c", "trap '' XFSZ; ulimit -f \"$0\" && exec \"$@\""])
+                .arg((limit / 512).to_string())
                 .arg(std::env::current_exe().expect("test binary"))
                 .args([
                     "--exact",

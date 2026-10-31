@@ -2,10 +2,11 @@
 
 // Test browser-only wasm paths in a browser: context loss, video conversion and memory, and the
 // packaged engine against native pins. Run `npm run build` first. Chrome unless `--browser
-// safari|firefox` (or ALPHA2_BROWSER) picks a WebDriver browser. Missing Chrome skips the run,
+// edge|safari|firefox` (or ALPHA2_BROWSER) picks another. Missing Chrome skips the run,
 // and a case that cannot run in this browser skips naming its capability; ALPHA2_REQUIRE fails
-// the capabilities it names. `--case <name>` selects one case;
-// `--serve[=port]` serves pages for manual runs. Cases are in scripts/lib/wasm-browser/.
+// the capabilities it names. `--case <name>` selects one case (perf cases, such as export-perf,
+// run only this way); `--serve[=port]` serves pages for manual runs. Cases are in
+// scripts/lib/wasm-browser/.
 
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -21,7 +22,11 @@ import {
   fromThisMachine,
   servedFile,
 } from "./lib/chrome-cdp.mjs";
-import { cases, videoImportCases } from "./lib/wasm-browser/cases.mjs";
+import {
+  cases,
+  perfCases,
+  videoImportCases,
+} from "./lib/wasm-browser/cases.mjs";
 import { page } from "./lib/wasm-browser/page.mjs";
 import { runCases } from "./lib/wasm-browser/run-cases.mjs";
 
@@ -31,6 +36,18 @@ const only = args.includes("--case") ? args[args.indexOf("--case") + 1] : null;
 const serveArgument = args.find((arg) => arg.startsWith("--serve"));
 const servePort =
   serveArgument === undefined ? null : Number(serveArgument.split("=")[1] ?? 0);
+
+// A perf case runs only when `--case` names it.
+const names =
+  only === null
+    ? Object.keys(cases)
+    : [...Object.keys(cases), ...Object.keys(perfCases)].filter(
+        (name) => name === only,
+      );
+if (names.length === 0) {
+  process.stdout.write(`FAIL no case named ${only}\n`);
+  process.exit(1);
+}
 
 let browser = null;
 if (servePort === null) {
@@ -61,9 +78,14 @@ const server = createServer(async (request, response) => {
   response.setHeader("cross-origin-opener-policy", "same-origin");
   response.setHeader("cross-origin-embedder-policy", "require-corp");
   const name = url.pathname.slice(1);
-  if (Object.hasOwn(cases, name)) {
+  const body = Object.hasOwn(cases, name)
+    ? cases[name]
+    : Object.hasOwn(perfCases, name)
+      ? perfCases[name]
+      : undefined;
+  if (body !== undefined) {
     response.setHeader("content-type", "text/html; charset=utf-8");
-    response.end(page(cases[name](), videoImportCases.has(name)));
+    response.end(page(body(), videoImportCases.has(name)));
     return;
   }
   const path = servedFile(root, url.pathname);
@@ -94,7 +116,7 @@ await new Promise((resolveListen) =>
 if (servePort !== null) {
   // Cross-origin isolation, which the audio cases need, requires a secure context: localhost.
   const { port } = server.address();
-  for (const name of Object.keys(cases))
+  for (const name of [...Object.keys(cases), ...Object.keys(perfCases)])
     process.stdout.write(`http://localhost:${port}/${name}\n`);
   process.stdout.write("serving; stop with Ctrl-C\n");
   await new Promise(() => {});
@@ -109,14 +131,17 @@ try {
   await probeRun("wasm-browser", browser, {
     engineModule: "/packages/alpha2/wasm/alpha2_wasm.js",
   });
-  const names = Object.keys(cases).filter(
-    (name) => only === null || name === only,
-  );
   const runPage = async (name) => {
     const encoded = await runBrowserPage(
       browser,
       `http://127.0.0.1:${address.port}/${name}${process.env.ALPHA2_CASE_QUERY ?? ""}`,
-      { timeoutMs: Number(process.env.ALPHA2_CASE_TIMEOUT_MS ?? 60_000) },
+      {
+        // A perf case exports for minutes on a slow GPU.
+        timeoutMs: Number(
+          process.env.ALPHA2_CASE_TIMEOUT_MS ??
+            (Object.hasOwn(perfCases, name) ? 600_000 : 60_000),
+        ),
+      },
     );
     return JSON.parse(decodeURIComponent(encoded));
   };

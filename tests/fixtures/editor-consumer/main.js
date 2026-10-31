@@ -735,11 +735,43 @@ async function main() {
         delete AudioContext.prototype.state;
         AudioContext.prototype.resume = resume;
       }
+      // A preview that had to be made again lost its GPU: the harness tells a browser that loses
+      // WebGPU on presenting from one that does not.
+      const previewRecoveries = bridge.previewRecoveries;
+      let rendererBackend = bridge.diagnostics?.adapter?.backend ?? null;
+      // A full HD stream through the package's decoder: whether the decoder this browser picks
+      // first served it, or failed and was replaced by a software one (reported, not judged).
+      globalThis.editorTestStage = "decode-1080p";
+      const { MediabunnyVideoDecoder } = await import("alpha2/mediabunny");
+      const fullHd = await MediabunnyVideoDecoder.open(
+        "full-hd",
+        await fetch(`${import.meta.env.BASE_URL}test-video-1080p.mp4`).then(
+          (r) => r.blob(),
+        ),
+      );
+      let fullHdDecode;
+      try {
+        const decoded = await fullHd.refill({
+          sourceId: "full-hd",
+          mediaTimeTicks: 0n,
+          reason: "seek",
+          generation: 0,
+        });
+        fullHdDecode = {
+          size: [decoded.frame.displayWidth, decoded.frame.displayHeight],
+          softwareFallback: fullHd.softwareFallback ?? null,
+        };
+        decoded.frame.close();
+      } finally {
+        fullHd.close();
+      }
       globalThis.editorTestStage = "surface-dispose";
       await surface.dispose();
       globalThis.editorTestStage = "rebind";
       await bridge.bindPreview(document.createElement("canvas"));
       await bridge.seek(0);
+      // A renderer made again after a lost GPU has no sample until it draws: the rebound one has.
+      rendererBackend ??= bridge.diagnostics?.adapter?.backend ?? null;
       await bridge.dispose();
       editor.dispose();
       document.title = encodeURIComponent(
@@ -750,7 +782,10 @@ async function main() {
           previewBackend,
           workerDecode: true,
           workerAudioFrames: 1024,
+          previewRecoveries,
           playWithoutAudioRecoveries,
+          rendererBackend,
+          fullHdDecode,
         }),
       );
     } catch (e) {

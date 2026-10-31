@@ -12,6 +12,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { cargoTargetDirectory } from "./lib/cargo-target.mjs";
+
 const root = resolve(import.meta.dirname, "..");
 const PINNED_GRAPH_HASH = "39b4fab61033bdd0";
 const cargo = (args) =>
@@ -154,12 +156,6 @@ assert.equal(
 console.log(
   `verified the packaged binding's CPU renderer draws the parity project as the native one does (${frameTimes.length} frames, ${(elapsed / frameTimes.length).toFixed(1)} ms per ${width}x${height} frame)`,
 );
-
-/** Where cargo writes, which CARGO_TARGET_DIR or a cargo config can move. */
-function cargoTargetDirectory() {
-  return JSON.parse(cargo(["metadata", "--format-version", "1", "--no-deps"]))
-    .target_directory;
-}
 
 /**
  * The premultiplied RGBA8 test card of the determinism crate (`test_card`): ramps, a checker,

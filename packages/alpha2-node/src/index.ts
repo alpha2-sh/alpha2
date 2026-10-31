@@ -34,6 +34,7 @@ import {
   type ProgressPhase,
   type ProtocolError,
   createRequest,
+  describeExit,
   loaderRefused,
   parseHostMessage,
 } from "./protocol.js";
@@ -2310,7 +2311,7 @@ async function requestHost(
         );
       } else {
         const tail = stderrTail();
-        const ended = `exit ${exitSignal ?? code ?? "unknown"}`;
+        const ended = describeExit(code, exitSignal);
         const detail = tail.trim() || ended;
         if (code === 70 || detail.includes("GPU_INIT_FAILED")) {
           rejectPromise(

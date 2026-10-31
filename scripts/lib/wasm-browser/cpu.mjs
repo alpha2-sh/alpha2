@@ -1,9 +1,18 @@
 // CPU renderer cases: a browser with no WebGPU adapter and no WebGL2 context previews and exports
 // on the engine's CPU renderer in wasm. `renderer` is the render host's option: "cpu" runs in any
-// browser; "auto" draws on the CPU only where the browser has no GPU. With `--disable-gpu` alone,
-// headless Chrome still offers SwiftShader WebGPU and WebGL2; turn that off as well:
-//   ALPHA2_CHROME_GPU_FLAGS="--disable-gpu --disable-software-rasterizer" \
-//     node scripts/test-wasm-browser.mjs --case renderer-auto
+// browser; "auto" draws on the CPU exactly where the page has neither a WebGPU adapter nor a WebGL2
+// context, which the cases find out for themselves. With `--disable-gpu` alone, headless Chrome
+// still offers SwiftShader WebGPU and WebGL2; Chrome without any GPU process is
+//   ALPHA2_CHROME_GPU=none node scripts/test-wasm-browser.mjs --case renderer-auto
+
+// The renderer `auto` must choose here: "gpu" when the page has a WebGPU adapter or a WebGL2
+// context, "cpu" otherwise. Whether a fallback adapter (SwiftShader) is a GPU is the product's
+// rule; this follows what the page offers.
+const EXPECTED_RENDERER = (renderer) => `
+const pageHasGpu = Boolean(await navigator.gpu?.requestAdapter()) ||
+  Boolean(new OffscreenCanvas(1, 1).getContext("webgl2"));
+const expected = ${JSON.stringify(renderer)} === "auto" ? (pageHasGpu ? "gpu" : "cpu") : ${JSON.stringify(renderer)};
+`;
 
 // A project of one decoded video (planar I420 frames, as WebCodecs decodes them), shown whole, then
 // blurred, then scaled down and turned over itself.
@@ -51,12 +60,27 @@ const host = await createWasmRenderWorkerHost(WebEffectRegistry, JSON.stringify(
   renderer: ${JSON.stringify(renderer)},
 })(canvas);
 const choice = host.rendererChoice;
-const expected = ${JSON.stringify(renderer)} === "auto" ? capabilities.renderer : ${JSON.stringify(renderer)};
+${EXPECTED_RENDERER(renderer)}
 if (choice?.renderer === "gpu") {
-  // A GPU's preview and export are other cases'; headless Chrome loses a WebGPU device that
-  // presents to a canvas.
+  // A GPU's export is other cases'; here one frame must present. A device lost on presenting
+  // (headless Chrome and SwiftShader lose one) is the browser's.
+  const data = new Uint8Array(width * height * 3 / 2).fill(128);
+  const frame = () => new VideoFrame(data, { format: "I420", codedWidth: width, codedHeight: height, timestamp: 0,
+    colorSpace: { primaries: "bt709", transfer: "bt709", matrix: "bt709", fullRange: false } });
+  let presented = await host.present(0n);
+  for (let attempt = 0; attempt < 4 && presented.missingFrames.length > 0; attempt++) {
+    await Promise.all(presented.missingFrames.map((missing) => host.uploadVideoFrame({
+      sourceId: missing.sourceId, requestedTimeTicks: missing.mediaTimeTicks,
+      decodedTimeTicks: missing.mediaTimeTicks, generation: 0, frame: frame(),
+    })));
+    presented = await host.present(0n);
+  }
+  const deviceLost = host.isDeviceLost();
   host.dispose();
-  report({ ok: expected === "gpu" && choice.rendererReason === null, ...choice, capabilities });
+  const details = { ...choice, presentedTimeTicks: String(presented.presentedTimeTicks), deviceLost, capabilities };
+  const chosen = expected === "gpu" && choice.rendererReason === null;
+  if (chosen && deviceLost) skip("webgpu-present", "the device was lost presenting to the canvas", details);
+  report({ ok: chosen && presented.presentedTimeTicks === 0n && !deviceLost, ...details });
 } else {
 // A planar I420 frame: a diagonal luma ramp that moves with the time, a bright square, and chroma
 // that changes across the picture.
@@ -172,31 +196,48 @@ const exportMs = (performance.now() - exportStarted - supplyMs - encodeMs) / fra
 const exportSupplyMs = supplyMs / frameTicks.length;
 await encoder.flush();
 encoder.close();
-// The encoded stream decodes back to as many frames, the last one showing the square.
-const decodedFrames = [];
-const decoder = new VideoDecoder({
-  output: async (frame) => { decodedFrames.push(frame); },
-  error: (error) => { throw error; },
-});
-decoder.configure({ codec: encoding.codec, codedWidth: width, codedHeight: height });
-for (const chunk of chunks) decoder.decode(chunk);
-await decoder.flush();
-decoder.close();
+// The encoded stream decodes back to as many frames, the last one showing the square. The decoder
+// the browser picks may fail on the stream before its first frame (a hardware one on a size it
+// does not take); it is then asked once more for a software decoder.
+const decodeAll = async (hardwareAcceleration) => {
+  const frames = [];
+  let failure = null;
+  const decoder = new VideoDecoder({
+    output: (frame) => { frames.push(frame); },
+    error: (error) => { failure ??= error; },
+  });
+  try {
+    decoder.configure({ codec: encoding.codec, codedWidth: width, codedHeight: height, hardwareAcceleration });
+    for (const chunk of chunks) decoder.decode(chunk);
+    await decoder.flush();
+  } catch (error) {
+    failure ??= error;
+  }
+  if (decoder.state !== "closed") decoder.close();
+  return { frames, failure };
+};
+let decoding = await decodeAll("no-preference");
+let decoderRetried = null;
+if (decoding.failure !== null && decoding.frames.length === 0) {
+  decoderRetried = String(decoding.failure?.message ?? decoding.failure);
+  decoding = await decodeAll("prefer-software");
+}
+const decodedFrames = decoding.frames;
+if (decoding.failure !== null) {
+  for (const frame of decodedFrames) frame.close();
+  throw decoding.failure;
+}
 const last = decodedFrames.at(-1);
-// A decoder hands back I420 or NV12, whose first plane is the luma.
+// A decoder hands back YUV (I420, NV12) or, in some browsers, RGB; either gives the luma.
 const decodedFormat = last.format;
-const lastCopy = new Uint8Array(last.allocationSize());
-const lastPlanes = await last.copyTo(lastCopy);
-const decodedSquare = /^(I4|NV12)/.test(decodedFormat)
-  ? lastCopy[lastPlanes[0].offset + (height * 3 / 8) * lastPlanes[0].stride + width * 3 / 8]
-  : null;
+const decodedSquare = await lumaAt(last, width * 3 / 8, height * 3 / 8);
 for (const frame of decodedFrames) frame.close();
 const report_ = {
   renderer: choice?.renderer, rendererReason: choice?.rendererReason, capabilities: { webgpu: capabilities.webgpu, webgl2: capabilities.webgl2, renderer: capabilities.renderer },
   size: [width, height], codec: encoding.codec, frames: frameTicks.length, presentedFrames, encodedChunks: chunks.length,
   decodedFrames: decodedFrames.length, previewMsPerFrame: Number(previewMs.toFixed(1)), exportMsPerFrame: Number(exportMs.toFixed(1)),
   supplyMsPerFrame: { preview: Number(previewSupplyMs.toFixed(1)), export: Number(exportSupplyMs.toFixed(1)) },
-  exportedSquare: exported[0], decodedSquare, decodedFormat,
+  exportedSquare: exported[0], decodedSquare, decodedFormat, decoderRetried,
   // How far the preview's luma is from the export's at the worst point.
   previewDifference: shown === null ? null : Math.round(Math.max(...shown.map((value, index) => Math.abs(value - exported[1][index])))),
 };
@@ -249,11 +290,23 @@ canvas.height = 24;
 document.body.append(canvas);
 await backend.initialize(canvas.transferControlToOffscreen());
 const choice = backend.rendererChoice;
-const expected = ${JSON.stringify(renderer)} === "auto" ? capabilities.renderer : ${JSON.stringify(renderer)};
+${EXPECTED_RENDERER(renderer)}
 if (choice?.renderer === "gpu") {
-  // A GPU's worker is other cases'; headless Chrome loses a WebGPU device that presents.
+  // A GPU's worker is other cases'; here one frame must present. A device lost on presenting
+  // (headless Chrome and SwiftShader lose one) is the browser's.
+  const data = new Uint8Array(64 * 48 * 3 / 2).fill(128);
+  await backend.uploadVideoFrame({
+    sourceId: "video", requestedTimeTicks: 0n, decodedTimeTicks: 0n, generation: 0,
+    frame: new VideoFrame(data, { format: "I420", codedWidth: 64, codedHeight: 48, timestamp: 0,
+      colorSpace: { primaries: "bt709", transfer: "bt709", matrix: "bt709", fullRange: false } }),
+  });
+  const presented = await backend.present(0n);
+  const deviceLost = backend.isDeviceLost();
   backend.dispose();
-  report({ ok: expected === "gpu" && choice.rendererReason === null, ...choice, capabilities: capabilities.renderer });
+  const details = { ...choice, presentedTimeTicks: String(presented.presentedTimeTicks), deviceLost, capabilities: capabilities.renderer };
+  const chosen = expected === "gpu" && choice.rendererReason === null;
+  if (chosen && deviceLost) skip("webgpu-present", "the device was lost presenting to the canvas", details);
+  report({ ok: chosen && presented.presentedTimeTicks === 0n && !deviceLost, ...details });
 } else {
 const data = new Uint8Array(64 * 48 * 3 / 2).fill(128);
 data.fill(200, 0, 64 * 48);

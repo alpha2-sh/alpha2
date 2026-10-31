@@ -11,12 +11,6 @@ const capture = (canvas, x, y, width = 1, height = 1) => {
   shot.close();
   return probe.getImageData(x, y, width, height).data;
 };
-// Headless Chrome and SwiftShader destroy a WebGPU device that presents to a canvas: there a case
-// cannot see a presentation.
-const presentUnsupported = async () => {
-  const info = (await navigator.gpu.requestAdapter())?.info ?? {};
-  return /HeadlessChrome/.test(navigator.userAgent) || /swiftshader/i.test([info.vendor, info.architecture, info.description].join(" "));
-};
 `;
 
 // A still frame drawn again is reported unchanged and neither submits work nor takes a canvas
@@ -24,7 +18,7 @@ const presentUnsupported = async () => {
 // which a headless browser cannot show: that is checked by eye in a headed one.
 export function previewUnchangedFrame() {
   return `
-if (!navigator.gpu) throw new Error("this browser offers no WebGPU");
+if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");
 ${PRESENT_HELPERS}
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
@@ -36,6 +30,7 @@ GPUCanvasContext.prototype.getCurrentTexture = function (...args) {
 };
 const canvas = new OffscreenCanvas(8, 8);
 const engine = await WebEffectRegistry.createForCanvas(canvas);
+const adapter = webgpuAdapter(engine);
 engine.loadProject(JSON.stringify({
   schema_version: 1, id: "still", name: "Still",
   settings: { width: 16, height: 16, frame_rate: { num: 30, den: 1 }, sample_rate: 48000 },
@@ -72,16 +67,15 @@ const reuploaded = render(12000);
 const redrawn = read();
 const deviceLost = engine.deviceLost;
 engine.free();
-const unseen = (await presentUnsupported()) && deviceLost;
-report({
-  ok: JSON.stringify(size) === "[8,8]" &&
-    !first.unchanged && first.submissions === 1 && first.acquired === 1 &&
-    [same, next].every((step) => step.unchanged && !step.repeated && step.submissions === 0 && step.acquired === 0) &&
-    !reuploaded.unchanged && reuploaded.submissions === 1 && reuploaded.acquired === 1 &&
-    (unseen || (drawn[0] > redrawn[0] && redrawn[0] > 0 && !deviceLost)),
-  size, first, same, next, reuploaded, drawn, redrawn, deviceLost,
-  ...(unseen ? { presented: "unavailable in this browser (device lost on present)" } : {}),
-});
+const paced = JSON.stringify(size) === "[8,8]" &&
+  !first.unchanged && first.submissions === 1 && first.acquired === 1 &&
+  [same, next].every((step) => step.unchanged && !step.repeated && step.submissions === 0 && step.acquired === 0) &&
+  !reuploaded.unchanged && reuploaded.submissions === 1 && reuploaded.acquired === 1;
+const details = { size, first, same, next, reuploaded, drawn, redrawn, deviceLost, adapter };
+// A device lost on presenting is the browser's; the pacing above was still checked.
+if (paced && deviceLost)
+  skip("webgpu-present", "the device was lost presenting to the canvas", details);
+report({ ok: paced && drawn[0] > redrawn[0] && redrawn[0] > 0 && !deviceLost, ...details });
 `;
 }
 
@@ -89,13 +83,14 @@ report({
 // at the default half scale the surface is half the size.
 export function previewFullResolution() {
   return `
-if (!navigator.gpu) throw new Error("this browser offers no WebGPU");
+if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");
 ${PRESENT_HELPERS}
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
 const [width, height] = [1280, 720];
 const canvas = new OffscreenCanvas(16, 16);
 const engine = await WebEffectRegistry.createForCanvas(canvas);
+const adapter = webgpuAdapter(engine);
 engine.loadProject(JSON.stringify({
   schema_version: 1, id: "checker", name: "Checker",
   settings: { width, height, frame_rate: { num: 30, den: 1 }, sample_rate: 48000 },
@@ -135,14 +130,15 @@ for (let y = 0; y < height; y++)
   }
 const deviceLost = engine.deviceLost;
 engine.free();
-// Headless Chrome on SwiftShader may also hand over a blank (transparent) picture.
-const unseen = (await presentUnsupported()) && (deviceLost || shown.every((value) => value === 0));
-report({
-  ok: JSON.stringify(half) === "[640,360]" && JSON.stringify(full) === "[1280,720]" &&
-    refused === "INVALID_INPUT" && played.missingSources.length === 0 &&
-    JSON.stringify(presented) === "[1280,720]" && (unseen || (wrong === 0 && !deviceLost)),
-  half, full, refused, presented, wrong, deviceLost,
-  ...(unseen ? { shown: "unavailable in this browser (headless presentation)" } : {}),
-});
+const sized = JSON.stringify(half) === "[640,360]" && JSON.stringify(full) === "[1280,720]" &&
+  refused === "INVALID_INPUT" && played.missingSources.length === 0 &&
+  JSON.stringify(presented) === "[1280,720]";
+const details = { half, full, refused, presented, wrong, deviceLost, adapter };
+// A device lost on presenting, or a blank capture (headless Chrome on SwiftShader), is the
+// browser's; the sizes above were still checked.
+const blank = shown.every((value) => value === 0);
+if (sized && (deviceLost || blank))
+  skip("webgpu-present", deviceLost ? "the device was lost presenting to the canvas" : "the presented canvas captured blank", details);
+report({ ok: sized && wrong === 0 && !deviceLost, ...details });
 `;
 }

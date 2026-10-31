@@ -44,7 +44,7 @@ report({ ok: uploaded === true && luma > 230, uploaded, luma });
 // sources as Firefox does, so the engine must fall back to canvas bitmaps.
 export function transparentEdges(webgl, rejectVideoFrame = false) {
   return `
-${webgl ? 'Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });' : 'if (!navigator.gpu) throw new Error("this browser offers no WebGPU");'}
+${webgl ? 'Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });' : 'if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");'}
 const copies = { videoFrame: 0, bitmap: 0 };
 ${
   rejectVideoFrame
@@ -65,6 +65,7 @@ GPUQueue.prototype.copyExternalImageToTexture = function (source, ...rest) {
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
 const engine = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(64, 48));
+const adapter = ${webgl} ? undefined : webgpuAdapter(engine);
 // Separate source IDs: the engine keeps the video upload across the reload.
 const load = (id, kind) => engine.loadProject(JSON.stringify({
   schema_version: 1, id: "edges", name: "Edges",
@@ -127,6 +128,7 @@ if (${rejectVideoFrame}) {
   fellBack &&= engine.uploadedFrameCount === kept + 1 && copies.videoFrame === 1;
 }
 report({
+  adapter,
   ok: edgeWorst <= 1 && edges > 0 && alphaWorst <= 2 && fellBack && !engine.deviceLost,
   edgeWorst, edges, alphaWorst, halfLuma: [halfFrame[0], halfImage[0]], copies,
 });
@@ -137,7 +139,7 @@ report({
 // where WebGPU refused a frame. `rejectVideoFrame` refuses VideoFrame copies as Firefox does.
 export function bitmapUploads(webgl, rejectVideoFrame = false) {
   return `
-${webgl ? 'Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });' : 'if (!navigator.gpu) throw new Error("this browser offers no WebGPU");'}
+${webgl ? 'Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });' : 'if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");'}
 ${
   rejectVideoFrame
     ? `const copyExternalImage = GPUQueue.prototype.copyExternalImageToTexture;
@@ -158,6 +160,7 @@ const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm
 const { uploadPresentedFrame } = await import("/packages/alpha2/dist/presented-frames.js");
 await init();
 const engine = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(64, 48));
+const adapter = ${webgl} ? undefined : webgpuAdapter(engine);
 engine.loadProject(JSON.stringify({
   schema_version: 1, id: "bitmaps", name: "Bitmaps",
   settings: { width: 64, height: 48, frame_rate: { num: 30, den: 1 }, sample_rate: 48000 },
@@ -204,6 +207,7 @@ const helperDraws = draws - drawsBefore;
 // Firefox refuses every VideoFrame; Chrome and Safari take them.
 const expected = ${webgl ? '["canvas"]' : rejectVideoFrame ? '["bitmap"]' : '["direct", "bitmap"]'};
 report({
+  adapter,
   ok: Object.values(worst).every((value) => value <= ${webgl ? 2 : 1}) && expected.includes(mode) &&
     before === ${webgl ? '"canvas"' : '"untried"'} && helperDraws === ${webgl ? 1 : 0} &&
     handed.format === null && !engine.deviceLost,
@@ -215,10 +219,11 @@ report({
 // The only case that reaches the composite's second layer and the bounded-layer region copy.
 export function layers(webgl) {
   return `
-${webgl ? 'Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });' : 'if (!navigator.gpu) throw new Error("this browser offers no WebGPU");'}
+${webgl ? 'Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });' : 'if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");'}
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
 const engine = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(64, 48));
+const adapter = ${webgl} ? undefined : webgpuAdapter(engine);
 const COLORS = { a: [40, 90, 200], b: [230, 60, 30], c: [60, 220, 90] };
 const visual = (x, y, scale) => ({
   position: { mode: "constant", value: { x, y } },
@@ -268,6 +273,7 @@ const distinct = Math.min(...[["a", "b"], ["a", "c"], ["b", "c"]].map(([p, q]) =
 const gpu = JSON.parse(engine.diagnostics()).gpu;
 const uncaptured = gpu.events.filter((event) => event.event === "uncaptured-error");
 report({
+  adapter,
   ok: Object.values(worst).every((value) => value <= 1) && distinct > 20 && uncaptured.length === 0 && !engine.deviceLost,
   worst, alone, distinct,
   ...(uncaptured.length ? { uncaptured } : {}),
@@ -358,11 +364,12 @@ report({
 // frame must configure it again, not report a lost device.
 export function webgpuUnconfiguredSurface() {
   return `
-if (!navigator.gpu) throw new Error("this browser offers no WebGPU");
+if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
 const canvas = new OffscreenCanvas(64, 48);
 const engine = await WebEffectRegistry.createForCanvas(canvas);
+const adapter = webgpuAdapter(engine);
 const project = await fetch("/tests/cases/host-parity-project.json").then((response) => response.json());
 engine.loadProject(JSON.stringify(project));
 const COLOR = [230, 120, 40];
@@ -387,19 +394,27 @@ for (const step of ["first", "after-transfer", "after-unconfigure"]) {
   entry.deviceLost = engine.deviceLost;
   frames.push(entry);
 }
-// The pixel is reported, not checked: headless Chrome on SwiftShader hands over a blank bitmap.
-report({ ok: frames.every((entry) => !entry.error && !entry.deviceLost), frames });
+const running = frames.every((entry) => !entry.error && !entry.deviceLost);
+// A blank bitmap is a browser that does not hand over what it presented (headless Chrome on
+// SwiftShader); any other colour than the image's is the engine's.
+const blank = frames.some((entry) => entry.pixel?.every((value) => value === 0));
+if (running && blank)
+  skip("webgpu-present", "the presented bitmap is blank", { adapter, frames });
+const shown = frames.every((entry) =>
+  entry.pixel?.[3] === 255 && entry.pixel.slice(0, 3).every((value, channel) => Math.abs(value - COLOR[channel]) <= 3));
+report({ ok: running && shown, adapter, frames });
 `;
 }
 
 // Headless Chrome and SwiftShader can lose WebGPU on shared-image presentation.
 export function smoke(webgl) {
   return `
-${webgl ? '// Hide WebGPU so the engine takes its WebGL2 backend.\nObject.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });' : 'if (!navigator.gpu) throw new Error("this browser offers no WebGPU");'}
+${webgl ? '// Hide WebGPU so the engine takes its WebGL2 backend.\nObject.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });' : 'if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");'}
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
 const canvas = new OffscreenCanvas(64, 48);
 const engine = await WebEffectRegistry.createForCanvas(canvas);
+const adapter = ${webgl} ? undefined : webgpuAdapter(engine);
 const project = await fetch("/tests/cases/host-parity-project.json").then((response) => response.json());
 engine.loadProject(JSON.stringify(project));
 // One colour, so the presented canvas is told from a cleared one; at frame 0 the project's exposure
@@ -454,24 +469,25 @@ const filterSamplesOk = ${webgl}
     degradations[0].applied === 16 &&
     degradations[0].requested > 16
   : diagnostics.maxFilterSamples > 16 && degradations.length === 0;
-const info = ${webgl} ? {} : (await navigator.gpu.requestAdapter())?.info ?? {};
-// Headless Chrome and SwiftShader destroy a WebGPU device that presents to a canvas: there the case
-// cannot see a presentation, and only there may the device be lost.
-const presentUnsupported =
-  !${webgl} && (/HeadlessChrome/.test(navigator.userAgent) || /swiftshader/i.test([info.vendor, info.architecture, info.description].join(" ")));
 const presentedColor = pixel !== null && pixel[3] === 255 && pixel.slice(0, 3).every((value, channel) => Math.abs(value - COLOR[channel]) <= 3);
-const presented = presentUnsupported && engine.deviceLost
-  ? "unavailable in this browser (device lost on present)"
-  : presentedColor || { pixel, shot: typeof shot === "string" ? shot : undefined, deviceLost: engine.deviceLost };
-report({
-  ok: frame.kind === "rendered" && tight === (64 * 48 * 3) / 2 && frame.layout.length === 3 && audio.length === 2 * 1024 &&
-    uncaptured.length === 0 && filterSamplesOk && (presented === true || (presentUnsupported && engine.deviceLost)),
+const presented = presentedColor || { pixel, shot: typeof shot === "string" ? shot : undefined, deviceLost: engine.deviceLost };
+const details = {
   ...(filterSamplesOk ? {} : { maxFilterSamples: diagnostics.maxFilterSamples, degradations }),
   frame: frame.kind,
   audioSamples: audio.length,
   presented,
+  ...(adapter ? { adapter } : {}),
   ...(uncaptured.length ? { uncaptured } : {}),
-});
+};
+const rest = frame.kind === "rendered" && tight === (64 * 48 * 3) / 2 && frame.layout.length === 3 && audio.length === 2 * 1024 &&
+  uncaptured.length === 0 && filterSamplesOk;
+// A WebGPU device lost on presenting (headless Chrome and SwiftShader destroy it), or a capture
+// that comes back blank, is the browser's: the case cannot see a presentation there. Everything
+// else was still checked.
+const blank = pixel !== null && pixel.every((value) => value === 0);
+if (!${webgl} && rest && presented !== true && (engine.deviceLost || blank))
+  skip("webgpu-present", engine.deviceLost ? "the device was lost presenting to the canvas" : "the presented canvas captured blank", details);
+report({ ok: rest && presented === true, ...details });
 `;
 }
 
@@ -608,11 +624,27 @@ const settle = (promise, ms) => Promise.race([
   promise.then((value) => ({ value }), (error) => ({ error: String(error?.message ?? error), code: error?.code ?? null })),
   new Promise((resolve) => setTimeout(() => resolve({ unsettled: true }), ms)),
 ]);
+// Without WebGL2 in the worker, \`auto\` draws on the CPU and there is no context to lose.
+const choice = backend.rendererChoice;
+if (choice?.renderer !== "gpu") {
+  backend.dispose();
+  skip("webgl2", "no WebGL2 in the worker", { rendererChoice: choice });
+}
 const first = await settle(backend.present(0n), 10000);
-await new Promise((resolve) => {
-  worker.addEventListener("message", function lost(event) {
-    if (event.data?.type === "test-lost") { worker.removeEventListener("message", lost); resolve(); }
-  });
+const describe = (outcome) => (outcome.unsettled ? "unsettled" : outcome.error ?? "presented");
+await new Promise((resolve, reject) => {
+  const onError = (event) => {
+    worker.removeEventListener("message", lost);
+    reject(new Error("the worker could not lose its context (first present: " + describe(first) + "): " + event.message));
+  };
+  function lost(event) {
+    if (event.data?.type !== "test-lost") return;
+    worker.removeEventListener("message", lost);
+    worker.removeEventListener("error", onError);
+    resolve();
+  }
+  worker.addEventListener("message", lost);
+  worker.addEventListener("error", onError, { once: true });
   worker.postMessage({ type: "test-lose" });
 });
 await new Promise((resolve) => setTimeout(resolve, 50));
@@ -627,8 +659,8 @@ report({
   ok: first.value !== undefined && !duringLoss.unsettled && lostBeforeRecover === true &&
     !recovered.unsettled && recovered.error === undefined && lostAfterRecover === false &&
     afterRecover.value !== undefined && workerErrors.length === 0,
-  first: first.unsettled ? "unsettled" : first.error ?? "presented",
-  duringLoss: duringLoss.unsettled ? "unsettled" : duringLoss.error ?? "presented",
+  first: describe(first),
+  duringLoss: describe(duringLoss),
   lostBeforeRecover,
   recovered: recovered.unsettled ? "unsettled" : recovered.error ?? "recovered",
   lostAfterRecover,
@@ -642,10 +674,10 @@ report({
 // "map-failed" readback.
 export function webgpuDroppedWork() {
   return `
-if (!navigator.gpu) throw new Error("this browser offers no WebGPU");
+if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
-const engine = await WebEffectRegistry.create();
+const engine = await gpuEngine(WebEffectRegistry);
 const project = await fetch("/tests/cases/host-parity-project.json").then((response) => response.json());
 engine.loadProject(JSON.stringify(project));
 engine.uploadRgbaImage("image-source", 64, 48, new Uint8Array(64 * 48 * 4).fill(255));
@@ -680,7 +712,7 @@ report({
 // A frame rejected for a validation error fails with that error, and the binding renders on.
 export function webgpuRejectedFrame() {
   return `
-if (!navigator.gpu) throw new Error("this browser offers no WebGPU");
+if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");
 const requestDevice = GPUAdapter.prototype.requestDevice;
 let device = null;
 GPUAdapter.prototype.requestDevice = async function (...args) {
@@ -689,7 +721,7 @@ GPUAdapter.prototype.requestDevice = async function (...args) {
 };
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
-const engine = await WebEffectRegistry.create();
+const engine = await gpuEngine(WebEffectRegistry);
 GPUAdapter.prototype.requestDevice = requestDevice;
 if (device === null) throw new Error("the binding's device was not seen");
 const project = await fetch("/tests/cases/host-parity-project.json").then((response) => response.json());
@@ -733,10 +765,11 @@ report({
 // group draws what its nodes draw inline, and the glow reaches past the white half it comes from.
 export function namedInputs(webgl) {
   return `
-${webgl ? 'Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });' : 'if (!navigator.gpu) throw new Error("this browser offers no WebGPU");'}
+${webgl ? 'Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });' : 'if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");'}
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
 const engine = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(64, 48));
+const adapter = ${webgl} ? undefined : webgpuAdapter(engine);
 const float = (name, value, max) => ({ name, type: "float", default: value, min: 0, max, unit: "normalized" });
 for (const definition of [
   { id: "test.bright-pass", version: 1, kind: "effect", params: [float("threshold", 0.7, 1)],
@@ -784,6 +817,7 @@ const glow = { right: grouped.luma(40, 24), plainRight: plain.luma(40, 24), left
 const gpu = JSON.parse(engine.diagnostics()).gpu;
 const uncaptured = gpu.events.filter((event) => event.event === "uncaptured-error");
 report({
+  adapter,
   ok: differing === 0 && glow.right > glow.plainRight + 8 && glow.left > 200 && uncaptured.length === 0 && !engine.deviceLost,
   differing, glow,
   ...(uncaptured.length ? { uncaptured } : {}),
@@ -834,10 +868,11 @@ report({
 // shader compiles and draws on the backend, coverage and all.
 export function shapes(webgl) {
   return `
-${webgl ? 'Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });' : 'if (!navigator.gpu) throw new Error("this browser offers no WebGPU");'}
+${webgl ? 'Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });' : 'if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");'}
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
 const engine = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(64, 48));
+const adapter = ${webgl} ? undefined : webgpuAdapter(engine);
 const constant = (value) => ({ mode: "constant", value });
 const white = { type: "solid", color: { red: 1, green: 1, blue: 1, alpha: 1 } };
 const square = (x0, y0, x1, y1) => ({ closed: true, vertices: [
@@ -885,6 +920,7 @@ const luma = {
 const gpu = JSON.parse(engine.diagnostics()).gpu;
 const uncaptured = gpu.events.filter((event) => event.event === "uncaptured-error");
 report({
+  adapter,
   ok: luma.ring > 200 && luma.hole < 40 && luma.masked > 200 && luma.unmasked < 40
     && luma.squareThen > 200 && luma.squareLater < 40 && luma.squareMoved > 200
     && uncaptured.length === 0 && !engine.deviceLost,
@@ -900,10 +936,11 @@ report({
  */
 export function layout(webgl) {
   return `
-${webgl ? 'Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });' : 'if (!navigator.gpu) throw new Error("this browser offers no WebGPU");'}
+${webgl ? 'Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });' : 'if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");'}
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
 const engine = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(160, 90));
+const adapter = ${webgl} ? undefined : webgpuAdapter(engine);
 engine.addFont("Alpha2 Fixture", new Uint8Array(await (await fetch("/tests/fonts/Alpha2Fixture.ttf")).arrayBuffer()), 0);
 const constant = (value) => ({ mode: "constant", value });
 const white = constant({ type: "solid", color: { red: 1, green: 1, blue: 1, alpha: 1 } });
@@ -945,6 +982,7 @@ const luma = {
 const gpu = JSON.parse(engine.diagnostics()).gpu;
 const uncaptured = gpu.events.filter((event) => event.event === "uncaptured-error");
 report({
+  adapter,
   ok: luma.square > 200 && luma.outside < 40 && luma.faded > 100 && luma.faded < 210
     && Math.abs(luma.overlap - luma.faded) <= 3 && luma.clipped > 200 && luma.pastClip < 40
     && luma.text > 200 && uncaptured.length === 0 && !engine.deviceLost,
@@ -961,10 +999,11 @@ report({
  */
 export function layoutGrid(webgl) {
   return `
-${webgl ? 'Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });' : 'if (!navigator.gpu) throw new Error("this browser offers no WebGPU");'}
+${webgl ? 'Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });' : 'if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");'}
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
 const engine = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(160, 90));
+const adapter = ${webgl} ? undefined : webgpuAdapter(engine);
 engine.addFont("Alpha2 Fixture", new Uint8Array(await (await fetch("/tests/fonts/Alpha2Fixture.ttf")).arrayBuffer()), 0);
 const constant = (value) => ({ mode: "constant", value });
 // Content 140 by 70 px: columns 10..75 and 85..150, rows 10..40 and 50..80.
@@ -998,6 +1037,7 @@ const luma = {
 const gpu = JSON.parse(engine.diagnostics()).gpu;
 const uncaptured = gpu.events.filter((event) => event.event === "uncaptured-error");
 report({
+  adapter,
   ok: luma.cell > 200 && luma.padding < 40 && luma.columnGap < 40 && luma.rowGap < 40
     && luma.spanLeft > 200 && luma.spanRight > 200 && luma.text > 200
     && uncaptured.length === 0 && !engine.deviceLost,

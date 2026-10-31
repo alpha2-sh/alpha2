@@ -18,6 +18,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve, win32 } from "node:path";
 import test from "node:test";
 
+import { missingCapability, suiteOf } from "./lib/capabilities.mjs";
+
 const root = resolve(import.meta.dirname, "..");
 const buildRelease = join(root, "scripts/build-native-release.sh");
 const smokeArchive = join(root, "release/ffmpeg-lgpl/smoke-archive.sh");
@@ -74,16 +76,9 @@ const elfFixtures =
       ? "no C compiler to build the fixture bundle"
       : false;
 
-// A bundle shaped like the release one: executables with RUNPATH $ORIGIN/../lib and a
-// libavdevice.so.62 needing libavfilter.so.11 with no RUNPATH of its own. `direct` makes the
-// executables need libavfilter themselves, so their RUNPATH reaches it.
-function elfBundle(scratch, target, { direct }) {
-  const name = `alpha2-${version}-${target}-bundled`;
-  const package_ = join(scratch, "build", name);
-  const lib = join(package_, "lib");
-  const bin = join(package_, "bin");
-  mkdirSync(lib, { recursive: true });
-  mkdirSync(bin, { recursive: true });
+// The fixture bundles' sources: an executable printing its usage through libavdevice, which needs
+// libavfilter.
+function fixtureSources(scratch) {
   const source = join(scratch, "src");
   mkdirSync(source, { recursive: true });
   writeFileSync(
@@ -108,10 +103,27 @@ function elfBundle(scratch, target, { direct }) {
       "",
     ].join("\n"),
   );
-  const compile = (args) => {
-    const result = run("cc", args);
-    assert.equal(result.status, 0, result.stderr);
-  };
+  return source;
+}
+
+/** Runs `command` with `args`, which must succeed. */
+function succeed(command, args) {
+  const result = run(command, args);
+  assert.equal(result.status, 0, result.stderr);
+}
+
+// A bundle shaped like the release one: executables with RUNPATH $ORIGIN/../lib and a
+// libavdevice.so.62 needing libavfilter.so.11 with no RUNPATH of its own. `direct` makes the
+// executables need libavfilter themselves, so their RUNPATH reaches it.
+function elfBundle(scratch, target, { direct }) {
+  const name = `alpha2-${version}-${target}-bundled`;
+  const package_ = join(scratch, "build", name);
+  const lib = join(package_, "lib");
+  const bin = join(package_, "bin");
+  mkdirSync(lib, { recursive: true });
+  mkdirSync(bin, { recursive: true });
+  const source = fixtureSources(scratch);
+  const compile = (args) => succeed("cc", args);
   compile([
     "-shared",
     "-fPIC",
@@ -251,6 +263,81 @@ test(
       assert.match(
         homebrew.stderr,
         /bin\/alpha2 links FFmpeg by a path the archive does not control:\n\/opt\/homebrew\/opt\/ffmpeg\/lib\/libavcodec\.62\.dylib/,
+      );
+    });
+  },
+);
+
+const machoFixtures =
+  process.platform !== "darwin"
+    ? "the Mach-O fixture bundle is built by a Mac's own toolchain"
+    : !cc
+      ? missingCapability(
+          "c-compiler",
+          suiteOf(import.meta.url),
+          "no C compiler to build the Mach-O fixture bundle",
+        )
+      : false;
+
+// A macOS bundle of real Mach-O files: executables with LC_RPATH @executable_path/../lib, and a
+// libavdevice.62.dylib needing libavfilter.11.dylib. With `rpath` each library's install name is
+// @rpath-relative before anything links it; without, they keep the absolute build paths cc gives
+// them, as a library linked from Homebrew would.
+function machoBundle(scratch, { rpath }) {
+  const name = `alpha2-${version}-macos-arm64-bundled`;
+  const package_ = join(scratch, "build", name);
+  const lib = join(package_, "lib");
+  const bin = join(package_, "bin");
+  mkdirSync(lib, { recursive: true });
+  mkdirSync(bin, { recursive: true });
+  const source = fixtureSources(scratch);
+  const library = (file, sources) => {
+    const path = join(lib, file);
+    succeed("cc", ["-dynamiclib", "-o", path, ...sources]);
+    if (rpath) succeed("install_name_tool", ["-id", `@rpath/${file}`, path]);
+    return path;
+  };
+  const filter = library("libavfilter.11.dylib", [join(source, "filter.c")]);
+  const device = library("libavdevice.62.dylib", [
+    join(source, "device.c"),
+    filter,
+  ]);
+  succeed("cc", [
+    "-o",
+    join(bin, "alpha2"),
+    join(source, "main.c"),
+    device,
+    "-Wl,-rpath,@executable_path/../lib",
+  ]);
+  copyFileSync(join(bin, "alpha2"), join(bin, "alpha2-host"));
+  chmodSync(join(bin, "alpha2-host"), 0o755);
+  const archive = join(scratch, `${name}.tar.gz`);
+  succeed("tar", ["-czf", archive, "-C", join(scratch, "build"), name]);
+  return archive;
+}
+
+test(
+  "a macOS bundle of Mach-O files passes only when every FFmpeg install name is @rpath-relative",
+  { skip: machoFixtures },
+  () => {
+    withScratch((scratch) => {
+      const archive = machoBundle(join(scratch, "rpath"), { rpath: true });
+      const passed = run(smokeArchive, [archive, "macos-arm64"]);
+      assert.equal(passed.status, 0, passed.stderr);
+      assert.match(
+        passed.stdout,
+        /smoke-tested .* without a loader environment/,
+      );
+    });
+    withScratch((scratch) => {
+      // The absolute names point into the build folder, which still exists: the executables
+      // start, and only the install names show the bundle depends on a path outside it.
+      const archive = machoBundle(join(scratch, "absolute"), { rpath: false });
+      const failed = run(smokeArchive, [archive, "macos-arm64"]);
+      assert.notEqual(failed.status, 0, failed.stdout);
+      assert.match(
+        failed.stderr,
+        /bin\/alpha2 links FFmpeg by a path the archive does not control:\n\/.*\/lib\/libavdevice\.62\.dylib/,
       );
     });
   },

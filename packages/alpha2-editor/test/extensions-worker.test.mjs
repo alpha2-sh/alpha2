@@ -190,7 +190,8 @@ test("a call past its time limit terminates its worker and fails as provider_sta
         error.message,
       ),
   );
-  assert.ok(performance.now() - started < 1000);
+  // The call's own 50 ms limit, not the 40 s default; the slack is for a busy machine.
+  assert.ok(performance.now() - started < 50 + 10_000);
   assert.equal(made[0].terminated, true);
 });
 

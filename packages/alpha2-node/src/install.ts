@@ -10,7 +10,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
@@ -586,7 +586,12 @@ function extract(
       ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe")
       : "tar";
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(tar, ["-xf", archive, "-C", destination], {
+    // tar runs in `destination` and names the archive relative to it, so neither path is an
+    // argument: Windows passes arguments to bsdtar in the ANSI code page, which turns a cache
+    // under a folder named in another script into question marks, while the working directory
+    // goes through as Unicode. The relative path holds only the installer's own ASCII names.
+    const child = spawn(tar, ["-xf", relative(destination, archive)], {
+      cwd: destination,
       stdio: ["ignore", "ignore", "pipe"],
       ...(signal ? { signal } : {}),
     });

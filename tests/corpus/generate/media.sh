@@ -402,6 +402,11 @@ if [[ -n "${FFMPEG_ENCODERS:-}" ]]; then
   "${ENCODE[@]}" -f lavfi -i testsrc2=size=128x96:rate=30:duration=1 \
     -an -c:v libx264 -profile:v high -pix_fmt yuv420p -g 30 -bf 2 -refs 4 \
     -x264-params threads=1:sliced-threads=0 h264-long-gop.mp4
+  # 1920x1080: the size at which a browser's hardware decoder is the one it picks, so the editor
+  # package check reports whether that decoder fell back to software.
+  "${ENCODE[@]}" -f lavfi -i testsrc2=size=1920x1080:rate=30:duration=0.5 \
+    -an -c:v libx264 -profile:v high -pix_fmt yuv420p -crf 30 \
+    -x264-params threads=1:sliced-threads=0 -flags:v +bitexact h264-1080p.mp4
   # High 10: FFmpeg's H.264 decoder offers a hardware format for it, and NVDEC then fails the
   # session on the first packet, not at open.
   "${ENCODE[@]}" -f lavfi -i testsrc2=size=128x96:rate=30:duration=0.5 \

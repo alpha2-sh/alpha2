@@ -318,7 +318,7 @@ fn an_animation_is_sized_and_budgeted_from_its_headers_before_anything_is_decode
     let report = probe(&canvas(7_680, 4_320)(crate::MAX_ANIMATION_FRAMES)).expect("probe");
     assert_eq!(report.timing.frame_count(), crate::MAX_ANIMATION_FRAMES);
     let animation = canvas(1_920, 1_080);
-    alpha2_scaling_support::assert_growth_below(
+    alpha2_scaling_support::assert_growth_below_shared(
         "an animation of 1x1 frames",
         crate::MAX_ANIMATION_FRAMES / alpha2_scaling_support::GROWTH,
         // A canvas a frame would be eight times the work.

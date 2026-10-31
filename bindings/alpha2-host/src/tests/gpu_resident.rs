@@ -2,8 +2,12 @@
 
 use super::*;
 
-#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "hwdecode"))]
+#[cfg(all(
+    any(target_os = "linux", target_os = "macos", target_os = "windows"),
+    feature = "hwdecode"
+))]
 #[test]
+#[allow(clippy::too_many_lines)]
 fn an_export_survives_a_hardware_session_that_fails_on_its_first_packet() {
     let _gpu = gpu_test_lock();
     #[cfg(target_os = "linux")]
@@ -27,6 +31,26 @@ fn an_export_survives_a_hardware_session_that_fails_on_its_first_packet() {
             return;
         }
         [("recovery-mpeg4.mp4", 64, 48)]
+    };
+    // Which of these D3D12VA fails on the first packet depends on the adapter; each export must
+    // survive either way.
+    #[cfg(target_os = "windows")]
+    let streams = {
+        if !create_gpu_test_host(VideoDecodePolicy::Auto)
+            .expect("host")
+            .hardware_decode_ready()
+        {
+            alpha2_test_support::skip!(
+                alpha2_test_support::Capability::D3d12Video,
+                "this host has no D3D12VA decode"
+            );
+            return;
+        }
+        [
+            ("h264-high10.mp4", 128, 96),
+            ("vp9.webm", 128, 96),
+            ("recovery-mpeg4.mp4", 64, 48),
+        ]
     };
     let directory = scratch_directory("hardware-fallback");
     for (name, width, height) in streams {
@@ -85,8 +109,15 @@ fn an_export_survives_a_hardware_session_that_fails_on_its_first_packet() {
                         "{name}: {result}"
                     );
                 }
+                // A device with no hardware decoder for the codec at all (D3D12VA and MPEG-4 Part
+                // 2) refuses before a session opens; one that offers a session fails on the first
+                // packet. Either way the frames are decoded in software.
                 if performance["hardwareDecodedFrames"].as_u64() == Some(0) {
-                    assert_eq!(reasons["decoderOpenFailed"], json!(1), "{name}: {result}");
+                    let reason = ["decoderOpenFailed", "noHardwareConfig"]
+                        .into_iter()
+                        .find(|reason| reasons[*reason] == json!(1))
+                        .unwrap_or_else(|| panic!("{name}: no typed fallback: {result}"));
+                    eprintln!("{name}: hardware decode fell back ({reason})");
                 }
                 assert_eq!(result["frames"], json!(3), "{name}");
             } else {
@@ -94,7 +125,10 @@ fn an_export_survives_a_hardware_session_that_fails_on_its_first_packet() {
                     assert!(exported.is_err(), "{name}: decoded in hardware");
                 }
                 if let Err(error) = exported {
-                    assert!(error.contains("decoderOpenFailed"), "{name}: {error}");
+                    assert!(
+                        error.contains("decoderOpenFailed") || error.contains("noHardwareConfig"),
+                        "{name}: {error}"
+                    );
                 }
             }
         }

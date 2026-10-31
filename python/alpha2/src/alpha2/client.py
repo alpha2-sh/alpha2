@@ -38,7 +38,14 @@ from .errors import (
     ExportPhase,
 )
 from .install import cached_host_binary, host_cache_directory, host_executable_name, package_version
-from .protocol import UNREAD_REQUEST_ID, create_request, loader_refused, parse_host_message
+from .protocol import (
+    UNREAD_REQUEST_ID,
+    create_request,
+    describe_exit,
+    loader_refused,
+    ntstatus_name,
+    parse_host_message,
+)
 from .results import ExportResult, StillResult
 
 if TYPE_CHECKING:
@@ -1403,10 +1410,7 @@ def _request_host(
             raise _error_from_host(protocol_error, host.stderr_tail(), phase)
         raise error
     tail = host.stderr_tail()
-    if signal_name is not None:
-        ended = f"exit {signal_name}"
-    else:
-        ended = f"exit {code if code is not None else 'unknown'}"
+    ended = describe_exit(code, signal_name)
     detail = tail.strip() or ended
     exit_options: dict[str, Any] = {
         "stderr": tail,
@@ -1435,6 +1439,7 @@ def _request_host(
         "stderr": tail,
         "exitCode": code,
         "signal": signal_name,
+        "ntstatus": ntstatus_name(code),
     }
     raise Alpha2HostError(
         "HOST_EXITED",

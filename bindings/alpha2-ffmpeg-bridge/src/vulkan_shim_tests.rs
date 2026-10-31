@@ -198,15 +198,30 @@ fn a_queue_lock_guard_holds_other_threads_off_until_it_drops() {
     let lock = Arc::new(VulkanQueueLock::new(shim_device(1, None), 0).expect("a queue lock"));
     let outer = lock.lock();
     let inner = lock.lock();
-    let entered = Arc::new(AtomicBool::new(false));
+    let (waiting, entered) = (
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicBool::new(false)),
+    );
     let waiter = std::thread::spawn({
         let lock = Arc::clone(&lock);
-        let entered = Arc::clone(&entered);
+        let (waiting, entered) = (Arc::clone(&waiting), Arc::clone(&entered));
         move || {
+            waiting.store(true, Ordering::Release);
             let _guard = lock.lock();
             entered.store(true, Ordering::Release);
         }
     });
+    // The checks below mean something only once the waiter is at the lock, however slowly its
+    // thread started.
+    let started = std::time::Instant::now();
+    while !waiting.load(Ordering::Acquire) {
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the waiter never started"
+        );
+        std::thread::yield_now();
+    }
+    // A lock that let it through would within this window.
     std::thread::sleep(Duration::from_millis(100));
     assert!(!entered.load(Ordering::Acquire), "held twice");
     drop(inner);

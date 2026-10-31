@@ -21,7 +21,7 @@ How to build alpha2 from a checkout and run its checks on one machine.
   cargo install cargo-about --version 0.9.2 --locked --features cli
   ```
 
-- The browser checks need Chrome or Chromium. They look for the usual install locations; `ALPHA2_PARITY_CHROME` names another executable.
+- The browser checks need Chrome or Chromium. They look for the usual install locations; `ALPHA2_PARITY_CHROME` names another executable. `--browser edge|firefox|safari` (or `ALPHA2_BROWSER`) runs them in another browser: Edge (`ALPHA2_EDGE`) through the same DevTools runner, Firefox through geckodriver (`ALPHA2_GECKODRIVER`, `ALPHA2_FIREFOX`) and Safari through safaridriver (`ALPHA2_SAFARIDRIVER`).
 
 ## FFmpeg
 
@@ -107,7 +107,11 @@ npm run test:node-e2e      # @alpha2-sh/node driving a debug alpha2-host
 npm run test:package       # the npm tarballs' contents and exports
 ```
 
-- `ALPHA2_CHROME_GPU` picks Chrome's GPU stack: `machine` (the machine's GPU; the default on macOS and Windows), `swiftshader` (the default on Linux) or `none` (no GPU process: `auto` renders on the CPU). On Linux, `machine` needs a headed Chrome on a DRI3 display. `ALPHA2_CHROME_GPU_FLAGS` replaces the GPU flags altogether (for example `"--use-angle=vulkan --enable-features=Vulkan"`), and `ALPHA2_CHROME_HEADED=1` runs a window.
+- `ALPHA2_CHROME_GPU` picks Chrome's (and Edge's) GPU stack: `machine` (the machine's GPU; the default on macOS and Windows), `swiftshader` (the default on Linux) or `none` (no GPU process: `auto` renders on the CPU). `ALPHA2_CHROME_GPU_FLAGS` replaces the GPU flags altogether (for example `"--use-angle=vulkan --enable-features=Vulkan"`).
+- On Linux, `machine` needs a headed Chrome on an X display with DRI3; Xvfb has none, and Chrome's GPU process hangs there on Mesa's Vulkan drivers. `scripts/run-with-gpu-display.sh [--gpu amd|nvidia|any] <command>` starts a headless weston with Xwayland and runs the command on it in that mode (needs weston, and bwrap for `--gpu amd`).
+- `ALPHA2_BROWSER_HEADED=1` runs Chrome, Edge or Firefox in a window (Safari always has one). Headless Firefox on macOS has no WebGPU adapter.
+- `ALPHA2_BROWSER_SETTINGS=stock` starts the browser as a user's would: none of the harness's Chrome flags (sandbox, unsafe WebGPU, 3D API blocking, autoplay, GPU stack) and no Firefox preferences. The default is `harness`.
+- Safari needs `safaridriver --enable` run once, Develop > Allow Remote Automation in Safari, and an unlocked console session; a run on a locked Mac fails at once. Without a GUI session (a CI service, some SSH sessions), `scripts/macos-gui-run.sh <log> <command>` runs the command in the logged-in user's session through a LaunchAgent, from a checkout outside `~/Documents`, `~/Desktop` and `~/Downloads`.
 - Every browser run starts with one probe page and prints a `browser-run:` line naming the browser, its version, the GPU mode, the flags and the WebGPU adapter; the full report goes to `target/browser-reports/`. A browser that cannot start ends the run before its first case.
 - `ALPHA2_REQUIRE=wasm,browser` turns a skip for a missing wasm build or browser into a failure.
 

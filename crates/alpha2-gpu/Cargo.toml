@@ -30,11 +30,38 @@ wgpu-interop = []
 [dependencies]
 wgpu.workspace = true
 web-time = "1.1.0"
+# The validation collector (`validation_log`) is the process's logger; wgpu-hal logs through it.
+log = "0.4.34"
+
+# The D3D12 debug layer's message queue, which the validation collector reads. The version
+# wgpu-hal is built on, so its raw device casts to the queue.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Graphics_Direct3D12"] }
 
 [dev-dependencies]
 alpha2-test-support.workspace = true
 alpha2-gpu = { path = ".", features = ["serial-acquisition"] }
 pollster.workspace = true
+serde_json.workspace = true
 
-[lints]
-workspace = true
+# The validation collector's tests inject an error through each backend's raw device.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+ash = "0.38"
+
+[target.'cfg(windows)'.dev-dependencies]
+windows = { version = "0.62", features = [
+  "Win32_Graphics_Direct3D12",
+  "Win32_Graphics_Dxgi_Common",
+] }
+
+[lints.rust]
+# Allowed in two places: the validation collector's D3D12 queue reader and its injection tests,
+# which reach the raw devices through wgpu's hal interop.
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+undocumented_unsafe_blocks = "warn"

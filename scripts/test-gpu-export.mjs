@@ -11,8 +11,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { required } from "./lib/capabilities.mjs";
+import { executable } from "./lib/cargo-target.mjs";
 import { runAvailable } from "./lib/gpu-export/available.mjs";
-import { createHarness, root } from "./lib/gpu-export/harness.mjs";
+import { createHarness } from "./lib/gpu-export/harness.mjs";
 import { runUnavailable } from "./lib/gpu-export/unavailable.mjs";
 
 const scratch = mkdtempSync(join(tmpdir(), "alpha2-gpu-export-"));
@@ -35,15 +36,8 @@ process.exit(!preconditionFailed && (harness?.failures ?? 0) === 0 ? 0 : 1);
 
 function parseArgs(argv) {
   const parsed = {
-    // Windows needs the `.exe` in the path.
     host: resolve(
-      process.env.ALPHA2_HOST_BINARY ??
-        join(
-          root,
-          "target",
-          "release",
-          `alpha2-host${process.platform === "win32" ? ".exe" : ""}`,
-        ),
+      process.env.ALPHA2_HOST_BINARY ?? executable("alpha2-host", "release"),
     ),
     repeats: 20,
     expectUnavailable: false,

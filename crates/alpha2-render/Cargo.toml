@@ -43,6 +43,8 @@ rayon = "1.11.0"
 
 [dev-dependencies]
 alpha2-test-support.workspace = true
+# The CPU bench's process CPU time.
+alpha2-os.workspace = true
 alpha2-model.workspace = true
 # Tests acquire devices one at a time (`alpha2_gpu::serialize_acquisition`).
 alpha2-gpu = { workspace = true, features = ["serial-acquisition"] }

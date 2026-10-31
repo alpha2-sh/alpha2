@@ -79,10 +79,17 @@ fn chain(effects: &'static [ClipEffect], time: MediaTime) -> Option<ActiveCompos
 
 static GPU_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
-fn gpu_test_lock() -> std::sync::MutexGuard<'static, ()> {
-    GPU_TEST_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+/// A GPU test's turn: no other GPU test of this suite runs while it is held, and the validation
+/// messages logged meanwhile are reported (or fail the test) when it ends, as
+/// `ALPHA2_VALIDATION_LOG` says.
+type GpuTurn = alpha2_gpu::validation_log::TestTurn<std::sync::MutexGuard<'static, ()>>;
+
+fn gpu_test_lock() -> GpuTurn {
+    GpuTurn::new(
+        GPU_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
 }
 
 static SHARED_GPU: OnceLock<GpuContext> = OnceLock::new();
@@ -109,6 +116,8 @@ static SHARED_GPU: OnceLock<GpuContext> = OnceLock::new();
 fn gpu() -> GpuContext {
     let shared = SHARED_GPU
         .get_or_init(|| {
+            // Before the device, so the validation collector watches it.
+            alpha2_gpu::validation_log::install_unless_off();
             pollster::block_on(GpuContext::request_product())
                 .expect("frame tests require a working GPU adapter")
         })

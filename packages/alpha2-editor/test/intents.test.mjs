@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createDocument, createEditor } from "../dist/index.js";
+import { assertScalesBelow } from "../../../scripts/lib/timing.mjs";
 
 const S = 120000;
 const document = () =>
@@ -336,37 +337,29 @@ test("the timeline index lists clips and markers in time order, once per documen
   assert.notEqual(timelineIndex(e.document), index);
 });
 
-test("the timeline index of 10,000 clips builds within its budget", async () => {
+test("the timeline index builds in time linear in the clips", async () => {
   const { timelineIndex } = await import("../dist/index.js");
-  // A track holds at most 4,096 clips: 10,000 over three tracks.
-  const tracks = [0, 1, 2].map((t) => ({
-    id: `V${t}`,
-    name: `Video ${t}`,
-    kind: "video",
-    clips: Array.from({ length: t < 2 ? 4_000 : 2_000 }, (_, i) => ({
-      id: `c${t}-${i}`,
-      source_id: "v",
-      timeline_range: { start: i * S, end: (i + 1) * S },
-      source_range: { start: 0, end: S },
-    })),
-  }));
-  // The index is cached per document, so each run times a new one, not a cache lookup.
-  const big = () =>
-    createDocument({ ...document().project, timeline: { tracks } });
-  // The fastest of three builds, so a GC pause or a busy CI machine is not the measurement.
-  let elapsed = Infinity;
-  let previous;
-  for (let run = 0; run < 3; run += 1) {
-    const fresh = big();
-    const started = performance.now();
-    const index = timelineIndex(fresh);
-    elapsed = Math.min(elapsed, performance.now() - started);
-    assert.equal(index.length, 10_000);
-    assert.notEqual(index, previous, "each run builds its own index");
-    previous = index;
-  }
-  // 250 ms, not 100: a busy runner can miss 100 ms alone; the budget catches index regressions.
-  assert.ok(elapsed < 250, `${elapsed.toFixed(1)} ms`);
+  // Over three tracks, the third half as long; at 10,000 a track holds 4,000 of the most 4,096.
+  const withClips = (count) => {
+    const tracks = [0, 1, 2].map((t) => ({
+      id: `V${t}`,
+      name: `Video ${t}`,
+      kind: "video",
+      clips: Array.from({ length: (t < 2 ? 2 : 1) * (count / 5) }, (_, i) => ({
+        id: `c${t}-${i}`,
+        source_id: "v",
+        timeline_range: { start: i * S, end: (i + 1) * S },
+        source_range: { start: 0, end: S },
+      })),
+    }));
+    return createDocument({ ...document().project, timeline: { tracks } });
+  };
+  const index = timelineIndex(withClips(10_000));
+  assert.equal(index.length, 10_000);
+  // The index is cached per document object: each run builds one for a shallow copy.
+  await assertScalesBelow("the timeline index", 1_250, withClips, (built) =>
+    timelineIndex({ ...built }),
+  );
 });
 
 test("keyframe edits keep their order and fall back to a constant", async () => {

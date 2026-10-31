@@ -6,6 +6,8 @@ import { execFileSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
+import { cargoTargetDirectory } from "./lib/cargo-target.mjs";
+
 const root = resolve(import.meta.dirname, "..");
 const cargo = (args) =>
   execFileSync("cargo", args, {
@@ -37,8 +39,7 @@ cargo([
 ]);
 const bytes = await readFile(
   join(
-    root,
-    "target",
+    cargoTargetDirectory(),
     "wasm32-unknown-unknown",
     "release",
     "alpha2_audio_determinism.wasm",

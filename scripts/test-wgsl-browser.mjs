@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
-// Compile built-in pipelines, effects and transitions with Chrome's WGSL compiler. Browser
-// fragment-uniformity rules can reject shaders accepted by native naga. Missing Chrome skips the
-// run; ALPHA2_REQUIRE naming `browser` fails it.
+// Compile built-in pipelines, effects and transitions with a browser's WGSL compiler. Browser
+// fragment-uniformity rules can reject shaders accepted by native naga. Chrome unless `--browser
+// edge|safari|firefox` (or ALPHA2_BROWSER) picks another. Missing Chrome skips the run;
+// ALPHA2_REQUIRE naming `browser` fails it.
 //
 // It also times what compiling every built-in costs the browser: one shader module and one render
 // pipeline per built-in effect and transition, created one after another. The renderer makes each
@@ -13,30 +14,23 @@ import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { resolve } from "node:path";
 
+import { browserForRun, runBrowserPage } from "./lib/browser-page.mjs";
 import { probeRun } from "./lib/browser-probe.mjs";
-import {
-  browserForCheck,
-  reportSkippedBrowser,
-  runChromePage,
-} from "./lib/chrome-cdp.mjs";
+import { reportSkippedBrowser } from "./lib/chrome-cdp.mjs";
 
 const root = resolve(import.meta.dirname, "..");
-let chrome;
+let browser;
 try {
-  chrome = browserForCheck();
+  browser = browserForRun({ argv: process.argv.slice(2) });
 } catch (error) {
   process.stdout.write(`FAIL ${error.message}\n`);
   process.exit(1);
 }
-if (chrome === null) {
+if (browser === null) {
   reportSkippedBrowser("the WGSL compile check", "wgsl-browser");
   process.exit(0);
 }
-await probeRun("wgsl-browser", {
-  kind: "chrome",
-  name: "chrome",
-  command: chrome,
-});
+await probeRun("wgsl-browser", browser);
 
 const listed = spawnSync(
   "cargo",
@@ -58,7 +52,7 @@ const server = createServer((request, response) => {
   }
   if (url.pathname === "/") {
     response.setHeader("content-type", "text/html; charset=utf-8");
-    response.end(page());
+    response.end(page(browser.name));
     return;
   }
   response.writeHead(404).end();
@@ -71,12 +65,10 @@ try {
   const address = server.address();
   if (typeof address !== "object" || address === null)
     throw new Error("missing server address");
-  const encoded = await runChromePage(
-    chrome,
+  const encoded = await runBrowserPage(
+    browser,
     `http://127.0.0.1:${address.port}/`,
-    {
-      timeoutMs: 120_000,
-    },
+    { timeoutMs: 120_000 },
   );
   result = JSON.parse(decodeURIComponent(encoded));
 } finally {
@@ -101,7 +93,7 @@ if (result.registration)
   );
 process.exit(result.failures.length === 0 ? 0 : 1);
 
-function page() {
+function page(browserName) {
   return `<!doctype html>
 <meta charset="utf-8">
 <title>pending</title>
@@ -112,7 +104,7 @@ const report = (value) => {
 try {
   const modules = await (await fetch("/modules.json")).json();
   const adapter = await navigator.gpu?.requestAdapter();
-  if (!adapter) throw new Error("this Chrome exposes no WebGPU adapter");
+  if (!adapter) throw new Error("this browser exposes no WebGPU adapter");
   const device = await adapter.requestDevice();
   const failures = [];
   for (const { label, source } of modules) {
@@ -152,7 +144,7 @@ try {
     count: modules.length,
     failures,
     registration,
-    adapter: "Chrome WebGPU" + (description ? " (" + description + ")" : ""),
+    adapter: ${JSON.stringify(browserName)} + " WebGPU" + (description ? " (" + description + ")" : ""),
   });
 } catch (error) {
   report({ error: String(error?.stack ?? error) });

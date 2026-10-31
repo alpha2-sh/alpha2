@@ -2,7 +2,9 @@
 //! adapter yields a row, and every row and codec either encoded or names the
 //! step it stopped at and why, within the probe's bound. The slice renders
 //! on an adapter whose GPU-resident path is available, or says why none is.
-#![cfg(all(target_os = "windows", feature = "hwencode"))]
+//! On macOS, `VideoToolbox` on the Metal device: each probed size encodes and
+//! renders its slice, or the probe fails naming what refused.
+#![cfg(all(any(target_os = "windows", target_os = "macos"), feature = "hwencode"))]
 
 use std::io::Read;
 use std::process::{Command, Stdio};
@@ -14,39 +16,11 @@ use serde_json::Value;
 /// in a child bounded by the GPU wait timeout (30 seconds), and the slice.
 const TIMEOUT: Duration = Duration::from_secs(300);
 
-/// The steps a row or a codec can stop at.
-const STEPS: [&str; 8] = [
-    "open-device",
-    "d3d12va-device",
-    "encoder",
-    "encode-support",
-    "extent",
-    "session-open",
-    "test-encode",
-    "first-packet",
-];
-
-fn refusal_is_named(refused: &Value, what: &str) {
-    let step = refused["step"].as_str().unwrap_or_default();
-    assert!(STEPS.contains(&step), "{what}: unknown step in {refused}");
-    assert!(
-        refused["reason"]
-            .as_str()
-            .is_some_and(|reason| !reason.trim().is_empty()),
-        "{what}: no reason in {refused}"
-    );
-}
-
-#[test]
-fn every_adapter_encodes_or_names_the_step_that_refused_and_why() {
-    let output = std::env::temp_dir().join(format!(
-        "alpha2-probe-gpu-encode-{}.mp4",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_file(&output);
+/// Runs `alpha2-host` with `args` to its end, within [`TIMEOUT`], and returns
+/// its status, standard output and standard error.
+fn run_host(args: &[&str]) -> (std::process::ExitStatus, String, String) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_alpha2-host"))
-        .args(["probe-gpu-encode", "256", "256"])
-        .arg(&output)
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -70,14 +44,52 @@ fn every_adapter_encodes_or_names_the_step_that_refused_and_why() {
         }
         if started.elapsed() > TIMEOUT {
             let _ = child.kill();
-            panic!("probe-gpu-encode did not finish within {TIMEOUT:?}");
+            panic!("alpha2-host {args:?} did not finish within {TIMEOUT:?}");
         }
         std::thread::sleep(Duration::from_millis(50));
     };
-    let (stdout, stderr) = (
+    (
+        status,
         stdout.join().expect("stdout"),
         stderr.join().expect("stderr"),
+    )
+}
+
+/// The steps a row or a codec can stop at.
+#[cfg(target_os = "windows")]
+const STEPS: [&str; 8] = [
+    "open-device",
+    "d3d12va-device",
+    "encoder",
+    "encode-support",
+    "extent",
+    "session-open",
+    "test-encode",
+    "first-packet",
+];
+
+#[cfg(target_os = "windows")]
+fn refusal_is_named(refused: &Value, what: &str) {
+    let step = refused["step"].as_str().unwrap_or_default();
+    assert!(STEPS.contains(&step), "{what}: unknown step in {refused}");
+    assert!(
+        refused["reason"]
+            .as_str()
+            .is_some_and(|reason| !reason.trim().is_empty()),
+        "{what}: no reason in {refused}"
     );
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+fn every_adapter_encodes_or_names_the_step_that_refused_and_why() {
+    let output = std::env::temp_dir().join(format!(
+        "alpha2-probe-gpu-encode-{}.mp4",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&output);
+    let output_arg = output.to_str().expect("UTF-8 path");
+    let (status, stdout, stderr) = run_host(&["probe-gpu-encode", "256", "256", output_arg]);
     assert!(status.success(), "{status}: {stdout}{stderr}");
     let report: Value = serde_json::from_str(stdout.trim()).expect("one JSON report");
     assert_eq!(report["ok"], true, "{report}");
@@ -126,6 +138,7 @@ fn every_adapter_encodes_or_names_the_step_that_refused_and_why() {
 
 /// The slice rendered eight frames into `output` where an adapter's path is
 /// usable, and otherwise says why.
+#[cfg(target_os = "windows")]
 fn slice_rendered_or_says_why(adapters: &[Value], rendered: &Value, output: &std::path::Path) {
     let usable = adapters.iter().any(|adapter| {
         adapter["codecs"]
@@ -142,5 +155,62 @@ fn slice_rendered_or_says_why(adapters: &[Value], rendered: &Value, output: &std
         assert!(rendered["failed"].is_null(), "{rendered}");
         assert_eq!(rendered["frames"], 8, "{rendered}");
         assert!(output.is_file(), "{rendered}");
+    }
+}
+
+/// Each size either encodes one `VideoToolbox` frame from the Metal device's
+/// planes and renders the eight-frame slice, or fails naming what refused:
+/// 256x256 is within every Apple encoder's range, 7680x4320 beyond the
+/// largest the host offers.
+#[cfg(target_os = "macos")]
+#[test]
+fn every_probed_size_encodes_and_renders_or_names_what_refused() {
+    let mut encoded = 0;
+    for (width, height) in [(256_u32, 256_u32), (1_920, 1_080), (7_680, 4_320)] {
+        let output = std::env::temp_dir().join(format!(
+            "alpha2-probe-gpu-encode-{width}x{height}-{}.mp4",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&output);
+        let (status, stdout, stderr) = run_host(&[
+            "probe-gpu-encode",
+            &width.to_string(),
+            &height.to_string(),
+            output.to_str().expect("UTF-8 path"),
+        ]);
+        let size = format!("{width}x{height}");
+        if !status.success() {
+            // The failing step names itself in the host's one diagnostic line.
+            let reason = stderr
+                .lines()
+                .find_map(|line| line.strip_prefix("alpha2-host: "))
+                .unwrap_or_else(|| panic!("{size}: {status} without a reason: {stderr}"));
+            assert!(!reason.trim().is_empty(), "{size}: {stderr}");
+            assert!(stdout.trim().is_empty(), "{size}: {stdout}");
+            eprintln!("{size}: refused: {reason}");
+            continue;
+        }
+        let report: Value = serde_json::from_str(stdout.trim()).expect("one JSON report");
+        assert_eq!(report["ok"], true, "{size}: {report}");
+        let result = &report["result"];
+        assert_eq!(result["encoder"], "h264_videotoolbox", "{size}: {report}");
+        assert!(result["packets"].as_u64() > Some(0), "{size}: {report}");
+        // The luma plane covers the picture; a pool may pad it.
+        let luma = &result["planeSizes"][0];
+        assert!(
+            luma[0].as_u64() >= Some(u64::from(width))
+                && luma[1].as_u64() >= Some(u64::from(height)),
+            "{size}: {report}"
+        );
+        assert_eq!(result["rendered"]["frames"], 8, "{size}: {report}");
+        assert!(output.is_file(), "{size}: no slice at {}", output.display());
+        let _ = std::fs::remove_file(&output);
+        encoded += 1;
+    }
+    if encoded == 0 {
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::VideotoolboxEncode,
+            "VideoToolbox encoded no probed size on this Mac"
+        );
     }
 }

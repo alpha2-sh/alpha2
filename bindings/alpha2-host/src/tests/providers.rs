@@ -1037,6 +1037,7 @@ fn readers_opening_at_once_decode_an_animated_image_once() {
     entered_rx
         .recv_timeout(Duration::from_secs(30))
         .expect("the first reader started decoding");
+    let (started, started_rx) = std::sync::mpsc::channel();
     let second = {
         let media = Arc::clone(&media);
         let decoded = Arc::clone(&decoded);
@@ -1044,6 +1045,7 @@ fn readers_opening_at_once_decode_an_animated_image_once() {
             let _watch = alpha2_extensions::watch_progress(move || {
                 decoded.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             });
+            started.send(()).ok();
             media.frame(
                 &provider_reader("anim", "b"),
                 MediaTime::from_ticks(12_000),
@@ -1051,6 +1053,11 @@ fn readers_opening_at_once_decode_an_animated_image_once() {
             )
         })
     };
+    // Unfinished means waited only once the second reader is at its open, however slowly its
+    // thread started; one that did not wait would finish within the window.
+    started_rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("the second reader started");
     std::thread::sleep(Duration::from_millis(200));
     let waited = !second.is_finished();
     release.send(()).ok();

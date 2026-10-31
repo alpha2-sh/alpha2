@@ -577,3 +577,33 @@ fn a_png_does_not_replace_a_symbolic_link() {
     std::fs::remove_file(link).expect("cleanup");
     std::fs::remove_file(target).expect("cleanup");
 }
+
+/// A PNG is not renamed over a junction (a link to a folder, which Windows
+/// makes without the privilege a file symbolic link needs): the junction and
+/// the folder it names stay as they were.
+#[cfg(windows)]
+#[test]
+fn a_png_does_not_replace_a_junction() {
+    let frame = first_frame(std::path::Path::new(&corpus("long-gop.mp4")));
+    let target = scratch("junction-target", "folder");
+    let _ = std::fs::remove_dir(&target);
+    std::fs::create_dir(&target).expect("target");
+    let link = scratch("junction", "png");
+    let _ = std::fs::remove_dir(&link);
+    let made = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J", &link, &target])
+        .output()
+        .expect("mklink");
+    assert!(made.status.success(), "{made:?}");
+    let error = write_png(&link, &frame).expect_err("a junction is refused");
+    assert!(error.contains("not a regular file"), "{error}");
+    assert!(
+        std::fs::symlink_metadata(&link).is_ok(),
+        "the junction is gone"
+    );
+    assert_eq!(std::fs::read_dir(&target).expect("target").count(), 0);
+    let partial = link.replace(".png", ".a2partial.png");
+    assert!(!std::path::Path::new(&partial).exists());
+    std::fs::remove_dir(link).expect("cleanup");
+    std::fs::remove_dir(target).expect("cleanup");
+}

@@ -5,6 +5,10 @@ import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 import test from "node:test";
 
+import {
+  missingCapability,
+  suiteOf,
+} from "../../../scripts/lib/capabilities.mjs";
 import { bunzip2 } from "../dist/bzip2.js";
 import { OPENH264_TARGETS } from "../dist/install.js";
 
@@ -143,9 +147,15 @@ const ciscoArchive = process.env.ALPHA2_TEST_OPENH264_ARCHIVE;
 test(
   "a Cisco OpenH264 archive decompresses to the library its SHA-256 names",
   {
+    // Cisco's archive is downloaded only where its binary is fetched for the tests
+    // (scripts/fetch-openh264.sh); ALPHA2_REQUIRE=openh264 fails instead of skipping.
     skip:
       !ciscoArchive?.trim() &&
-      "ALPHA2_TEST_OPENH264_ARCHIVE names no Cisco .bz2 file",
+      missingCapability(
+        "openh264",
+        suiteOf(import.meta.url),
+        "ALPHA2_TEST_OPENH264_ARCHIVE names no Cisco .bz2 file",
+      ),
   },
   async () => {
     const entry = Object.values(OPENH264_TARGETS).find(

@@ -660,23 +660,39 @@ fn every_yuv_layout_uploads_as_planes_and_keeps_its_aspect_ratio() {
     }
 }
 
-#[cfg(all(target_os = "linux", feature = "hwdecode"))]
+#[cfg(all(any(target_os = "linux", target_os = "windows"), feature = "hwdecode"))]
 #[test]
-#[allow(clippy::used_underscore_binding)]
+#[allow(clippy::used_underscore_binding, clippy::too_many_lines)]
 fn a_surface_that_cannot_be_imported_reaches_the_frame_through_a_download() {
     use crate::frames::{FrameInstallMetrics, NativeGpuFrames};
 
     let _gpu = gpu_test_lock();
+    #[cfg(target_os = "linux")]
     let Some(context) = vulkan_video_context() else {
         return;
     };
-    let mut decoder = alpha2_native::NativeExportDecoder::open_vulkan(
+    #[cfg(target_os = "windows")]
+    let Some(context) = create_gpu_test_host(VideoDecodePolicy::Auto)
+        .expect("host")
+        .decode_d3d12()
+    else {
+        alpha2_test_support::skip!(
+            alpha2_test_support::Capability::D3d12Video,
+            "this host has no D3D12VA decode"
+        );
+        return;
+    };
+    #[cfg(target_os = "linux")]
+    let opened = alpha2_native::NativeExportDecoder::open_vulkan(
         corpus("h264-long-gop.mp4"),
         1,
         &context,
         1,
-    )
-    .expect("8-bit H.264 opens in hardware");
+    );
+    #[cfg(target_os = "windows")]
+    let opened =
+        alpha2_native::NativeExportDecoder::open_d3d12(corpus("h264-long-gop.mp4"), 1, &context, 1);
+    let mut decoder = opened.expect("8-bit H.264 opens in hardware");
     let frame = decoder
         .decode_video_next(&CancelToken::default())
         .expect("decodes")
@@ -700,8 +716,8 @@ fn a_surface_that_cannot_be_imported_reaches_the_frame_through_a_download() {
             .expect("reads the presented texture")
     };
 
-    // Without the shared context the import fails, the way a failed per-frame allocation would; the
-    // frame must still arrive, from the CPU.
+    // Without the shared context the import (on D3D12, the copy) fails, the way a failed per-frame
+    // allocation would; the frame must still arrive, from the CPU.
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let frames = NativeGpuFrames::new(size);
     let mut metrics = FrameInstallMetrics::default();
@@ -754,7 +770,11 @@ fn a_surface_that_cannot_be_imported_reaches_the_frame_through_a_download() {
     else {
         panic!("no fallback when hardware is required");
     };
-    assert!(error.contains("no shared Vulkan context"), "{error}");
+    #[cfg(target_os = "linux")]
+    let unshared = "no shared Vulkan context";
+    #[cfg(target_os = "windows")]
+    let unshared = "no shared D3D12 context";
+    assert!(error.contains(unshared), "{error}");
 }
 
 /// A device fault is not an import failure: a download would wait on the

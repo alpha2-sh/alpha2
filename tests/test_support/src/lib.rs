@@ -32,6 +32,8 @@ pub enum Capability {
     D3d12Video,
     /// D3D12VA H.264 encode on an accepted adapter.
     D3d12Encode,
+    /// The D3D12 debug layer (the Graphics Tools optional feature).
+    D3d12DebugLayer,
     /// A Metal device shared with `VideoToolbox`.
     Metal,
     /// `VideoToolbox` hardware H.264 decode.
@@ -94,6 +96,10 @@ pub enum Capability {
     AudioRenderQuantum,
     /// An `AudioContext` output timestamp on the common origin.
     AudioOutputTimestamp,
+    /// An `AudioContext` that starts without a user gesture.
+    AudioAutostart,
+    /// Decoded `VideoFrame`s in 8-bit 4:2:0.
+    YuvVideoFrames,
 }
 
 impl Capability {
@@ -106,6 +112,7 @@ impl Capability {
         Self::OldVulkanValidationLayer,
         Self::D3d12Video,
         Self::D3d12Encode,
+        Self::D3d12DebugLayer,
         Self::Metal,
         Self::Videotoolbox,
         Self::VideotoolboxEncode,
@@ -137,6 +144,8 @@ impl Capability {
         Self::Ac3Decode,
         Self::AudioRenderQuantum,
         Self::AudioOutputTimestamp,
+        Self::AudioAutostart,
+        Self::YuvVideoFrames,
     ];
 
     /// The capability's name in `ALPHA2_REQUIRE` and the skip log.
@@ -150,6 +159,7 @@ impl Capability {
             Self::OldVulkanValidationLayer => "old-vulkan-validation-layer",
             Self::D3d12Video => "d3d12-video",
             Self::D3d12Encode => "d3d12-encode",
+            Self::D3d12DebugLayer => "d3d12-debug-layer",
             Self::Metal => "metal",
             Self::Videotoolbox => "videotoolbox",
             Self::VideotoolboxEncode => "videotoolbox-encode",
@@ -181,6 +191,8 @@ impl Capability {
             Self::Ac3Decode => "ac3-decode",
             Self::AudioRenderQuantum => "audio-render-quantum",
             Self::AudioOutputTimestamp => "audio-output-timestamp",
+            Self::AudioAutostart => "audio-autostart",
+            Self::YuvVideoFrames => "yuv-video-frames",
         }
     }
 

@@ -600,7 +600,7 @@ mod sources;
 /// would.
 #[test]
 fn conform_takes_time_in_proportion_to_the_sources() {
-    alpha2_scaling_support::assert_linear(
+    alpha2_scaling_support::assert_linear_shared(
         "conform",
         10_000 / alpha2_scaling_support::GROWTH,
         sources::many_sources,

@@ -56,6 +56,11 @@ const CASES = [
     ticks: 60_000,
     transcode: "yuv-repack",
   },
+  {
+    name: "hevc-main10-hardware",
+    fixture: "hevc-main10-padded.mp4",
+    decode: "hardware-required",
+  },
 ];
 
 // One `serve` process running several exports on its one device: leftovers add up and the layer
@@ -64,10 +69,11 @@ const SERVES = [
   { name: "serve-h264-hardware", fixture: "h264-long-gop.mp4", exports: 3 },
 ];
 
-// The decode probe encodes nothing, so the encoder's known messages fail it. No checked-in 10-bit
-// clip decodes in hardware on the reference GPU, so the P010 views are not exercised here.
+// The decode probe encodes nothing, so the encoder's known messages fail it.
+// hevc-main10-padded.mp4 decodes in hardware on the 4090 and RADV: P010 views run here.
 const PROBES = [
   { name: "probe-h264", fixture: "h264-long-gop.mp4", frames: 8 },
+  { name: "probe-hevc-main10", fixture: "hevc-main10-padded.mp4", frames: 8 },
 ];
 
 const layer = findValidationLayer(process.env.VK_LAYER_PATH);

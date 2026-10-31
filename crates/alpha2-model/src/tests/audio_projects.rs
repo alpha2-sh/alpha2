@@ -433,7 +433,7 @@ fn validating_a_ducking_chain_takes_work_in_proportion_to_its_tracks() {
         });
         project
     };
-    alpha2_scaling_support::assert_linear(
+    alpha2_scaling_support::assert_linear_shared(
         "validating a ducking chain",
         crate::MAX_TRACKS / alpha2_scaling_support::GROWTH,
         with_tracks,

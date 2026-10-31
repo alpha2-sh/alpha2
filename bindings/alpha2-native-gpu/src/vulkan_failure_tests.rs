@@ -18,6 +18,7 @@ use super::*;
 
 /// The shared device, or `None` (a recorded skip) where this GPU cannot make one.
 pub(super) fn shared_context() -> Option<SharedVulkanContext> {
+    alpha2_gpu::validation_log::install_unless_off();
     alpha2_test_support::available!(
         alpha2_test_support::Capability::VulkanVideo,
         SharedVulkanContext::create().map_err(|error| format!("no Vulkan Video device ({error})"))
@@ -881,10 +882,17 @@ fn overflow_outside_lock_child() {
     let wait = Duration::from_secs(3);
     set_wait_timeout(wait);
     let started = Instant::now();
+    let retires = inject::retires_begun();
     let looked = std::thread::scope(|scope| {
         let overflow = scope.spawn(|| give_back_unfinished(&pool, &frame, 1));
-        // Let the give-back reach its wait for the oldest ticket.
-        std::thread::sleep(Duration::from_millis(300));
+        // The pool is asked once the give-back is in its wait for the oldest ticket.
+        while inject::retires_begun() == retires {
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "the give-back never began waiting for the oldest ticket"
+            );
+            std::thread::yield_now();
+        }
         let asked = Instant::now();
         let stats = pool.stats();
         let looked = asked.elapsed();

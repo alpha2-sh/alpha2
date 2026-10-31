@@ -1,0 +1,563 @@
+{
+  "lin": {
+    "description": "Linux x86_64, NVIDIA RTX 4090 and AMD integrated GPU (RADV), Vulkan",
+    "capabilities": [
+      "vulkan-video",
+      "nvenc",
+      "gpu-resident",
+      "openh264",
+      "wasm"
+    ],
+    "browser": {
+      "capabilities": [
+        "browser",
+        "wasm",
+        "webgpu",
+        "webgl2",
+        "webcodecs-audio",
+        "webcodecs-video"
+      ],
+      "displays": [
+        [
+          "scripts/run-with-gpu-display.sh",
+          "--gpu",
+          "nvidia"
+        ],
+        [
+          "scripts/run-with-gpu-display.sh",
+          "--gpu",
+          "amd"
+        ]
+      ]
+    },
+    "perf": {
+      "rounds": 5,
+      "sourceEnv": {},
+      "configurations": [
+        {
+          "name": "gpu-resident-vulkan",
+          "env": {},
+          "args": [
+            "--renderer",
+            "gpu",
+            "--video-decode",
+            "software",
+            "--input-policy",
+            "gpu-required"
+          ],
+          "axes": {
+            "project": "p1",
+            "renderer": "gpu",
+            "pipeline": "resident",
+            "encoder": "h264_vulkan",
+            "encclass": "hw",
+            "decode": "sw"
+          }
+        },
+        {
+          "name": "gpu-readback-nvenc",
+          "env": {},
+          "args": [
+            "--renderer",
+            "gpu",
+            "--video-decode",
+            "software",
+            "--input-policy",
+            "cpu-readback",
+            "--video-encoder",
+            "h264_nvenc"
+          ],
+          "axes": {
+            "project": "p1",
+            "renderer": "gpu",
+            "pipeline": "readback",
+            "encoder": "h264_nvenc",
+            "encclass": "hw",
+            "decode": "sw"
+          }
+        },
+        {
+          "name": "gpu-readback-openh264",
+          "env": {},
+          "args": [
+            "--renderer",
+            "gpu",
+            "--video-decode",
+            "software",
+            "--input-policy",
+            "cpu-readback",
+            "--video-encoder",
+            "openh264"
+          ],
+          "axes": {
+            "project": "p1",
+            "renderer": "gpu",
+            "pipeline": "readback",
+            "encoder": "openh264",
+            "encclass": "sw",
+            "decode": "sw"
+          }
+        },
+        {
+          "name": "cpu-nvenc",
+          "env": {},
+          "args": [
+            "--renderer",
+            "cpu",
+            "--video-decode",
+            "software",
+            "--video-encoder",
+            "h264_nvenc"
+          ],
+          "axes": {
+            "project": "p1",
+            "renderer": "cpu",
+            "pipeline": "readback",
+            "encoder": "h264_nvenc",
+            "encclass": "hw",
+            "decode": "sw"
+          }
+        },
+        {
+          "name": "cpu-openh264",
+          "env": {},
+          "args": [
+            "--renderer",
+            "cpu",
+            "--video-decode",
+            "software",
+            "--video-encoder",
+            "openh264"
+          ],
+          "axes": {
+            "project": "p1",
+            "renderer": "cpu",
+            "pipeline": "readback",
+            "encoder": "openh264",
+            "encclass": "sw",
+            "decode": "sw"
+          }
+        },
+        {
+          "name": "p2r-sw-resident",
+          "env": {},
+          "args": [
+            "--renderer",
+            "gpu",
+            "--video-decode",
+            "software",
+            "--input-policy",
+            "gpu-required"
+          ],
+          "axes": {
+            "project": "p2r",
+            "renderer": "gpu",
+            "pipeline": "resident",
+            "encoder": "h264_vulkan",
+            "encclass": "hw",
+            "decode": "sw"
+          }
+        },
+        {
+          "name": "p2r-hw-resident",
+          "env": {},
+          "args": [
+            "--renderer",
+            "gpu",
+            "--video-decode",
+            "hardware-required",
+            "--input-policy",
+            "gpu-required"
+          ],
+          "axes": {
+            "project": "p2r",
+            "renderer": "gpu",
+            "pipeline": "resident",
+            "encoder": "h264_vulkan",
+            "encclass": "hw",
+            "decode": "hw"
+          }
+        },
+        {
+          "name": "p2t-hw-resident",
+          "env": {},
+          "args": [
+            "--renderer",
+            "gpu",
+            "--video-decode",
+            "hardware-required",
+            "--input-policy",
+            "gpu-required"
+          ],
+          "axes": {
+            "project": "p2t",
+            "renderer": "gpu",
+            "pipeline": "resident",
+            "encoder": "h264_vulkan",
+            "encclass": "hw",
+            "decode": "hw"
+          }
+        }
+      ]
+    }
+  },
+  "win": {
+    "description": "Windows x64 laptop, Intel Iris Xe and NVIDIA MX450, DX12",
+    "capabilities": [
+      "d3d12-video",
+      "d3d12-encode",
+      "gpu-resident",
+      "dxc",
+      "openh264",
+      "wasm"
+    ],
+    "adapters": {
+      "render": [
+        "intel",
+        "nvidia"
+      ],
+      "host": "encoder"
+    },
+    "corruption": {
+      "adapter": "intel",
+      "reference": "nvidia"
+    },
+    "browser": {
+      "capabilities": [
+        "browser",
+        "wasm",
+        "webgpu",
+        "webgl2",
+        "webcodecs-audio",
+        "webcodecs-video"
+      ],
+      "displays": [
+        []
+      ],
+      "stockNeedsConsole": true
+    },
+    "perf": {
+      "rounds": 3,
+      "sourceEnv": {
+        "ALPHA2_GPU_ADAPTER": "encoder"
+      },
+      "configurations": [
+        {
+          "name": "iris-resident-d3d12",
+          "env": {
+            "ALPHA2_GPU_ADAPTER": "encoder"
+          },
+          "args": [
+            "--renderer",
+            "gpu",
+            "--video-decode",
+            "software",
+            "--input-policy",
+            "gpu-required"
+          ],
+          "axes": {
+            "project": "p1",
+            "renderer": "gpu",
+            "pipeline": "resident",
+            "encoder": "h264_d3d12va",
+            "encclass": "hw",
+            "decode": "sw"
+          }
+        },
+        {
+          "name": "iris-readback-mf",
+          "env": {
+            "ALPHA2_GPU_ADAPTER": "encoder"
+          },
+          "args": [
+            "--renderer",
+            "gpu",
+            "--video-decode",
+            "software",
+            "--input-policy",
+            "cpu-readback",
+            "--video-encoder",
+            "h264_mf"
+          ],
+          "axes": {
+            "project": "p1",
+            "renderer": "gpu",
+            "pipeline": "readback",
+            "encoder": "h264_mf",
+            "encclass": "sw",
+            "decode": "sw"
+          }
+        },
+        {
+          "name": "iris-readback-openh264",
+          "env": {
+            "ALPHA2_GPU_ADAPTER": "encoder"
+          },
+          "args": [
+            "--renderer",
+            "gpu",
+            "--video-decode",
+            "software",
+            "--input-policy",
+            "cpu-readback",
+            "--video-encoder",
+            "openh264"
+          ],
+          "axes": {
+            "project": "p1",
+            "renderer": "gpu",
+            "pipeline": "readback",
+            "encoder": "openh264",
+            "encclass": "sw",
+            "decode": "sw"
+          }
+        },
+        {
+          "name": "cpu-openh264",
+          "env": {},
+          "args": [
+            "--renderer",
+            "cpu",
+            "--video-decode",
+            "software",
+            "--video-encoder",
+            "openh264"
+          ],
+          "axes": {
+            "project": "p1",
+            "renderer": "cpu",
+            "pipeline": "readback",
+            "encoder": "openh264",
+            "encclass": "sw",
+            "decode": "sw"
+          }
+        },
+        {
+          "name": "default-config",
+          "env": {},
+          "args": [],
+          "axes": {
+            "project": "p1",
+            "default": "1"
+          }
+        },
+        {
+          "name": "p2r-sw-resident",
+          "env": {
+            "ALPHA2_GPU_ADAPTER": "encoder"
+          },
+          "args": [
+            "--renderer",
+            "gpu",
+            "--video-decode",
+            "software",
+            "--input-policy",
+            "gpu-required"
+          ],
+          "axes": {
+            "project": "p2r",
+            "renderer": "gpu",
+            "pipeline": "resident",
+            "encoder": "h264_d3d12va",
+            "encclass": "hw",
+            "decode": "sw"
+          }
+        },
+        {
+          "name": "p2r-hw-resident",
+          "env": {
+            "ALPHA2_GPU_ADAPTER": "encoder"
+          },
+          "args": [
+            "--renderer",
+            "gpu",
+            "--video-decode",
+            "hardware-required",
+            "--input-policy",
+            "gpu-required"
+          ],
+          "axes": {
+            "project": "p2r",
+            "renderer": "gpu",
+            "pipeline": "resident",
+            "encoder": "h264_d3d12va",
+            "encclass": "hw",
+            "decode": "hw"
+          }
+        }
+      ]
+    }
+  },
+  "mac": {
+    "description": "macOS arm64 (Apple silicon), Metal and VideoToolbox",
+    "capabilities": [
+      "videotoolbox",
+      "gpu-resident",
+      "openh264",
+      "wasm"
+    ],
+    "browser": {
+      "capabilities": [
+        "browser",
+        "wasm",
+        "webgpu",
+        "webgl2",
+        "webcodecs-audio",
+        "webcodecs-video"
+      ],
+      "displays": [
+        []
+      ]
+    },
+    "perf": {
+      "rounds": 3,
+      "sourceEnv": {},
+      "configurations": [
+        {
+          "name": "gpu-resident-vt",
+          "env": {},
+          "args": [
+            "--renderer",
+            "gpu",
+            "--video-decode",
+            "software",
+            "--input-policy",
+            "gpu-required"
+          ],
+          "axes": {
+            "project": "p1",
+            "renderer": "gpu",
+            "pipeline": "resident",
+            "encoder": "h264_videotoolbox",
+            "encclass": "hw",
+            "decode": "sw"
+          }
+        },
+        {
+          "name": "gpu-readback-vt",
+          "env": {},
+          "args": [
+            "--renderer",
+            "gpu",
+            "--video-decode",
+            "software",
+            "--input-policy",
+            "cpu-readback",
+            "--video-encoder",
+            "h264_videotoolbox"
+          ],
+          "axes": {
+            "project": "p1",
+            "renderer": "gpu",
+            "pipeline": "readback",
+            "encoder": "h264_videotoolbox",
+            "encclass": "hw",
+            "decode": "sw"
+          }
+        },
+        {
+          "name": "gpu-readback-openh264",
+          "env": {},
+          "args": [
+            "--renderer",
+            "gpu",
+            "--video-decode",
+            "software",
+            "--input-policy",
+            "cpu-readback",
+            "--video-encoder",
+            "openh264"
+          ],
+          "axes": {
+            "project": "p1",
+            "renderer": "gpu",
+            "pipeline": "readback",
+            "encoder": "openh264",
+            "encclass": "sw",
+            "decode": "sw"
+          }
+        },
+        {
+          "name": "cpu-vt",
+          "env": {},
+          "args": [
+            "--renderer",
+            "cpu",
+            "--video-decode",
+            "software",
+            "--video-encoder",
+            "h264_videotoolbox"
+          ],
+          "axes": {
+            "project": "p1",
+            "renderer": "cpu",
+            "pipeline": "readback",
+            "encoder": "h264_videotoolbox",
+            "encclass": "hw",
+            "decode": "sw"
+          }
+        },
+        {
+          "name": "cpu-openh264",
+          "env": {},
+          "args": [
+            "--renderer",
+            "cpu",
+            "--video-decode",
+            "software",
+            "--video-encoder",
+            "openh264"
+          ],
+          "axes": {
+            "project": "p1",
+            "renderer": "cpu",
+            "pipeline": "readback",
+            "encoder": "openh264",
+            "encclass": "sw",
+            "decode": "sw"
+          }
+        },
+        {
+          "name": "p2r-sw-resident",
+          "env": {},
+          "args": [
+            "--renderer",
+            "gpu",
+            "--video-decode",
+            "software",
+            "--input-policy",
+            "gpu-required"
+          ],
+          "axes": {
+            "project": "p2r",
+            "renderer": "gpu",
+            "pipeline": "resident",
+            "encoder": "h264_videotoolbox",
+            "encclass": "hw",
+            "decode": "sw"
+          }
+        },
+        {
+          "name": "p2r-hw-resident",
+          "env": {},
+          "args": [
+            "--renderer",
+            "gpu",
+            "--video-decode",
+            "hardware-required",
+            "--input-policy",
+            "gpu-required"
+          ],
+          "axes": {
+            "project": "p2r",
+            "renderer": "gpu",
+            "pipeline": "resident",
+            "encoder": "h264_videotoolbox",
+            "encclass": "hw",
+            "decode": "hw"
+          }
+        }
+      ]
+    }
+  }
+}

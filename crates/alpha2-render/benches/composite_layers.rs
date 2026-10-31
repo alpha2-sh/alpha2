@@ -13,6 +13,12 @@ const FRAMES: u32 = 60;
 
 fn main() {
     let gpu = pollster::block_on(GpuContext::request_product()).expect("GPU adapter");
+    // The adapter first: a time means nothing without the GPU it was measured on.
+    let adapter = gpu.capabilities();
+    println!(
+        "adapter: {} on {} ({} {})",
+        adapter.adapter_name, adapter.backend, adapter.driver, adapter.driver_info
+    );
     let device = gpu.device().clone();
     let renderer = Renderer::new(gpu);
     let source = renderer

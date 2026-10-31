@@ -21,7 +21,7 @@
   ],
   "scripts": {
     "build": "npm run build:wasm && npm run build:js",
-    "build:js": "rm -rf dist && tsc -p tsconfig.json",
+    "build:js": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.json",
     "build:wasm": "node scripts/build-wasm.mjs"
   },
   "exports": {

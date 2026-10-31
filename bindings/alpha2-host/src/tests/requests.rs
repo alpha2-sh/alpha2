@@ -48,7 +48,8 @@ fn line_with_a_project_of_small_objects(objects: usize) -> String {
 
 /// Runs `test` of this binary in a child process whose standard error is a
 /// pipe the parent has already closed, and returns the child's status and
-/// standard output.
+/// standard output. The parent closes the child's standard input right after,
+/// so the end of it tells the child the read end is gone.
 #[cfg(unix)]
 fn run_with_stderr_closed(test: &str) -> (std::process::ExitStatus, String) {
     let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
@@ -59,12 +60,13 @@ fn run_with_stderr_closed(test: &str) -> (std::process::ExitStatus, String) {
             "--nocapture",
             "--test-threads=1",
         ])
-        .stdin(std::process::Stdio::null())
+        .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("child");
     drop(child.stderr.take());
+    drop(child.stdin.take());
     let output = child.wait_with_output().expect("child output");
     (
         output.status,
@@ -77,9 +79,9 @@ fn run_with_stderr_closed(test: &str) -> (std::process::ExitStatus, String) {
 #[test]
 #[ignore = "run by a_closed_stderr_does_not_end_the_host with its standard error closed"]
 fn start_a_host_and_export_with_stderr_closed() {
-    // Its parent closes the read end right after the spawn; give it the time to, so every line
-    // meets a closed pipe.
-    std::thread::sleep(Duration::from_millis(200));
+    // Its parent closes the read end right after the spawn, then this standard input: once it
+    // ends, every line meets a closed pipe.
+    std::io::copy(&mut std::io::stdin(), &mut std::io::sink()).expect("read standard input");
     let _gpu = gpu_test_lock();
     let host = create_host(VideoDecodePolicy::Software).expect("host");
     // A worker thread's diagnostics too: a thread that panicked on one would be reported as some

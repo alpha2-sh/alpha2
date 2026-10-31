@@ -1,0 +1,83 @@
+name: scheduled
+
+# The checks too slow for every change: every fuzz target and the worklet under Miri, weekly.
+# Benchmarks are compared only on a quiet fixed machine (the release gate), not on shared runners.
+on:
+  schedule:
+    - cron: "41 2 * * 1"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: Seconds each fuzz target runs
+        type: number
+        default: 1800
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  fuzz:
+    name: Fuzz (${{ matrix.target }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every [[bin]] of fuzz/Cargo.toml; a new target is added here in the change that adds it.
+        target:
+          - project_from_json
+          - evaluate
+          - audio_render
+          - extension_svg
+          - extension_animated
+          - extension_lottie
+          - extension_exr
+          - caption_import
+          - project_lint
+          - composition_plan
+          - vector_raster
+          - layout_resolve
+          - layout_values
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Provenance
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc -vV | head -1
+      - name: Install the nightly toolchain
+        run: rustup toolchain install nightly --profile minimal
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - uses: taiki-e/cache-cargo-install-action@9ee83daaa7b96a6fab930949ecf1122bba04a389 # v3.0.8
+        with:
+          tool: cargo-fuzz@0.12.0
+      - name: Fuzz ${{ matrix.target }}
+        env:
+          SECONDS_EACH: ${{ inputs.seconds || 1800 }}
+          TARGET: ${{ matrix.target }}
+        run: scripts/fuzz.sh "$SECONDS_EACH" "$TARGET"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: failure()
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: |
+            fuzz/artifacts/${{ matrix.target }}
+            fuzz/logs/${{ matrix.target }}.log
+          if-no-files-found: ignore
+
+  miri:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Provenance
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc -vV | head -1
+      - name: Install the nightly toolchain with Miri
+        run: rustup toolchain install nightly --profile minimal --component miri
+      - run: scripts/miri.sh

@@ -477,6 +477,34 @@ pub fn thread_cpu_work() -> Option<u64> {
     }
 }
 
+/// Asks the scheduler to run the calling thread on the fastest cores at full
+/// speed, so two readings of [`thread_cpu_work`] are taken on one kind of
+/// core: on macOS the `QOS_CLASS_USER_INTERACTIVE` class (a thread of a lower
+/// class may move between performance and efficiency cores), on Windows out
+/// of power throttling (`EcoQoS`). Nothing elsewhere.
+///
+/// Best effort: a refusal leaves the thread as it was, and nothing reports it.
+pub fn prefer_fast_cores() {
+    #[cfg(any(target_os = "macos", windows))]
+    platform::prefer_fast_cores();
+}
+
+/// The CPU time the whole process has used so far, user and system together,
+/// over all its threads: `getrusage(RUSAGE_SELF)` on Unix, `GetProcessTimes`
+/// on Windows. `None` where the operating system does not report it (or this
+/// build does not read it there).
+#[must_use]
+pub fn process_cpu_time() -> Option<std::time::Duration> {
+    #[cfg(any(unix, windows))]
+    {
+        platform::process_cpu_time()
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        None
+    }
+}
+
 /// Writes one line to standard error, the way `eprintln!` does, and drops
 /// it when the stream is closed or full instead of panicking.
 ///
@@ -513,6 +541,25 @@ mod tests {
         // A running test binary holds at least a megabyte, and never more than it ever held.
         assert!(resident > 1 << 20, "{memory:?}");
         assert!(peak >= resident, "{memory:?}");
+    }
+
+    #[test]
+    #[cfg(any(unix, windows))]
+    fn the_process_cpu_time_grows_with_its_work() {
+        let started = process_cpu_time().expect("process CPU time");
+        let mut state = 1_u64;
+        let busy = std::time::Instant::now();
+        while busy.elapsed() < std::time::Duration::from_millis(200) {
+            state = std::hint::black_box(state.wrapping_mul(6_364_136_223_846_793_005));
+        }
+        let worked = process_cpu_time()
+            .expect("process CPU time")
+            .saturating_sub(started);
+        // 200 ms of spinning on one thread; the clocks tick in at most 16 ms steps (Windows).
+        assert!(
+            worked >= std::time::Duration::from_millis(150),
+            "{worked:?} of CPU time for 200 ms of work"
+        );
     }
 
     #[test]

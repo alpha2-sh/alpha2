@@ -2,13 +2,14 @@
 // Same page contract as `chrome-cdp.mjs`: the page reports through `document.title`. Each page
 // gets its own driver and session, and every request has a deadline.
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createServer } from "node:net";
 import { posix, win32 } from "node:path";
 
+import { track, untrack } from "./browser-cleanup.mjs";
 import { BrowserStartError } from "./browser-errors.mjs";
-import { stopChrome } from "./chrome-cdp.mjs";
+import { browserSettingsMode, stopChrome } from "./chrome-cdp.mjs";
 
 /** How long one WebDriver request may wait for its answer unless the page has less time left. */
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -30,32 +31,83 @@ const BROWSERS = {
     variable: "ALPHA2_SAFARIDRIVER",
     portArguments: (port) => ["-p", String(port)],
     capabilities: () => ({ browserName: "safari" }),
-    // Safari refuses a session until automation is allowed, once per machine.
     sessionHint:
-      "run `safaridriver --enable` once and allow remote automation in Safari's Develop settings",
+      "Safari automation needs `safaridriver --enable` run once, Develop > Allow Remote Automation in Safari, and an unlocked console session",
   },
   firefox: {
     executable: "geckodriver",
     variable: "ALPHA2_GECKODRIVER",
     portArguments: (port) => ["--port", String(port)],
-    capabilities: (env) => ({
-      browserName: "firefox",
-      "moz:firefoxOptions": {
-        ...(env.ALPHA2_FIREFOX ? { binary: env.ALPHA2_FIREFOX } : {}),
-        args: ["-headless"],
-        prefs: {
-          "dom.webgpu.enabled": true,
-          "gfx.webgpu.ignore-blocklist": true,
-          // An AudioContext would otherwise wait for a user gesture.
-          "media.autoplay.default": 0,
-          "media.autoplay.block-webaudio": false,
+    capabilities: ({ env, platform, exists }) => {
+      const headed = env.ALPHA2_BROWSER_HEADED === "1";
+      if (
+        headed &&
+        platform === "linux" &&
+        !env.DISPLAY &&
+        !env.WAYLAND_DISPLAY
+      )
+        throw new BrowserStartError(
+          "a headed Firefox (ALPHA2_BROWSER_HEADED=1) needs DISPLAY or WAYLAND_DISPLAY",
+        );
+      const binary = firefoxExecutable({ env, platform, exists });
+      return {
+        browserName: "firefox",
+        "moz:firefoxOptions": {
+          ...(binary === null ? {} : { binary }),
+          // Headless Firefox on macOS has no WebGPU adapter.
+          args: headed ? [] : ["-headless"],
+          ...(browserSettingsMode(env) === "stock"
+            ? {}
+            : {
+                prefs: {
+                  "dom.webgpu.enabled": true,
+                  "gfx.webgpu.ignore-blocklist": true,
+                  // An AudioContext would otherwise wait for a user gesture.
+                  "media.autoplay.default": 0,
+                  "media.autoplay.block-webaudio": false,
+                },
+              }),
         },
-      },
-    }),
+      };
+    },
     sessionHint:
       "set ALPHA2_FIREFOX to a Firefox executable if geckodriver cannot find one",
   },
 };
+
+/**
+ * The Firefox a session runs: ALPHA2_FIREFOX, else the first usual install on this platform that
+ * exists, else null (geckodriver then looks on its own).
+ */
+export function firefoxExecutable({
+  env = process.env,
+  platform = process.platform,
+  exists = existsSync,
+} = {}) {
+  if (env.ALPHA2_FIREFOX) return env.ALPHA2_FIREFOX;
+  return firefoxCandidates(platform, env).find((path) => exists(path)) ?? null;
+}
+
+/**
+ * Where Firefox installs on a platform. On Linux these are the executables themselves:
+ * /usr/bin/firefox and /snap/bin/firefox are launcher scripts, which geckodriver refuses as a
+ * binary ("not a Firefox executable").
+ */
+export function firefoxCandidates(
+  platform = process.platform,
+  env = process.env,
+) {
+  if (platform === "darwin")
+    return ["/Applications/Firefox.app/Contents/MacOS/firefox"];
+  if (platform === "win32")
+    return [env.PROGRAMFILES ?? env.ProgramFiles]
+      .filter(Boolean)
+      .map((root) => win32.join(root, "Mozilla Firefox", "firefox.exe"));
+  return [
+    "/usr/lib/firefox/firefox",
+    "/snap/firefox/current/usr/lib/firefox/firefox",
+  ];
+}
 
 /** The browsers `webDriverBrowser` knows. */
 export const WEBDRIVER_BROWSERS = Object.freeze(Object.keys(BROWSERS));
@@ -90,7 +142,7 @@ export function webDriverBrowser(
     name,
     driver,
     driverArguments: browser.portArguments,
-    capabilities: browser.capabilities(env),
+    capabilities: browser.capabilities({ env, platform, exists }),
     sessionHint: browser.sessionHint,
   };
 }
@@ -104,6 +156,20 @@ function onPath(file, { env, platform, exists }) {
     if (exists(candidate)) return candidate;
   }
   return null;
+}
+
+/**
+ * Whether the Mac's console is locked, from `ioreg -n Root -d1` (`readIoreg` returns its output).
+ * Safari refuses automation while it is.
+ */
+export function macConsoleLocked(
+  readIoreg = () =>
+    spawnSync("ioreg", ["-n", "Root", "-d1"], {
+      encoding: "utf8",
+      timeout: 10_000,
+    }).stdout ?? "",
+) {
+  return /"CGSSessionScreenIsLocked"\s*=\s*Yes/.test(readIoreg());
 }
 
 /**
@@ -122,14 +188,31 @@ function onPath(file, { env, platform, exists }) {
  *   by default.
  * @param {(capabilities: object) => void} [options.onBrowser] Called with the session's
  *   capabilities (`browserName`, `browserVersion`) once the session started.
+ * @param {string} [options.platform] Stands in for `process.platform` in tests.
+ * @param {() => string} [options.readIoreg] Stands in for `ioreg -n Root -d1` in tests.
  * @returns {Promise<string>} The URI-encoded JSON title the page set. Rejects with a
- *   `BrowserStartError` when the driver or the session cannot start.
+ *   `BrowserStartError` when the driver or the session cannot start, and before the driver starts
+ *   when Safari is asked for on a Mac whose console is locked.
  */
 export async function runWebDriverPage(
   browser,
   url,
-  { timeoutMs = 30_000, sessionTimeoutMs = SESSION_TIMEOUT_MS, onBrowser } = {},
+  {
+    timeoutMs = 30_000,
+    sessionTimeoutMs = SESSION_TIMEOUT_MS,
+    onBrowser,
+    platform = process.platform,
+    readIoreg,
+  } = {},
 ) {
+  if (
+    browser.name === "safari" &&
+    platform === "darwin" &&
+    macConsoleLocked(readIoreg)
+  )
+    throw new BrowserStartError(
+      "the Mac's console is locked; Safari automation needs an unlocked console session",
+    );
   const target = new URL(url);
   if (target.hostname === "127.0.0.1") target.hostname = "localhost";
   const port = await freePort();
@@ -139,6 +222,7 @@ export async function runWebDriverPage(
     detached: process.platform !== "win32",
     windowsHide: true,
   });
+  const cleanup = track({ child, group: process.platform !== "win32" });
   // geckodriver logs to stdout, safaridriver to stderr: keep the tail of both.
   let output = "";
   for (const stream of [child.stdout, child.stderr]) {
@@ -198,25 +282,10 @@ export async function runWebDriverPage(
       await driver
         .command("DELETE", `/session/${session}`, undefined, 10_000)
         .catch(() => {});
-    await stopDriver(child);
+    // Ends the driver's process group, and with it the browser it started.
+    await stopChrome(child);
+    untrack(cleanup);
   }
-}
-
-/** Ends a driver and every process it started, and waits up to 2 s for it to exit. */
-async function stopDriver(child) {
-  if (
-    process.platform !== "win32" &&
-    child.pid !== undefined &&
-    child.exitCode === null &&
-    child.signalCode === null
-  ) {
-    try {
-      process.kill(-child.pid, "SIGTERM");
-    } catch {
-      // The group is already gone.
-    }
-  }
-  await stopChrome(child);
 }
 
 /** A port nothing on this machine listens on now. */

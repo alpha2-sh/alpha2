@@ -4,6 +4,8 @@ on:
   pull_request:
   push:
     branches: [main, "prerelease-v*"]
+  schedule:
+    - cron: "17 3 * * *"
   workflow_dispatch:
     inputs:
       jobs:
@@ -22,17 +24,80 @@ env:
   ALPHA2_RENDERER: gpu
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
   SAVE_RUST_CACHE: ${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/prerelease-v') }}
+  # Pushes, the nightly schedule, dispatches and the release's call run the heavy legs too; pull
+  # requests do not. Jobs cannot read env in their own `if`, so job conditions spell it out.
+  HEAVY: ${{ github.event_name != 'pull_request' }}
 
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number) || format('ci-run-{0}', github.run_id) }}
   cancel-in-progress: true
 
 jobs:
-  rust-checks:
-    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',rust-checks,') }}
-    runs-on: ubuntu-latest
+  changes:
+    # What a pull request touches, so the platform lanes run only where they can see a difference.
+    # Every other event runs everything.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      native: ${{ steps.areas.outputs.native }}
+      js: ${{ steps.areas.outputs.js }}
+      e2e: ${{ steps.areas.outputs.e2e }}
+      packaging: ${{ steps.areas.outputs.packaging }}
+      browser: ${{ steps.areas.outputs.browser }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - name: Areas this change touches
+        id: areas
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          native=false js=false e2e=false packaging=false
+          if [ "$EVENT" != pull_request ]; then
+            native=true js=true e2e=true packaging=true
+          else
+            while IFS= read -r path; do
+              case $path in
+                Cargo.toml | Cargo.lock | rust-toolchain.toml | crates/* | bindings/* | extensions/* | \
+                  tests/* | release/ffmpeg-lgpl/* | release/openh264/* | scripts/fetch-*.sh | \
+                  .github/workflows/ci.yml)
+                  native=true ;;
+              esac
+              case $path in
+                packages/* | scripts/* | package.json | package-lock.json) js=true ;;
+              esac
+              case $path in
+                python/* | packages/alpha2-node/* | scripts/run-node-e2e.mjs) e2e=true ;;
+              esac
+              case $path in
+                release/* | scripts/build-native-release.sh | python/alpha2-host/* | \
+                  packages/alpha2-node/src/install* | .github/workflows/release.yml)
+                  packaging=true ;;
+              esac
+            done < <(git diff --name-only "$BASE...HEAD")
+            [ "$native" = true ] && js=true && e2e=true
+          fi
+          {
+            echo "native=$native"
+            echo "js=$js"
+            echo "e2e=$e2e"
+            echo "packaging=$packaging"
+            echo "browser=$js"
+          } | tee -a "$GITHUB_OUTPUT"
+
+  rust-checks:
+    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',rust-checks,') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Provenance
+        shell: bash
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc -vV | head -1
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL \
@@ -79,12 +144,18 @@ jobs:
       fail-fast: false
       matrix:
         features: [all-features, no-default-features]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     env:
       ALPHA2_REQUIRE: c-compiler
       ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Provenance
+        shell: bash
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc -vV | head -1
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL \
@@ -125,12 +196,18 @@ jobs:
   js:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',js,') }}
     needs: release-wasm
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
     env:
       ALPHA2_REQUIRE: wasm
       ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Provenance
+        shell: bash
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc -vV | head -1
       - name: Install native media build dependencies
         run: >-
           sudo apt-get update && sudo apt-get install --yes
@@ -185,12 +262,18 @@ jobs:
   host:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',host,') }}
     needs: release-wasm
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     env:
       ALPHA2_REQUIRE: wasm,browser,python,host
       ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Provenance
+        shell: bash
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc -vV | head -1
       - name: Install native media build dependencies
         run: >-
           sudo apt-get update && sudo apt-get install --yes
@@ -244,8 +327,6 @@ jobs:
             --out "$RUNNER_TEMP/lavapipe.mp4" --no-audio --video-codec mpeg4-part2 \
             2> "$RUNNER_TEMP/lavapipe.log" || { cat "$RUNNER_TEMP/lavapipe.log"; exit 1; }
           grep "hardware decode unavailable, using software" "$RUNNER_TEMP/lavapipe.log"
-      - run: npm run test:node-e2e
-      - run: python/alpha2/.venv/bin/pytest python/alpha2/tests/test_e2e.py
       - name: Skips this run recorded
         if: always()
         run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
@@ -264,15 +345,21 @@ jobs:
       matrix:
         include:
           - target: linux-x64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - target: linux-arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
     env:
       ALPHA2_REQUIRE: openh264,c-compiler
       ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Provenance
+        shell: bash
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc -vV | head -1
       - name: Install native media build dependencies
         run: >-
           sudo apt-get update && sudo apt-get install --yes
@@ -309,6 +396,17 @@ jobs:
         run: cargo test --release -p alpha2-native --lib openh264 --no-fail-fast
       - name: Host tests
         run: cargo test --release -p alpha2-host openh264 --no-fail-fast
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: The Node client decompresses Cisco's archive to the library the manifest pins
+        run: |
+          npm run build:js --workspace alpha2
+          npm run build --workspace @alpha2-sh/node
+          ALPHA2_TEST_OPENH264_ARCHIVE="$(ls "$RUNNER_TEMP"/openh264/*.bz2)" \
+            node --test packages/alpha2-node/test/bzip2.test.mjs
       - name: A GPU without an H.264 encoder exports H.264 through OpenH264, the same bytes twice
         run: |
           cargo build --release -p alpha2-host
@@ -350,9 +448,15 @@ jobs:
   cpu-renderer:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',cpu-renderer,') }}
     name: CPU renderer
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Provenance
+        shell: bash
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc -vV | head -1
       - name: Install native media build dependencies
         run: >-
           sudo apt-get update && sudo apt-get install --yes
@@ -407,9 +511,15 @@ jobs:
     if: >-
       ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',wasm-audio,') ||
       contains(format(',{0},', inputs.jobs), ',host,') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Provenance
+        shell: bash
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc -vV | head -1
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -425,9 +535,15 @@ jobs:
 
   msrv:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',msrv,') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Provenance
+        shell: bash
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc -vV | head -1
       - name: Install native media build dependencies
         run: >-
           sudo apt-get update && sudo apt-get install --yes
@@ -456,9 +572,15 @@ jobs:
 
   valgrind:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',valgrind,') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Provenance
+        shell: bash
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc -vV | head -1
       - name: Install native media build dependencies
         run: >-
           sudo apt-get update && sudo apt-get install --yes
@@ -492,9 +614,15 @@ jobs:
 
   wasm-lint:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',wasm-lint,') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Provenance
+        shell: bash
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc -vV | head -1
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -507,9 +635,15 @@ jobs:
 
   fuzz-check:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',fuzz-check,') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Provenance
+        shell: bash
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc -vV | head -1
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -520,23 +654,29 @@ jobs:
       - run: cargo fmt --manifest-path fuzz/Cargo.toml --check
       - run: cargo clippy --manifest-path fuzz/Cargo.toml --locked --bins -- -D warnings
 
-  hwdecode-targets:
-    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',hwdecode-targets,') }}
-    name: Hardware decode shim (${{ matrix.target }})
+  platform-lint:
+    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',platform-lint,') }}
+    name: Platform lint (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: macos-arm64
-            runner: macos-latest
+            runner: macos-26
           - target: win-x64
-            runner: windows-latest
+            runner: windows-2025
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Provenance
+        shell: bash
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc -vV | head -1
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -544,9 +684,9 @@ jobs:
           cache-bin: false
           save-if: ${{ env.SAVE_RUST_CACHE }}
       - name: Install macOS build tools
-        if: startsWith(matrix.target, 'macos-')
+        if: runner.os == 'macOS'
         run: brew install pkg-config
-      - name: Pin the FFmpeg SDK that the hardware decode shim builds against
+      - name: Pin the FFmpeg SDK
         run: |
           sdk_root="$(scripts/fetch-ffmpeg-sdk.sh ${{ matrix.target }})"
           if [ "${{ runner.os }}" = Windows ]; then
@@ -563,6 +703,9 @@ jobs:
               echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
               echo "FFMPEG_LINK_MODE=dynamic"
             } >> "$GITHUB_ENV"
+            if [ "${{ runner.os }}" = Linux ]; then
+              echo "LD_LIBRARY_PATH=$sdk_root/lib" >> "$GITHUB_ENV"
+            fi
           fi
       # The Windows host compiles its DX12 pipelines with the pinned DXC and refuses to start without it.
       - if: runner.os == 'Windows'
@@ -573,7 +716,23 @@ jobs:
       - name: Fetch the pinned DXC
         if: runner.os == 'Windows'
         run: echo "ALPHA2_DXC_PATH=$(scripts/fetch-dxc.sh "$RUNNER_TEMP/dxc")" >> "$GITHUB_ENV"
-      - run: cargo clippy -p alpha2-native -p alpha2-native-gpu -p alpha2-host --all-features --all-targets -- -D warnings
+      - name: Clippy of the native crates
+        run: >-
+          cargo clippy -p alpha2-native -p alpha2-native-gpu -p alpha2-host -p alpha2-ffmpeg-bridge
+          -p alpha2-os -p alpha2-build-support --all-features --all-targets -- -D warnings
+      - run: scripts/check-native-features.sh
+      - name: Install the rust-version toolchain
+        run: |
+          msrv="$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)"
+          test -n "$msrv"
+          rustup toolchain install "$msrv" --profile minimal
+          echo "MSRV=$msrv" >> "$GITHUB_ENV"
+      - name: The native crates build with the rust-version toolchain
+        run: >-
+          cargo "+$MSRV" check -p alpha2-native -p alpha2-native-gpu -p alpha2-host
+          -p alpha2-ffmpeg-bridge -p alpha2-os -p alpha2-build-support --all-targets --all-features
+      - name: The benches build
+        run: cargo bench --no-run -p alpha2-render -p alpha2-native
       - name: Link and start the host
         run: |
           cargo build -p alpha2-host
@@ -583,45 +742,311 @@ jobs:
         run: |
           echo '{"protocolVersion":1,"requestId":"c","operation":"capabilities"}' \
             | ALPHA2_RENDERER=gpu target/debug/alpha2-host serve > "$RUNNER_TEMP/capabilities.json"
-          python - "$RUNNER_TEMP/capabilities.json" <<'EOF'
+          python - "$RUNNER_TEMP/capabilities.json" <<'PY'
           import json, sys
           answer = json.loads(open(sys.argv[1]).read().splitlines()[0])
           compiler = answer["result"]["capabilities"]["gpu"]["shaderCompiler"]
           assert compiler.startswith("DXC"), compiler
           print(compiler)
-          EOF
+          PY
 
-  node-client:
-    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',node-client,') }}
-    name: Node client (${{ matrix.runner }})
+  platform-js:
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',platform-js,')) &&
+      needs.changes.outputs.js == 'true' }}
+    name: JavaScript tests (${{ matrix.runner }})
+    needs: [changes, release-wasm]
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        runner: [macos-latest, windows-latest]
+        runner: [macos-26, windows-2025]
     defaults:
       run:
         shell: bash
+    env:
+      ALPHA2_REQUIRE: wasm
+      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Provenance
+        shell: bash
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc -vV | head -1
+      # The toolchain check runs the pinned rustc.
+      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Build the alpha2 JavaScript the client imports
-        run: npm run build:js --workspace alpha2
-      - run: npm run build --workspace @alpha2-sh/node
-      - run: node --test packages/alpha2-node/test/*.test.mjs
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: alpha2-build
+          path: packages
+      - run: npm run test:js
+      - name: Skips this run recorded
+        if: always()
+        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: skip-log-platform-js-${{ matrix.runner }}
+          path: ${{ github.workspace }}/target/skip-log.jsonl
+          if-no-files-found: ignore
 
-  python:
-    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',python,') }}
-    name: Python package (${{ matrix.runner }})
+  platform-native:
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',platform-native,')) &&
+      needs.changes.outputs.native == 'true' }}
+    name: Native tests (${{ matrix.target }}, software adapter)
+    needs: changes
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - target: macos-arm64
+            runner: macos-26
+            require: openh264,c-compiler
+          - target: win-x64
+            runner: windows-2025
+            require: openh264,dxc
+    defaults:
+      run:
+        shell: bash
+    env:
+      ALPHA2_REQUIRE: ${{ matrix.require }}
+      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Provenance
+        shell: bash
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc -vV | head -1
+      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: false
+          save-if: ${{ env.SAVE_RUST_CACHE }}
+      - name: Install macOS build tools
+        if: runner.os == 'macOS'
+        run: brew install pkg-config
+      - name: Pin the FFmpeg SDK
+        run: |
+          sdk_root="$(scripts/fetch-ffmpeg-sdk.sh ${{ matrix.target }})"
+          if [ "${{ runner.os }}" = Windows ]; then
+            sdk_root="$(cygpath -m "$sdk_root")"
+            {
+              echo "FFMPEG_INCLUDE_DIR=$sdk_root/include"
+              echo "FFMPEG_LIBS_DIR=$sdk_root/lib"
+              echo "FFMPEG_LINK_MODE=dynamic"
+            } >> "$GITHUB_ENV"
+            echo "$sdk_root/bin" >> "$GITHUB_PATH"
+          else
+            {
+              echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
+              echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
+              echo "FFMPEG_LINK_MODE=dynamic"
+            } >> "$GITHUB_ENV"
+            if [ "${{ runner.os }}" = Linux ]; then
+              echo "LD_LIBRARY_PATH=$sdk_root/lib" >> "$GITHUB_ENV"
+            fi
+          fi
+      # The Windows host compiles its DX12 pipelines with the pinned DXC and refuses to start without it.
+      - if: runner.os == 'Windows'
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ runner.temp }}/dxc
+          key: dxc-${{ hashFiles('release/dxc/manifest.toml') }}
+      - name: Fetch the pinned DXC
+        if: runner.os == 'Windows'
+        run: echo "ALPHA2_DXC_PATH=$(scripts/fetch-dxc.sh "$RUNNER_TEMP/dxc")" >> "$GITHUB_ENV"
+      # Cisco's binary, downloaded from Cisco onto this runner, for these tests only.
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ runner.temp }}/openh264
+          key: openh264-${{ matrix.target }}-${{ hashFiles('release/openh264/manifest.toml') }}
+      - name: Fetch Cisco's OpenH264 binary
+        run: |
+          library="$(scripts/fetch-openh264.sh ${{ matrix.target }} "$RUNNER_TEMP/openh264")"
+          echo "ALPHA2_OPENH264_LIBRARY=$library" >> "$GITHUB_ENV"
+      - name: Adapters
+        run: cargo run -q -p alpha2-gpu --example adapters
+      - name: Native and host tests (debug)
+        run: >-
+          cargo test --locked --all-features --no-fail-fast -p alpha2-os -p alpha2-build-support
+          -p alpha2-ffmpeg-bridge -p alpha2-native -p alpha2-native-gpu -p alpha2-gpu -p alpha2-host
+      - name: Native and host tests (release, strict GPU errors)
+        if: ${{ !cancelled() && env.HEAVY == 'true' }}
+        env:
+          ALPHA2_GPU_STRICT: "1"
+        run: >-
+          cargo test --locked --release --all-features --no-fail-fast -p alpha2-os
+          -p alpha2-build-support -p alpha2-ffmpeg-bridge -p alpha2-native -p alpha2-native-gpu
+          -p alpha2-gpu -p alpha2-host
+      - name: H.264 goes through OpenH264, the same bytes twice
+        if: ${{ !cancelled() }}
+        run: |
+          cargo build --release -p alpha2-host
+          node -e '
+            const fs = require("node:fs");
+            const project = JSON.parse(fs.readFileSync("tests/cases/host-parity-complex-project.json", "utf8"));
+            Object.assign(project.settings, { width: 1920, height: 1080 });
+            fs.writeFileSync(process.argv[1], JSON.stringify(project));
+          ' "$RUNNER_TEMP/openh264-project.json"
+          for run in first second; do
+            target/release/alpha2-host export --project "$RUNNER_TEMP/openh264-project.json" \
+              --asset video=tests/corpus/parity-rgb.mov --asset still=tests/corpus/parity-image.png \
+              --out "$RUNNER_TEMP/$run.mp4" > "$RUNNER_TEMP/$run.json" 2> "$RUNNER_TEMP/$run.log" \
+              || { cat "$RUNNER_TEMP/$run.log"; exit 1; }
+          done
+          node -e '
+            const { result } = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+            const check = (ok, what) => { if (!ok) throw new Error(what + ": " + JSON.stringify(result)); };
+            check(result.videoEncoder === "openh264", "videoEncoder");
+            check(result.videoEncoderClass === "software", "videoEncoderClass");
+            check(result.frames === 36, "frames");
+            check(result.videoEncoderLibrary.provider === "cisco-openh264", "provider");
+          ' "$RUNNER_TEMP/first.json"
+          cmp "$RUNNER_TEMP/first.mp4" "$RUNNER_TEMP/second.mp4"
+      - name: Skips this run recorded
+        if: always()
+        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: skip-log-platform-native-${{ matrix.target }}
+          path: ${{ github.workspace }}/target/skip-log.jsonl
+          if-no-files-found: ignore
+
+  platform-e2e:
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',platform-e2e,')) &&
+      needs.changes.outputs.e2e == 'true' }}
+    name: End-to-end clients (${{ matrix.target }})
+    needs: [changes, release-wasm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64
+            runner: ubuntu-24.04
+          - target: macos-arm64
+            runner: macos-26
+          - target: win-x64
+            runner: windows-2025
+    defaults:
+      run:
+        shell: bash
+    env:
+      # The CPU renderer: the same pictures on every runner, none of which has a GPU.
+      ALPHA2_RENDERER: cpu
+      ALPHA2_REQUIRE: python,host
+      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Provenance
+        shell: bash
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc -vV | head -1
+      - name: Install native media build dependencies
+        if: runner.os == 'Linux'
+        run: >-
+          sudo apt-get update && sudo apt-get install --yes
+          libasound2-dev pkg-config clang
+      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: false
+          save-if: ${{ env.SAVE_RUST_CACHE }}
+      - name: Install macOS build tools
+        if: runner.os == 'macOS'
+        run: brew install pkg-config
+      - name: Pin the FFmpeg SDK
+        run: |
+          sdk_root="$(scripts/fetch-ffmpeg-sdk.sh ${{ matrix.target }})"
+          if [ "${{ runner.os }}" = Windows ]; then
+            sdk_root="$(cygpath -m "$sdk_root")"
+            {
+              echo "FFMPEG_INCLUDE_DIR=$sdk_root/include"
+              echo "FFMPEG_LIBS_DIR=$sdk_root/lib"
+              echo "FFMPEG_LINK_MODE=dynamic"
+            } >> "$GITHUB_ENV"
+            echo "$sdk_root/bin" >> "$GITHUB_PATH"
+          else
+            {
+              echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
+              echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
+              echo "FFMPEG_LINK_MODE=dynamic"
+            } >> "$GITHUB_ENV"
+            if [ "${{ runner.os }}" = Linux ]; then
+              echo "LD_LIBRARY_PATH=$sdk_root/lib" >> "$GITHUB_ENV"
+            fi
+          fi
+      # The Windows host compiles its DX12 pipelines with the pinned DXC and refuses to start without it.
+      - if: runner.os == 'Windows'
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ runner.temp }}/dxc
+          key: dxc-${{ hashFiles('release/dxc/manifest.toml') }}
+      - name: Fetch the pinned DXC
+        if: runner.os == 'Windows'
+        run: echo "ALPHA2_DXC_PATH=$(scripts/fetch-dxc.sh "$RUNNER_TEMP/dxc")" >> "$GITHUB_ENV"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: alpha2-build
+          path: packages
+      - name: Build the host and the Python package
+        run: |
+          cargo build -p alpha2-host
+          cd python/alpha2
+          pipx install uv==0.9.17
+          uv venv -p 3.11 .venv
+          uv pip install --group dev
+          uv pip install --no-deps -e .
+          if [ -d .venv/Scripts ]; then echo "PY=$PWD/.venv/Scripts" >> "$GITHUB_ENV"; else echo "PY=$PWD/.venv/bin" >> "$GITHUB_ENV"; fi
+      - run: npm run test:node-e2e
+      - name: Python end-to-end tests
+        if: ${{ !cancelled() }}
+        env:
+          ALPHA2_HOST_BINARY: ${{ github.workspace }}/target/debug/alpha2-host${{ runner.os == 'Windows' && '.exe' || '' }}
+        run: '"$PY/pytest" python/alpha2/tests/test_e2e.py python/alpha2/tests/test_scenes.py'
+      - name: Skips this run recorded
+        if: always()
+        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: skip-log-platform-e2e-${{ matrix.target }}
+          path: ${{ github.workspace }}/target/skip-log.jsonl
+          if-no-files-found: ignore
+
+  python:
+    if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',python,') }}
+    name: Python package (${{ matrix.runner }}, ${{ matrix.python }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, macos-26, windows-2025]
+        python: ["3.11", "3.15"]
     defaults:
       run:
         shell: bash
@@ -631,25 +1056,34 @@ jobs:
       ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Provenance
+        shell: bash
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc -vV | head -1
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           cache-bin: false
           save-if: ${{ env.SAVE_RUST_CACHE }}
-      # The oldest Python the package supports, which the abi3 module is built for.
-      - name: Build the package into a Python 3.11 environment
+      # The abi3 module is built for 3.11, the oldest Python the package supports, and loads on
+      # every later one: the newest release is tested beside it. uv 0.13.3 is the first uv that
+      # installs CPython 3.15.0.
+      - name: Build the package into a Python ${{ matrix.python }} environment
         run: |
-          pipx install uv==0.9.17
-          uv venv -p 3.11 .venv
+          pipx install uv==0.13.3
+          uv venv -p ${{ matrix.python }} .venv
           uv pip install --group dev
           uv pip install --no-deps -e .
           if [ -d .venv/Scripts ]; then echo "PY=.venv/Scripts" >> "$GITHUB_ENV"; else echo "PY=.venv/bin" >> "$GITHUB_ENV"; fi
-      - if: runner.os == 'Linux'
+      - if: runner.os == 'Linux' && matrix.python == '3.11'
         run: |
           "$PY/ruff" check src tests ../alpha2-host
           "$PY/ruff" format --check src tests ../alpha2-host
           "$PY/mypy"
+          "$PY/mypy" --platform win32
+          "$PY/mypy" --platform darwin
       # The end-to-end tests skip: there is no host here (the host job runs them).
       - run: '"$PY/pytest"'
       - name: Skips this run recorded
@@ -659,7 +1093,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
-          name: skip-log-python-${{ matrix.runner }}
+          name: skip-log-python-${{ matrix.runner }}-${{ matrix.python }}
           path: ${{ github.workspace }}/target/skip-log.jsonl
           if-no-files-found: ignore
 
@@ -667,6 +1101,7 @@ jobs:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',determinism,') }}
     name: Determinism pins (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -676,11 +1111,16 @@ jobs:
           - target: linux-arm64
             runner: ubuntu-24.04-arm
           - target: macos-arm64
-            runner: macos-latest
+            runner: macos-26
           - target: win-x64
-            runner: windows-latest
+            runner: windows-2025
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Provenance
+        shell: bash
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc -vV | head -1
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -693,9 +1133,15 @@ jobs:
 
   security:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',security,') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Provenance
+        shell: bash
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc -vV | head -1
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check
@@ -705,10 +1151,19 @@ jobs:
     if: >-
       ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',release-wasm,') ||
       contains(format(',{0},', inputs.jobs), ',js,') || contains(format(',{0},', inputs.jobs), ',host,') ||
-      contains(format(',{0},', inputs.jobs), ',browser,') }}
-    runs-on: ubuntu-latest
+      contains(format(',{0},', inputs.jobs), ',browser,') ||
+      contains(format(',{0},', inputs.jobs), ',platform-js,') ||
+      contains(format(',{0},', inputs.jobs), ',platform-e2e,') ||
+      contains(format(',{0},', inputs.jobs), ',browser-platforms,') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Provenance
+        shell: bash
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc -vV | head -1
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       # The npm packages a release tag publishes come from this job, so a tag builds them and their
@@ -758,29 +1213,37 @@ jobs:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',render-goldens,') }}
     name: Render goldens (${{ matrix.backend }})
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:
         include:
           - backend: vulkan
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - backend: gl
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
           - backend: dx12
-            runner: windows-latest
+            runner: windows-2025
             # Debug builds compile the same optimized HLSL as release ones, so a strict debug run
             # is the release lane's check too.
             strict: "1"
           - backend: metal
-            runner: macos-latest
+            runner: macos-26
     env:
       WGPU_BACKEND: ${{ matrix.backend }}
       LIBGL_ALWAYS_SOFTWARE: "1"
       WGPU_VALIDATION: "1"
       MTL_DEBUG_LAYER: "1"
       ALPHA2_GPU_STRICT: ${{ matrix.strict || '0' }}
+      # What wgpu-hal's validation logged during each test, reported (not failing) and uploaded.
+      ALPHA2_VALIDATION_REPORT: ${{ github.workspace }}/target/validation-report.jsonl
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Provenance
+        shell: bash
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc -vV | head -1
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -803,6 +1266,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: echo "ALPHA2_DXC_PATH=$(scripts/fetch-dxc.sh "$RUNNER_TEMP/dxc")" >> "$GITHUB_ENV"
+      - name: Adapters
+        shell: bash
+        run: cargo run -q -p alpha2-gpu --example adapters
       - name: Run render goldens and engine frame tests on ${{ matrix.backend }}
         env:
           ALPHA2_GOLDEN_ACTUAL_DIR: ${{ github.workspace }}/target/golden-actual/f16
@@ -819,17 +1285,29 @@ jobs:
           name: golden-actual-${{ matrix.backend }}
           path: target/golden-actual
           if-no-files-found: ignore
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: validation-report-${{ matrix.backend }}
+          path: target/validation-report.jsonl
+          if-no-files-found: ignore
 
   browser:
     if: ${{ !inputs.jobs || contains(format(',{0},', inputs.jobs), ',browser,') }}
     needs: release-wasm
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     env:
       ALPHA2_REQUIRE: browser,wasm,webgpu,webgl2,webcodecs-audio,webcodecs-video
       ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
       ALPHA2_CHROME_GPU: swiftshader
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Provenance
+        shell: bash
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc -vV | head -1
       - name: Install the pinned Rust toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -848,6 +1326,17 @@ jobs:
       - run: npm run test:wgsl-browser
       - run: node scripts/test-wasm-browser.mjs
       - run: npm run test:editor:package
+      - name: The wasm-browser cases in Firefox (the image's Firefox and geckodriver)
+        if: ${{ !cancelled() }}
+        run: node scripts/test-wasm-browser.mjs --browser firefox
+      - name: With no GPU in the browser, auto renders on the CPU (page and worker)
+        if: ${{ !cancelled() }}
+        env:
+          ALPHA2_CHROME_GPU: none
+          ALPHA2_REQUIRE: browser,wasm
+        run: |
+          node scripts/test-wasm-browser.mjs --case renderer-auto
+          node scripts/test-wasm-browser.mjs --case renderer-auto-worker
       - name: Skips this run recorded
         if: always()
         run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
@@ -856,4 +1345,188 @@ jobs:
         with:
           name: skip-log-browser
           path: ${{ github.workspace }}/target/skip-log.jsonl
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: browser-reports-linux
+          path: |
+            target/browser-reports
+            target/editor-reports
+          if-no-files-found: ignore
+
+  browser-platforms:
+    # Chrome on the hosted runners' software adapters (the macOS VM's paravirtual Metal device,
+    # Windows' WARP): the harnesses work on those systems; these are not real-GPU runs.
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',browser-platforms,')) &&
+      github.event_name != 'pull_request' }}
+    name: ${{ matrix.name }}
+    needs: release-wasm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Browser (macOS VM Metal, software adapter)
+            runner: macos-26
+            key: macos
+          - name: Browser (Windows WARP, software adapter)
+            runner: windows-2025
+            key: windows
+    defaults:
+      run:
+        shell: bash
+    env:
+      ALPHA2_CHROME_GPU: machine
+      ALPHA2_REQUIRE: browser,wasm
+      ALPHA2_SKIP_LOG: ${{ github.workspace }}/target/skip-log.jsonl
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Provenance
+        shell: bash
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc -vV | head -1
+      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: alpha2-build
+          path: packages
+      - run: npm run test:wgsl-browser
+      - run: node scripts/test-wasm-browser.mjs
+        if: ${{ !cancelled() }}
+      - run: npm run test:editor:package
+        if: ${{ !cancelled() }}
+      - name: The same in Edge
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        run: |
+          node scripts/test-wgsl-browser.mjs --browser edge
+          node scripts/test-wasm-browser.mjs --browser edge
+      - name: With no GPU in the browser, auto renders on the CPU (page and worker)
+        if: ${{ !cancelled() }}
+        env:
+          ALPHA2_CHROME_GPU: none
+          ALPHA2_REQUIRE: browser,wasm
+        run: |
+          node scripts/test-wasm-browser.mjs --case renderer-auto
+          node scripts/test-wasm-browser.mjs --case renderer-auto-worker
+      - name: Skips this run recorded
+        if: always()
+        run: node scripts/skip-log-summary.mjs "$ALPHA2_SKIP_LOG"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: browser-records-${{ matrix.key }}
+          path: |
+            target/skip-log.jsonl
+            target/browser-reports
+            target/editor-reports
+          if-no-files-found: ignore
+
+  gpu-validation:
+    # The GPU suites under each backend's validation layer. Reports what the layers say; failing on
+    # it comes after every lane's report has been empty for a while.
+    if: >-
+      ${{ (!inputs.jobs || contains(format(',{0},', inputs.jobs), ',gpu-validation,')) &&
+      github.event_name != 'pull_request' }}
+    name: GPU validation (${{ matrix.backend }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: vulkan
+            runner: ubuntu-24.04
+            target: linux-x64
+            crates: -p alpha2-render -p alpha2-engine
+          - backend: metal
+            runner: macos-26
+            target: macos-arm64
+            crates: -p alpha2-render -p alpha2-engine -p alpha2-native-gpu -p alpha2-host
+          - backend: dx12
+            runner: windows-2025
+            target: win-x64
+            crates: -p alpha2-render -p alpha2-engine -p alpha2-native-gpu -p alpha2-host
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Provenance
+        shell: bash
+        run: |
+          echo "image: $ImageOS $ImageVersion"
+          rustc -vV | head -1
+      - name: Install the pinned Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          cache-bin: false
+          save-if: ${{ env.SAVE_RUST_CACHE }}
+      - name: Install Mesa software GPU drivers and the Khronos validation layer
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update && sudo apt-get install --yes mesa-vulkan-drivers
+          layers="$(scripts/fetch-vulkan-validation-layer.sh)"
+          set -- /usr/share/vulkan/icd.d/lvp_icd*.json
+          {
+            echo "VK_LAYER_PATH=$layers"
+            echo "VK_ICD_FILENAMES=$1"
+          } >> "$GITHUB_ENV"
+      - name: Install the D3D12 debug layer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Add-WindowsCapability -Online -Name "Tools.Graphics.DirectX~~~~0.0.1.0"
+      - name: Install macOS build tools
+        if: runner.os == 'macOS'
+        run: brew install pkg-config
+      - name: Pin the FFmpeg SDK
+        run: |
+          sdk_root="$(scripts/fetch-ffmpeg-sdk.sh ${{ matrix.target }})"
+          if [ "${{ runner.os }}" = Windows ]; then
+            sdk_root="$(cygpath -m "$sdk_root")"
+            {
+              echo "FFMPEG_INCLUDE_DIR=$sdk_root/include"
+              echo "FFMPEG_LIBS_DIR=$sdk_root/lib"
+              echo "FFMPEG_LINK_MODE=dynamic"
+            } >> "$GITHUB_ENV"
+            echo "$sdk_root/bin" >> "$GITHUB_PATH"
+          else
+            {
+              echo "PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
+              echo "FFMPEG_PKG_CONFIG_PATH=$sdk_root/lib/pkgconfig"
+              echo "FFMPEG_LINK_MODE=dynamic"
+            } >> "$GITHUB_ENV"
+            if [ "${{ runner.os }}" = Linux ]; then
+              echo "LD_LIBRARY_PATH=$sdk_root/lib" >> "$GITHUB_ENV"
+            fi
+          fi
+      # The Windows host compiles its DX12 pipelines with the pinned DXC and refuses to start without it.
+      - if: runner.os == 'Windows'
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ runner.temp }}/dxc
+          key: dxc-${{ hashFiles('release/dxc/manifest.toml') }}
+      - name: Fetch the pinned DXC
+        if: runner.os == 'Windows'
+        run: echo "ALPHA2_DXC_PATH=$(scripts/fetch-dxc.sh "$RUNNER_TEMP/dxc")" >> "$GITHUB_ENV"
+      - name: Adapters
+        run: cargo run -q -p alpha2-gpu --example adapters
+      - name: GPU suites under ${{ matrix.backend }} validation
+        run: node scripts/test-gpu-validation.mjs --backend ${{ matrix.backend }} ${{ matrix.crates }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: gpu-validation-${{ matrix.backend }}
+          path: target/gpu-validation
           if-no-files-found: ignore

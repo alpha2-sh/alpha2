@@ -252,9 +252,13 @@ version = "0.5.0"
 dependencies = [
  "alpha2-gpu",
  "alpha2-test-support",
+ "ash",
+ "log",
  "pollster",
+ "serde_json",
  "web-time",
  "wgpu",
+ "windows",
 ]
 
 [[package]]
@@ -420,6 +424,7 @@ dependencies = [
  "alpha2-gpu",
  "alpha2-media",
  "alpha2-model",
+ "alpha2-os",
  "alpha2-shaders",
  "alpha2-test-support",
  "alpha2-time",

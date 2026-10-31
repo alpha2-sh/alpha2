@@ -20,6 +20,7 @@ import {
   missingCapability,
   suiteOf,
 } from "../../../scripts/lib/capabilities.mjs";
+import { assertScalesBelow } from "../../../scripts/lib/timing.mjs";
 
 const cue = (start, end, text) => ({
   timeline_range: { start, end },
@@ -157,8 +158,8 @@ test(
       runtimeAssets: { wasmUrl: readFileSync(wasmFile) },
     });
     try {
+      const cue = "00:00.000 --> 00:01.000\nx\n\n";
       const refused = async (file, message) => {
-        const started = performance.now();
         await assert.rejects(bridge.importCaptions(file), (error) => {
           assert.equal(error.name, "EditorError");
           assert.equal(error.code, "invalid_captions");
@@ -166,27 +167,37 @@ test(
           return true;
         });
         assert.deepEqual(Object.keys(editor.document.assets), []);
-        return performance.now() - started;
       };
+      const cues = (count) =>
+        subtitles("cues.vtt", `WEBVTT\n\n${cue.repeat(count)}`);
       await refused(
         subtitles("huge.srt", "", MAX_CAPTION_FILE_BYTES + 1),
         new RegExp(`huge.srt is ${MAX_CAPTION_FILE_BYTES + 1} bytes`),
       );
-      // One cue past the file limit: refused in about the time reading takes.
-      const cue = "00:00.000 --> 00:01.000\nx\n\n";
+      // One cue past the file limit: refused in about the time reading takes, which is linear.
       const crowded = `WEBVTT\n\n${cue.repeat(MAX_CAPTION_FILE_CUES + 1)}`;
-      const elapsed = await refused(
+      await refused(
         subtitles("crowded.vtt", crowded),
         new RegExp(`crowded.vtt: .*more than ${MAX_CAPTION_FILE_CUES} cues`),
       );
-      assert.ok(elapsed < 5000, `took ${elapsed} ms`);
+      await assertScalesBelow(
+        "a file of more cues than the limit",
+        MAX_CAPTION_FILE_CUES + 1,
+        cues,
+        (file) => refused(file, /more than/),
+      );
       // The file limit's cues, all at once: a row each, found in n log n time.
       const all = `WEBVTT\n\n${cue.repeat(MAX_CAPTION_FILE_CUES)}`;
-      const placed = await refused(
+      await refused(
         subtitles("all.vtt", all),
         /all.vtt: the captions need 65536 caption tracks/,
       );
-      assert.ok(placed < 5000, `took ${placed} ms`);
+      await assertScalesBelow(
+        "cues all at once",
+        MAX_CAPTION_FILE_CUES / 8,
+        cues,
+        (file) => refused(file, /caption tracks/),
+      );
       await refused(subtitles("bare.vtt", "no header"), /bare.vtt: .*WEBVTT/);
       const fits = Array.from(
         { length: 3 },

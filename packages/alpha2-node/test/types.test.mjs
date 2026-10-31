@@ -21,15 +21,20 @@ function typeErrors(source) {
     types: ["node"],
   };
   const host = ts.createCompilerHost(options);
+  // The compiler names files with forward slashes, on Windows too, so a name is resolved before it
+  // is compared with `file`.
+  const isChecked = (name) => resolve(name) === file;
   const getSourceFile = host.getSourceFile.bind(host);
   host.getSourceFile = (name, language, ...rest) =>
-    name === file
+    isChecked(name)
       ? ts.createSourceFile(name, source, language)
       : getSourceFile(name, language, ...rest);
   const fileExists = host.fileExists.bind(host);
-  host.fileExists = (name) => name === file || fileExists(name);
+  host.fileExists = (name) => isChecked(name) || fileExists(name);
   const program = ts.createProgram([file], options, host);
   const checked = program.getSourceFile(file);
+  // Without it the diagnostics below would be every file's but this one's, and none would say so.
+  assert.ok(checked, `${file} is not in the program`);
   return [
     ...program.getSyntacticDiagnostics(checked),
     ...program.getSemanticDiagnostics(checked),
@@ -60,4 +65,16 @@ export { samples, fallbacks, reserved, why, renderer, fellBack, threads, cpuMs, 
 `),
     [],
   );
+});
+
+test("a declared shape mismatch is reported", () => {
+  const errors = typeErrors(`
+import type { NativeExportResult } from "../dist/index.js";
+
+declare const result: NativeExportResult;
+const renderer: number = result.renderer;
+export { renderer };
+`);
+  assert.equal(errors.length, 1, errors.join("\n"));
+  assert.match(errors[0], /not assignable to type 'number'/);
 });

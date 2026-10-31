@@ -95,6 +95,38 @@ test("a case only one side measured is listed, not compared", () => {
   assert.match(report(result)[0], /^ok: none of 6 benchmark times/);
 });
 
+test("a time printed as n/a is not measured, not unchanged", () => {
+  const measured = measurements(
+    "cpu_frame size=1920x1080 threads=1 wall_ms=120.0 cpu_ms=118.0",
+  );
+  const unmeasured = measurements(
+    "cpu_frame size=1920x1080 threads=1 wall_ms=121.0 cpu_ms=n/a",
+  );
+  assert.deepEqual(
+    unmeasured.get("cpu_frame size=1920x1080 threads=1 cpu_ms"),
+    {
+      value: null,
+      step: 0,
+    },
+  );
+  for (const [before, after] of [
+    [measured, unmeasured],
+    [unmeasured, measured],
+  ]) {
+    const result = compare(before, after);
+    assert.deepEqual(result.notMeasured, [
+      "cpu_frame size=1920x1080 threads=1 cpu_ms",
+    ]);
+    assert.equal(result.unchanged, 1, "wall_ms alone");
+    assert.deepEqual(result.regressions, []);
+    assert.ok(
+      report(result).includes(
+        "  not measured (n/a on this machine): cpu_frame size=1920x1080 threads=1 cpu_ms",
+      ),
+    );
+  }
+});
+
 test("the command exits 1 on a regression, 0 without one, and 2 when nothing matches", () => {
   const dir = mkdtempSync(join(tmpdir(), "bench-compare-"));
   try {
