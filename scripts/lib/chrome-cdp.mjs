@@ -600,7 +600,10 @@ export async function runChromePage(
           );
         } catch (error) {
           if (error instanceof CommandTimeout) break;
-          throw error;
+          // A page that crashed or closed: what it last showed says how far it got.
+          throw new Error(`${error.message} (the page was at ${title})`, {
+            cause: error,
+          });
         }
         title = evaluation.result?.value ?? "";
         if (title.startsWith("%7B") || title.startsWith("%7b")) return title;

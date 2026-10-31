@@ -125,7 +125,7 @@ fn an_injected_loss_after_a_heavy_frame_is_device_hung() {
 fn an_injected_loss_after_light_frames_stays_device_lost() {
     // Light on any adapter: the blur's radius follows the frame's size, so its cost grows with the
     // cube of the width, and at 1080p a software rasterizer takes longer than the watchdog.
-    let answer = lost_export(None, "480x270");
+    let answer = lost_export(None, "128x72");
     let error = &answer["error"];
     assert_eq!(answer["ok"], false, "{answer}");
     assert_eq!(error["code"], "GPU_DEVICE_LOST", "{answer}");

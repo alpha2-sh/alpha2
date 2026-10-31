@@ -268,6 +268,30 @@ fn required_set() -> &'static BTreeSet<Capability> {
     })
 }
 
+/// Why this machine's hardware video is not its own, when it is a virtual machine: a guest's
+/// paravirtual video engines list codecs they then fail to decode, intermittently. macOS reports a
+/// hypervisor through `kern.hv_vmm_present`; elsewhere this is `None`.
+#[must_use]
+pub fn virtual_machine() -> Option<&'static str> {
+    #[cfg(target_os = "macos")]
+    {
+        static GUEST: OnceLock<bool> = OnceLock::new();
+        let guest = *GUEST.get_or_init(|| {
+            std::process::Command::new("sysctl")
+                .args(["-n", "kern.hv_vmm_present"])
+                .output()
+                .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "1")
+        });
+        if guest {
+            return Some(
+                "this Mac is a virtual machine (kern.hv_vmm_present), whose paravirtual \
+                 VideoToolbox fails decodes it lists",
+            );
+        }
+    }
+    None
+}
+
 /// Whether `ALPHA2_REQUIRE` names `capability`.
 ///
 /// # Panics

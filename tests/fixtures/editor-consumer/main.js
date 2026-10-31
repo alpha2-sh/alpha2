@@ -14,6 +14,17 @@ import extensionsWasmUrl from "alpha2/wasm/alpha2_extensions_bg.wasm?url";
 import wasmUrl from "alpha2/wasm/alpha2_wasm_bg.wasm?url";
 import audioWasmUrl from "alpha2/wasm/alpha2_audio_worklet.wasm?url";
 import workletUrl from "alpha2/audio-worklet-processor?worker&url";
+
+// Each stage the page reaches is its title until the result replaces it, so a run that loses the
+// page (a crash, a timeout) can say where it was.
+let stage;
+Object.defineProperty(globalThis, "editorTestStage", {
+  get: () => stage,
+  set: (value) => {
+    stage = value;
+    if (!document.title.startsWith("%7B")) document.title = "stage " + value;
+  },
+});
 // Keep module evaluation synchronous: lazy engine chunks may share imports with the entry module.
 // Initialization runs after those modules can evaluate.
 async function main() {

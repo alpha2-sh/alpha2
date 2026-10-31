@@ -296,6 +296,10 @@ fn parity_device() -> Option<alpha2_native_gpu::SharedVulkanContext> {
 
 #[cfg(all(target_os = "macos", feature = "hwdecode"))]
 fn parity_device() -> Option<alpha2_native_gpu::SharedMetalContext> {
+    if let Some(reason) = alpha2_test_support::virtual_machine() {
+        alpha2_test_support::skip!(alpha2_test_support::Capability::Videotoolbox, "{reason}");
+        return None;
+    }
     if !create_gpu_media_host(VideoDecodePolicy::Auto)
         .expect("host")
         .hardware_decode_ready()

@@ -333,6 +333,10 @@ pub fn explain_choice(
             record.name,
             if record.software { "" } else { "hardware " }
         ),
+        (ChoiceReason::PerformancePolicy, _) if record.software => format!(
+            "{} renders in software: no hardware adapter renders here",
+            record.name
+        ),
         (ChoiceReason::PerformancePolicy, _) => format!(
             "{} is the first hardware adapter in the high-performance order",
             record.name

@@ -29,15 +29,17 @@ fn a_non_utf8_argument_is_refused_without_a_panic() {
 fn a_closed_stdout_ends_the_command_with_status_1() {
     let corpus =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/corpus/h264-long-gop.mp4");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_alpha2"))
+    // The reading end is closed before the command starts, so its first write fails however fast
+    // it runs.
+    let (reader, writer) = std::io::pipe().expect("a pipe");
+    drop(reader);
+    let output = Command::new(env!("CARGO_BIN_EXE_alpha2"))
         .arg("probe")
         .arg(&corpus)
-        .stdout(Stdio::piped())
+        .stdout(Stdio::from(writer))
         .stderr(Stdio::piped())
-        .spawn()
+        .output()
         .expect("alpha2 runs");
-    drop(child.stdout.take());
-    let output = child.wait_with_output().expect("alpha2 ends");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(1), "{stderr}");
     assert!(stderr.contains("alpha2: standard output:"), "{stderr}");

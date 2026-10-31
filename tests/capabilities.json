@@ -45,7 +45,7 @@
   },
   "videotoolbox": {
     "description": "VideoToolbox hardware H.264 decode.",
-    "probe": "metal and VTIsHardwareDecodeSupported(H.264)"
+    "probe": "metal and VTIsHardwareDecodeSupported(H.264), on a Mac that is not a virtual machine (kern.hv_vmm_present)"
   },
   "videotoolbox-encode": {
     "description": "VideoToolbox hardware H.264 encode.",

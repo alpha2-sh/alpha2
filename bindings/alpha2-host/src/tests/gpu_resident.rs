@@ -20,6 +20,10 @@ fn an_export_survives_a_hardware_session_that_fails_on_its_first_packet() {
     let streams = [("vp9.webm", 128, 96), ("h264-high10.mp4", 128, 96)];
     #[cfg(target_os = "macos")]
     let streams = {
+        if let Some(reason) = alpha2_test_support::virtual_machine() {
+            alpha2_test_support::skip!(alpha2_test_support::Capability::Videotoolbox, "{reason}");
+            return;
+        }
         if !create_gpu_media_host(VideoDecodePolicy::Auto)
             .expect("host")
             .hardware_decode_ready()

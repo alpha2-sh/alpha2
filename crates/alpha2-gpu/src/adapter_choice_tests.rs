@@ -200,6 +200,19 @@ fn software_adapters_come_last() {
         first(&only_warp, &AdapterPolicy::Auto, true),
         (1, ChoiceReason::OnlyAdapter)
     );
+    // With no hardware adapter that renders, `performance` takes the software one and says so.
+    let fallback = rank_adapters(&only_warp, &AdapterPolicy::Performance, true).expect("WARP");
+    let explanation = explain_choice(
+        &only_warp,
+        fallback.order[0],
+        None,
+        fallback.reason,
+        &AdapterPolicy::Performance,
+    );
+    assert!(
+        explanation.contains("renders in software: no hardware adapter renders here"),
+        "{explanation}"
+    );
     assert!(
         only_warp[1].summary().contains("(a software adapter)"),
         "{}",

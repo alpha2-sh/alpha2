@@ -753,7 +753,9 @@ jobs:
             | ALPHA2_RENDERER=gpu target/debug/alpha2-host serve > "$RUNNER_TEMP/capabilities.json"
           python - "$RUNNER_TEMP/capabilities.json" <<'PY'
           import json, sys
-          answer = json.loads(open(sys.argv[1]).read().splitlines()[0])
+          # The ready line comes first; the capabilities are the answer to request "c".
+          lines = [json.loads(line) for line in open(sys.argv[1]).read().splitlines() if line]
+          answer = next(line for line in lines if line.get("requestId") == "c")
           compiler = answer["result"]["capabilities"]["gpu"]["shaderCompiler"]
           assert compiler.startswith("DXC"), compiler
           print(compiler)
@@ -910,9 +912,11 @@ jobs:
             Object.assign(project.settings, { width: 1920, height: 1080 });
             fs.writeFileSync(process.argv[1], JSON.stringify(project));
           ' "$RUNNER_TEMP/openh264-project.json"
+          # Pinned: these runners also offer a platform H.264 encoder, which the host would prefer.
           for run in first second; do
             target/release/alpha2-host export --project "$RUNNER_TEMP/openh264-project.json" \
               --asset video=tests/corpus/parity-rgb.mov --asset still=tests/corpus/parity-image.png \
+              --video-encoder openh264 \
               --out "$RUNNER_TEMP/$run.mp4" > "$RUNNER_TEMP/$run.json" 2> "$RUNNER_TEMP/$run.log" \
               || { cat "$RUNNER_TEMP/$run.log"; exit 1; }
           done
