@@ -32,7 +32,7 @@
     "lint:rust": "cargo clippy --workspace --all-targets --all-features -- -D warnings",
     "format": "prettier --write \"**/*.{js,mjs,cjs,ts,tsx,mts,cts}\"",
     "format:check": "prettier --check \"**/*.{js,mjs,cjs,ts,tsx,mts,cts}\"",
-    "test:js": "npm run build:js --workspace alpha2 && npm run build --workspace @alpha2-sh/node && npm run build --workspace @alpha2-sh/react && node --test packages/alpha2/test/*.test.mjs packages/alpha2-node/test/*.test.mjs packages/alpha2-react/test/*.test.mjs scripts/*.test.mjs scripts/lib/*.test.mjs scripts/packaging/*.test.mjs scripts/lib/wasm-browser/*.test.mjs scripts/release-gate/*.test.mjs && npm run test:editor",
+    "test:js": "npm run build:js --workspace alpha2 && npm run build --workspace @alpha2-sh/node && npm run build --workspace @alpha2-sh/react && node --test packages/alpha2/test/*.test.mjs packages/alpha2-node/test/*.test.mjs packages/alpha2-react/test/*.test.mjs scripts/*.test.mjs scripts/lib/*.test.mjs scripts/packaging/*.test.mjs scripts/lib/wasm-browser/*.test.mjs && npm run test:editor",
     "test:editor": "npm run build --workspace @alpha2-sh/editor && node --test packages/alpha2-editor/test/*.test.mjs",
     "test:editor:package": "npm run build --workspace @alpha2-sh/editor && node scripts/test-editor-package.mjs"
   },

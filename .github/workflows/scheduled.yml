@@ -1,7 +1,7 @@
 name: scheduled
 
 # The checks too slow for every change: every fuzz target and the worklet under Miri, weekly.
-# Benchmarks are compared only on a quiet fixed machine (the release gate), not on shared runners.
+# Benchmarks are compared only on a quiet fixed machine, not on shared runners.
 on:
   schedule:
     - cron: "41 2 * * 1"

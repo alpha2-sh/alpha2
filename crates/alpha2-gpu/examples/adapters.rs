@@ -1,4 +1,4 @@
-//! Prints every adapter of every backend, one per line, for CI and release-gate logs:
+//! Prints every adapter of every backend, one per line, for CI and machine check logs:
 //! `backend<TAB>name<TAB>type<TAB>driver<TAB>driver_info<TAB>vendor:device`, then on Windows the
 //! DX12 shader compiler the instance settings name.
 //!
