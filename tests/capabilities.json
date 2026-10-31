@@ -161,7 +161,7 @@
   },
   "webcodecs-video": {
     "description": "WebCodecs video encode.",
-    "probe": "VideoEncoder exists"
+    "probe": "VideoEncoder exists; on a Mac virtual machine (kern.hv_vmm_present), an encode that stalls also counts as absent"
   },
   "aac-encode": {
     "description": "AAC encode in the browser.",

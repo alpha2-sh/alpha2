@@ -12,6 +12,8 @@ import {
   required,
   requiredCapabilities,
   summarizeSkipLog,
+  virtualMachine,
+  virtualMachineEncoderStall,
 } from "./capabilities.mjs";
 
 test("ALPHA2_REQUIRE is a trimmed comma list of known names", () => {
@@ -129,5 +131,19 @@ test("records appended by many processes are whole lines", async () => {
       assert.equal(JSON.parse(line).capability, "browser");
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("only a video encoder stall on a virtual machine is forgiven", () => {
+  for (const other of [null, {}, { code: "GPU_TIMEOUT", stage: "map-failed" }])
+    assert.equal(virtualMachineEncoderStall(other), null);
+  const guest = virtualMachine();
+  for (const stall of [
+    { code: "ENCODE_STALLED" },
+    { code: "GPU_TIMEOUT", stage: "encoder-stalled" },
+  ]) {
+    const reason = virtualMachineEncoderStall(stall);
+    if (guest === null) assert.equal(reason, null);
+    else assert.match(reason, /stalled.*virtual machine/);
   }
 });

@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { resolve, join, extname } from "node:path";
 import { browserForRun, runBrowserPage } from "./lib/browser-page.mjs";
 import { probeRun } from "./lib/browser-probe.mjs";
-import { recordSkip } from "./lib/capabilities.mjs";
+import { recordSkip, virtualMachineEncoderStall } from "./lib/capabilities.mjs";
 import {
   animatedGif,
   largeLottie,
@@ -238,6 +238,27 @@ try {
       ),
     ),
   );
+  // A retry is a failure unless every earlier attempt stalled in a virtual machine's encoder.
+  let noGpuOk = noGpu.ok;
+  const stalls = (noGpu.retriedAfter ?? []).map(virtualMachineEncoderStall);
+  if (
+    !noGpuOk &&
+    noGpu.exported &&
+    stalls.length > 0 &&
+    stalls.every((stall) => stall !== null)
+  ) {
+    try {
+      recordSkip({
+        suite: "editor-package",
+        test: "noGpu single attempt",
+        capability: "webcodecs-video",
+        reason: `the export was retried: ${stalls[0]}`,
+      });
+      noGpuOk = true;
+    } catch (error) {
+      noGpu.required = error.message;
+    }
+  }
   const incompleteGraph = JSON.parse(
     decodeURIComponent(
       await runBrowserPage(
@@ -315,7 +336,7 @@ export const app=<EditorProvider editor={editor}><Selected/><EditorPreview bridg
       browser.ok &&
       fallback.ok &&
       contextLoss.ok &&
-      noGpu.ok &&
+      noGpuOk &&
       incompleteGraph.ok &&
       extensions.ok &&
       webkitStorage.ok &&

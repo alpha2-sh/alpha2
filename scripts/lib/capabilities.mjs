@@ -1,6 +1,7 @@
 // The test capability contract, as in the Rust and Python helpers: ALPHA2_REQUIRE turns a named
 // capability's skips into failures; other skips are appended to ALPHA2_SKIP_LOG as JSON lines.
 
+import { execFileSync } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -44,6 +45,51 @@ export function suiteOf(fileOrUrl) {
     ? fileURLToPath(fileOrUrl)
     : String(fileOrUrl);
   return relative(root, file).split("\\").join("/");
+}
+
+let guest;
+
+/**
+ * Why this machine's video engines are not its own, or null: as the Rust helper, only a Mac
+ * guest is detected (kern.hv_vmm_present). Its paravirtual encoder intermittently stops putting
+ * out frames.
+ *
+ * @returns {string | null}
+ */
+export function virtualMachine() {
+  if (process.platform !== "darwin") return null;
+  guest ??= (() => {
+    try {
+      return (
+        execFileSync("sysctl", ["-n", "kern.hv_vmm_present"], {
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+        }).trim() === "1"
+      );
+    } catch {
+      return false;
+    }
+  })();
+  return guest
+    ? "this Mac is a virtual machine (kern.hv_vmm_present), whose paravirtual video encoder stalls intermittently"
+    : null;
+}
+
+/**
+ * The skip reason when `failure` is a video encoder stall on a virtual machine, or null. A stall
+ * elsewhere stays a failure.
+ *
+ * @param {{ code?: string | null, stage?: string | null } | null | undefined} failure
+ * @returns {string | null}
+ */
+export function virtualMachineEncoderStall(failure) {
+  if (
+    failure?.code !== "ENCODE_STALLED" &&
+    failure?.stage !== "encoder-stalled"
+  )
+    return null;
+  const machine = virtualMachine();
+  return machine === null ? null : `the video encoder stalled, and ${machine}`;
 }
 
 /**

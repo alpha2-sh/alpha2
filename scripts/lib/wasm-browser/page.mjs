@@ -132,7 +132,7 @@ ${body}
       skipped: "this browser lost WebGPU importing a VideoFrame (" + String(error?.message ?? error) + ")",
       capability: "webgpu-video-import",
     });
-  else report({ error: described(error) });
+  else report({ error: described(error), code: error?.code ?? null, stage: error?.failure?.stage ?? null });
 }
 </script></body></html>`;
 }

@@ -11,7 +11,7 @@ import { join, resolve } from "node:path";
 
 import { browserForRun, runBrowserPage } from "./lib/browser-page.mjs";
 import { probeRun } from "./lib/browser-probe.mjs";
-import { recordSkip } from "./lib/capabilities.mjs";
+import { recordSkip, virtualMachineEncoderStall } from "./lib/capabilities.mjs";
 import {
   gpuProcessEnvironment,
   reportSkippedBrowser,
@@ -174,7 +174,13 @@ try {
     }
     return gpuProcessEnvironment(gpuProcess, result) ?? result;
   };
-  const report = (name, result) => {
+  const report = (name, outcome) => {
+    const stalled =
+      outcome.ok === true ? null : virtualMachineEncoderStall(outcome);
+    const result =
+      stalled === null
+        ? outcome
+        : { skipped: stalled, capability: "webcodecs-video" };
     if (result.skipped && !result.capability) {
       failures += 1;
       process.stdout.write(

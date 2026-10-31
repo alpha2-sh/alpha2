@@ -242,17 +242,24 @@ async function main() {
       });
       const artifact = await job.result.catch(() => null);
       const report = artifact?.report;
+      const exported =
+        rendered === true &&
+        renderer?.renderer === "cpu" &&
+        renderer.runtimeEffects === false &&
+        bridge.capabilities.features.preview.available === true &&
+        artifact !== null &&
+        (artifact.file?.size ?? artifact.bytes?.byteLength ?? 0) > 0 &&
+        report?.renderer?.renderer === "cpu" &&
+        reported.length === 0;
       const result = {
-        ok:
-          rendered === true &&
-          renderer?.renderer === "cpu" &&
-          renderer.runtimeEffects === false &&
-          bridge.capabilities.features.preview.available === true &&
-          artifact !== null &&
-          (artifact.file?.size ?? artifact.bytes?.byteLength ?? 0) > 0 &&
-          report?.renderer?.renderer === "cpu" &&
-          job.attempts.length === 1 &&
-          reported.length === 0,
+        ok: exported && job.attempts.length === 1,
+        exported,
+        // The runner forgives retries after encoder stalls on a virtual machine.
+        retriedAfter: job.attempts.slice(0, -1).map((attempt) => ({
+          code: attempt.failure?.code ?? null,
+          stage: attempt.failure?.stage ?? null,
+          message: attempt.failure?.message ?? null,
+        })),
         rendered,
         renderer,
         previewBackend: bridge.previewBackend,

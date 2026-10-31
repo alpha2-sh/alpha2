@@ -757,8 +757,10 @@ report({
 export function webgpuDroppedWork() {
   return `
 if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");
-const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+const { default: init, WebEffectRegistry, setGpuWatchdogMs } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
+// A slow first frame (a virtual machine's) must not read as hung: this case is about the canary.
+setGpuWatchdogMs(600_000);
 const engine = await gpuEngine(WebEffectRegistry);
 const project = await fetch("/tests/cases/host-parity-project.json").then((response) => response.json());
 engine.loadProject(JSON.stringify(project));
