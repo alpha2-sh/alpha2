@@ -35,6 +35,8 @@ pub struct GpuContext {
     // Shared, so that a clone (one per readback) copies no strings.
     capabilities: Arc<Capabilities>,
     diagnostics: Arc<DiagnosticHook>,
+    /// How fast the device works through predicted cost, shared by clones.
+    rate: Arc<crate::rate::GpuRate>,
 }
 
 /// The queue and the lock every call that reaches it takes.
@@ -168,6 +170,7 @@ impl GpuContext {
             queue: LockedQueue::shared(queue, queue_lock),
             capabilities,
             diagnostics,
+            rate: Arc::default(),
         }
     }
 
@@ -560,6 +563,7 @@ impl GpuContext {
             queue: LockedQueue::shared(queue, None),
             capabilities,
             diagnostics,
+            rate: Arc::default(),
         })
     }
 
@@ -585,6 +589,12 @@ impl GpuContext {
     #[must_use]
     pub fn capabilities(&self) -> &Capabilities {
         &self.capabilities
+    }
+
+    /// How fast this device works through predicted cost.
+    #[must_use]
+    pub fn rate(&self) -> &Arc<crate::rate::GpuRate> {
+        &self.rate
     }
 
     /// This device, with renderers made on it storing their intermediate
@@ -790,7 +800,7 @@ async fn product_candidates(request: &ProductRequest) -> Result<Vec<Candidate>, 
             if pin.is_pin() && !pinned {
                 continue;
             }
-            let cpu = info.device_type == wgpu::DeviceType::Cpu;
+            let cpu = crate::software_adapter(&info);
             if cpu && request.software == SoftwareAdapters::Refuse && !pinned {
                 software.push(info.name);
                 continue;

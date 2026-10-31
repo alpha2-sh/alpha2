@@ -562,6 +562,8 @@ fn add_decode_path_metrics(value: &mut Value, metrics: &ExportMetrics) {
 /// readback), means over `gpuTimeSampledFrames`, or `gpuTimeUnavailable` saying why there are
 /// none. The GPU waits other fields contain are backend-specific: `readbackWaitMs` on the readback
 /// path, `encoderPlaneWaitMs` on D3D12 and Vulkan, `encoderInputReadyWaitMs` on `VideoToolbox`.
+/// `gpuSubmissions` counts how the export's frames were cut into queue submissions to stay under
+/// the GPU watchdog's budget.
 pub fn add_gpu_time_metrics(value: &mut Value, renderer: Option<&alpha2_render::Renderer>) {
     let times = renderer.map_or(Err("the CPU renderer runs no GPU work"), |renderer| {
         renderer.take_frame_gpu_times()
@@ -591,6 +593,15 @@ pub fn add_gpu_time_metrics(value: &mut Value, renderer: Option<&alpha2_render::
     value["gpuPackMsPerFrame"] = json!(pack);
     value["gpuTimeSampledFrames"] = json!(sampled);
     value["gpuTimeUnavailable"] = json!(unavailable);
+    value["gpuSubmissions"] = renderer.map_or(Value::Null, |renderer| {
+        let stats = renderer.take_gpu_submission_stats();
+        json!({
+            "frames": stats.frames,
+            "splitFrames": stats.split_frames,
+            "maxPerFrame": stats.max_per_frame,
+            "maxPredictedMs": stats.max_predicted_ms.map(|ms| (ms * 10.0).round() / 10.0),
+        })
+    });
 }
 
 fn milliseconds(duration: Duration) -> Value {

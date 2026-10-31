@@ -74,9 +74,9 @@ fn a_busy_gpu_encoder_with_no_cpu_encoder_is_encoder_busy() {
     );
 }
 
-/// 96x64 is below NVENC's 146x50 and below the 4090's `h264_vulkan` minimum:
-/// the same request fails the same way every time, so it is invalid input
-/// that names the sizes that work.
+/// 96x64 is below NVENC's 146x50 and below a discrete NVIDIA GPU's
+/// `h264_vulkan` minimum: the same request fails the same way every time, so
+/// it is invalid input that names the sizes that work.
 #[test]
 fn an_output_below_every_encoder_minimum_is_invalid_input() {
     let nvenc = refusal(

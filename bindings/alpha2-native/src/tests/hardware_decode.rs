@@ -623,8 +623,8 @@ fn the_decode_report_names_this_builds_backend_and_the_runtimes_hardware_decoder
 /// (`VTIsHardwareDecodeSupported`), not from what `FFmpeg` registers: each
 /// listed codec opens a hardware session on its corpus stream and decodes a
 /// hardware frame, and each unlisted one is refused before a session opens,
-/// so an M1 never claims AV1 and a session never runs in `VideoToolbox`'s
-/// software decoder.
+/// so a Mac without an AV1 decoder never claims AV1 and a session never runs
+/// in `VideoToolbox`'s software decoder.
 #[cfg(all(target_os = "macos", feature = "hwdecode"))]
 #[test]
 fn the_videotoolbox_decode_list_comes_from_the_device() {
@@ -639,8 +639,8 @@ fn the_videotoolbox_decode_list_comes_from_the_device() {
         ("h264", "h264-long-gop.mp4"),
         ("hevc", "hevc-hvc1.mp4"),
         ("vp9", "vp9.webm"),
-        // 320x180: VideoToolbox's AV1 decoder (an M4's) refuses a 64x48 stream's session though it
-        // decodes the codec, which is a per-stream refusal the lazy fallback handles.
+        // 320x180: VideoToolbox's AV1 decoder on Apple silicon refuses a 64x48 stream's session
+        // though it decodes the codec, which is a per-stream refusal the lazy fallback handles.
         ("av1", "av1-padded.mp4"),
     ] {
         match open_hardware_decoder(corpus(name), &context) {

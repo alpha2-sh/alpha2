@@ -70,6 +70,11 @@ pub struct Renderer {
     pub(crate) frame_lock: crate::Shared<FrameLock>,
     /// How long each recent submission kept the GPU busy.
     pub(crate) submission_clock: Arc<crate::submission_clock::SubmissionClock>,
+    /// How the last frame was submitted, until a caller takes it.
+    pub(crate) last_frame_submissions: Mutex<Option<crate::FrameSubmissions>>,
+    /// The calibration draw's effect, made the first time a frame needs the
+    /// device's rate.
+    pub(crate) calibration: std::sync::OnceLock<crate::registry::RegisteredEffect>,
 }
 
 /// A command encoder of this renderer's, open until its commands are
@@ -83,9 +88,18 @@ pub struct Renderer {
 ///
 /// And it holds the renderer's frame lock (see [`FrameLock`]) from creation
 /// until that submission.
+///
+/// A heavy frame's work may be cut into several command buffers
+/// ([`crate::submission_planner`]): the encoder derefs to the one being
+/// recorded, and each finished one waits beside it for the submission.
 #[derive(Debug)]
 pub(crate) struct RenderEncoder {
     encoder: wgpu::CommandEncoder,
+    /// Command buffers finished ahead of `encoder`, in submission order.
+    finished: Vec<wgpu::CommandBuffer>,
+    planner: crate::submission_planner::SubmissionPlanner,
+    device: wgpu::Device,
+    label: &'static str,
     errors: crate::gpu_errors::FrameErrorScope,
     scope: crate::retire::EncodeScope,
     frame: FrameGuard,
@@ -185,19 +199,61 @@ impl std::ops::DerefMut for RenderEncoder {
 impl RenderEncoder {
     /// Finishes recording; the encode stays open until [`Renderer::submit`].
     pub(crate) fn finish(self) -> RenderCommands {
+        let mut buffers = self.finished;
+        buffers.push(self.encoder.finish());
         RenderCommands {
-            buffer: self.encoder.finish(),
+            buffers,
+            planner: self.planner,
             errors: self.errors,
             scope: self.scope,
             frame: self.frame,
         }
+    }
+
+    /// The frame's submission planning.
+    pub(crate) const fn planner(&mut self) -> &mut crate::submission_planner::SubmissionPlanner {
+        &mut self.planner
+    }
+
+    /// Charges a pass to the plan and returns how many bands it is drawn in,
+    /// finishing the command buffer first when the plan says so.
+    pub(crate) fn place_pass(
+        &mut self,
+        cost: crate::effect_cost::EffectCost,
+        pixels: u64,
+        bandable: bool,
+    ) -> u32 {
+        let placement = self.planner.pass(cost, pixels, bandable);
+        if placement.cut_before {
+            self.cut();
+        }
+        placement.bands
+    }
+
+    /// Finishes the command buffer before the next band of a banded pass.
+    pub(crate) fn next_band(&mut self) {
+        self.planner.next_band();
+        self.cut();
+    }
+
+    fn cut(&mut self) {
+        // The same scopes, retirement and frame lock cover every buffer of the frame.
+        #[allow(clippy::disallowed_methods)]
+        let next = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some(self.label),
+            });
+        let done = std::mem::replace(&mut self.encoder, next);
+        self.finished.push(done.finish());
     }
 }
 
 /// A finished [`RenderEncoder`] waiting to be submitted.
 #[derive(Debug)]
 pub(crate) struct RenderCommands {
-    buffer: wgpu::CommandBuffer,
+    buffers: Vec<wgpu::CommandBuffer>,
+    planner: crate::submission_planner::SubmissionPlanner,
     errors: crate::gpu_errors::FrameErrorScope,
     scope: crate::retire::EncodeScope,
     frame: FrameGuard,
@@ -232,9 +288,19 @@ impl LossClassifier {
     }
 }
 
+/// What [`Renderer::submit_buffers`] submitted: the last submission's index,
+/// the summed timings, and the clock's sequence numbers of every submission.
+struct SubmittedBuffers {
+    index: wgpu::SubmissionIndex,
+    timings: SubmitTimings,
+    sequences: std::ops::Range<u64>,
+}
+
 /// One queue submission and the spans a caller asked to be measured.
 pub(crate) struct MeasuredSubmit {
     pub(crate) index: wgpu::SubmissionIndex,
+    /// The submission clock's sequence numbers of the submissions made.
+    pub(crate) sequences: std::ops::Range<u64>,
     pub(crate) timings: SubmitTimings,
     pub(crate) lease_retire: Duration,
 }
@@ -378,6 +444,8 @@ impl Renderer {
             gpu_errors,
             frame_lock: crate::Shared::default(),
             submission_clock,
+            last_frame_submissions: Mutex::new(None),
+            calibration: std::sync::OnceLock::new(),
         }
     }
 
@@ -664,6 +732,10 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
         RenderEncoder {
             encoder,
+            finished: Vec::new(),
+            planner: crate::submission_planner::SubmissionPlanner::default(),
+            device: self.gpu.device().clone(),
+            label,
             errors,
             scope,
             frame,
@@ -700,24 +772,27 @@ impl Renderer {
         let mut errors = Vec::new();
         let mut scopes = Vec::new();
         let mut frames = Vec::new();
+        let mut planners = Vec::new();
         for commands in commands {
-            command_buffers.push(commands.buffer);
+            command_buffers.extend(commands.buffers.into_iter().map(|buffer| (buffer, None)));
+            if let Some(buffer_ms) = commands.planner.buffer_ms() {
+                let first = command_buffers.len() - buffer_ms.len();
+                for (slot, ms) in command_buffers[first..].iter_mut().zip(buffer_ms) {
+                    slot.1 = Some(ms);
+                }
+            }
+            planners.push(commands.planner);
             errors.push(commands.errors);
             scopes.push(commands.scope);
             frames.push(commands.frame);
         }
-        let (index, timings) = if measure {
-            self.gpu.submit_timed(command_buffers)
-        } else {
-            (self.gpu.submit(command_buffers), SubmitTimings::default())
-        };
-        // Every submission is timed for the loss classification, whatever `measure` says: one
-        // clock read here and one when its work completes.
-        let sequence = self.submission_clock.record(web_time::Instant::now());
-        let clock = Arc::clone(&self.submission_clock);
-        self.gpu.on_submitted_work_done(move || {
-            clock.complete(sequence, web_time::Instant::now());
-        });
+        let submitted = self.submit_buffers(command_buffers, measure);
+        self.note_frame_submissions(&planners, &submitted);
+        let SubmittedBuffers {
+            index,
+            timings,
+            sequences,
+        } = submitted;
         // The submission reports its own errors, so its scopes close after it, in reverse order.
         let mut caught = None;
         for scope in errors.into_iter().rev() {
@@ -737,9 +812,133 @@ impl Renderer {
         }
         Ok(MeasuredSubmit {
             index,
+            sequences,
             timings,
             lease_retire: drain_started.map_or(Duration::ZERO, |started| started.elapsed()),
         })
+    }
+
+    /// Submits `buffers`, each with its predicted milliseconds when its
+    /// frame was planned: in one queue submission as one frame always was,
+    /// or, when a frame was cut, one submission per buffer so the GPU can be
+    /// preempted between them. Every submission is timed for the loss
+    /// classification, whatever `measure` says: one clock read at the submit
+    /// and one when its work completes.
+    fn submit_buffers(
+        &self,
+        buffers: Vec<(wgpu::CommandBuffer, Option<f64>)>,
+        measure: bool,
+    ) -> SubmittedBuffers {
+        let submit = |buffers: Vec<wgpu::CommandBuffer>, predicted_ms: Option<f64>| {
+            let (index, timings) = if measure {
+                self.gpu.submit_timed(buffers)
+            } else {
+                (self.gpu.submit(buffers), SubmitTimings::default())
+            };
+            let sequence = self
+                .submission_clock
+                .record(web_time::Instant::now(), predicted_ms);
+            let clock = Arc::clone(&self.submission_clock);
+            self.gpu.on_submitted_work_done(move || {
+                clock.complete(sequence, web_time::Instant::now());
+            });
+            (index, timings, sequence)
+        };
+        if buffers.len() <= 1 || buffers.iter().all(|(_, ms)| ms.is_none()) {
+            let predicted_ms = buffers
+                .iter()
+                .filter_map(|(_, ms)| *ms)
+                .reduce(|a, b| a + b);
+            let (index, timings, sequence) = submit(
+                buffers.into_iter().map(|(buffer, _)| buffer).collect(),
+                predicted_ms,
+            );
+            return SubmittedBuffers {
+                index,
+                timings,
+                sequences: sequence..sequence + 1,
+            };
+        }
+        let mut total = SubmitTimings::default();
+        let mut last = None;
+        let mut first_sequence = None;
+        for (buffer, predicted_ms) in buffers {
+            let (index, timings, sequence) = submit(vec![buffer], predicted_ms);
+            total.queue_lock_wait = total
+                .queue_lock_wait
+                .saturating_add(timings.queue_lock_wait);
+            total.queue_submit = total.queue_submit.saturating_add(timings.queue_submit);
+            first_sequence.get_or_insert(sequence);
+            last = Some((index, sequence));
+        }
+        let (index, last_sequence) = last.expect("at least two buffers");
+        SubmittedBuffers {
+            index,
+            timings: total,
+            sequences: first_sequence.unwrap_or(last_sequence)..last_sequence + 1,
+        }
+    }
+
+    /// Records how the frames among `planners` were submitted, and has a
+    /// planned frame's measured GPU time fold into the device's rate when
+    /// its work completes.
+    fn note_frame_submissions(
+        &self,
+        planners: &[crate::submission_planner::SubmissionPlanner],
+        submitted: &SubmittedBuffers,
+    ) {
+        let Some(planner) = planners.iter().find(|planner| planner.is_frame()) else {
+            return;
+        };
+        let submissions =
+            u32::try_from(submitted.sequences.end - submitted.sequences.start).unwrap_or(u32::MAX);
+        let buffer_ms = planner.buffer_ms();
+        let report = crate::FrameSubmissions {
+            submissions,
+            predicted_ms: buffer_ms.as_ref().map(|buffers| buffers.iter().sum()),
+            cost: planner.cost(),
+        };
+        crate::diagnostics::record_frame_plan(
+            &self.diagnostics,
+            &report,
+            buffer_ms
+                .iter()
+                .flatten()
+                .copied()
+                .fold(None, |most: Option<f64>, ms| {
+                    Some(most.map_or(ms, |most| most.max(ms)))
+                }),
+        );
+        *self
+            .last_frame_submissions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(report);
+        if planner.is_planned() {
+            let clock = Arc::clone(&self.submission_clock);
+            let rate = Arc::clone(self.gpu.rate());
+            let sequences = submitted.sequences.clone();
+            let unit_pixels = report.cost.unit_pixels();
+            self.gpu.on_submitted_work_done(move || {
+                if let Some(measured_ms) = clock.gpu_ms(sequences) {
+                    rate.observe(measured_ms, unit_pixels);
+                }
+            });
+        }
+    }
+
+    /// How the last frame rendered on this renderer was submitted, taken so
+    /// a caller reads each frame's once.
+    pub fn take_frame_submissions(&self) -> Option<crate::FrameSubmissions> {
+        self.last_frame_submissions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+
+    /// How the frames rendered since the last call were cut into
+    /// submissions; the counts start again from zero.
+    pub fn take_gpu_submission_stats(&self) -> crate::GpuSubmissionStats {
+        crate::diagnostics::take_gpu_submission_stats(&self.diagnostics)
     }
 
     /// Returns whether per-pass timing is being collected.

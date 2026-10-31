@@ -1,0 +1,8 @@
+[
+  {
+    "id": "gpu-watchdog.heavy",
+    "version": 1,
+    "kind": "effect",
+    "wgslBody": "// A streak of 1024 taps, the whole per-invocation loop budget, across 0.72 x 0.31 of the\n// picture, each tap weighted by a chain of eight dependent transcendental calls seeded by its\n// colour. About 1 KiB of WGSL that keeps a GPU busy for a long time per pixel.\nfn effect(uv: vec2f, src: vec4f) -> vec4f {\n    var acc = vec4f(0.0);\n    var total = 0.0;\n    var w = 0.5;\n    for (var i = 0u; i < 1024u; i++) {\n        let s = sample_src(fract(uv + vec2f(f32(i) * 0.0007, f32(i) * 0.0003)));\n        w = sin(w * 1.37 + s.r);\n        w = cos(w * 1.11 + s.g);\n        w = exp(-abs(w) * 0.7);\n        w = sqrt(w + 0.01);\n        w = sin(w * 2.03 + s.b);\n        w = exp(-abs(w));\n        w = cos(w * 0.91 + s.a);\n        w = sqrt(abs(w) + 0.001);\n        acc += s * w;\n        total += w;\n    }\n    return acc / max(total, 0.000001);\n}\n"
+  }
+]

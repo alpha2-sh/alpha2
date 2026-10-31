@@ -1,0 +1,139 @@
+{
+  "fps": 24,
+  "ticks_per_frame": 5000,
+  "segments": [
+    {
+      "name": "lens-blur",
+      "kind": "effect",
+      "id": "alpha2.effect.lens-blur",
+      "start": 0,
+      "end": 10000
+    },
+    {
+      "name": "oil-paint",
+      "kind": "effect",
+      "id": "alpha2.effect.oil-paint",
+      "start": 10000,
+      "end": 20000
+    },
+    {
+      "name": "surface-blur",
+      "kind": "effect",
+      "id": "alpha2.effect.surface-blur",
+      "start": 20000,
+      "end": 30000
+    },
+    {
+      "name": "matte-choker",
+      "kind": "effect",
+      "id": "alpha2.effect.matte-choker",
+      "start": 30000,
+      "end": 40000
+    },
+    {
+      "name": "outline",
+      "kind": "effect",
+      "id": "alpha2.effect.outline",
+      "start": 40000,
+      "end": 50000
+    },
+    {
+      "name": "radial-blur-spin",
+      "kind": "effect",
+      "id": "alpha2.effect.radial-blur",
+      "start": 50000,
+      "end": 60000
+    },
+    {
+      "name": "gaussian-blur-r1",
+      "kind": "effect",
+      "id": "alpha2.effect.gaussian-blur",
+      "start": 60000,
+      "end": 70000
+    },
+    {
+      "name": "glow-max",
+      "kind": "effect",
+      "id": "alpha2.effect.glow",
+      "start": 70000,
+      "end": 80000
+    },
+    {
+      "name": "drop-shadow-max",
+      "kind": "effect",
+      "id": "alpha2.effect.drop-shadow",
+      "start": 80000,
+      "end": 90000
+    },
+    {
+      "name": "tilt-shift-max",
+      "kind": "effect",
+      "id": "alpha2.effect.tilt-shift",
+      "start": 90000,
+      "end": 100000
+    },
+    {
+      "name": "unsharp-mask-max",
+      "kind": "effect",
+      "id": "alpha2.effect.unsharp-mask",
+      "start": 100000,
+      "end": 110000
+    },
+    {
+      "name": "zoom-blur",
+      "kind": "transition",
+      "id": "alpha2.transition.zoom-blur",
+      "start": 140000,
+      "end": 155000
+    },
+    {
+      "name": "defocus-blur",
+      "kind": "transition",
+      "id": "alpha2.transition.defocus-blur",
+      "start": 160000,
+      "end": 175000
+    },
+    {
+      "name": "linear-blur",
+      "kind": "transition",
+      "id": "alpha2.transition.linear-blur",
+      "start": 180000,
+      "end": 195000
+    },
+    {
+      "name": "revolve",
+      "kind": "transition",
+      "id": "alpha2.transition.revolve",
+      "start": 200000,
+      "end": 215000
+    },
+    {
+      "name": "whip-pan",
+      "kind": "transition",
+      "id": "alpha2.transition.whip-pan",
+      "start": 220000,
+      "end": 235000
+    },
+    {
+      "name": "film-burn",
+      "kind": "transition",
+      "id": "alpha2.transition.film-burn",
+      "start": 240000,
+      "end": 255000
+    },
+    {
+      "name": "fragment",
+      "kind": "transition",
+      "id": "alpha2.transition.fragment",
+      "start": 260000,
+      "end": 275000
+    },
+    {
+      "name": "power-kaleido",
+      "kind": "transition",
+      "id": "alpha2.transition.power-kaleido",
+      "start": 280000,
+      "end": 295000
+    }
+  ]
+}

@@ -417,8 +417,7 @@ if [[ -n "${FFMPEG_ENCODERS:-}" ]]; then
   "${ENCODE[@]}" -f lavfi -i testsrc2=size=128x96:rate=30:duration=0.5 \
     -an -c:v libvpx-vp9 -b:v 200k -pix_fmt yuv420p -threads 1 \
     -fflags +bitexact -flags:v +bitexact vp9.webm
-  # VP9 within every hardware decoder's limits (the RTX 4090's Vulkan VP9 decoder starts at
-  # 128x128).
+  # VP9 within every hardware decoder's limits (an NVIDIA Vulkan VP9 decoder starts at 128x128).
   "${ENCODE[@]}" -f lavfi -i testsrc2=size=192x128:rate=30:duration=1 \
     -an -c:v libvpx-vp9 -b:v 300k -pix_fmt yuv420p -threads 1 \
     -fflags +bitexact -flags:v +bitexact vp9-128.webm

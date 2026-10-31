@@ -242,8 +242,8 @@ fn composite(
 ///
 /// A GPU blends in fixed-function hardware whose internal precision varies:
 /// this model is exact on lavapipe, llvmpipe, WARP and Metal and within 16
-/// half-float steps (under a quarter of a code) on NVIDIA, RADV and the Iris
-/// Xe, which no single blend model fits better. The CPU keeps one model so its
+/// half-float steps (under a quarter of a code) on NVIDIA, RADV and an Intel
+/// integrated GPU, which no single blend model fits better. The CPU keeps one model so its
 /// output is the same everywhere.
 #[inline]
 pub(crate) fn over(dst: &mut Rgba, src: Rgba) {

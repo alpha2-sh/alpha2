@@ -1390,12 +1390,13 @@ test("a source keeps at most its cursor limit open, closing the one used least r
   );
 });
 
-test("after a decoder error the next forward request decodes with a new decoder", async () => {
+test("webcodecs decoder falls back to software once", async () => {
   // A transient EncodingError, or a reclaimed codec, closes the VideoDecoder and calls its error
-  // callback; the request that met it fails, and play continues from the next one.
+  // callback; the request that met it is decoded again by a software decoder, which serves the rest.
   const original = globalThis.VideoDecoder;
   let failAt = 4 * 33_333;
   let created = 0;
+  const configured = [];
   globalThis.VideoDecoder = class extends EventTarget {
     decodeQueueSize = 0;
     state = "configured";
@@ -1408,7 +1409,9 @@ test("after a decoder error the next forward request decodes with a new decoder"
       this.#error = error;
       created += 1;
     }
-    configure() {}
+    configure(config) {
+      configured.push(config.hardwareAcceleration);
+    }
     decode(chunk) {
       if (chunk.timestamp === failAt) {
         failAt = -1;
@@ -1465,17 +1468,70 @@ test("after a decoder error the next forward request decodes with a new decoder"
     decoder.close();
     globalThis.VideoDecoder = original;
   }
-  assert.deepEqual(outcomes, [
-    "ok",
-    "ok",
-    "ok",
-    "ok",
-    "EncodingError",
-    "ok",
-    "ok",
-    "ok",
-    "ok",
-    "ok",
-  ]);
+  assert.deepEqual(outcomes, Array(10).fill("ok"));
   assert.equal(created, 2);
+  assert.deepEqual(configured, [undefined, "prefer-software"]);
+  assert.equal(decoder.softwareFallback, "EncodingError: Decoding error.");
+});
+
+test("a stream no decoder gives a frame of is refused as one this browser cannot decode", async () => {
+  // A browser that says it decodes a codec, then refuses its configuration at the first frame.
+  const original = globalThis.VideoDecoder;
+  const configured = [];
+  globalThis.VideoDecoder = class extends EventTarget {
+    decodeQueueSize = 0;
+    state = "unconfigured";
+    #error;
+    constructor({ error }) {
+      super();
+      this.#error = error;
+    }
+    configure(config) {
+      configured.push(config.hardwareAcceleration);
+      queueMicrotask(() =>
+        this.#error(
+          new DOMException(
+            "Unsupported configuration. Check isConfigSupported() prior to calling configure().",
+            "OperationError",
+          ),
+        ),
+      );
+    }
+    decode() {}
+    async flush() {}
+    close() {
+      this.state = "closed";
+    }
+  };
+  const source = {
+    config: { codec: "hvc1.2.4.L93.B0" },
+    chunksFrom: () =>
+      (async function* chunks() {
+        for (let index = 0; index < 30; index += 1)
+          yield { timestamp: index * 33_333, type: "key" };
+      })(),
+  };
+  const decoder = new WebCodecsVideoDecoder("clip", source);
+  try {
+    await assert.rejects(
+      decoder.refill({
+        sourceId: "clip",
+        mediaTimeTicks: 0n,
+        reason: "seek",
+        generation: 1,
+      }),
+      (error) => {
+        assert.equal(error.code, "DECODE_UNAVAILABLE");
+        assert.equal(error.failure.code, "INVALID_INPUT");
+        assert.equal(error.facts.codec, "hvc1.2.4.L93.B0");
+        assert.equal(error.cause.name, "OperationError");
+        assert.match(error.message, /HEVC/);
+        return true;
+      },
+    );
+    assert.deepEqual(configured, [undefined, "prefer-software"]);
+  } finally {
+    decoder.close();
+    globalThis.VideoDecoder = original;
+  }
 });

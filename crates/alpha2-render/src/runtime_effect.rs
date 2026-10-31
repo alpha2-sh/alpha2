@@ -63,15 +63,32 @@ impl Renderer {
             .map_err(GraphError::into_render_error)
     }
 
-    #[allow(clippy::too_many_lines)]
+    /// Encodes a registered effect's pass, charged to the encoder's plan: in
+    /// bands, each its own command buffer, when the plan says the pass alone
+    /// outruns a submission's budget.
     pub(crate) fn encode_effect_pass(
         &self,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::renderer::RenderEncoder,
+        pass: EffectPass<'_>,
+        uniforms: &mut UniformArenaLease,
+    ) -> Result<Option<PendingEffectTiming>, RenderError> {
+        let registered = self
+            .effects
+            .get(pass.id)
+            .ok_or(RenderError::UnknownEffect)?;
+        self.encode_registered_pass(encoder, registered, pass, uniforms)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn encode_registered_pass(
+        &self,
+        encoder: &mut crate::renderer::RenderEncoder,
+        registered: &crate::registry::RegisteredEffect,
         pass: EffectPass<'_>,
         uniforms: &mut UniformArenaLease,
     ) -> Result<Option<PendingEffectTiming>, RenderError> {
         let EffectPass {
-            id,
+            id: _,
             kind,
             source_a,
             source_b,
@@ -82,7 +99,6 @@ impl Renderer {
             runtime,
             output,
         } = pass;
-        let registered = self.effects.get(id).ok_or(RenderError::UnknownEffect)?;
         let drawn = self.effect_pipeline(registered);
         let source_b = match (registered.definition.kind, source_b) {
             (EffectKind::Transition, Some(source)) => source,
@@ -177,6 +193,32 @@ impl Renderer {
                 layout: &drawn.bind_group_layout,
                 entries: &entries,
             });
+        let bands = encoder.place_pass(
+            registered.cost,
+            u64::from(size.width) * u64::from(size.height),
+            true,
+        );
+        if bands > 1 {
+            // Every band reads the pass's sources and none its own target, so each pixel is
+            // drawn as one pass draws it; only when the GPU starts each band changes.
+            for band in 0..bands {
+                if band > 0 {
+                    encoder.next_band();
+                }
+                let (top, rows) = crate::submission_planner::band_rows(band, bands, size.height);
+                if rows > 0 {
+                    encode_pass(
+                        encoder,
+                        &drawn.pipeline,
+                        &bind_group,
+                        output,
+                        None,
+                        Some((band, top, size.width, rows)),
+                    );
+                }
+            }
+            return Ok(None);
+        }
         // One reusable probe, never one per pass: a query set per pass exhausts driver counter
         // buffers (Metal), and the failed allocation silently drops the whole submission.
         let timing = self.pass_timing_epoch();
@@ -194,6 +236,7 @@ impl Renderer {
             &bind_group,
             output,
             probe.map(|(_, probe)| &probe.queries),
+            None,
         );
         if let Some((_, probe)) = probe {
             encoder.resolve_query_set(&probe.queries, 0..2, &probe.resolve, 0);
@@ -398,13 +441,21 @@ fn runtime_bytes(size: RenderSize, runtime: EffectRuntime, max_filter_samples: u
     bytes
 }
 
+/// Encodes one full-target draw, or with `band` (index, top row, width,
+/// rows) the rows of one band: the first band clears the target as a whole
+/// pass does, later ones keep what the bands before them drew.
 fn encode_pass(
     encoder: &mut wgpu::CommandEncoder,
     pipeline: &wgpu::RenderPipeline,
     bind_group: &wgpu::BindGroup,
     output: &wgpu::TextureView,
     timestamp_queries: Option<&wgpu::QuerySet>,
+    band: Option<(u32, u32, u32, u32)>,
 ) {
+    let load = match band {
+        Some((index, ..)) if index > 0 => wgpu::LoadOp::Load,
+        _ => wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+    };
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("alpha2 runtime effect pass"),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -412,7 +463,7 @@ fn encode_pass(
             depth_slice: None,
             resolve_target: None,
             ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                load,
                 store: wgpu::StoreOp::Store,
             },
         })],
@@ -427,6 +478,9 @@ fn encode_pass(
     });
     pass.set_pipeline(pipeline);
     pass.set_bind_group(0, bind_group, &[]);
+    if let Some((_, top, width, rows)) = band {
+        pass.set_scissor_rect(0, top, width, rows);
+    }
     pass.draw(0..3, 0..1);
 }
 

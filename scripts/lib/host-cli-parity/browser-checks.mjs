@@ -54,8 +54,8 @@ export async function browserChecks(
   });
   console.log(`complex project parity metrics: ${JSON.stringify(complex)}`);
   assert.equal(complex.frames, 36, "every frame of the complex project");
-  // Cross-GPU float rounding and edge sampling. RTX 4090 vs headless Chrome: 92% exact, 8% one code
-  // apart, 12 larger out of 331,776 samples; bounds leave other GPUs headroom.
+  // Cross-GPU float rounding and edge sampling. A discrete NVIDIA GPU against headless Chrome:
+  // about 92% exact, nearly all others one code apart; bounds leave other GPUs headroom.
   const complexPeak = peakExcess({
     max: Math.max(complex.y.max, complex.u.max, complex.v.max),
     outliers: complex.outliers,

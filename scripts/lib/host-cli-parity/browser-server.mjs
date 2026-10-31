@@ -6,7 +6,11 @@ import { createServer } from "node:http";
 
 import { runBrowserPage } from "../browser-page.mjs";
 import { recordSkip } from "../capabilities.mjs";
-import { fromThisMachine, servedFile } from "../chrome-cdp.mjs";
+import {
+  fromThisMachine,
+  gpuProcessEnvironment,
+  servedFile,
+} from "../chrome-cdp.mjs";
 import { root } from "./fixtures.mjs";
 import { complexPage } from "./pages/complex.mjs";
 import { extensionsPage } from "./pages/extensions.mjs";
@@ -93,10 +97,29 @@ export async function browserParity(
     if (typeof address !== "object" || address === null)
       throw new Error("missing parity server address");
     const url = `http://127.0.0.1:${address.port}${page}`;
-    const encoded = await runBrowserPage(browser, url, {
-      timeoutMs: Number(process.env.ALPHA2_CASE_TIMEOUT_MS ?? 120_000),
-    });
-    const result = JSON.parse(decodeURIComponent(encoded));
+    let gpuProcess;
+    let result;
+    try {
+      const encoded = await runBrowserPage(browser, url, {
+        timeoutMs: Number(process.env.ALPHA2_CASE_TIMEOUT_MS ?? 120_000),
+        onGpuProcess: (record) => (gpuProcess = record),
+      });
+      result = JSON.parse(decodeURIComponent(encoded));
+    } catch (error) {
+      if (!gpuProcess?.restarted) throw error;
+      result = { error: error.message };
+    }
+    // A page that lost its GPU process to the environment says nothing about the engine.
+    const environment = gpuProcessEnvironment(gpuProcess, result);
+    if (environment !== null) {
+      recordSkip({
+        suite: "host-cli-parity",
+        test: page,
+        capability: environment.capability,
+        reason: environment.skipped,
+      });
+      throw new Error(`browser parity did not run: ${environment.skipped}`);
+    }
     if (result.error) throw new Error(`browser parity failed: ${result.error}`);
     const backend = result.adapter?.backend;
     if (result.adapter !== undefined && backend !== "BrowserWebGpu")

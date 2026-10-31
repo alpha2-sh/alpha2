@@ -5,7 +5,9 @@
  * The player renders offscreen at project size; the element preserves the
  * project's aspect ratio while scaling with its container. Hidden pages pause
  * presentation and show the latest time when visible. The player recovers
- * device loss on its next presentation.
+ * device loss on its next presentation; a recovery that needs a new canvas
+ * (a lost WebGL2 context, the CPU renderer after the GPU was lost) gets one
+ * from the component, which swaps the element in place.
  *
  * {@link bindCanvas} is the same wiring without React.
  */
@@ -60,6 +62,14 @@ export interface CanvasBindingOptions {
   readonly onError?: (error: unknown) => void;
   /** The page's visibility; `document` by default. */
   readonly visibility?: VisibilitySource;
+  /**
+   * Puts a new canvas, at the same drawing-buffer size, where the bound one is, and resolves with
+   * it: what {@link CanvasBinding.replaceSurface} transfers to the player. Without it
+   * `replaceSurface` rejects.
+   */
+  readonly replaceCanvas?: () => Promise<{
+    transferControlToOffscreen(): OffscreenCanvas;
+  }>;
 }
 
 /** A canvas bound to a player. */
@@ -72,6 +82,12 @@ export interface CanvasBinding {
    * whether that presentation succeeds or fails. Showing the same time again presents it again.
    */
   show(timeTicks: bigint): void;
+  /**
+   * A new surface for the player, from `replaceCanvas`, transferred to an `OffscreenCanvas`: give
+   * this to `Alpha2Player`'s `replaceSurface` option. Rejects without `replaceCanvas`, after
+   * {@link CanvasBinding.dispose}, or when the new canvas cannot be transferred.
+   */
+  replaceSurface(): Promise<OffscreenCanvas>;
   /**
    * Stops presenting. The player stays its owner's to dispose; failures of work it still has in
    * flight are not reported. Idempotent.
@@ -159,6 +175,13 @@ export function bindCanvas(
       pending = true;
       void pump();
     },
+    async replaceSurface() {
+      if (disposed) throw new Error("the canvas binding is disposed");
+      if (options.replaceCanvas === undefined)
+        throw new Error("the canvas binding was given no replaceCanvas option");
+      const next = await options.replaceCanvas();
+      return next.transferControlToOffscreen();
+    },
     dispose() {
       if (disposed) return;
       disposed = true;
@@ -173,9 +196,13 @@ export interface Alpha2CanvasProps {
    * Makes the player for a canvas. The component calls it each time it makes a canvas (React may
    * set an effect up more than once, as `<StrictMode>` and `<Activity>` do) and disposes what it
    * returns when that canvas goes. A new function makes a new player, so keep it stable, as with
-   * `useCallback`.
+   * `useCallback`. Pass `replaceSurface` to the player (`Alpha2Player`'s option of that name): it
+   * swaps a new canvas element in for the bound one, so a GPU-loss recovery can take another
+   * renderer without the player being made again.
    */
-  readonly createPlayer: () => CanvasPlayer;
+  readonly createPlayer: (
+    replaceSurface: () => Promise<OffscreenCanvas>,
+  ) => CanvasPlayer;
   /** The timeline time to show, in ticks. */
   readonly timeTicks: bigint;
   /** Project width and height: the size the player draws at, and the element's aspect ratio. */
@@ -210,30 +237,47 @@ export function Alpha2Canvas(props: Alpha2CanvasProps): ReactElement {
   useEffect(() => {
     const host = container.current;
     if (host === null) return undefined;
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    canvas.style.width = "100%";
-    canvas.style.height = "100%";
-    canvas.style.display = "block";
+    const makeCanvas = (): HTMLCanvasElement => {
+      const made = document.createElement("canvas");
+      made.width = width;
+      made.height = height;
+      made.style.width = "100%";
+      made.style.height = "100%";
+      made.style.display = "block";
+      return made;
+    };
+    let canvas = makeCanvas();
     host.appendChild(canvas);
-    const player = createPlayer();
-    const bound = bindCanvas(player, canvas, {
+    // The binding exists once the player does; the player asks for a surface only after that.
+    let bound: CanvasBinding | undefined;
+    const player = createPlayer(() => {
+      if (bound === undefined)
+        return Promise.reject(new Error("the canvas is not bound yet"));
+      return bound.replaceSurface();
+    });
+    bound = bindCanvas(player, canvas, {
       onPresented: (frame) => callbacks.current.onPresented?.(frame),
       onError: (error) => (callbacks.current.onError ?? reportUnhandled)(error),
+      replaceCanvas: () => {
+        const next = makeCanvas();
+        canvas.replaceWith(next);
+        canvas = next;
+        return Promise.resolve(next);
+      },
     });
-    binding.current = bound;
-    bound.show(callbacks.current.timeTicks);
+    const current = bound;
+    binding.current = current;
+    current.show(callbacks.current.timeTicks);
     // A failure has gone to onError already.
-    bound.ready.then(
+    current.ready.then(
       () => {
-        if (binding.current === bound) callbacks.current.onReady?.();
+        if (binding.current === current) callbacks.current.onReady?.();
       },
       () => {},
     );
     return () => {
-      bound.dispose();
-      if (binding.current === bound) binding.current = undefined;
+      current.dispose();
+      if (binding.current === current) binding.current = undefined;
       player.dispose();
       canvas.remove();
     };

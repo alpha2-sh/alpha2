@@ -80,6 +80,13 @@ function assertDeclaredPerformance(performance, path) {
         "surfaceCeiling",
         "reservedBytes",
       ].every((key) => typeof value[key] === "number"),
+    gpuSubmissions: (value) =>
+      value === null ||
+      (["frames", "splitFrames", "maxPerFrame"].every((key) =>
+        Number.isSafeInteger(value[key]),
+      ) &&
+        (value.maxPredictedMs === null ||
+          typeof value.maxPredictedMs === "number")),
   };
   for (const [key, value] of Object.entries(performance)) {
     if (key in declared)

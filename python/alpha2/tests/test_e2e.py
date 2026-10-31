@@ -93,6 +93,7 @@ def assert_declared_performance(performance: dict[str, Any], path: str) -> None:
         "hardwareFallbackMessages",
         "encodeChannelDepthSamples",
         "gpuEncodeBudget",
+        "gpuSubmissions",
     }
     for key, value in performance.items():
         if key not in declared:
@@ -103,6 +104,9 @@ def assert_declared_performance(performance: dict[str, Any], path: str) -> None:
         assert performance["gpuEncodeBudget"] is None
     if path == "gpu-resident":
         assert performance["gpuEncodeBudget"] is not None
+    submissions = performance.get("gpuSubmissions")
+    if submissions is not None:
+        assert set(submissions) == {"frames", "splitFrames", "maxPerFrame", "maxPredictedMs"}
 
 
 def test_the_client_reports_the_hosts_encode_capabilities(client: HostClient) -> None:

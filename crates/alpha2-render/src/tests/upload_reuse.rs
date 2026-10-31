@@ -1,8 +1,8 @@
 //! Copy-initialized textures read back exactly what was copied, even where the copy is all zero and
 //! the memory under the new texture held other pixels just before.
 //!
-//! A driver that skips all-zero blocks of the copy into memory created without zeroing (Iris Xe
-//! over DX12 with committed resources) shows stale texels in exactly these blocks.
+//! A driver that skips all-zero blocks of the copy into memory created without zeroing (some Intel
+//! integrated GPUs over DX12 with committed resources) shows stale texels in exactly these blocks.
 
 use super::*;
 

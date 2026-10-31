@@ -276,6 +276,26 @@ test("hdr source without planes is refused at import with a typed cause", async 
   library.dispose();
 });
 
+test("an hdr source without planes imports for a degraded preview when the library takes one", async () => {
+  element = { duration: 0.2, videoWidth: 64, videoHeight: 48 };
+  const library = new AssetLibrary({ hdrWithoutPlanes: "preview-degraded" });
+  const imported = await file("hdr-hlg.mp4", "clip.mp4", "video/mp4");
+  const asset = await withVideoDecoder("opaque", () =>
+    library.importFile(imported),
+  );
+  assert.equal(asset.kind, "video");
+  assert.equal(asset.planarDecode, "unavailable");
+  // A track this browser cannot decode at all is refused all the same.
+  await withVideoDecoder("unsupported", () =>
+    assert.rejects(library.importFile(imported), { code: "unsupported_media" }),
+  );
+  assert.throws(
+    () => new AssetLibrary({ hdrWithoutPlanes: "export" }),
+    RangeError,
+  );
+  library.dispose();
+});
+
 test("a video the media element refuses and WebCodecs claims but cannot decode is refused naming both", async () => {
   element = {
     duration: NaN,

@@ -161,7 +161,7 @@ const pump = new AudioPump(
 await pump.fill();
 await useAudioRing(node, ring.transfer);
 await configureEngineMixedAudio(node);
-const clock = new AudioPlaybackClock(pump, ring, context, Alpha2AudioWorkletHost.latency(node));
+const clock = new AudioPlaybackClock(pump, ring, context, { processing: Alpha2AudioWorkletHost.latency(node) });
 const timer = setInterval(() => void pump.fill(), 20);
 const errors = [];
 const offsets = [];
@@ -203,6 +203,9 @@ const details = {
   firstFrame,
   meanOffsetMs: meanOffsetMs === null ? null : +meanOffsetMs.toFixed(2),
   offsetBoundMs: +offsetBoundMs.toFixed(2),
+  // Where the clock's output latency came from, and how much it was.
+  latencySource: clock.latencySource,
+  latencyMs: +(clock.latencySeconds * 1000).toFixed(2),
 };
 const tracked = underruns === 0 && spread <= frame && Math.abs(last - first) <= frame;
 if (tracked && (meanOffsetMs === null || Math.abs(meanOffsetMs) > offsetBoundMs))
@@ -244,7 +247,7 @@ for (const contextRate of [44_100, 96_000]) {
     ring, 0, { blockFrames: 4096, targetFrames: project + 8192 },
   );
   await pump.fill();
-  const clock = new AudioPlaybackClock(pump, ring, { sampleRate: contextRate }, Alpha2AudioWorkletHost.latency(node));
+  const clock = new AudioPlaybackClock(pump, ring, { sampleRate: contextRate }, { processing: Alpha2AudioWorkletHost.latency(node) });
   const rendered = (await context.startRendering()).getChannelData(0);
   // The tone's period from its first and last rising zero crossings, each placed between samples.
   const crossings = [];

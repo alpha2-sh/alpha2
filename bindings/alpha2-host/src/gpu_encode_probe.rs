@@ -6,9 +6,9 @@
 //! codec (`encode_support`). Each codec it reports is held to one encoded
 //! frame at the probe's size, in a child process
 //! ([`crate::d3d12va_probe::probe_child`]): a driver that crashes inside
-//! its encode submission (an Intel Iris Xe on driver 30.0.101.2079 does,
-//! about once in a few thousand frames) takes that child with it, and every
-//! other row is still reported. A row that stops names the step it stopped
+//! its encode submission (an Intel integrated GPU on driver 30.0.101.2079
+//! does, about once in a few thousand frames) takes that child with it, and
+//! every other row is still reported. A row that stops names the step it stopped
 //! at and the reason, with the `HRESULT` or `FFmpeg` error where there is
 //! one.
 //!
@@ -551,7 +551,7 @@ fn skipped(reasons: &[String]) -> String {
 mod tests {
     use super::*;
 
-    fn iris_xe() -> AdapterRow {
+    fn integrated_gpu() -> AdapterRow {
         AdapterRow {
             index: 0,
             name: "Intel(R) Iris(R) Xe Graphics".to_owned(),
@@ -627,7 +627,7 @@ mod tests {
         }
     }
 
-    fn mx450() -> AdapterRow {
+    fn discrete_gpu() -> AdapterRow {
         AdapterRow {
             index: 1,
             name: "NVIDIA GeForce MX450".to_owned(),
@@ -649,13 +649,17 @@ mod tests {
     /// step it stopped at and why.
     #[test]
     fn a_row_reads_as_its_adapter_and_each_codec_s_answer() {
-        let report = report_json((1920, 1080), &[iris_xe(), mx450()], &Value::Null);
+        let report = report_json(
+            (1920, 1080),
+            &[integrated_gpu(), discrete_gpu()],
+            &Value::Null,
+        );
         let adapters = &report["result"]["adapters"];
-        let iris = &adapters[0];
-        assert_eq!(iris["luid"], "00000000000AB12C");
-        assert_eq!(iris["vendorDevice"], "8086:9a49");
-        assert_eq!(iris["refused"], Value::Null);
-        let h264 = &iris["codecs"][0];
+        let integrated = &adapters[0];
+        assert_eq!(integrated["luid"], "00000000000AB12C");
+        assert_eq!(integrated["vendorDevice"], "8086:9a49");
+        assert_eq!(integrated["refused"], Value::Null);
+        let h264 = &integrated["codecs"][0];
         assert_eq!(h264["usable"], false);
         assert_eq!(h264["refused"]["step"], "first-packet");
         assert_eq!(h264["result"]["firstPacketUnitNames"], json!(["IDR"]));
@@ -665,7 +669,7 @@ mod tests {
             h264["support"]["refusedRateControlModes"],
             json!([{"mode": "cbr", "hresult": "0x887A0020"}])
         );
-        let hevc = &iris["codecs"][1];
+        let hevc = &integrated["codecs"][1];
         assert_eq!(hevc["usable"], true);
         assert_eq!(hevc["refused"], Value::Null);
         assert_eq!(
@@ -675,7 +679,7 @@ mod tests {
         assert_eq!(hevc["result"]["extradataSize"], 0);
         assert_eq!(hevc["result"]["codedSize"], json!([1920, 1088]));
         assert_eq!(hevc["result"]["firstPacketDecodes"], true);
-        let av1 = &iris["codecs"][2];
+        let av1 = &integrated["codecs"][2];
         assert_eq!(av1["refused"]["step"], "session-open");
         assert_eq!(
             av1["refused"]["log"],
@@ -688,7 +692,7 @@ mod tests {
         assert_eq!(mx["codecs"], json!([]));
 
         assert_eq!(
-            summary(&iris_xe()),
+            summary(&integrated_gpu()),
             "[0] Intel(R) Iris(R) Xe Graphics, 8086:9a49, LUID 00000000000AB12C, driver \
              30.0.101.2079: h264: refused at first-packet: lacks its parameter sets \
              (h264_d3d12va 1920x1088 1 packet(s), 2048 bytes, first packet [IDR]); hevc: \
@@ -697,7 +701,7 @@ mod tests {
              Generic error (it last logged: [av1_d3d12va @ 0] Failed: 0x887A0020)"
         );
         assert_eq!(
-            summary(&mx450()),
+            summary(&discrete_gpu()),
             "[1] NVIDIA GeForce MX450, 10de:1f97, LUID none, driver unknown: refused at \
              d3d12va-device: AVERROR(-22): `Invalid argument`"
         );
@@ -740,9 +744,14 @@ mod tests {
     /// reason names each one and where it stopped.
     #[test]
     fn a_skipped_slice_says_why_for_each_adapter() {
-        let mut iris = iris_xe();
-        iris.codecs[1].refused = Some(Refusal::at(FIRST_PACKET, "lacks a coded picture"));
-        let rendered = slice(&[iris, mx450()], &[None, None], (1920, 1080), "unused.mp4");
+        let mut integrated = integrated_gpu();
+        integrated.codecs[1].refused = Some(Refusal::at(FIRST_PACKET, "lacks a coded picture"));
+        let rendered = slice(
+            &[integrated, discrete_gpu()],
+            &[None, None],
+            (1920, 1080),
+            "unused.mp4",
+        );
         assert_eq!(
             rendered,
             json!({
@@ -762,7 +771,7 @@ mod tests {
 
     #[test]
     fn a_size_outside_the_extent_says_where_it_lands() {
-        let extent = iris_xe().codecs[0].support.clone().expect("extent");
+        let extent = integrated_gpu().codecs[0].support.clone().expect("extent");
         assert_eq!(
             outside(&extent, (8_190, 4_320)),
             "8190x4320 codes as 8192x4320, outside the device's 64x64 to 4096x4096 (alignment \

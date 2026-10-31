@@ -8,7 +8,7 @@
 //!
 //! The session tests never decode what they write, so they run on a device
 //! whose test encode opens but writes an undecodable first packet (an Intel
-//! Iris Xe on driver 30.0.101.2079 does, and the capability refuses it for
+//! integrated GPU on driver 30.0.101.2079 does, and the capability refuses it for
 //! an export): [`accepts_undecodable_packets`] lets their thread past that
 //! one check. They open sessions but send no frame to one: the same driver
 //! hangs or crashes inside its encode submission about once in a few
@@ -35,8 +35,8 @@ thread_local! {
     static FAIL_SEND_AT: Cell<Option<u64>> = const { Cell::new(None) };
 }
 
-/// Whether this thread's session answers frame `index`'s `send_frame` with `EINVAL`, as the Iris
-/// Xe's `h264_d3d12va` intermittently does.
+/// Whether this thread's session answers frame `index`'s `send_frame` with `EINVAL`, as an Intel
+/// integrated GPU's `h264_d3d12va` intermittently does.
 pub(super) fn send_fails_at(index: u64) -> bool {
     FAIL_SEND_AT.get() == Some(index)
 }
@@ -319,8 +319,8 @@ fn a_first_packet_is_usable_only_with_its_parameter_sets_and_a_picture() {
             "{units:?}"
         );
     }
-    // What an Iris Xe on driver 30.0.101.2079 writes: the H.264 picture over its SPS and PPS, and
-    // HEVC's parameter sets with no picture after them.
+    // What an Intel integrated GPU on driver 30.0.101.2079 writes: the H.264 picture over its SPS
+    // and PPS, and HEVC's parameter sets with no picture after them.
     for (codec, units, lacks) in [
         (H264, &[5][..], "its parameter sets (NAL unit types [5])"),
         (
@@ -357,7 +357,7 @@ fn a_first_packet_is_usable_only_with_its_parameter_sets_and_a_picture() {
 
 #[test]
 fn the_units_of_a_packet_are_read_as_its_codec_frames_them() {
-    // An Iris Xe's first `h264_d3d12va` packet: an IDR slice where the SPS and PPS should be.
+    // That driver's first `h264_d3d12va` packet: an IDR slice where the SPS and PPS should be.
     let h264 = [0, 0, 1, 0x25, 0x88, 0x80, 0x8f, 0, 0, 0];
     assert_eq!(stream_units(NativeVideoCodec::H264, &h264), (vec![5], None));
     let h264 = [
@@ -422,7 +422,8 @@ fn every_codec_has_a_capability_or_a_reason_naming_why_not() {
                     );
                 } else if let Err(refused) = shared.encode_support(encoder.d3d12) {
                     // The device's own refusal, which names the adapter, the codec and the check:
-                    // an Iris Xe has no AV1 encoder, an MX450 and WARP no ID3D12VideoDevice3.
+                    // an Intel integrated GPU without an AV1 encoder refuses AV1, and an NVIDIA GPU
+                    // without a video encoder and WARP have no ID3D12VideoDevice3.
                     assert_eq!(reason, refused);
                     assert!(reason.contains(&adapter), "{reason}");
                     if !reason.contains("ID3D12VideoDevice3") {
@@ -673,10 +674,11 @@ fn drive(
 
 #[test]
 fn the_pool_allocates_within_the_host_leases_plus_the_retained_surfaces() {
-    // About four thousand encodes. On an Iris Xe (driver 30.0.101.2079) FFmpeg 8.1.3's D3D12VA
-    // encoder hangs or crashes in the driver's submission about once per few thousand frames, so
-    // this runs only where an export would, unless `ALPHA2_D3D12VA_MEASURE_UNDECODABLE` is set (how
-    // `CODEC_RETAINED_SURFACES` was measured there).
+    // About four thousand encodes. On an Intel integrated GPU (driver 30.0.101.2079) FFmpeg
+    // 8.1.3's D3D12VA encoder hangs or crashes in the driver's submission about once per few
+    // thousand frames, so this runs only where an export would, unless
+    // `ALPHA2_D3D12VA_MEASURE_UNDECODABLE` is set (how `CODEC_RETAINED_SURFACES` was measured
+    // there).
     let device = if std::env::var_os("ALPHA2_D3D12VA_MEASURE_UNDECODABLE").is_some() {
         session_device()
     } else {
@@ -805,10 +807,10 @@ fn ten_frames_encode_with_parameter_sets_in_the_first_packet_only() {
     let _ = std::fs::remove_dir_all(directory);
 }
 
-/// What D3D12 Video Encode answered for HEVC on an Iris Xe on driver
-/// 30.0.101.2079: a constant QP, and CBR and VBR refused in the configuration
+/// What D3D12 Video Encode answered for HEVC on an Intel integrated GPU on
+/// driver 30.0.101.2079: a constant QP, and CBR and VBR refused in the configuration
 /// `FFmpeg` opens them with.
-fn iris_xe_modes(adapter: &str) -> DeviceModes {
+fn qp_only_modes(adapter: &str) -> DeviceModes {
     DeviceModes {
         adapter: adapter.to_owned(),
         encoder: Encoder::for_codec(NativeVideoCodec::Hevc).expect("encoder"),
@@ -891,9 +893,9 @@ fn the_first_adapter_that_encodes_answers_and_refuses_what_it_does_not_list() {
         ),
         (
             "DX12 adapter 0",
-            Ok(iris_xe_modes("Intel(R) Iris(R) Xe Graphics")),
+            Ok(qp_only_modes("Intel(R) Iris(R) Xe Graphics")),
         ),
-        ("DX12 adapter 3", Ok(iris_xe_modes("another adapter"))),
+        ("DX12 adapter 3", Ok(qp_only_modes("another adapter"))),
     ];
     assert_eq!(
         answering_adapter(&adapters, "disabled", (1_920, 1_080)),

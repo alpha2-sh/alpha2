@@ -2,8 +2,9 @@
 //!
 //! The GPU's `Rgba16Float` targets round a finite value toward zero when they
 //! store it, keep subnormals, store a finite value past the largest half as
-//! that half and keep infinity: measured on NVIDIA, RADV, lavapipe, llvmpipe
-//! GL, Apple M4, Intel Iris Xe and NVIDIA MX450 over Vulkan and DX12. The
+//! that half and keep infinity: measured on discrete NVIDIA GPUs, RADV,
+//! lavapipe, llvmpipe GL, an Apple-silicon GPU and an Intel integrated GPU
+//! over Vulkan, DX12 and Metal. The
 //! composite shader writes values that are already halves (`stored_half` in
 //! composite.wesl). Both are [`store`] here, so every picture the CPU keeps
 //! holds the bits a GPU keeps.

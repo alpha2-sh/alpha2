@@ -17,6 +17,7 @@ import { browserForRun, runBrowserPage } from "./lib/browser-page.mjs";
 import { probeRun } from "./lib/browser-probe.mjs";
 import { recordSkip } from "./lib/capabilities.mjs";
 import {
+  gpuProcessEnvironment,
   reportSkippedBrowser,
   skippedCasesSummary,
   fromThisMachine,
@@ -25,6 +26,7 @@ import {
 import {
   cases,
   pageDrivers,
+  caseLaunch,
   perfCases,
   videoImportCases,
 } from "./lib/wasm-browser/cases.mjs";
@@ -133,21 +135,52 @@ try {
     engineModule: "/packages/alpha2/wasm/alpha2_wasm.js",
   });
   const runPage = async (name) => {
-    const encoded = await runBrowserPage(
-      browser,
-      `http://127.0.0.1:${address.port}/${name}${process.env.ALPHA2_CASE_QUERY ?? ""}`,
-      {
-        // A perf case exports for minutes on a slow GPU.
-        timeoutMs: Number(
-          process.env.ALPHA2_CASE_TIMEOUT_MS ??
-            (Object.hasOwn(perfCases, name) ? 600_000 : 60_000),
-        ),
-        ...(Object.hasOwn(pageDrivers, name)
-          ? { onPage: pageDrivers[name] }
-          : {}),
-      },
-    );
-    return JSON.parse(decodeURIComponent(encoded));
+    // A page whose GPU process restarted reports the environment, whatever it reported itself.
+    let gpuProcess;
+    let encoded;
+    try {
+      encoded = await runBrowserPage(
+        browser,
+        `http://127.0.0.1:${address.port}/${name}${process.env.ALPHA2_CASE_QUERY ?? ""}`,
+        {
+          // A perf case exports for minutes on a slow GPU.
+          timeoutMs: Number(
+            process.env.ALPHA2_CASE_TIMEOUT_MS ??
+              (Object.hasOwn(perfCases, name)
+                ? 600_000
+                : (caseLaunch[name]?.timeoutMs ?? 60_000)),
+          ),
+          ...(Object.hasOwn(pageDrivers, name)
+            ? { onPage: pageDrivers[name] }
+            : {}),
+          ...(caseLaunch[name]?.domainBlocking3d
+            ? { domainBlocking3d: true }
+            : {}),
+          onGpuProcess: (record) => (gpuProcess = record),
+        },
+      );
+    } catch (error) {
+      const marked = gpuProcessEnvironment(gpuProcess, {
+        error: error.message,
+      });
+      if (marked === null) throw error;
+      return marked;
+    }
+    const result = JSON.parse(decodeURIComponent(encoded));
+    // A case that crashes the GPU process itself counts only the exits it did not cause: more of
+    // them restarted the GPU process under the page (a Windows session 0 does at launch), which is
+    // the environment's, as for any other case. The page's own result says whether it recovered.
+    const caused = caseLaunch[name]?.gpuProcessExits;
+    if (caused !== undefined && gpuProcess !== undefined) {
+      if (gpuProcess.exits <= caused) return { ...result, gpuProcess };
+      return (
+        gpuProcessEnvironment(
+          { ...gpuProcess, exits: gpuProcess.exits - caused },
+          result,
+        ) ?? result
+      );
+    }
+    return gpuProcessEnvironment(gpuProcess, result) ?? result;
   };
   const report = (name, result) => {
     if (result.skipped && !result.capability) {
@@ -165,7 +198,7 @@ try {
         });
         skipped.push({ name, reason: result.skipped });
         process.stdout.write(
-          `skip ${name}: [${result.capability}] ${result.skipped}\n`,
+          `skip ${name}: [${result.capability}] ${result.skipped}${result.page === undefined ? "" : ` (the page: ${JSON.stringify(result.page)})`}\n`,
         );
       } catch (error) {
         failures += 1;

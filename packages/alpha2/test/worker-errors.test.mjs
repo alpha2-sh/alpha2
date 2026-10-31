@@ -11,6 +11,13 @@ import {
   WorkerRenderBackend,
 } from "../dist/worker.js";
 
+/** A recovery onto the same canvas, on the GPU. */
+const SAME_GPU = Object.freeze({
+  renderer: "gpu",
+  surface: "same",
+  reason: "a first GPU loss",
+});
+
 test("render worker preserves structured wasm error metadata", async () => {
   const responses = [];
   const scope = {
@@ -617,9 +624,9 @@ test("a worker player refills when the engine has presented nothing yet", async 
     terminate() {},
   };
   const refills = [];
-  const player = new Alpha2Player(new WorkerRenderBackend(worker), (requests) =>
-    refills.push(requests),
-  );
+  const player = new Alpha2Player(new WorkerRenderBackend(worker), {
+    onRefill: (requests) => refills.push(requests),
+  });
   await player.initialize({});
   const presented = await player.seek(4_000n);
   assert.equal(presented.presentedTimeTicks, undefined);
@@ -688,7 +695,7 @@ test("a render worker that failed stays failed: pending and later requests rejec
     // host's first request is then initialize().
     () => backend.initialize({}),
     () => backend.present(0n),
-    () => backend.recover(),
+    () => backend.recover(SAME_GPU),
     () => backend.reset(),
     () => backend.beginExport(0n, "h264", 0n),
   ]) {
@@ -824,7 +831,7 @@ test("a wasm worker host whose recovery failed answers as lost, never through th
   made[0].deviceLost = true;
   assert.equal(host.isDeviceLost(), true);
   failNext = true;
-  await assert.rejects(host.recover(), /not restored/);
+  await assert.rejects(host.recover(SAME_GPU), /not restored/);
   assert.deepEqual(freed, ["registry 1"]);
   assert.equal(host.isDeviceLost(), true, "no binding is a lost one");
   await assert.rejects(host.present(0n), (error) => {
@@ -836,7 +843,7 @@ test("a wasm worker host whose recovery failed answers as lost, never through th
     () => host.beginExport(0n, "h264", 0n),
     (error) => error.code === "GPU_DEVICE_LOST",
   );
-  await host.recover();
+  await host.recover(SAME_GPU);
   assert.equal(host.isDeviceLost(), false);
   assert.equal((await host.present(0n)).requestedTimeTicks, 0n);
   host.dispose();
@@ -1025,8 +1032,8 @@ test("the render worker recovers only a host that lost its device", async () => 
   }));
   scope.onmessage({ data: { id: 1, type: "initialize", canvas: {} } });
   // Two players, or one player twice, ask for a recovery from the same loss.
-  scope.onmessage({ data: { id: 2, type: "recover" } });
-  scope.onmessage({ data: { id: 3, type: "recover" } });
+  scope.onmessage({ data: { id: 2, type: "recover", step: SAME_GPU } });
+  scope.onmessage({ data: { id: 3, type: "recover", step: SAME_GPU } });
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(recoveries, 1);
   assert.deepEqual(

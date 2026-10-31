@@ -110,6 +110,7 @@ impl Capabilities {
             String::new()
         };
         let half_float = adapter.get_texture_format_features(wgpu::TextureFormat::Rgba16Float);
+        let software_rasterizer = software_adapter(&info);
         Self {
             tier: tier_for(&adapter.get_downlevel_capabilities()),
             intermediate_format: intermediate_format_for(half_float),
@@ -125,10 +126,41 @@ impl Capabilities {
             backend: format!("{:?}", info.backend),
             driver: info.driver,
             driver_info: info.driver_info,
-            software_rasterizer: info.device_type == wgpu::DeviceType::Cpu,
+            software_rasterizer,
             shader_compiler,
         }
     }
+}
+
+/// Renderer names that mean a software rasterizer: wgpu-hal's list for GL
+/// (`mesa offscreen`, `swiftshader`, `llvmpipe`) and WARP, which a browser
+/// reaches through ANGLE as a GL renderer named "Microsoft Basic Render
+/// Driver" that wgpu-hal does not flag.
+const SOFTWARE_RENDERER_NAMES: [&str; 4] = [
+    "mesa offscreen",
+    "swiftshader",
+    "llvmpipe",
+    "microsoft basic render",
+];
+
+/// Whether `info` names a software adapter: one the backend flags as a CPU
+/// (`DeviceType::Cpu`, a browser's fallback adapter) or whose name is a
+/// software rasterizer's ([`software_renderer_name`]). Product selection and
+/// the capability report both decide by this rule.
+#[must_use]
+pub fn software_adapter(info: &wgpu::AdapterInfo) -> bool {
+    info.device_type == wgpu::DeviceType::Cpu || software_renderer_name(&info.name)
+}
+
+/// Whether a renderer or adapter name is a software rasterizer's, compared
+/// without case: a browser's unmasked WebGL renderer string qualifies as the
+/// adapter name does.
+#[must_use]
+pub fn software_renderer_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    SOFTWARE_RENDERER_NAMES
+        .iter()
+        .any(|software| name.contains(software))
 }
 
 /// The intermediate format for an adapter whose `Rgba16Float` support is
@@ -202,6 +234,43 @@ mod tests {
             intermediate_format_for(half_float(Usages::empty(), Flags::empty())),
             IntermediateFormat::Rgba8Unorm
         );
+    }
+
+    #[test]
+    fn software_adapters_are_named_by_type_or_renderer() {
+        let info = |name: &str, device_type| wgpu::AdapterInfo {
+            name: name.to_owned(),
+            vendor: 0,
+            device: 0,
+            device_type,
+            device_pci_bus_id: String::new(),
+            driver: String::new(),
+            driver_info: String::new(),
+            backend: wgpu::Backend::Gl,
+            subgroup_min_size: 0,
+            subgroup_max_size: 0,
+            transient_saves_memory: None,
+            limit_bucket: None,
+        };
+        assert!(software_adapter(&info("", wgpu::DeviceType::Cpu)));
+        assert!(software_adapter(&info(
+            "ANGLE (Microsoft, Microsoft Basic Render Driver (0x0000008C) Direct3D11 vs_5_0 \
+             ps_5_0, D3D11)",
+            wgpu::DeviceType::Other
+        )));
+        assert!(software_adapter(&info(
+            "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), \
+             SwiftShader driver)",
+            wgpu::DeviceType::Other
+        )));
+        assert!(!software_adapter(&info(
+            "ANGLE (AMD, AMD Radeon Graphics (0x0000164E) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+            wgpu::DeviceType::Other
+        )));
+        assert!(!software_adapter(&info(
+            "Intel(R) UHD Graphics",
+            wgpu::DeviceType::IntegratedGpu
+        )));
     }
 
     #[test]

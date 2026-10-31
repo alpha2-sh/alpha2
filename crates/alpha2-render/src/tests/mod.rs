@@ -57,6 +57,7 @@ mod runtime_effects;
 mod single_pass;
 mod source_presentation;
 mod stalls;
+mod submissions;
 mod texture_pool;
 mod threads;
 mod transition_quality;

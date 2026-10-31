@@ -159,36 +159,66 @@ export function alpha2FrameBitmap(frame, width, height) {
   entry.context.drawImage(frame, 0, 0, width, height);
   return entry.canvas.transferToImageBitmap();
 }
-let premultiplied;
-export function alpha2BitmapUploadsPremultiplied() {
-  if (premultiplied !== undefined) return premultiplied;
-  const source = new OffscreenCanvas(1, 1);
-  const context = source.getContext("2d");
-  context.fillStyle = "rgba(255, 0, 0, 0.5)";
-  context.fillRect(0, 0, 1, 1);
-  const bitmap = source.transferToImageBitmap();
-  // Safari 16.4 to 16.6 has OffscreenCanvas but no WebGL on it; there the engine runs on a page's
-  // canvas, so a detached page canvas measures the same browser.
-  const gl = new OffscreenCanvas(1, 1).getContext("webgl2")
-    ?? globalThis.document?.createElement("canvas").getContext("webgl2")
-    ?? null;
+export function alpha2ImagePixels(image, width, height) {
+  const canvas = new OffscreenCanvas(width, height);
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (context === null) throw new Error("the VideoFrame import could not create a 2D canvas");
+  context.drawImage(image, 0, 0, width, height);
+  return new Uint8Array(context.getImageData(0, 0, width, height).data.buffer);
+}
+let uploadProbe;
+export function alpha2BitmapUploadProbe() {
+  if (uploadProbe !== undefined) return uploadProbe;
+  // Without a scratch context nothing can show that bitmaps upload: frames go as pixels.
+  const gl = new OffscreenCanvas(1, 1).getContext("webgl2");
   if (gl === null) {
-    bitmap.close();
-    throw new Error("the WebGL2 VideoFrame import could not create a probe context");
+    uploadProbe = { works: false, premultiplied: false };
+    return uploadProbe;
   }
+  // A `size`-square canvas bitmap of opaque red (filled, or drawn from a VideoFrame as frames are)
+  // uploaded into immutable storage as wgpu uploads one: whether WebGL took it without an error and
+  // its centre reads back red. With `color`, a 1x1 fill of that colour, and its pixel.
+  const upload = (size, video, color) => {
+    const source = new OffscreenCanvas(size, size);
+    const context = source.getContext("2d");
+    if (video) {
+      const red = new Uint8Array(size * size * 4);
+      for (let at = 0; at < red.length; at += 4) red.set([255, 0, 0, 255], at);
+      const frame = new VideoFrame(red, { format: "RGBA", codedWidth: size, codedHeight: size, timestamp: 0 });
+      context.drawImage(frame, 0, 0);
+      frame.close();
+    } else {
+      context.fillStyle = color ?? "rgb(255, 0, 0)";
+      context.fillRect(0, 0, size, size);
+    }
+    const bitmap = source.transferToImageBitmap();
+    try {
+      gl.getError();
+      const texture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, size, size);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
+      const taken = gl.getError() === gl.NO_ERROR;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, gl.createFramebuffer());
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+      const pixel = new Uint8Array(4);
+      gl.readPixels(size >> 1, size >> 1, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+      gl.deleteTexture(texture);
+      const red = pixel[0] >= 250 && pixel[1] <= 5 && pixel[2] <= 5 && pixel[3] >= 250;
+      return { works: taken && gl.getError() === gl.NO_ERROR && red, pixel };
+    } finally {
+      bitmap.close();
+    }
+  };
   try {
-    const texture = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bitmap);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, gl.createFramebuffer());
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
-    const pixel = new Uint8Array(4);
-    gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+    // Some drivers refuse some sizes (GL_INVALID_VALUE) or take the upload without an error and
+    // leave the texture black, depending on the size and on how the canvas was drawn.
+    const works = [1, 16, 64, 256].every((size) => upload(size, false).works && upload(size, true).works);
     // Half-transparent red reads back as 128 premultiplied, 255 straight.
-    premultiplied = pixel[0] < 192;
-    return premultiplied;
+    const premultiplied = upload(1, false, "rgba(255, 0, 0, 0.5)").pixel[0] < 192;
+    uploadProbe = { works, premultiplied };
+    return uploadProbe;
   } finally {
-    bitmap.close();
     gl.getExtension("WEBGL_lose_context")?.loseContext();
   }
 }
@@ -201,15 +231,74 @@ extern "C" {
         height: u32,
     ) -> Result<web_sys::ImageBitmap, JsValue>;
 
-    #[wasm_bindgen(js_name = alpha2BitmapUploadsPremultiplied, catch)]
-    fn bitmap_uploads_premultiplied() -> Result<bool, JsValue>;
+    #[wasm_bindgen(js_name = alpha2ImagePixels, catch)]
+    fn image_pixels(image: &JsValue, width: u32, height: u32) -> Result<Vec<u8>, JsValue>;
+
+    #[wasm_bindgen(js_name = alpha2BitmapUploadProbe, catch)]
+    fn bitmap_upload_probe() -> Result<JsValue, JsValue>;
+}
+
+/// How the WebGL2 backend uploads a `VideoFrame`: as a canvas bitmap, which
+/// WebGL takes premultiplied or straight as the browser chooses, or, where a
+/// bitmap upload fails or leaves the texture black (ANGLE on some Vulkan
+/// drivers), as the 2D canvas's pixels, read back on the CPU.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WebGl2Uploads {
+    Bitmap { premultiplied: bool },
+    CpuPixels,
+}
+
+impl WebGl2Uploads {
+    /// The name diagnostics and the capability report give it.
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Bitmap { .. } => "bitmap",
+            Self::CpuPixels => "cpu-pixels",
+        }
+    }
+}
+
+thread_local! {
+    /// What [`webgl2_uploads`] measured in this realm, once.
+    static WEBGL2_UPLOADS: std::cell::Cell<Option<WebGl2Uploads>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// How this browser's WebGL2 takes a frame, measured once on a scratch
+/// `OffscreenCanvas` context: opaque red bitmaps of four sizes, filled and
+/// drawn from a `VideoFrame`, must upload without a GL error and read back
+/// red, and a half-transparent one tells premultiplied from straight. Without
+/// a scratch context, frames go as CPU pixels.
+pub(crate) fn webgl2_uploads() -> Result<WebGl2Uploads, JsValue> {
+    if let Some(measured) = WEBGL2_UPLOADS.with(std::cell::Cell::get) {
+        return Ok(measured);
+    }
+    let probe = bitmap_upload_probe()?;
+    let flag = |name: &str| {
+        web_sys::js_sys::Reflect::get(&probe, &JsValue::from_str(name))
+            .map(|value| value.as_bool() == Some(true))
+    };
+    let measured = if flag("works")? {
+        WebGl2Uploads::Bitmap {
+            premultiplied: flag("premultiplied")?,
+        }
+    } else {
+        WebGl2Uploads::CpuPixels
+    };
+    WEBGL2_UPLOADS.with(|cell| cell.set(Some(measured)));
+    Ok(measured)
+}
+
+/// The upload mode [`webgl2_uploads`] measured, if a frame or the capability
+/// report has asked yet.
+pub(crate) fn measured_webgl2_uploads() -> Option<WebGl2Uploads> {
+    WEBGL2_UPLOADS.with(std::cell::Cell::get)
 }
 
 /// Uploads a `VideoFrame` into `texture` on the WebGL2 backend, returning
-/// whether the texture now holds premultiplied or straight color.
-///
-/// Whether WebGL uploads a canvas bitmap premultiplied is the browser's
-/// choice (Chrome does), so it is measured once, on a scratch context.
+/// whether the texture now holds premultiplied or straight color: a canvas
+/// bitmap where this browser's WebGL2 uploads one, else the canvas's straight
+/// pixels through `write_texture` ([`webgl2_uploads`]).
 pub(crate) fn upload_frame_through_canvas(
     gpu: &alpha2_gpu::GpuContext,
     frame: &web_sys::VideoFrame,
@@ -217,15 +306,54 @@ pub(crate) fn upload_frame_through_canvas(
     width: u32,
     height: u32,
 ) -> Result<alpha2_render::SourceAlpha, JsValue> {
-    let alpha = if bitmap_uploads_premultiplied()? {
-        alpha2_render::SourceAlpha::Premultiplied
-    } else {
-        alpha2_render::SourceAlpha::Straight
-    };
-    let bitmap = frame_bitmap(frame, width, height)?;
-    upload_bitmap_through_gl(gpu, &bitmap, texture, width, height);
-    bitmap.close();
-    Ok(alpha)
+    match webgl2_uploads()? {
+        WebGl2Uploads::Bitmap { premultiplied } => {
+            let bitmap = frame_bitmap(frame, width, height)?;
+            upload_bitmap_through_gl(gpu, &bitmap, texture, width, height);
+            bitmap.close();
+            Ok(if premultiplied {
+                alpha2_render::SourceAlpha::Premultiplied
+            } else {
+                alpha2_render::SourceAlpha::Straight
+            })
+        }
+        WebGl2Uploads::CpuPixels => {
+            upload_pixels_through_canvas(gpu, frame, texture, width, height)?;
+            Ok(alpha2_render::SourceAlpha::Straight)
+        }
+    }
+}
+
+/// Draws `image` on a 2D canvas and uploads its straight RGBA pixels into
+/// `texture` with `write_texture`: the WebGL2 upload where canvas bitmaps fail.
+fn upload_pixels_through_canvas(
+    gpu: &alpha2_gpu::GpuContext,
+    image: &JsValue,
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+) -> Result<(), JsValue> {
+    let pixels = image_pixels(image, width, height)?;
+    gpu.queue().write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &pixels,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(width * 4),
+            rows_per_image: Some(height),
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    Ok(())
 }
 
 /// Uploads `bitmap` into `texture` on the WebGL2 backend.
@@ -352,7 +480,14 @@ pub(crate) fn upload_bitmap(
     height: u32,
 ) -> Result<alpha2_render::SourceAlpha, JsValue> {
     if !browser_webgpu {
-        upload_bitmap_through_gl(gpu, bitmap, texture, width, height);
+        match webgl2_uploads()? {
+            WebGl2Uploads::Bitmap { .. } => {
+                upload_bitmap_through_gl(gpu, bitmap, texture, width, height);
+            }
+            WebGl2Uploads::CpuPixels => {
+                upload_pixels_through_canvas(gpu, bitmap, texture, width, height)?;
+            }
+        }
         return Ok(alpha2_render::SourceAlpha::Straight);
     }
     let (Some(queue), Some(texture)) = (gpu.queue().as_webgpu(), texture.as_webgpu()) else {

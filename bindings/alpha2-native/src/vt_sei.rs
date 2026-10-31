@@ -197,7 +197,7 @@ fn unescape(data: &[u8]) -> Vec<u8> {
 mod tests {
     use super::*;
 
-    /// The SEI an M4's `VideoToolbox` wrote at the head of an export's first
+    /// The SEI `VideoToolbox` on Apple silicon wrote at the head of an export's first
     /// access unit: Apple's UUID, then 29 bytes of encoder state (one of
     /// them differs between runs), escaped as it was in the stream.
     const APPLE_SEI: &[u8] = &[

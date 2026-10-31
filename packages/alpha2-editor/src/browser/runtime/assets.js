@@ -11,6 +11,7 @@ import {
 } from "alpha2/hdr-frames";
 import {
   MediabunnyVideoDecoder,
+  probeAudioSource,
   probePlanarDecode,
   videoTrackFacts,
 } from "alpha2/mediabunny";
@@ -61,9 +62,27 @@ export const DEFAULT_TEXT = TEXT_DEFAULTS;
 
 export class AssetLibrary {
   #assets = new Map();
+  #hdrWithoutPlanes;
   #urls = [];
   #rasterizer = new OffscreenTextRasterizer();
   #textVersion = 1n;
+
+  /**
+   * `hdrWithoutPlanes` decides an HDR video this browser decodes only to frames without planes
+   * (and has no software decoder for): `"refuse"` (the default) refuses its import with
+   * `unsupported_media`; `"preview-degraded"` imports it with `planarDecode: "unavailable"`, for a
+   * preview through the browser's own tone mapping and an export the bridge refuses.
+   */
+  constructor({ hdrWithoutPlanes = "refuse" } = {}) {
+    if (
+      hdrWithoutPlanes !== "refuse" &&
+      hdrWithoutPlanes !== "preview-degraded"
+    )
+      throw new RangeError(
+        'hdrWithoutPlanes must be "refuse" or "preview-degraded"',
+      );
+    this.#hdrWithoutPlanes = hdrWithoutPlanes;
+  }
 
   get map() {
     return this.#assets;
@@ -255,6 +274,41 @@ export class AssetLibrary {
   }
 
   /**
+   * Whether this browser hands `file`'s HDR frames over as planes: `"available"`, or
+   * `"unavailable"` for a track it decodes only without planes when the library previews such a
+   * track degraded. Rejects with `unsupported_media` for one it refuses.
+   */
+  async #planarDecode(file, probe) {
+    if (!probe?.video?.colorMetadata) return "available";
+    try {
+      await probePlanarDecode(file, { declared: probe.video.colorMetadata });
+      return "available";
+    } catch (error) {
+      // Only a track the browser decodes, to frames without planes, can be previewed degraded;
+      // one it cannot decode at all stays refused.
+      if (
+        error instanceof PlanarDecodeUnavailableError &&
+        error.facts.softwareDecoder !== undefined &&
+        this.#hdrWithoutPlanes === "preview-degraded"
+      )
+        return "unavailable";
+      if (
+        error instanceof PlanarDecodeUnavailableError ||
+        error instanceof DecodeUnavailableError
+      )
+        throw new EditorError(
+          "unsupported_media",
+          decodeRefusalMessage(file.name, error.facts),
+          "import",
+          undefined,
+          true,
+          { cause: error },
+        );
+      throw error;
+    }
+  }
+
+  /**
    * `probe` is null when the container was unreadable; an element with no picture is refused. A
    * file the media element cannot open still imports, with no element (`video: null`), when the
    * decoder preview and export read it with decodes its picture.
@@ -264,26 +318,8 @@ export class AssetLibrary {
       throw new Error("the file has neither a picture nor sound");
     // An HDR source must reach the engine as planes, which some browsers never hand over (an
     // opaque hardware frame and no software decoder): refused here, by name, rather than at its
-    // first frame.
-    if (probe?.video?.colorMetadata) {
-      try {
-        await probePlanarDecode(file, { declared: probe.video.colorMetadata });
-      } catch (error) {
-        if (
-          error instanceof PlanarDecodeUnavailableError ||
-          error instanceof DecodeUnavailableError
-        )
-          throw new EditorError(
-            "unsupported_media",
-            decodeRefusalMessage(file.name, error.facts),
-            "import",
-            undefined,
-            true,
-            { cause: error },
-          );
-        throw error;
-      }
-    }
+    // first frame, unless the library takes it for a degraded preview.
+    const planarDecode = await this.#planarDecode(file, probe);
     const url = URL.createObjectURL(file);
     this.#urls.push(url);
     const video = document.createElement("video");
@@ -334,7 +370,13 @@ export class AssetLibrary {
       // Having audio is the document's fact; whether this browser decodes it is the session's.
       hasAudio: probe?.hasAudio ?? false,
       audioDecodable: probe?.audioDecodable ?? false,
+      ...(probe?.audioDecodeFacts
+        ? { audioDecodeFacts: probe.audioDecodeFacts }
+        : {}),
       colorMetadata: read.colorMetadata,
+      // Whether this browser hands its frames over as planes: the session's fact, like
+      // `audioDecodable`. "unavailable" previews degraded and is never exported here.
+      planarDecode,
       fit: "contain",
       thumbnail: null,
       peaks: null,
@@ -356,7 +398,7 @@ export class AssetLibrary {
   }
 
   async #importAudio(file, reference = null) {
-    const { duration, decodable } = await probeAudio(file);
+    const { duration, decodable, facts } = await probeAudio(file);
     const asset = {
       id: reference?.id ?? uid("src"),
       kind: "audio",
@@ -366,6 +408,7 @@ export class AssetLibrary {
       duration,
       hasAudio: true,
       audioDecodable: decodable,
+      ...(facts ? { audioDecodeFacts: facts } : {}),
       peaks: null,
       thumbnail: null,
     };
@@ -550,12 +593,12 @@ export async function probeVideo(file) {
         facts: await videoTrackFacts(track),
       };
     }
+    const audioDecode = audio ? await audioDecoding(file) : null;
     return {
       video,
       hasAudio: audio !== null,
-      audioDecodable: Boolean(
-        audio && (await audio.canDecode().catch(() => false)),
-      ),
+      audioDecodable: audioDecode?.decodable ?? false,
+      ...(audioDecode?.facts ? { audioDecodeFacts: audioDecode.facts } : {}),
     };
   } catch (error) {
     console.warn("probe fell back to HTMLVideoElement metadata", error);
@@ -612,9 +655,24 @@ async function containerDuration(file) {
 }
 
 /**
- * An audio file's duration, and whether this browser can decode it. A file this browser cannot
- * decode (Safari before 26 has no `AudioDecoder`) still imports: the document records the audio,
- * which a native host and another browser hear.
+ * Whether this browser decodes a file's primary audio, by the trial decode the preview's decoder
+ * makes when it opens (`probeAudioSource`), and when not, the facts of the refusal.
+ */
+async function audioDecoding(file) {
+  try {
+    await probeAudioSource(file.name, file);
+    return { decodable: true, facts: null };
+  } catch (error) {
+    if (error instanceof DecodeUnavailableError)
+      return { decodable: false, facts: error.facts };
+    throw error;
+  }
+}
+
+/**
+ * An audio file's duration, whether this browser can decode it, and the facts when it cannot. A
+ * file this browser cannot decode (no `AudioDecoder`, or a decoder that fails on it) still imports:
+ * the document records the audio, which a native host and another browser hear.
  */
 async function probeAudio(file) {
   const input = new Input({
@@ -624,11 +682,11 @@ async function probeAudio(file) {
   try {
     const track = await input.getPrimaryAudioTrack();
     if (!track) throw new Error("media has no audio track");
-    const decodable = await track.canDecode().catch(() => false);
+    const { decodable, facts } = await audioDecoding(file);
     const duration =
       (await track.getDurationFromMetadata().catch(() => null)) ??
       (decodable ? await track.computeDuration() : 0);
-    return { duration, decodable };
+    return { duration, decodable, facts };
   } finally {
     input.dispose();
   }

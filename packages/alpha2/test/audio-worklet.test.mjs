@@ -1240,7 +1240,7 @@ test(
       pump,
       ring,
       { sampleRate: 48_000 },
-      delay,
+      { processing: delay },
     );
     let heardAt;
     for (let quantum = 0; quantum < 24 && heardAt === undefined; quantum += 1) {
@@ -1361,7 +1361,7 @@ async function playAcrossRates(
       pump,
       ring,
       { sampleRate: contextRate },
-      delay,
+      { processing: delay },
     );
     const played = [];
     for (let quantum = 0; quantum * 128 < seconds * contextRate; quantum += 1) {

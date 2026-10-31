@@ -152,7 +152,18 @@ if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined") 
       const onGrid = times.every((time, index) => Math.abs(time - index / 30) <= slack);
       const videoDuration = await video.computeDuration();
       const audioDuration = audio === null ? null : await audio.computeDuration();
-      const ok = format === formats[container]
+      // What the sink reports of its encoders: how the latency mode was measured, the encoder asked
+      // for, the encode latency of every frame, and for AAC how its priming was measured.
+      const probe = sink.videoLatencyProbe;
+      const latency = sink.videoEncodeLatencyMs;
+      const priming = sink.aacPrimingProbe;
+      const reported = typeof probe?.mode === "string" && typeof probe.outcome === "string"
+        && typeof probe.ms === "number"
+        && sink.videoEncoderAcceleration === "no-preference"
+        && latency.count === FRAMES && latency.max >= latency.mean
+        && (audioCodec !== "aac" || (typeof priming?.outcome === "string" && priming.attempts >= 1));
+      const ok = reported
+        && format === formats[container]
         && video.codec === videoCodec
         && (audio?.codec ?? undefined) === audioCodec
         && times.length === FRAMES
@@ -161,6 +172,7 @@ if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined") 
         && (audioDuration === null || Math.abs(audioDuration - 1) < 0.05);
       return {
         ok, format, videoCodec: video.codec, audioCodec: audio?.codec ?? null, frames: times.length, onGrid,
+        reported, latencyProbe: probe, encodeLatency: latency, primingProbe: priming ?? null,
         videoDuration: Number(videoDuration.toFixed(4)),
         audioDuration: audioDuration === null ? null : Number(audioDuration.toFixed(4)),
       };
@@ -194,7 +206,7 @@ if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined") 
 // block times, leave it out. Chrome on Linux has no AAC encoder: the case skips there.
 export function exportAacPriming() {
   return `
-const { aacEncoderDelay, audioEncoderSampleRate, MediabunnySink } = await import("/packages/alpha2/dist/mediabunny.js");
+const { aacEncoderPrimingProbe, audioEncoderSampleRate, MediabunnySink } = await import("/packages/alpha2/dist/mediabunny.js");
 const { renderOfflineAudio } = await import("/packages/alpha2/dist/audio.js");
 const mb = await import("mediabunny");
 const config = { sampleRate: 48000, numberOfChannels: 2, bitrate: 128000 };
@@ -202,7 +214,8 @@ const rate = typeof AudioEncoder === "undefined" ? null : await audioEncoderSamp
 if (rate === null) {
   report({ skipped: "this browser has no AAC encoder", capability: "aac-encode" });
 } else {
-  const delay = await aacEncoderDelay({ ...config, sampleRate: rate });
+  const probe = await aacEncoderPrimingProbe({ ...config, sampleRate: rate });
+  const delay = probe.delay;
   const results = {};
   for (const container of ["mp4", "mov", "mkv"]) {
     const sink = new MediabunnySink({
@@ -235,8 +248,10 @@ if (rate === null) {
   // An encoder without priming (delay 0) is allowed when no container's decoded onset shows any.
   const maxAbsOnset = Math.max(...Object.values(results).map((value) => Math.abs(value.onset ?? Infinity)));
   report({
-    ok: Object.values(results).every((value) => value.ok) && (delay > 0 || maxAbsOnset < 0.001),
-    rate, delay, results,
+    // A probe that timed out twice measured nothing: the case says so instead of passing on delay 0.
+    ok: Object.values(results).every((value) => value.ok) && probe.outcome === "output"
+      && (delay > 0 || maxAbsOnset < 0.001),
+    rate, delay, outcome: probe.outcome, attempts: probe.attempts, probeMs: Math.round(probe.ms), results,
   });
 }
 `;
@@ -492,7 +507,7 @@ const worker = new Worker(URL.createObjectURL(new Blob([\`
 import init, { WebEffectRegistry } from "\${origin}/packages/alpha2/wasm/alpha2_wasm.js";
 import { createWasmRenderWorkerHost, installRenderWorker } from "\${origin}/packages/alpha2/dist/worker.js";
 await init();
-installRenderWorker(self, createWasmRenderWorkerHost(WebEffectRegistry, \${JSON.stringify(JSON.stringify(project))}));
+installRenderWorker(self, createWasmRenderWorkerHost(WebEffectRegistry, \${JSON.stringify(JSON.stringify(project))}, { renderer: "gpu" }));
 self.postMessage({ type: "test-ready" });
 \`], { type: "text/javascript" })), { type: "module" });
 await new Promise((resolve, reject) => {

@@ -2069,3 +2069,79 @@ test("unreadableFrames takes only redecode or present", () => {
     RangeError,
   );
 });
+
+/** `recoveryEngine` that also presents degraded frames, recording each. */
+function degradedEngine() {
+  const engine = recoveryEngine();
+  engine.degraded = [];
+  engine.uploadDegradedVideoFrame = (...args) => {
+    engine.degraded.push(args);
+    args[2].close();
+    return { generation: 2n, retainedBytes: 32 };
+  };
+  return engine;
+}
+
+test("a preview presents an opaque hdr source degraded when no software decode gives planes", async () => {
+  const engine = degradedEngine();
+  const supply = new FrameSupply(engine, {
+    opaqueEngineFrames: "present-degraded",
+  });
+  const hardware = opaque(fakeHdrFrame({ transfer: "hlg", timestamp: 0 }));
+  const { done, requests } = supplyOne(supply, hardware, noSoftwareDecoder);
+  const supplied = await done;
+  assert.equal(supplied.uploaded.length, 1);
+  assert.equal(engine.degraded.length, 1);
+  assert.equal(
+    engine.degraded[0][2],
+    hardware,
+    "the browser's own frame is presented",
+  );
+  assert.ok(hardware.closed);
+  assert.deepEqual(engine.yuv, []);
+  assert.deepEqual(engine.direct, []);
+  assert.deepEqual(
+    requests.map((request) => request.decode ?? "default"),
+    ["default", "software"],
+  );
+  // Later frames decode as the browser gives them and are presented degraded at once.
+  let decodes = 0;
+  const later = await supply.supply(4_000n, {
+    width: 4,
+    height: 2,
+    liveSourceIds: new Set(["v"]),
+    getLayer: () => ({ id: "v", kind: "video" }),
+    pixelsFor: async (_layer, _seconds, options) => {
+      decodes += 1;
+      assert.equal(options.decode, undefined);
+      return {
+        kind: "video-frame",
+        frame: opaque(fakeHdrFrame({ transfer: "hlg", timestamp: 1_000 })),
+        chromaSiting: "left",
+      };
+    },
+    isCurrent: () => true,
+  });
+  assert.equal(decodes, 1);
+  assert.equal(later.uploaded.length, 1);
+  assert.equal(engine.degraded.length, 2);
+});
+
+test("a supply without degraded presentation, or an engine without it, refuses the source", async () => {
+  for (const supply of [
+    new FrameSupply(degradedEngine()),
+    new FrameSupply(recoveryEngine(), {
+      opaqueEngineFrames: "present-degraded",
+    }),
+  ]) {
+    const hardware = opaque(fakeHdrFrame({ transfer: "hlg", timestamp: 0 }));
+    await assert.rejects(supplyOne(supply, hardware, noSoftwareDecoder).done, {
+      code: "PLANAR_DECODE_UNAVAILABLE",
+    });
+    assert.ok(hardware.closed);
+  }
+  assert.throws(
+    () => new FrameSupply(recoveryEngine(), { opaqueEngineFrames: "show" }),
+    RangeError,
+  );
+});

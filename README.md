@@ -127,7 +127,7 @@ Each `--asset` gives the file of the project source with that id. [`docs/native.
 
 Native exports encode on the GPU wherever the device and codec allow it. Hardware decoding is on by default on Linux and opt-in on macOS and Windows (`--video-decode auto` on `alpha2-host export`, `videoDecode: "auto"` in `@alpha2-sh/node`).
 
-- **Browsers**: Chrome 96, Firefox 89 or Safari 16.4, or later. Audio preview needs a cross-origin isolated page (`Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Embedder-Policy: require-corp`). Serve `.wasm` files as `application/wasm`.
+- **Browsers**: Chrome 96, Firefox 89 or Safari 26, or later. Audio preview needs a cross-origin isolated page (`Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Embedder-Policy: require-corp`). Serve `.wasm` files as `application/wasm`.
 - **Windows N/KN** without the Media Feature Pack and **Windows Server** without Media Foundation have no default software H.264: install OpenH264 (`install --openh264`) or use a D3D12/NVENC GPU.
 - **Node.js**: 22.21 or later (24.5 or later on Node 24).
 - **Python**: 3.11.4 or later.

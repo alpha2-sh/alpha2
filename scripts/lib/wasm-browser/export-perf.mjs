@@ -1,21 +1,21 @@
 // Browser export throughput on the machine's GPU: the packaged engine in a render worker exports a
 // project whose video is a 1080p H.264 source, through the package's own decode, export and mux
 // path, as an app does. Only correctness is judged (every frame exported); the times are recorded.
-// Not in the default case list: it needs the release gate's perf inputs and minutes of a real GPU.
-//   node scripts/release-gate/perf.mjs --make-source
+// Not in the default case list: it needs minutes of a real GPU and inputs made beforehand, a project
+// at target/perf/p2r.json whose video asset is target/perf/source-1080p.mp4.
 //   node scripts/test-wasm-browser.mjs --case export-perf
-// Page parameters: `?project=` and `?source=` (repository paths; by default the release gate's
-// P2r project and decode source under target/release-gate/perf/) and `?seconds=` (default 10).
+// Page parameters: `?project=` and `?source=` (repository paths, defaulting to the two above) and
+// `?seconds=` (default 10).
 
 export function exportPerf() {
   return `
 const parameters = new URL(location.href).searchParams;
-const projectPath = parameters.get("project") ?? "/target/release-gate/perf/p2r.json";
-const sourcePath = parameters.get("source") ?? "/target/release-gate/perf/source-1080p.mp4";
+const projectPath = parameters.get("project") ?? "/target/perf/p2r.json";
+const sourcePath = parameters.get("source") ?? "/target/perf/source-1080p.mp4";
 const seconds = Number(parameters.get("seconds") ?? 10);
 const fetched = async (path) => {
   const response = await fetch(path);
-  if (!response.ok) throw new Error(path + " answered " + response.status + "; run node scripts/release-gate/perf.mjs --make-source first");
+  if (!response.ok) throw new Error(path + " answered " + response.status + "; make the perf inputs first");
   return response;
 };
 const project = await (await fetched(projectPath)).json();
@@ -32,7 +32,7 @@ const worker = new Worker(URL.createObjectURL(new Blob([\`
 import init, { WebEffectRegistry } from "\${origin}/packages/alpha2/wasm/alpha2_wasm.js";
 import { createWasmRenderWorkerHost, installRenderWorker } from "\${origin}/packages/alpha2/dist/worker.js";
 await init();
-installRenderWorker(self, createWasmRenderWorkerHost(WebEffectRegistry, \${JSON.stringify(JSON.stringify(project))}));
+installRenderWorker(self, createWasmRenderWorkerHost(WebEffectRegistry, \${JSON.stringify(JSON.stringify(project))}, { renderer: "gpu" }));
 self.postMessage({ type: "test-ready" });
 \`], { type: "text/javascript" })), { type: "module" });
 // A message posted before the module has installed its loop would be lost.

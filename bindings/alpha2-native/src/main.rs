@@ -577,7 +577,7 @@ fn probe_encoders(mut args: impl Iterator<Item = String>) -> Result<(), String> 
 /// runs in: `probe-d3d12va-rate-control` and the open's arguments
 /// ([`alpha2_native::D3D12RateControlOpen::arguments`]).
 ///
-/// An Intel Iris Xe on driver 30.0.101.2079 hangs or crashes inside
+/// An Intel integrated GPU on driver 30.0.101.2079 hangs or crashes inside
 /// `FFmpeg`'s D3D12VA encode submission about once in a few thousand
 /// frames. The probe encodes one frame per mode the device lists, so a
 /// crash is rare, but one would end the whole report; in a child it ends

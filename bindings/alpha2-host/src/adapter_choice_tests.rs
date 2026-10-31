@@ -13,11 +13,11 @@ fn a_second_row_of_the_same_gpu_is_not_opened() {
         luid: None,
         software,
     };
-    let iris = (0x8086, 0x9a49);
+    let integrated = (0x8086, 0x9a49);
     let laptop = [
         row(2, (0x10de, 0x1f97), Some((88, 0, 0)), false),
-        row(0, iris, None, false),
-        row(1, iris, Some((0, 2, 0)), false),
+        row(0, integrated, None, false),
+        row(1, integrated, Some((0, 2, 0)), false),
         row(3, (0x1414, 0x8c), None, true),
     ];
     assert_eq!(duplicate_rows(&laptop), [(0, 1)]);
@@ -33,21 +33,21 @@ fn a_second_row_of_the_same_gpu_is_not_opened() {
 /// could encode.
 #[test]
 fn the_report_names_every_adapter_and_the_one_that_could_encode() {
-    let mut mx450 = AdapterRecord::unasked(1, "NVIDIA GeForce MX450".to_owned(), "dx12", false);
-    mx450.renders = Ok(());
-    mx450.luid = Some(0x1_349e);
-    mx450.decodes = Err("ID3D12VideoDevice unavailable".to_owned());
-    mx450.gpu_encodes = vec![("h264", Err("ID3D12VideoDevice unavailable".to_owned()))];
-    let mut iris =
+    let mut discrete = AdapterRecord::unasked(1, "NVIDIA GeForce MX450".to_owned(), "dx12", false);
+    discrete.renders = Ok(());
+    discrete.luid = Some(0x1_349e);
+    discrete.decodes = Err("ID3D12VideoDevice unavailable".to_owned());
+    discrete.gpu_encodes = vec![("h264", Err("ID3D12VideoDevice unavailable".to_owned()))];
+    let mut integrated =
         AdapterRecord::unasked(0, "Intel(R) Iris(R) Xe Graphics".to_owned(), "dx12", false);
-    iris.renders = Ok(());
-    iris.decodes = Ok(());
-    iris.gpu_encodes = vec![
+    integrated.renders = Ok(());
+    integrated.decodes = Ok(());
+    integrated.gpu_encodes = vec![
         ("h264", Ok(())),
         ("hevc", Ok(())),
         ("av1", Err("no".to_owned())),
     ];
-    let records = vec![mx450, iris];
+    let records = vec![discrete, integrated];
     let policy = AdapterPolicy::Index(1);
     let order = alpha2_gpu::rank_adapters(&records, &policy, true).expect("pinned");
     let report = AdapterChoiceReport::ranked(policy, records, &order);

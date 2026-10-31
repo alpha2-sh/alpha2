@@ -2,6 +2,14 @@ import { raceAbort } from "./abort.js";
 import { videoFrameRepackedBytes } from "./video-frames.js";
 import { ExportFailureError, recordCleanupFailure } from "./export-failure.js";
 import type { MissingFrame } from "./player.js";
+import { softwareDecodeRequest } from "./frame-intake.js";
+import {
+  type AacEncoderProbe,
+  type BrowserExportPerformance,
+  type EncodeLatency,
+  ExportMetrics,
+  type VideoLatencyProbe,
+} from "./export-metrics.js";
 
 const TICKS_PER_SECOND = 120_000n;
 const DEFAULT_MAX_IN_FLIGHT_VIDEO_FRAMES = 3;
@@ -87,55 +95,18 @@ export interface BrowserExportOptions {
   readonly maxInFlightBytes?: number;
 }
 
-/** Browser export measurements whose names match native `performance` fields. */
-export interface BrowserExportMetrics {
-  readonly pipelineEnabled: true;
-  /** Time spent waiting for the host to decode and upload missing sources. */
-  readonly sourceConvertUploadMs: number;
-  /** Worker/Wasm evaluation, render, submission, and response time. */
-  readonly frameSubmitMs: number;
-  /** End-to-end GPU mapping latency, including time overlapped with other work. */
-  readonly readbackMapLatencyMs: number;
-  /** Time for which ordered export progress was blocked on GPU mapping. */
-  readonly readbackWaitMs: number;
-  /** Alias retained for direct comparison with native metrics. */
-  readonly readbackBlockingMs: number;
-  /** Time a rendered frame waited behind earlier encoder work. */
-  readonly encodeQueueWaitMs: number;
-  /** Time spent inside the browser encoder/muxer video-write adapter. */
-  readonly videoEncodeMs: number;
-  /** Time spent finalizing the encoder and muxer. */
-  readonly muxFinishMs: number;
-  readonly inFlightDepth: number;
-  readonly encodeChannelDepth: number;
-  readonly inFlightByteBudget: number;
-  readonly stagingBytesPerFrame: number;
-  readonly peakReadbackBytes: number;
-  /**
-   * Mapped staging bytes the export read back: the raw video that crossed from the GPU to script.
-   * Native reports the same field.
-   */
-  readonly outputReadbackBytes: number;
-  /**
-   * Bytes script copied to pack read-back planes tight, because this browser's `VideoFrame` ignores
-   * `layout` (Safari). 0 where the frame reads the padded planes in place.
-   */
-  readonly outputRepackBytes: number;
-  readonly peakEncodeQueueBytes: number;
-  readonly maxPendingMediaEvents: number;
-  readonly averagePendingMediaEvents: number;
-  readonly maxInFlightReadbacks: number;
-  readonly maxEncodeQueueEvents: number;
-  readonly encodeBackpressureCount: number;
-  readonly pipelineOverlapFrames: number;
-}
-
 /** Completion data shaped like the comparable part of a native export result. */
 export interface BrowserExportResult {
   readonly renderMs: number;
   readonly frames: number;
   readonly fps: number;
-  readonly performance: BrowserExportMetrics;
+  readonly performance: BrowserExportPerformance;
+  /** How the sink measured its video encoder's latency mode, when it reports it. */
+  readonly videoLatencyProbe?: VideoLatencyProbe;
+  /** How the sink measured its AAC encoder's priming, when it reports it. */
+  readonly aacPrimingProbe?: AacEncoderProbe;
+  /** The video encoder the sink asked the browser for, when it reports it. */
+  readonly videoEncoderAcceleration?: "no-preference" | "prefer-software";
 }
 
 /** Backend implemented by the worker that owns the shared wasm renderer. */
@@ -164,6 +135,11 @@ export interface BrowserEncodeSink {
   finish(): Promise<void>;
   /** Discards partial output; called once when the export fails. */
   abort(reason: Error): Promise<void> | void;
+  /** Reported into the result when the sink has them (a `MediabunnySink` does). */
+  readonly videoLatencyProbe?: VideoLatencyProbe;
+  readonly aacPrimingProbe?: AacEncoderProbe;
+  readonly videoEncoderAcceleration?: "no-preference" | "prefer-software";
+  readonly videoEncodeLatencyMs?: EncodeLatency;
 }
 
 /**
@@ -345,6 +321,11 @@ export class Alpha2Exporter {
  * would overflow it (`RESOURCE_LIMIT`, stage `working-set-over-budget`), and `refill` rejects with
  * that. Neither is retried by `decideRetry`.
  *
+ * A refill that rejects because the render host sent a frame back for a software decode
+ * (`SOFTWARE_DECODE_REQUIRED`) is not a failure: the same frame is asked for again, once, with
+ * `decode: "software"` on its `missingFrames` entry, and every later frame of a source whose frames
+ * have no planar format is asked for in software from then on. `refill` must honor `decode`.
+ *
  * `refill` must deliver through a decoder refill of the export's own, not the preview's: a
  * `DecoderRefillCoordinator` made for the export, whose `deliver` uploads to the backend the
  * export renders with and whose requests carry generation 0 (an {@link ExportWaiting} has none).
@@ -393,24 +374,19 @@ export async function exportToSink(
   let frameRetainedBytes: number | undefined;
   let exportComplete = false;
   let refills = 0;
-  let sourceConvertUploadMs = 0;
-  let frameSubmitMs = 0;
-  let readbackMapLatencyMs = 0;
-  let readbackWaitMs = 0;
-  let encodeQueueWaitMs = 0;
-  let videoEncodeMs = 0;
-  let muxFinishMs: number;
-  let peakReadbackBytes = 0;
-  let outputReadbackBytes = 0;
-  let outputRepackBytes = 0;
-  let peakEncodeQueueBytes = 0;
-  let maxPendingMediaEvents = 0;
-  let pendingDepthTotal = 0;
-  let pendingDepthSamples = 0;
-  let maxInFlightReadbacks = 0;
-  let maxEncodeQueueEvents = 0;
-  let encodeBackpressureCount = 0;
-  let pipelineOverlapFrames = 0;
+  const metrics = new ExportMetrics({
+    maxInFlightReadbacks: maxInFlightFrames,
+    maxPendingVideoWrites: maxInFlightFrames,
+    inFlightByteBudget: maxInFlightBytes,
+  });
+  // Sources whose frames came back without planes, and frames sent back once, by source and time.
+  const softwareSources = new Set<string>();
+  const softwareFrames = new Set<string>();
+  const inSoftware = (missing: MissingFrame): MissingFrame =>
+    softwareSources.has(missing.sourceId) ||
+    softwareFrames.has(`${missing.sourceId}\u0000${missing.mediaTimeTicks}`)
+      ? { ...missing, decode: "software" }
+      : missing;
   // Writes settle in order. A settled write frees its slot and bytes for the next frame at once;
   // a failed one fails the export.
   const retireSettledWrites = (): void => {
@@ -462,7 +438,7 @@ export async function exportToSink(
               () => {},
             );
         });
-        frameSubmitMs += performance.now() - submitStarted;
+        metrics.frameSubmitMs += performance.now() - submitStarted;
         if (step.kind === "complete") {
           exportComplete = true;
           break;
@@ -472,8 +448,26 @@ export async function exportToSink(
             throw sourcesNotHeld(step, refills);
           refills += 1;
           const refillStarted = performance.now();
-          await cancellable(refill(step));
-          sourceConvertUploadMs += performance.now() - refillStarted;
+          try {
+            await cancellable(
+              refill({
+                ...step,
+                missingFrames: step.missingFrames.map(inSoftware),
+              }),
+            );
+          } catch (error) {
+            const request = softwareDecodeRequest(error);
+            const key =
+              request && `${request.sourceId}\u0000${request.mediaTimeTicks}`;
+            if (key === undefined || softwareFrames.has(key)) throw error;
+            softwareFrames.add(key);
+            if (request?.reason === "non-planar")
+              softwareSources.add(request.sourceId);
+            // Asking for the frame again in software is part of the same refill.
+            refills -= 1;
+          } finally {
+            metrics.sourceSupplyMs += performance.now() - refillStarted;
+          }
           continue;
         }
         refills = 0;
@@ -507,15 +501,18 @@ export async function exportToSink(
         frameRetainedBytes = step.retainedBytes;
         retainedBytes += step.retainedBytes;
         readbackBytes += step.retainedBytes;
-        peakReadbackBytes = Math.max(peakReadbackBytes, readbackBytes);
+        metrics.peakReadbackBytes = Math.max(
+          metrics.peakReadbackBytes,
+          readbackBytes,
+        );
         const mappingStarted = performance.now();
         const measuredOutput = step.output.then(
           (output) => {
-            readbackMapLatencyMs += performance.now() - mappingStarted;
+            metrics.readbackMapLatencyMs += performance.now() - mappingStarted;
             return output;
           },
           (error: unknown) => {
-            readbackMapLatencyMs += performance.now() - mappingStarted;
+            metrics.readbackMapLatencyMs += performance.now() - mappingStarted;
             throw error;
           },
         );
@@ -524,17 +521,14 @@ export async function exportToSink(
           output: measuredOutput,
           retainedBytes: step.retainedBytes,
         });
-        maxInFlightReadbacks = Math.max(
-          maxInFlightReadbacks,
+        metrics.peakInFlightReadbacks = Math.max(
+          metrics.peakInFlightReadbacks,
           pendingReadbacks.length,
         );
-        if (pendingWrites.length > 0) pipelineOverlapFrames += 1;
+        if (pendingWrites.length > 0) metrics.pipelineOverlapFrames += 1;
       }
 
-      const pendingDepth = pendingReadbacks.length + pendingWrites.length;
-      maxPendingMediaEvents = Math.max(maxPendingMediaEvents, pendingDepth);
-      pendingDepthTotal += pendingDepth;
-      pendingDepthSamples += 1;
+      metrics.samplePending(pendingReadbacks.length + pendingWrites.length);
 
       if (pendingReadbacks.length === 0) {
         const oldestWrite = pendingWrites.shift();
@@ -551,20 +545,20 @@ export async function exportToSink(
       const output = await cancellable(oldestReadback.output, ({ frame }) =>
         frame.close(),
       );
-      readbackWaitMs += performance.now() - readbackWaitStarted;
+      metrics.readbackWaitMs += performance.now() - readbackWaitStarted;
       readbackBytes -= oldestReadback.retainedBytes;
-      outputReadbackBytes += oldestReadback.retainedBytes;
-      outputRepackBytes += videoFrameRepackedBytes(output.frame);
+      metrics.outputReadbackBytes += oldestReadback.retainedBytes;
+      metrics.outputRepackBytes += videoFrameRepackedBytes(output.frame);
       const encodeQueued = performance.now();
-      if (pendingWrites.length > 0) encodeBackpressureCount += 1;
+      if (pendingWrites.length > 0) metrics.encodeBackpressureCount += 1;
       const write = writeTail.then(
         async () => {
-          encodeQueueWaitMs += performance.now() - encodeQueued;
-          const encodeStarted = performance.now();
+          metrics.encodeQueueWaitMs += performance.now() - encodeQueued;
+          const writeStarted = performance.now();
           try {
             await sink.writeVideo(output);
           } finally {
-            videoEncodeMs += performance.now() - encodeStarted;
+            metrics.videoWriteWaitMs += performance.now() - writeStarted;
           }
         },
         (error: unknown) => {
@@ -590,9 +584,12 @@ export async function exportToSink(
       );
       pendingWrites.push(pendingWrite);
       encodeQueueBytes += oldestReadback.retainedBytes;
-      peakEncodeQueueBytes = Math.max(peakEncodeQueueBytes, encodeQueueBytes);
-      maxEncodeQueueEvents = Math.max(
-        maxEncodeQueueEvents,
+      metrics.peakEncodeQueueBytes = Math.max(
+        metrics.peakEncodeQueueBytes,
+        encodeQueueBytes,
+      );
+      metrics.maxEncodeQueueEvents = Math.max(
+        metrics.maxEncodeQueueEvents,
         pendingWrites.length,
       );
       void write.catch(() => {});
@@ -602,7 +599,7 @@ export async function exportToSink(
     throwIfCancelled();
     const finishStarted = performance.now();
     await sink.finish();
-    muxFinishMs = performance.now() - finishStarted;
+    metrics.finishMs = performance.now() - finishStarted;
     throwIfCancelled();
     const renderMs = performance.now() - started;
     const completed = exporter.progress.completed;
@@ -616,34 +613,19 @@ export async function exportToSink(
       renderMs,
       frames,
       fps: frames / Math.max(renderMs / 1_000, Number.EPSILON),
-      performance: {
-        pipelineEnabled: true,
-        sourceConvertUploadMs,
-        frameSubmitMs,
-        readbackMapLatencyMs,
-        readbackWaitMs,
-        readbackBlockingMs: readbackWaitMs,
-        encodeQueueWaitMs,
-        videoEncodeMs,
-        muxFinishMs,
-        inFlightDepth: maxInFlightFrames,
-        encodeChannelDepth: maxInFlightFrames,
-        inFlightByteBudget: maxInFlightBytes,
-        stagingBytesPerFrame: frameRetainedBytes ?? 0,
-        peakReadbackBytes,
-        outputReadbackBytes,
-        outputRepackBytes,
-        peakEncodeQueueBytes,
-        maxPendingMediaEvents,
-        averagePendingMediaEvents:
-          pendingDepthSamples === 0
-            ? 0
-            : pendingDepthTotal / pendingDepthSamples,
-        maxInFlightReadbacks,
-        maxEncodeQueueEvents,
-        encodeBackpressureCount,
-        pipelineOverlapFrames,
-      },
+      performance: (() => {
+        metrics.stagingBytesPerFrame = frameRetainedBytes ?? 0;
+        return metrics.finish(sink.videoEncodeLatencyMs);
+      })(),
+      ...(sink.videoLatencyProbe === undefined
+        ? {}
+        : { videoLatencyProbe: sink.videoLatencyProbe }),
+      ...(sink.aacPrimingProbe === undefined
+        ? {}
+        : { aacPrimingProbe: sink.aacPrimingProbe }),
+      ...(sink.videoEncoderAcceleration === undefined
+        ? {}
+        : { videoEncoderAcceleration: sink.videoEncoderAcceleration }),
     };
   } catch (error) {
     if (error instanceof ExportAbortedError && error.code === "cancelled") {

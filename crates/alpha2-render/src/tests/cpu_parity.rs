@@ -14,24 +14,24 @@ use crate::{
 };
 
 /// [`Parity::class`] widens on a device whose sRGB `pow` is off by more than
-/// this many codes: a hundred times the least precise one measured (the
-/// table in `device_precision.rs`).
+/// this many codes: a hundred times the least precise one measured (see
+/// `device_precision.rs`).
 const POW_WIDEN: f64 = 0.01;
 
 /// [`Parity::class`] widens on a device that filters 8-bit pictures with
-/// fewer bits of weight than this: the M4 (5) and the software rasterizers
-/// (1), whose every sampled picture is off, filtered or not.
+/// fewer bits of weight than this: Apple-silicon GPUs (5) and the software
+/// rasterizers (1), whose every sampled picture is off, filtered or not.
 const COARSE_FILTER_BITS: u32 = 6;
 
 /// [`Parity::filtered`] widens on a device that filters 8-bit pictures with
-/// fewer bits of weight than this: NVIDIA (8) and WARP (7), not RADV or the
-/// Iris Xe (9).
+/// fewer bits of weight than this: NVIDIA (8) and WARP (7), not the AMD and
+/// Intel integrated GPUs measured (9).
 const WEIGHT_WIDEN: u32 = 9;
 
 /// No sample of an [`Tolerance::Unstable`] comparison may differ by more
 /// than this many codes: the smallest power of two over the largest
 /// difference measured on hardware (a halftone cell edge, 34 codes on RADV,
-/// the Iris Xe and the M4).
+/// an Intel integrated GPU and an Apple-silicon GPU).
 const UNSTABLE_CAP: usize = 64;
 
 /// How far the CPU picture may be from the GPU's, in 8-bit codes.

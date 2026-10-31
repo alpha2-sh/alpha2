@@ -593,6 +593,93 @@ test("the playback clock is the audio the listener hears, not what was mixed", a
   assert.equal(clock.sample, 96_000);
 });
 
+test("missing output latency falls back to the output timestamp", async () => {
+  const buffer = ring(1, 8192);
+  const pump = new AudioPump(
+    source(1, (_, frames) => ({
+      kind: "mixed",
+      planes: planes(1, frames, () => 0),
+    })),
+    buffer,
+    0,
+    { blockFrames: 512, targetFrames: 4096 },
+  );
+  // A browser that reports no outputLatency: the context renders 2.0 s next and was heard at
+  // 1.94 s 10 ms ago, so 50 ms lie between the audio thread and the speaker.
+  const output = {
+    sampleRate: 48_000,
+    outputLatency: 0,
+    baseLatency: 0.005,
+    currentTime: 2,
+    getOutputTimestamp: () => ({
+      contextTime: 1.94,
+      performanceTime: performance.now() - 10,
+    }),
+  };
+  const clock = new AudioPlaybackClock(pump, buffer, output);
+  await pump.fill();
+  buffer.read(
+    planes(1, 4096, () => 0),
+    4096,
+  );
+  assert.equal(clock.latencySource, "output-timestamp");
+  assert.ok(
+    Math.abs(clock.latencySeconds - 0.05) < 0.002,
+    clock.latencySeconds,
+  );
+  assert.ok(Math.abs(clock.sample - (4096 - 2400)) <= 96, String(clock.sample));
+  // A browser that reports outputLatency is believed first, its base latency added.
+  output.outputLatency = 0.02;
+  assert.equal(clock.latencySource, "output-latency");
+  assert.equal(clock.sample, 4096 - 1200);
+  // Neither: only the base latency is known.
+  output.outputLatency = undefined;
+  output.getOutputTimestamp = () => ({ contextTime: 0, performanceTime: 0 });
+  output.currentTime = 0;
+  assert.equal(clock.latencySource, "base-only");
+  assert.equal(clock.sample, 4096 - 240);
+});
+
+test("a latency offset shifts the heard position", async () => {
+  const buffer = ring(1, 8192);
+  const pump = new AudioPump(
+    source(1, (_, frames) => ({
+      kind: "mixed",
+      planes: planes(1, frames, () => 0),
+    })),
+    buffer,
+    0,
+    { blockFrames: 512, targetFrames: 4096 },
+  );
+  const clock = new AudioPlaybackClock(
+    pump,
+    buffer,
+    { sampleRate: 48_000, outputLatency: 0.01 },
+    { latencyOffsetSeconds: 0.03 },
+  );
+  await pump.fill();
+  buffer.read(
+    planes(1, 4096, () => 0),
+    4096,
+  );
+  // 10 ms reported plus the 30 ms a wireless link adds, which no browser reports.
+  assert.equal(clock.sample, 4096 - 480 - 1440);
+  clock.latencyOffsetSeconds = -0.005;
+  assert.equal(clock.sample, 4096 - 480 + 240);
+  assert.equal(clock.latencySource, "output-latency");
+  assert.throws(() => (clock.latencyOffsetSeconds = Number.NaN), RangeError);
+  assert.throws(
+    () =>
+      new AudioPlaybackClock(
+        pump,
+        buffer,
+        { sampleRate: 48_000 },
+        { latencyOffsetSeconds: Infinity },
+      ),
+    RangeError,
+  );
+});
+
 test("the playback clock counts the project's samples when the context runs at another rate", async () => {
   // A 48 kHz project in a 44.1 kHz context: the pump counts project samples, so 10 ms of output is
   // 480 of them, while the node's delay is in context samples.
@@ -611,7 +698,7 @@ test("the playback clock counts the project's samples when the context runs at a
     pump,
     buffer,
     { sampleRate: 44_100, outputLatency: 0.01 },
-    processing,
+    { processing },
   );
   await pump.fill();
   assert.equal(pump.sampleRate, 48_000);
@@ -644,7 +731,7 @@ test("the playback clock subtracts the delay of what plays the ring", async () =
     pump,
     buffer,
     { sampleRate: 48_000, outputLatency: 0.01 },
-    processing,
+    { processing },
   );
   await pump.fill();
   buffer.read(

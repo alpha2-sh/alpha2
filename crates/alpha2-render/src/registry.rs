@@ -247,6 +247,8 @@ pub(crate) struct RegisteredEffect {
     pub(crate) uniform_layout: UniformLayout,
     /// Whether the body can read the frame time ([`body_reads_time`]).
     reads_time: bool,
+    /// What one invocation may cost at worst, per pixel.
+    pub(crate) cost: crate::effect_cost::EffectCost,
     /// Made when a host's effect registers, its verdict awaited then; a
     /// built-in's the first time it is drawn or warmed
     /// ([`Renderer::effect_pipeline`]).
@@ -586,10 +588,11 @@ impl EffectRegistry {
 }
 
 /// A registry entry for `definition`, its pipeline not made yet.
-fn registered_effect(definition: EffectDef) -> RegisteredEffect {
+pub(crate) fn registered_effect(definition: EffectDef) -> RegisteredEffect {
     RegisteredEffect {
         uniform_layout: uniform_layout(&definition.params),
         reads_time: body_reads_time(&definition.wgsl_body),
+        cost: crate::effect_cost::invocation_cost(&blank_comments(&definition.wgsl_body)),
         definition,
         pipeline: std::sync::OnceLock::new(),
     }
@@ -1132,7 +1135,8 @@ fn validate_wgsl_body(body: &str) -> Result<(), ShaderDiagnostics> {
         }
     }
     bound_for_loops(body)?;
-    crate::call_budget::check_invocation_calls(&code)
+    crate::call_budget::check_invocation_calls(&code)?;
+    crate::effect_cost::check_invocation_cost(&code).map(drop)
 }
 
 /// The identifiers in `code`: words that start with a letter or `_`, so the

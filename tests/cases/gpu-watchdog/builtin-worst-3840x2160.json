@@ -1,0 +1,1004 @@
+{
+  "schema_version": 1,
+  "id": "gpu-watchdog-builtin-worst",
+  "name": "The costliest built-ins at their maximum parameters, 3840x2160",
+  "settings": {
+    "width": 3840,
+    "height": 2160,
+    "frame_rate": {
+      "num": 24,
+      "den": 1
+    },
+    "sample_rate": 48000
+  },
+  "sources": [
+    {
+      "id": "video",
+      "locator": "fixture://parity-rgb",
+      "kind": "video"
+    },
+    {
+      "id": "still",
+      "locator": "fixture://parity-image",
+      "kind": "image"
+    }
+  ],
+  "compositions": [
+    {
+      "id": "lens-blur-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.lens-blur",
+              "version": 1,
+              "params": {
+                "radius": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.02
+                  }
+                },
+                "highlights": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 10.0
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "oil-paint-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.oil-paint",
+              "version": 1,
+              "params": {
+                "radius": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.015
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "surface-blur-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.surface-blur",
+              "version": 1,
+              "params": {
+                "radius": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.02
+                  }
+                },
+                "threshold": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 1.0
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "matte-choker-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.matte-choker",
+              "version": 1,
+              "params": {
+                "choke": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": -1.0
+                  }
+                },
+                "radius": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.03
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "outline-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.outline",
+              "version": 1,
+              "params": {
+                "color": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "color",
+                    "value": [
+                      1,
+                      1,
+                      1,
+                      1
+                    ]
+                  }
+                },
+                "width": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.03
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "radial-blur-spin-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.radial-blur",
+              "version": 1,
+              "params": {
+                "mode": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "enum",
+                    "value": 1
+                  }
+                },
+                "amount": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 1.0
+                  }
+                },
+                "angle": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 90.0
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "gaussian-blur-r1-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.gaussian-blur",
+              "version": 1,
+              "params": {
+                "radius": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 1.0
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "glow-max-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.glow",
+              "version": 1,
+              "params": {
+                "threshold": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.0
+                  }
+                },
+                "intensity": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 3.0
+                  }
+                },
+                "radius": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.06
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "drop-shadow-max-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.drop-shadow",
+              "version": 1,
+              "params": {
+                "color": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "color",
+                    "value": [
+                      0,
+                      0,
+                      0,
+                      1
+                    ]
+                  }
+                },
+                "opacity": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 1.0
+                  }
+                },
+                "distance": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.2
+                  }
+                },
+                "softness": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.2
+                  }
+                },
+                "shadow_only": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "bool",
+                    "value": false
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "tilt-shift-max-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.tilt-shift",
+              "version": 1,
+              "params": {
+                "blur": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.2
+                  }
+                },
+                "focus": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.0
+                  }
+                },
+                "falloff": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 1.0
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    },
+    {
+      "id": "unsharp-mask-max-look",
+      "nodes": [
+        {
+          "id": "clip",
+          "op": {
+            "type": "clip"
+          }
+        },
+        {
+          "id": "effect",
+          "op": {
+            "type": "effect",
+            "input": "clip",
+            "effect": {
+              "id": "alpha2.effect.unsharp-mask",
+              "version": 1,
+              "params": {
+                "amount": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 5.0
+                  }
+                },
+                "radius": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.1
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "output": "effect"
+    }
+  ],
+  "timeline": {
+    "tracks": [
+      {
+        "id": "base",
+        "name": "Base",
+        "kind": "video",
+        "clips": [
+          {
+            "id": "effect-lens-blur",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 0,
+              "end": 10000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 10000
+            },
+            "composition": {
+              "id": "lens-blur-look"
+            }
+          },
+          {
+            "id": "effect-oil-paint",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 10000,
+              "end": 20000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 30000
+            },
+            "composition": {
+              "id": "oil-paint-look"
+            }
+          },
+          {
+            "id": "effect-surface-blur",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 20000,
+              "end": 30000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 50000
+            },
+            "composition": {
+              "id": "surface-blur-look"
+            }
+          },
+          {
+            "id": "effect-matte-choker",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 30000,
+              "end": 40000
+            },
+            "source_range": {
+              "start": 60000,
+              "end": 70000
+            },
+            "composition": {
+              "id": "matte-choker-look"
+            }
+          },
+          {
+            "id": "effect-outline",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 40000,
+              "end": 50000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 10000
+            },
+            "composition": {
+              "id": "outline-look"
+            }
+          },
+          {
+            "id": "effect-radial-blur-spin",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 50000,
+              "end": 60000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 30000
+            },
+            "composition": {
+              "id": "radial-blur-spin-look"
+            }
+          },
+          {
+            "id": "effect-gaussian-blur-r1",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 60000,
+              "end": 70000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 50000
+            },
+            "composition": {
+              "id": "gaussian-blur-r1-look"
+            }
+          },
+          {
+            "id": "effect-glow-max",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 70000,
+              "end": 80000
+            },
+            "source_range": {
+              "start": 60000,
+              "end": 70000
+            },
+            "composition": {
+              "id": "glow-max-look"
+            }
+          },
+          {
+            "id": "effect-drop-shadow-max",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 80000,
+              "end": 90000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 10000
+            },
+            "composition": {
+              "id": "drop-shadow-max-look"
+            }
+          },
+          {
+            "id": "effect-tilt-shift-max",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 90000,
+              "end": 100000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 30000
+            },
+            "composition": {
+              "id": "tilt-shift-max-look"
+            }
+          },
+          {
+            "id": "effect-unsharp-mask-max",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 100000,
+              "end": 110000
+            },
+            "source_range": {
+              "start": 40000,
+              "end": 50000
+            },
+            "composition": {
+              "id": "unsharp-mask-max-look"
+            }
+          },
+          {
+            "id": "chain-0",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 120000,
+              "end": 155000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-1",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 140000,
+              "end": 175000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-2",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 160000,
+              "end": 195000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 55000
+            }
+          },
+          {
+            "id": "chain-3",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 180000,
+              "end": 215000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-4",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 200000,
+              "end": 235000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-5",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 220000,
+              "end": 255000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-6",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 240000,
+              "end": 275000
+            },
+            "source_range": {
+              "start": 20000,
+              "end": 55000
+            }
+          },
+          {
+            "id": "chain-7",
+            "source_id": "still",
+            "timeline_range": {
+              "start": 260000,
+              "end": 295000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          },
+          {
+            "id": "chain-8",
+            "source_id": "video",
+            "timeline_range": {
+              "start": 280000,
+              "end": 315000
+            },
+            "source_range": {
+              "start": 0,
+              "end": 35000
+            }
+          }
+        ],
+        "transitions": [
+          {
+            "from_clip": "chain-0",
+            "to_clip": "chain-1",
+            "timeline_range": {
+              "start": 140000,
+              "end": 155000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.zoom-blur",
+              "version": 1,
+              "params": {
+                "strength": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 1.0
+                  }
+                }
+              }
+            }
+          },
+          {
+            "from_clip": "chain-1",
+            "to_clip": "chain-2",
+            "timeline_range": {
+              "start": 160000,
+              "end": 175000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.defocus-blur",
+              "version": 1,
+              "params": {
+                "blur_size": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 0.2
+                  }
+                }
+              }
+            }
+          },
+          {
+            "from_clip": "chain-2",
+            "to_clip": "chain-3",
+            "timeline_range": {
+              "start": 180000,
+              "end": 195000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.linear-blur",
+              "version": 1,
+              "params": {
+                "intensity": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 1.0
+                  }
+                }
+              }
+            }
+          },
+          {
+            "from_clip": "chain-3",
+            "to_clip": "chain-4",
+            "timeline_range": {
+              "start": 200000,
+              "end": 215000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.revolve",
+              "version": 1,
+              "params": {
+                "max_rotation": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 360.0
+                  }
+                },
+                "swirl": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 720.0
+                  }
+                },
+                "peak_zoom": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 5.0
+                  }
+                },
+                "barrel": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 2.0
+                  }
+                },
+                "motion_blur": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 3.0
+                  }
+                }
+              }
+            }
+          },
+          {
+            "from_clip": "chain-4",
+            "to_clip": "chain-5",
+            "timeline_range": {
+              "start": 220000,
+              "end": 235000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.whip-pan",
+              "version": 1,
+              "params": {
+                "direction": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "enum",
+                    "value": 0
+                  }
+                },
+                "blur": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 1.0
+                  }
+                }
+              }
+            }
+          },
+          {
+            "from_clip": "chain-5",
+            "to_clip": "chain-6",
+            "timeline_range": {
+              "start": 240000,
+              "end": 255000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.film-burn",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-6",
+            "to_clip": "chain-7",
+            "timeline_range": {
+              "start": 260000,
+              "end": 275000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.fragment",
+              "version": 1
+            }
+          },
+          {
+            "from_clip": "chain-7",
+            "to_clip": "chain-8",
+            "timeline_range": {
+              "start": 280000,
+              "end": 295000
+            },
+            "easing": {
+              "type": "linear"
+            },
+            "effect": {
+              "id": "alpha2.transition.power-kaleido",
+              "version": 1,
+              "params": {
+                "scale": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 10.0
+                  }
+                },
+                "z": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 10.0
+                  }
+                },
+                "speed": {
+                  "mode": "constant",
+                  "value": {
+                    "type": "float",
+                    "value": 20.0
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

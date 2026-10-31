@@ -524,8 +524,9 @@ int32_t alpha2_native_gpu_d3d12_encode_caps(
     };
     /*
      * Each mode the device lists, asked about whole: a device can list a mode and still refuse
-     * the session FFmpeg opens with it (an Intel Iris Xe on driver 30.0.101.2079 fails VBR with
-     * its VBV sizes at DXGI_ERROR_DRIVER_INTERNAL_ERROR). Only the modes that pass stay listed.
+     * the session FFmpeg opens with it (an Intel integrated GPU on driver 30.0.101.2079 fails VBR
+     * with its VBV sizes at DXGI_ERROR_DRIVER_INTERNAL_ERROR). Only the modes that pass stay
+     * listed.
      */
     uint32_t listed = caps->rate_control_modes;
     caps->rate_control_modes = 0;

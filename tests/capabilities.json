@@ -137,7 +137,11 @@
   },
   "presentation-capture": {
     "description": "Capturing what a page presents.",
-    "probe": "the page's positive control (a plain 2D canvas through the same capture) is non-blank"
+    "probe": "the page's positive control (a canvas of the same kind cleared to one colour without the engine, through the same capture) is non-blank"
+  },
+  "browser-gpu-process": {
+    "description": "A browser GPU process that lasts the whole page.",
+    "probe": "Chrome's GPU process id is the same at the page's start and end and Chrome logged no GPU process exit"
   },
   "page-freeze": {
     "description": "Freezing a page and letting it run again, as a browser freezes a background tab.",

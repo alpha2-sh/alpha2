@@ -184,8 +184,9 @@ function scripted({
       log.order.push("output.abort");
     },
   });
-  const run = ({ inFlightBytes, signal, options = {} } = {}) =>
+  const run = ({ inFlightBytes, signal, options = {}, exporter = {} } = {}) =>
     exportTimeline({
+      ...exporter,
       supplyFrame: async (seconds, missing) => {
         log.supplied.push([seconds, missing]);
       },
@@ -551,6 +552,90 @@ test(
       assert.equal(rendered, false);
     } finally {
       encodes = null;
+    }
+  },
+);
+
+test("sdk and editor loops report the same fields", { skip }, async () => {
+  const { BROWSER_EXPORT_PERFORMANCE_FIELDS } =
+    await import("alpha2/export-metrics");
+  const { Alpha2Exporter, exportToSink } = await import("alpha2/exporter");
+  const { run } = scripted({ frames: 3 });
+  const { result: editor } = await quiet(() => run());
+  const backend = {
+    begin: async () => ({
+      kind: "rendered",
+      retainedBytes: 1_024,
+      readback: Promise.resolve({
+        close() {},
+        codedWidth: 16,
+        codedHeight: 16,
+        format: "I420",
+        allocationSize: () => 384,
+      }),
+    }),
+    isDeviceLost: () => false,
+    abort() {},
+  };
+  const sdk = await exportToSink(
+    new Alpha2Exporter(backend, { num: 30n, den: 1n }, 0n, 12_000n),
+    {
+      async writeVideo(output) {
+        output.frame.close();
+      },
+      async finish() {},
+      abort() {},
+      videoEncodeLatencyMs: { mean: 2, max: 3, count: 3 },
+    },
+    async () => {},
+  );
+  for (const field of BROWSER_EXPORT_PERFORMANCE_FIELDS) {
+    assert.ok(field in editor.performance, `editor reports ${field}`);
+    assert.ok(field in sdk.performance, `sdk reports ${field}`);
+  }
+  assert.deepEqual(sdk.performance.videoEncodeLatencyMs, {
+    mean: 2,
+    max: 3,
+    count: 3,
+  });
+  // Each loop reports its own configured limits under the shared names.
+  assert.equal(sdk.performance.maxInFlightReadbacks, 3);
+  assert.ok(editor.performance.maxInFlightReadbacks > 0);
+  assert.ok(editor.performance.maxPendingVideoWrites > 0);
+  for (const old of [
+    "videoEncodeMs",
+    "sourceConvertUploadMs",
+    "muxFinishMs",
+    "inFlightDepth",
+    "encodeChannelDepth",
+  ]) {
+    assert.ok(!(old in editor.performance), `editor dropped ${old}`);
+    assert.ok(!(old in sdk.performance), `sdk dropped ${old}`);
+  }
+});
+
+test(
+  "an attempt after an encode failure asks the sink for the software encoder",
+  { skip },
+  async () => {
+    for (const videoEncoder of ["default", "software"]) {
+      const { log, run } = scripted({ frames: 2 });
+      const heard = [];
+      const { result } = await quiet(() =>
+        run({
+          exporter: {
+            videoEncoder,
+            onSoftwareEncoder: (available) => heard.push(available),
+          },
+        }),
+      );
+      assert.equal(result.frames, 2);
+      // Heard before anything renders, for the retry policy to read.
+      assert.deepEqual(heard, [true]);
+      assert.equal(
+        log.sinkOptions.videoHardwareAcceleration,
+        videoEncoder === "software" ? "prefer-software" : undefined,
+      );
     }
   },
 );

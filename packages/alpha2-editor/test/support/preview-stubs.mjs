@@ -7,6 +7,14 @@ register("./engine-hook.mjs", import.meta.url);
 
 globalThis.stubEngine = { engines: [], mixers: [], start: null };
 
+/**
+ * Forgets the GPU losses this realm counted (`pageGpuLosses` of `alpha2/gpu-recovery`), so a test
+ * that loses the GPU starts its recovery ladder as a fresh page would.
+ */
+export function resetPageGpuLosses() {
+  delete globalThis[Symbol.for("alpha2.pageGpuLosses")];
+}
+
 /** An OffscreenCanvas whose `bitmaprenderer` context counts the bitmaps transferred to it. */
 export class FakeCanvas {
   constructor(width = 16, height = 16) {

@@ -28,6 +28,7 @@ GPUCanvasContext.prototype.getCurrentTexture = function (...args) {
   acquired += 1;
   return acquire.apply(this, args);
 };
+const control = await presentationControl((surface) => capture(surface, 4, 4), 8, 8);
 const canvas = new OffscreenCanvas(8, 8);
 const engine = await WebEffectRegistry.createForCanvas(canvas);
 const adapter = webgpuAdapter(engine);
@@ -71,7 +72,7 @@ const paced = JSON.stringify(size) === "[8,8]" &&
   !first.unchanged && first.submissions === 1 && first.acquired === 1 &&
   [same, next].every((step) => step.unchanged && !step.repeated && step.submissions === 0 && step.acquired === 0) &&
   !reuploaded.unchanged && reuploaded.submissions === 1 && reuploaded.acquired === 1;
-const details = { size, first, same, next, reuploaded, drawn, redrawn, deviceLost, adapter };
+const details = { size, first, same, next, reuploaded, drawn, redrawn, deviceLost, adapter, control };
 // A device lost on presenting is the browser's; the pacing above was still checked.
 if (paced && deviceLost)
   skip("webgpu-present", "the device was lost presenting to the canvas", details);
@@ -88,6 +89,7 @@ ${PRESENT_HELPERS}
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
 const [width, height] = [1280, 720];
+const control = await presentationControl((surface) => capture(surface, 8, 8), 16, 16);
 const canvas = new OffscreenCanvas(16, 16);
 const engine = await WebEffectRegistry.createForCanvas(canvas);
 const adapter = webgpuAdapter(engine);
@@ -133,12 +135,11 @@ engine.free();
 const sized = JSON.stringify(half) === "[640,360]" && JSON.stringify(full) === "[1280,720]" &&
   refused === "INVALID_INPUT" && played.missingSources.length === 0 &&
   JSON.stringify(presented) === "[1280,720]";
-const details = { half, full, refused, presented, wrong, deviceLost, adapter };
-// A device lost on presenting, or a blank capture (headless Chrome on SwiftShader), is the
-// browser's; the sizes above were still checked.
-const blank = shown.every((value) => value === 0);
-if (sized && (deviceLost || blank))
-  skip("webgpu-present", deviceLost ? "the device was lost presenting to the canvas" : "the presented canvas captured blank", details);
+const details = { half, full, refused, presented, wrong, deviceLost, adapter, control };
+// A device lost on presenting is the browser's; the sizes above were still checked. A blank
+// capture fails: the control showed that this browser's capture works.
+if (sized && deviceLost)
+  skip("webgpu-present", "the device was lost presenting to the canvas", details);
 report({ ok: sized && wrong === 0 && !deviceLost, ...details });
 `;
 }

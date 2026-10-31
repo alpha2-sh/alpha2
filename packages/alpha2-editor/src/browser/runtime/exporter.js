@@ -8,6 +8,7 @@ import {
 } from "alpha2/containers";
 import {
   audioEncoderSampleRate,
+  canEncodeInSoftware,
   canEncodeVideoTrack,
   MediabunnySink,
   videoEncoderProfiles,
@@ -35,6 +36,7 @@ import { estimatedStagingBytes, minimumExportWorkingSet } from "./staging.js";
 import { DEFAULT_IN_FLIGHT_BYTES } from "./budget.js";
 import { secondsToTicks } from "alpha2/project";
 import { raceAbort } from "alpha2/abort";
+import { ExportMetrics } from "alpha2/export-metrics";
 
 // Upper bounds on frames in each stage. Within them the byte budget decides: a frame is submitted
 // only when its bytes fit.
@@ -112,7 +114,10 @@ export async function probeEncoders(
  * rethrown as an `ExportFailureError` with the phase it happened in; a cancellation rethrows the
  * abort reason. `createSink(options)` makes the muxer the frames and audio are written to, a
  * `MediabunnySink` unless a test supplies another. `openOutput` receives the export's container
- * beside the size estimate, so the file is named and typed for it.
+ * beside the size estimate, so the file is named and typed for it. `videoEncoder: "software"` (the
+ * retry policy's after a failed encode) asks the browser for a software video encoder where it has
+ * one; `onSoftwareEncoder(available)` hears, before anything renders, whether it has one, which the
+ * retry policy reads.
  */
 export async function exportTimeline({
   supplyFrame,
@@ -129,11 +134,15 @@ export async function exportTimeline({
   onProgress,
   signal,
   createSink = (sinkOptions) => new MediabunnySink(sinkOptions),
+  videoEncoder = "default",
+  onSoftwareEncoder,
 }) {
   const started = performance.now();
   const diagnosticsBefore = rendererDiagnostics(engine);
   const transferBefore = sourceTransfer?.();
-  const metrics = browserExportMetrics();
+  const metrics = browserExportMetrics(
+    options.memory?.inFlightBytes ?? DEFAULT_IN_FLIGHT_BYTES,
+  );
   const settings = doc.settings;
   const rate = exportFrameRate(options.frameRate, settings);
   const fps = rate.num / rate.den;
@@ -171,6 +180,15 @@ export async function exportTimeline({
     settings,
     videoRateControl,
   );
+  const softwareEncoder = await canEncodeInSoftware(videoCodec, {
+    width: settings.width,
+    height: settings.height,
+    rate: videoRateControl,
+    ...(videoEncoding.codecString === undefined
+      ? {}
+      : { codecString: videoEncoding.codecString }),
+  });
+  onSoftwareEncoder?.(softwareEncoder);
   const audioBitrate =
     audioCodec === undefined
       ? undefined
@@ -202,6 +220,9 @@ export async function exportTimeline({
     // Snapping to the exact rate is what keeps the written track CFR.
     frameRate: rate,
     destination: output.destination,
+    ...(videoEncoder === "software" && softwareEncoder
+      ? { videoHardwareAcceleration: "prefer-software" }
+      : {}),
   });
 
   // Audio is written a window ahead of the video so the file comes out interleaved.
@@ -328,7 +349,7 @@ export async function exportTimeline({
               Number(ticket.timeTicks) / 120_000,
               ticket.missingSources,
             );
-            metrics.sourceConvertUploadMs += performance.now() - supplyStarted;
+            metrics.sourceSupplyMs += performance.now() - supplyStarted;
             continue;
           }
           waitingAt = null;
@@ -352,8 +373,8 @@ export async function exportTimeline({
             readback,
             retainedBytes: ticket.retainedBytes,
           });
-          metrics.maxInFlightReadbacks = Math.max(
-            metrics.maxInFlightReadbacks,
+          metrics.peakInFlightReadbacks = Math.max(
+            metrics.peakInFlightReadbacks,
             pendingReadbacks.length,
           );
           if (pendingWrites.length > 0) metrics.pipelineOverlapFrames += 1;
@@ -379,13 +400,7 @@ export async function exportTimeline({
           pendingEncodeBytes -= oldest.bytes;
           continue;
         }
-        const pendingDepth = pendingReadbacks.length + pendingWrites.length;
-        metrics.maxPendingMediaEvents = Math.max(
-          metrics.maxPendingMediaEvents,
-          pendingDepth,
-        );
-        metrics.pendingDepthTotal += pendingDepth;
-        metrics.pendingDepthSamples += 1;
+        metrics.samplePending(pendingReadbacks.length + pendingWrites.length);
         const pendingReadback = pendingReadbacks.shift();
         const readbackWaitStarted = performance.now();
         enter("readback", produced);
@@ -414,13 +429,13 @@ export async function exportTimeline({
         const write = writeTail.then(
           async () => {
             metrics.encodeQueueWaitMs += performance.now() - encodeQueued;
-            const encodeStarted = performance.now();
+            const writeStarted = performance.now();
             try {
               await inPhase("encode", Number(output.index), () =>
                 sink.writeVideo(output),
               );
             } finally {
-              metrics.videoEncodeMs += performance.now() - encodeStarted;
+              metrics.videoWriteWaitMs += performance.now() - writeStarted;
             }
           },
           (error) => {
@@ -481,7 +496,7 @@ export async function exportTimeline({
     onProgress?.({ phase: "finalizing", ratio: FRAMES_SHARE });
     const finishStarted = performance.now();
     await sink.finish();
-    metrics.muxFinishMs = performance.now() - finishStarted;
+    metrics.finishMs = performance.now() - finishStarted;
     const written = sink.output;
     if (written === null || sink.bytesWritten === 0)
       throw new Error("the encoder returned an empty result");
@@ -527,6 +542,11 @@ export async function exportTimeline({
       // `quantizer` when the encoder accepted constant-quantizer encoding, else the bitrate path.
       appliedVideoRateControl: sink.appliedVideoRateControl ?? null,
       videoLatencyMode: sink.videoLatencyMode ?? null,
+      // How the latency mode and the AAC priming were measured, and which video encoder was asked
+      // for: a timed-out probe is reported, not kept.
+      videoLatencyProbe: sink.videoLatencyProbe ?? null,
+      aacPrimingProbe: sink.aacPrimingProbe ?? null,
+      videoEncoderAcceleration: sink.videoEncoderAcceleration ?? null,
       // The codec string the encoder opened (for H.264, its profile and level), and the H.264
       // profiles this browser refused before it: a lower profile of the same codec, not a switch.
       videoCodecString:
@@ -550,6 +570,7 @@ export async function exportTimeline({
       },
       performance: finishBrowserExportMetrics(
         metrics,
+        sink.videoEncodeLatencyMs,
         diagnosticsBefore,
         rendererDiagnostics(engine),
       ),
@@ -600,7 +621,7 @@ export async function exportTimeline({
           peakReadbackBytes: metrics.peakReadbackBytes,
           peakEncodeQueueBytes: metrics.peakEncodeQueueBytes,
           stagingBytesPerFrame: metrics.stagingBytesPerFrame,
-          maxInFlightReadbacks: metrics.maxInFlightReadbacks,
+          peakInFlightReadbacks: metrics.peakInFlightReadbacks,
           jsHeap: jsHeap(),
         },
         ...deviceDiagnostics(engine),
@@ -710,66 +731,41 @@ function browserEnvironment() {
   };
 }
 
-function browserExportMetrics() {
-  return {
-    pipelineEnabled: true,
-    sourceConvertUploadMs: 0,
-    frameSubmitMs: 0,
-    readbackMapLatencyMs: 0,
-    readbackWaitMs: 0,
-    encodeQueueWaitMs: 0,
-    videoEncodeMs: 0,
-    audioDecodeMs: 0,
-    audioMixMs: 0,
-    audioEncodeMs: 0,
-    muxFinishMs: 0,
-    stagingBytesPerFrame: 0,
-    packedBytesPerFrame: 0,
-    peakReadbackBytes: 0,
-    outputReadbackBytes: 0,
-    outputRepackBytes: 0,
-    sourcePlanarCopyFrames: 0,
-    sourcePlanarCopyBytes: 0,
-    sourceUnreadableFrames: 0,
-    sourceReadbackRetries: 0,
-    sourceRedecodedFrames: 0,
-    peakEncodeQueueBytes: 0,
-    maxPendingMediaEvents: 0,
-    pendingDepthTotal: 0,
-    pendingDepthSamples: 0,
-    maxInFlightReadbacks: 0,
-    maxEncodeQueueEvents: 0,
-    encodeBackpressureCount: 0,
-    pipelineOverlapFrames: 0,
-    audioBlocksInterleaved: 0,
-    output: null,
-    memory: null,
-  };
+/**
+ * The shared browser export figures (`ExportMetrics` in `alpha2/export-metrics`, which the SDK's
+ * loop reports too) and the editor's own: audio, source transfer, memory and output.
+ */
+function browserExportMetrics(inFlightByteBudget) {
+  return Object.assign(
+    new ExportMetrics({
+      maxInFlightReadbacks: MAX_IN_FLIGHT_READBACKS,
+      maxPendingVideoWrites: MAX_PENDING_VIDEO_WRITES,
+      inFlightByteBudget,
+    }),
+    {
+      audioDecodeMs: 0,
+      audioMixMs: 0,
+      audioEncodeMs: 0,
+      packedBytesPerFrame: 0,
+      sourcePlanarCopyFrames: 0,
+      sourcePlanarCopyBytes: 0,
+      sourceUnreadableFrames: 0,
+      sourceReadbackRetries: 0,
+      sourceRedecodedFrames: 0,
+      audioBlocksInterleaved: 0,
+      output: null,
+      memory: null,
+    },
+  );
 }
 
-function finishBrowserExportMetrics(metrics, before, after) {
+function finishBrowserExportMetrics(metrics, encodeLatency, before, after) {
   const result = {
-    pipelineEnabled: metrics.pipelineEnabled,
-    sourceConvertUploadMs: metrics.sourceConvertUploadMs,
-    frameSubmitMs: metrics.frameSubmitMs,
-    readbackMapLatencyMs: metrics.readbackMapLatencyMs,
-    readbackWaitMs: metrics.readbackWaitMs,
-    readbackBlockingMs: metrics.readbackWaitMs,
-    encodeQueueWaitMs: metrics.encodeQueueWaitMs,
-    videoEncodeMs: metrics.videoEncodeMs,
+    ...metrics.finish(encodeLatency),
     audioDecodeMs: metrics.audioDecodeMs,
     audioMixMs: metrics.audioMixMs,
     audioEncodeMs: metrics.audioEncodeMs,
-    muxFinishMs: metrics.muxFinishMs,
-    inFlightDepth: MAX_IN_FLIGHT_READBACKS,
-    encodeChannelDepth: MAX_PENDING_VIDEO_WRITES,
-    stagingBytesPerFrame: metrics.stagingBytesPerFrame,
     packedBytesPerFrame: metrics.packedBytesPerFrame,
-    peakReadbackBytes: metrics.peakReadbackBytes,
-    // Mapped output readbacks plus HDR source frames copied out planar for the tone map.
-    outputReadbackBytes: metrics.outputReadbackBytes,
-    // Copies made to pack planes tight where VideoFrame ignores `layout`; 0 elsewhere.
-    outputRepackBytes: metrics.outputRepackBytes,
     sourcePlanarCopyFrames: metrics.sourcePlanarCopyFrames,
     sourcePlanarCopyBytes: metrics.sourcePlanarCopyBytes,
     // Source frames the browser could not read back, the reads repeated, and the frames decoded
@@ -777,16 +773,6 @@ function finishBrowserExportMetrics(metrics, before, after) {
     sourceUnreadableFrames: metrics.sourceUnreadableFrames,
     sourceReadbackRetries: metrics.sourceReadbackRetries,
     sourceRedecodedFrames: metrics.sourceRedecodedFrames,
-    peakEncodeQueueBytes: metrics.peakEncodeQueueBytes,
-    maxPendingMediaEvents: metrics.maxPendingMediaEvents,
-    averagePendingMediaEvents:
-      metrics.pendingDepthSamples === 0
-        ? 0
-        : metrics.pendingDepthTotal / metrics.pendingDepthSamples,
-    maxInFlightReadbacks: metrics.maxInFlightReadbacks,
-    maxEncodeQueueEvents: metrics.maxEncodeQueueEvents,
-    encodeBackpressureCount: metrics.encodeBackpressureCount,
-    pipelineOverlapFrames: metrics.pipelineOverlapFrames,
     audioBlocksInterleaved: metrics.audioBlocksInterleaved,
     memory: metrics.memory,
     output: metrics.output,

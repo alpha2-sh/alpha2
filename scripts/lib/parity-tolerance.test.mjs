@@ -15,8 +15,8 @@ test("differences within the general bound pass", () => {
 });
 
 test("a sharp edge sampled a fraction of a texel apart on another device passes", () => {
-  // Native lavapipe or Iris Xe against Chrome: alpha2.transition.directional at progress 1/3, two
-  // vertically adjacent Y samples 7 codes apart in opposite directions.
+  // Native lavapipe or an Intel integrated GPU against Chrome: alpha2.transition.directional at
+  // progress 1/3, two vertically adjacent Y samples 7 codes apart in opposite directions.
   assert.equal(peakExcess({ max: 7, outliers: 2 }), null);
   assert.equal(
     peakExcess({ max: OUTLIER_PEAK_CODES, outliers: OUTLIER_SAMPLES }),
@@ -36,6 +36,6 @@ test("a larger local difference fails however few samples it touches", () => {
     peakExcess({ max: OUTLIER_PEAK_CODES + 1, outliers: 1 }),
     /9 codes apart at most/,
   );
-  // Plain `fwidth` anti-aliasing: up to 41 codes on a few rims between an RTX 4090 and RADV.
+  // Plain `fwidth` anti-aliasing: up to 41 codes on a few rims between NVIDIA and RADV.
   assert.notEqual(peakExcess({ max: 41, outliers: 3 }), null);
 });

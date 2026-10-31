@@ -16,6 +16,8 @@ import {
   chromeGpuMode,
   edgeExecutable,
   fromThisMachine,
+  gpuProcessEnvironment,
+  gpuProcessRecord,
   reportSkippedBrowser,
   runChromePage,
   servedFile,
@@ -413,10 +415,10 @@ test("a static server sends the repository's files on Windows as on POSIX, and n
         "/tests/name%20with%20space.json",
         inside("tests", "name with space.json"),
       ],
-      // A hidden name is refused, inside or not: .git and .local are not a page's to read.
+      // A hidden name is refused, inside or not: no dot directory is a page's to read.
       ["/..hidden", null],
       ["/.git/config", null],
-      ["/.local/PLAN.md", null],
+      ["/.private/notes.md", null],
       ["/packages/.cache/file.js", null],
       ["/%2egit/config", null],
       // Out of the repository, by dots or by an encoded separator, or not a path at all.
@@ -577,4 +579,58 @@ test("stopping a running Chrome on Windows ends its process tree", async () => {
     ["taskkill", "/T", "/F", "/PID", String(child.pid)],
   ]);
   assert.ok(child.exitCode !== null || child.signalCode !== null);
+});
+
+test("a changed GPU process id marks the page as environment", () => {
+  const changed = gpuProcessRecord({ startPid: 40, endPid: 52, exits: 0 });
+  assert.equal(changed.restarted, true);
+  const marked = gpuProcessEnvironment(changed, { error: "device lost" });
+  assert.equal(marked.capability, "browser-gpu-process");
+  assert.match(marked.skipped, /^gpu-process-restarted: .*from 40 to 52/);
+  assert.equal(marked.page, "device lost");
+  assert.equal(marked.ok, undefined);
+  // A logged exit counts even when the id at both ends is the same restarted process.
+  const logged = gpuProcessRecord({ startPid: 52, endPid: 52, exits: 1 });
+  assert.match(
+    gpuProcessEnvironment(logged, { ok: true }).skipped,
+    /logged 1 GPU process exit/,
+  );
+  // A GPU process that only started during the page, or an end DevTools could not report, is
+  // no restart.
+  for (const record of [
+    gpuProcessRecord({ startPid: null, endPid: 52, exits: 0 }),
+    gpuProcessRecord({ startPid: 40, endPid: undefined, exits: 0 }),
+    gpuProcessRecord({ startPid: 40, endPid: 40, exits: 0 }),
+  ]) {
+    assert.equal(record.restarted, false);
+    assert.equal(gpuProcessEnvironment(record, { ok: true }), null);
+  }
+  assert.equal(gpuProcessEnvironment(undefined, { ok: true }), null);
+});
+
+test("stopping Chrome waits for every process it reported", async () => {
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  // The GPU process (pid 7) outlives the browser for three polls; pid 8 is already gone.
+  let polls = 0;
+  const asked = [];
+  const alive = async (pid) => {
+    asked.push(pid);
+    if (pid === 7) return ++polls <= 3;
+    return false;
+  };
+  const started = Date.now();
+  await stopChrome(child, { pids: [7, 8], alive });
+  assert.equal(polls, 4);
+  assert.ok(asked.includes(8));
+  assert.ok(child.exitCode !== null || child.signalCode !== null);
+  // A process that never exits is waited for no longer than the bound.
+  const stuck = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  const before = Date.now();
+  await stopChrome(stuck, { pids: [9], alive: async () => true, waitMs: 600 });
+  assert.ok(Date.now() - before < 3_000);
+  assert.ok(Date.now() - started < 10_000);
 });

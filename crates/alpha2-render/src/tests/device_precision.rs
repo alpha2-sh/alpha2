@@ -1,21 +1,13 @@
 //! What the shared test device computes less precisely than the CPU renderer, measured once per
 //! process: the CPU-parity classes widen by these numbers, not by adapter or backend names.
 //!
-//! Measured (release, DXC on DX12):
-//!
-//! | device                                  | filter weight bits | `pow` error, codes |
-//! |-----------------------------------------|--------------------|--------------------|
-//! | NVIDIA RTX 4090 (Vulkan)                | 8                  | 0.000075           |
-//! | NVIDIA MX450 (DX12, Vulkan)             | 8                  | 0.000075           |
-//! | AMD RADV Raphael (Vulkan)               | 9                  | 0.000046           |
-//! | Intel Iris Xe (Vulkan)                  | 9                  | 0.000048           |
-//! | WARP (DX12)                             | 7                  | 0.000045           |
-//! | Apple M4 (Metal)                        | 5                  | 0.000042           |
-//! | lavapipe (Vulkan), llvmpipe (GL)        | 1                  | 0.000099           |
-//!
-//! No device's `pow` is far from `f64`. What sets devices apart is how they filter 8-bit
-//! pictures: with 8 or 9 bits of weight (NVIDIA, WARP; RADV, Iris), at half precision (the M4,
-//! about 1/32 of a code off) or rounding the filtered value to 8 bits (lavapipe, llvmpipe).
+//! Measured (release, DXC on DX12) on discrete and integrated GPUs from NVIDIA, AMD and Intel
+//! over Vulkan and DX12, an Apple-silicon GPU over Metal, WARP, lavapipe and llvmpipe: no
+//! device's `pow` is more than 0.0001 of a code from `f64`. What sets devices apart is how they
+//! filter 8-bit pictures: discrete and integrated desktop GPUs with 7 to 9 bits of weight (NVIDIA
+//! 8, the AMD and Intel integrated GPUs 9, WARP 7), Apple-silicon GPUs at half precision (about 5
+//! bits, 1/32 of a code off), and the software rasterizers rounding the filtered value to 8 bits
+//! (1 bit of weight).
 //!
 //! Each probe draws a full-screen triangle into a one-row target whose texel `x` takes input
 //! `x` from a uniform, so no value is a constant the shader compiler could fold, and reads the

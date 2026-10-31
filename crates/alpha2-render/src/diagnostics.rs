@@ -128,6 +128,21 @@ pub struct PipelineCreationStats {
     pub create_micros_max: u64,
 }
 
+/// How the frames rendered since the last
+/// [`crate::Renderer::take_gpu_submission_stats`] were cut into submissions.
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+pub struct GpuSubmissionStats {
+    /// Frames rendered.
+    pub frames: u64,
+    /// Frames submitted in more than one submission.
+    pub split_frames: u64,
+    /// The most submissions one frame took.
+    pub max_per_frame: u32,
+    /// The longest GPU time predicted for one submission, in milliseconds,
+    /// among the frames that were planned.
+    pub max_predicted_ms: Option<f64>,
+}
+
 /// One pipeline's creation, for a trace: which, and when it began and ended.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PipelineCreation {
@@ -191,6 +206,7 @@ pub(crate) struct DiagnosticsState {
     copy_bytes: u64,
     pipeline_creation: PipelineCreationStats,
     pipeline_creations: VecDeque<PipelineCreation>,
+    gpu_submissions: GpuSubmissionStats,
 }
 
 pub(crate) type SharedDiagnostics = Arc<Mutex<DiagnosticsState>>;
@@ -398,6 +414,37 @@ pub(crate) fn take_pipeline_creations(state: &SharedDiagnostics) -> Vec<Pipeline
         .pipeline_creations
         .drain(..)
         .collect()
+}
+
+/// Records how one frame was submitted, the longest predicted submission
+/// among its own when it was planned.
+pub(crate) fn record_frame_plan(
+    state: &SharedDiagnostics,
+    frame: &crate::FrameSubmissions,
+    max_predicted_ms: Option<f64>,
+) {
+    let mut state = state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let totals = &mut state.gpu_submissions;
+    totals.frames = totals.frames.saturating_add(1);
+    totals.split_frames = totals
+        .split_frames
+        .saturating_add(u64::from(frame.submissions > 1));
+    totals.max_per_frame = totals.max_per_frame.max(frame.submissions);
+    if let Some(ms) = max_predicted_ms {
+        totals.max_predicted_ms = Some(totals.max_predicted_ms.map_or(ms, |most| most.max(ms)));
+    }
+}
+
+/// The submission counts since the last call, starting again from zero.
+pub(crate) fn take_gpu_submission_stats(state: &SharedDiagnostics) -> GpuSubmissionStats {
+    std::mem::take(
+        &mut state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .gpu_submissions,
+    )
 }
 
 pub(crate) fn record_yuv_repack(state: &SharedDiagnostics) {

@@ -18,11 +18,35 @@ import workletUrl from "alpha2/audio-worklet-processor?worker&url";
 // Initialization runs after those modules can evaluate.
 async function main() {
   const params = new URLSearchParams(location.search);
-  // The context-loss case draws on the page canvas through WebGL2, on the main thread, so the page
-  // can lose that context.
+  // The context-loss case draws through WebGL2 on the main thread, on any adapter (a software one
+  // too), so the page can lose that context: the renderer's own canvas, which the bridge copies to
+  // the page's, recorded as it takes its context.
   const contextLoss = params.has("context-loss");
-  if (contextLoss)
+  const webgl2Contexts = [];
+  if (contextLoss) {
     Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });
+    const getContext = OffscreenCanvas.prototype.getContext;
+    OffscreenCanvas.prototype.getContext = function (kind, ...rest) {
+      const context = getContext.call(this, kind, ...rest);
+      if (kind === "webgl2" && context && this.width > 1)
+        webgl2Contexts.push(context);
+      return context;
+    };
+  }
+  // The no-GPU case: a browser with neither WebGPU nor WebGL, as with acceleration turned off.
+  // Preview and export draw on the CPU renderer (the preview worker follows the page's renderer).
+  const noGpu = params.get("gpu") === "none";
+  if (noGpu) {
+    Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });
+    for (const Canvas of [HTMLCanvasElement, OffscreenCanvas]) {
+      const getContext = Canvas.prototype.getContext;
+      Canvas.prototype.getContext = function (kind, ...rest) {
+        return kind === "webgl2" || kind === "webgl"
+          ? null
+          : getContext.call(this, kind, ...rest);
+      };
+    }
+  }
   const editor = createEditor({
     document: createEmptyDocument({ width: 320, height: 180 }),
   });
@@ -68,6 +92,7 @@ async function main() {
       extensionsWorkerFactory: () => new ExtensionsWorker(),
       ...(contextLoss ? {} : { workerFactory }),
     },
+    ...(contextLoss ? { renderer: "gpu" } : {}),
     onError: error,
   });
   globalThis.editorTestStage = "binding";
@@ -166,10 +191,7 @@ async function main() {
       if (bridge.previewBackend !== "main-thread")
         throw Error("Unexpected preview adapter: " + bridge.previewBackend);
       globalThis.editorTestStage = "lose-context";
-      const lose = document
-        .getElementById("preview")
-        .getContext("webgl2")
-        ?.getExtension("WEBGL_lose_context");
+      const lose = webgl2Contexts.at(-1)?.getExtension("WEBGL_lose_context");
       if (!lose) throw Error("this browser offers no WEBGL_lose_context");
       lose.loseContext();
       setTimeout(() => lose.restoreContext(), 300);
@@ -190,6 +212,52 @@ async function main() {
         reported,
         previewRecoveries: bridge.previewRecoveries,
       };
+      await bridge.dispose();
+      editor.dispose();
+      document.title = encodeURIComponent(JSON.stringify(result));
+    } catch (e) {
+      document.title = encodeURIComponent(
+        JSON.stringify({
+          ok: false,
+          error: String(e),
+          stack: e.stack,
+          phase: globalThis.editorTestStage,
+          reported,
+        }),
+      );
+    }
+  } else if (params.has("test") && noGpu) {
+    try {
+      globalThis.editorTestStage = "add-color";
+      const rendered = await addColor();
+      const renderer = bridge.capabilities.renderer;
+      globalThis.editorTestStage = "export";
+      const job = bridge.startExport({
+        videoCodec: "avc",
+        includeAudio: false,
+      });
+      const artifact = await job.result.catch(() => null);
+      const report = artifact?.report;
+      const result = {
+        ok:
+          rendered === true &&
+          renderer?.renderer === "cpu" &&
+          renderer.runtimeEffects === false &&
+          bridge.capabilities.features.preview.available === true &&
+          artifact !== null &&
+          (artifact.file?.size ?? artifact.bytes?.byteLength ?? 0) > 0 &&
+          report?.renderer?.renderer === "cpu" &&
+          job.attempts.length === 1 &&
+          reported.length === 0,
+        rendered,
+        renderer,
+        previewBackend: bridge.previewBackend,
+        exportRenderer: report?.renderer ?? null,
+        attempts: job.attempts.length,
+        failure: job.failure ?? null,
+        reported,
+      };
+      await artifact?.release?.();
       await bridge.dispose();
       editor.dispose();
       document.title = encodeURIComponent(JSON.stringify(result));
@@ -426,9 +494,96 @@ async function main() {
         }),
       );
     }
+  } else if (
+    params.has("test") &&
+    params.get("import") === "no-audio-decoder"
+  ) {
+    // A browser without AudioDecoder (as Safari before 26) imports a compressed audio file as
+    // undecodable here, with what the trial decode found, instead of refusing it.
+    try {
+      globalThis.editorTestStage = "import-audio";
+      delete globalThis.AudioDecoder;
+      const audioFile = new File(
+        [
+          await fetch(`${import.meta.env.BASE_URL}test-audio.m4a`).then((r) =>
+            r.blob(),
+          ),
+        ],
+        "audio.m4a",
+        { type: "audio/mp4" },
+      );
+      const { assetIds } = await bridge.importFiles([audioFile]);
+      const asset = bridge.getAsset(assetIds[0]);
+      const result = {
+        ok:
+          asset?.audioDecodable === false &&
+          asset.audioDecodeFacts?.kind === "audio" &&
+          editor.document.assets[assetIds[0]]?.kind === "audio" &&
+          reported.length === 0,
+        audioDecodable: asset?.audioDecodable,
+        facts: asset?.audioDecodeFacts ?? null,
+        reported,
+      };
+      await bridge.dispose();
+      editor.dispose();
+      document.title = encodeURIComponent(JSON.stringify(result));
+    } catch (e) {
+      document.title = encodeURIComponent(
+        JSON.stringify({
+          ok: false,
+          error: String(e),
+          stack: e.stack,
+          phase: globalThis.editorTestStage,
+        }),
+      );
+    }
+  } else if (
+    params.has("test") &&
+    params.get("proxy") === "no-create-writable"
+  ) {
+    // A browser whose file handles cannot write (no createWritable, as Safari before 26) keeps a
+    // proxy in memory for the session.
+    try {
+      delete FileSystemFileHandle.prototype.createWritable;
+      globalThis.editorTestStage = "import-video";
+      const videoFile = new File(
+        [
+          await fetch(`${import.meta.env.BASE_URL}test-video.mp4`).then((r) =>
+            r.blob(),
+          ),
+        ],
+        "video.mp4",
+        { type: "video/mp4" },
+      );
+      const { assetIds } = await bridge.importFiles([videoFile]);
+      insert(assetIds[0]);
+      globalThis.editorTestStage = "proxy";
+      await bridge.generateProxy(assetIds[0]);
+      const status = bridge.proxyStatus(assetIds[0]);
+      const result = {
+        ok: status.available === true && reported.length === 0,
+        status,
+        reported,
+      };
+      await bridge.dispose();
+      editor.dispose();
+      document.title = encodeURIComponent(JSON.stringify(result));
+    } catch (e) {
+      document.title = encodeURIComponent(
+        JSON.stringify({
+          ok: false,
+          error: String(e),
+          stack: e.stack,
+          phase: globalThis.editorTestStage,
+          reported,
+        }),
+      );
+    }
   } else if (params.has("test") && params.has("export")) {
     // An export with audio under WebKit's conditions: `export=webkit-storage` reports a nearly
-    // full origin and still writes; `export=no-audio-encoder` lacks AudioEncoder and is refused.
+    // full origin and still writes; `export=no-audio-encoder` lacks AudioEncoder and is refused;
+    // `export=no-create-writable` has file handles that cannot write (Safari before 26) and
+    // exports into memory.
     const mode = params.get("export");
     try {
       globalThis.editorTestStage = "add-color";
@@ -437,6 +592,8 @@ async function main() {
       const { assetIds } = await bridge.importFiles([toneWav(1, 48000)]);
       insert(assetIds[0], "audio");
       if (mode === "no-audio-encoder") delete globalThis.AudioEncoder;
+      if (mode === "no-create-writable")
+        delete FileSystemFileHandle.prototype.createWritable;
       if (mode === "webkit-storage")
         StorageManager.prototype.estimate = async () => ({
           quota: 150e9,
@@ -457,19 +614,30 @@ async function main() {
               failure: job.failure ?? null,
               attempts: job.attempts.length,
             }
-          : {
-              ok:
-                artifact?.kind === "file" &&
-                artifact.file.size > 0 &&
-                (report.audioCodec === "aac" || report.audioCodec === "opus") &&
-                report.performance?.output?.storageEstimate?.belowEstimate ===
-                  true,
-              kind: artifact?.kind ?? null,
-              bytes: artifact?.file?.size ?? null,
-              audioCodec: report?.audioCodec ?? null,
-              storageEstimate: report?.performance?.output?.storageEstimate,
-              failure: job.failure ?? null,
-            };
+          : mode === "no-create-writable"
+            ? {
+                ok:
+                  artifact?.kind === "blob" &&
+                  (artifact.blob?.size ?? 0) > 0 &&
+                  (report.audioCodec === "aac" || report.audioCodec === "opus"),
+                kind: artifact?.kind ?? null,
+                bytes: artifact?.blob?.size ?? null,
+                failure: job.failure ?? null,
+              }
+            : {
+                ok:
+                  artifact?.kind === "file" &&
+                  artifact.file.size > 0 &&
+                  (report.audioCodec === "aac" ||
+                    report.audioCodec === "opus") &&
+                  report.performance?.output?.storageEstimate?.belowEstimate ===
+                    true,
+                kind: artifact?.kind ?? null,
+                bytes: artifact?.file?.size ?? null,
+                audioCodec: report?.audioCodec ?? null,
+                storageEstimate: report?.performance?.output?.storageEstimate,
+                failure: job.failure ?? null,
+              };
       await artifact?.release?.();
       await bridge.dispose();
       editor.dispose();

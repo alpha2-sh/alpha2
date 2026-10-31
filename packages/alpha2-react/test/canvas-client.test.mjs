@@ -39,6 +39,8 @@ class FakeWorker extends EventTarget {
   shown;
   /** When set, presentations are held until this resolves. */
   hold;
+  /** When set, the next presentation finds the device lost (a WebGL2 one: no same-canvas rung). */
+  loseOnPresent = false;
   postMessage(message) {
     this.requests.push(message);
     if (message.id === undefined || this.terminated) return;
@@ -46,6 +48,12 @@ class FakeWorker extends EventTarget {
       this.uploaded.add(`${message.sourceId}@${message.requestedTimeTicks}`);
     const answer = () => {
       if (this.terminated) return;
+      if (message.type === "present" && this.loseOnPresent) {
+        this.loseOnPresent = false;
+        this.dispatchEvent(
+          new MessageEvent("message", { data: { type: "device-lost" } }),
+        );
+      }
       const reply =
         message.type === "initialize" && this.failInitialize !== undefined
           ? {
@@ -64,6 +72,15 @@ class FakeWorker extends EventTarget {
     this.terminated = true;
   }
   #result(message) {
+    if (message.type === "probe-surface")
+      return { kind: "webgl2", webgpuAdapter: false };
+    if (message.type === "recover")
+      return {
+        renderer: message.step.renderer,
+        rendererReason: null,
+        backend: "webgl2",
+        adapter: null,
+      };
     if (message.type !== "present") return undefined;
     const time = message.timeTicks;
     const missingFrames = this.sources
@@ -97,13 +114,12 @@ class FakeWorker extends EventTarget {
  */
 function players(setup = () => {}) {
   const workers = [];
-  const createPlayer = () => {
+  const createPlayer = (replaceSurface) => {
     const worker = new FakeWorker();
     setup(worker);
     workers.push(worker);
-    const player = new Alpha2Player(
-      new WorkerRenderBackend(worker),
-      async (requests) => {
+    const player = new Alpha2Player(new WorkerRenderBackend(worker), {
+      async onRefill(requests) {
         for (const request of requests)
           await player.uploadVideoFrame({
             sourceId: request.sourceId,
@@ -113,7 +129,8 @@ function players(setup = () => {}) {
             generation: request.generation,
           });
       },
-    );
+      replaceSurface,
+    });
     return player;
   };
   return {
@@ -179,6 +196,33 @@ test("mounting gives a player a canvas, presents the time, and reports ready", a
   assert.equal(made.worker.of("initialize").length, 1);
   assert.deepEqual(made.worker.presented, [7n]);
   assert.deepEqual(events, ["ready", 7n]);
+});
+
+test("a recovery onto a fresh surface swaps the canvas element in place", async () => {
+  const made = players();
+  const element = (timeTicks) =>
+    createElement(
+      Alpha2Canvas,
+      props({ createPlayer: made.createPlayer, timeTicks }),
+    );
+  await act(() => root.render(element(0n)));
+  await settle();
+  const first = container.querySelector("canvas");
+  made.worker.loseOnPresent = true;
+  await act(() => root.render(element(1n)));
+  await settle();
+  await act(() => root.render(element(2n)));
+  await settle();
+  const canvases = container.querySelectorAll("canvas");
+  assert.equal(canvases.length, 1, "the new canvas replaced the old one");
+  assert.notEqual(canvases[0], first);
+  assert.equal(canvases[0].style.width, "100%");
+  const [recover] = made.worker.of("recover");
+  assert.deepEqual(recover.step.surface, "fresh");
+  assert.deepEqual(recover.canvas, { width: 1920, height: 1080 });
+  // The same player recovered: one worker, one initialize, the latest time presented.
+  assert.equal(made.workers.length, 1);
+  assert.equal(made.worker.presented.at(-1), 2n);
 });
 
 test("a new time presents it", async () => {

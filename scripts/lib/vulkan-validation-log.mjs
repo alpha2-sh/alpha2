@@ -110,7 +110,7 @@ export function checkValidationLog(text, known) {
   return { problems, counts };
 }
 
-// Known messages for FFmpeg 8.1.3 on NVIDIA 580 (RTX 4090). Any other message ID fails the run,
+// Known messages for FFmpeg 8.1.3 on NVIDIA driver 580. Any other message ID fails the run,
 // whatever its prefix or level; remove entries when their causes are fixed.
 const NAGA_LAYOUT = "VUID-StandaloneSpirv-None-10684";
 

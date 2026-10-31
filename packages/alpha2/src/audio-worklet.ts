@@ -71,7 +71,7 @@ type WorkletInitResponse =
 
 /**
  * How late a node's output is behind the samples it takes, in samples at the context's rate. An
- * `AudioPlaybackClock` subtracts it (its `processing` argument).
+ * `AudioPlaybackClock` subtracts it (its `processing` option).
  */
 export interface AudioProcessingDelay {
   readonly latencySamples: number;

@@ -88,6 +88,8 @@ pub enum Capability {
     WebgpuVideoImport,
     /// Capturing what a page presents.
     PresentationCapture,
+    /// A browser GPU process that lasts the whole page.
+    BrowserGpuProcess,
     /// Freezing a page and letting it run again.
     PageFreeze,
     /// `WebCodecs` audio.
@@ -146,6 +148,7 @@ impl Capability {
         Self::WebgpuPresent,
         Self::WebgpuVideoImport,
         Self::PresentationCapture,
+        Self::BrowserGpuProcess,
         Self::PageFreeze,
         Self::WebcodecsAudio,
         Self::WebcodecsVideo,
@@ -196,6 +199,7 @@ impl Capability {
             Self::WebgpuPresent => "webgpu-present",
             Self::WebgpuVideoImport => "webgpu-video-import",
             Self::PresentationCapture => "presentation-capture",
+            Self::BrowserGpuProcess => "browser-gpu-process",
             Self::PageFreeze => "page-freeze",
             Self::WebcodecsAudio => "webcodecs-audio",
             Self::WebcodecsVideo => "webcodecs-video",

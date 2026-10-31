@@ -71,7 +71,7 @@ const SERVES = [
 ];
 
 // The decode probe encodes nothing, so the encoder's known messages fail it.
-// hevc-main10-padded.mp4 decodes in hardware on the 4090 and RADV: P010 views run here.
+// hevc-main10-padded.mp4 decodes in hardware on NVIDIA and RADV: P010 views run here.
 const PROBES = [
   { name: "probe-h264", fixture: "h264-long-gop.mp4", frames: 8 },
   { name: "probe-hevc-main10", fixture: "hevc-main10-padded.mp4", frames: 8 },

@@ -489,16 +489,16 @@ impl Default for VideoDecodePolicy {
     /// code of a software decode, 8-bit and 10-bit), with no fallback, no
     /// slower (steady milliseconds per frame at most 1.02 times software's),
     /// and with a gain: at most 0.8 times the host CPU per frame, or 0.95
-    /// times the steady time. Measured 2026-10-31 on the default adapter and
-    /// encoder, a 1080p30 H.264 source exported full frame with an overlay and
-    /// on its own, three alternating rounds of the release host:
-    /// - Linux, RTX 4090, Vulkan Video into `h264_vulkan`: steady 0.99 and
-    ///   1.02 times software, host CPU 0.26 and 0.33 times; passes.
-    /// - macOS, Apple M4, `VideoToolbox` into `h264_videotoolbox`: steady 1.00
-    ///   and 1.00 times, host CPU 0.53 and 0.43 times; passes.
-    /// - Windows, Iris Xe, D3D12VA into `h264_d3d12va`: steady 1.09 and 1.26
-    ///   times software (both hardware configurations bistable between runs),
-    ///   host CPU 0.42 and 0.29 times; fails on the steady time.
+    /// times the steady time. Measured on the default adapter and encoder, a
+    /// 1080p30 H.264 source exported full frame with an overlay and on its own,
+    /// three alternating rounds of the release host:
+    /// - Linux, a discrete NVIDIA GPU, Vulkan Video into `h264_vulkan`: as fast
+    ///   as software, at well under half its host CPU; passes.
+    /// - macOS, an Apple-silicon GPU, `VideoToolbox` into `h264_videotoolbox`:
+    ///   as fast as software, at about half its host CPU; passes.
+    /// - Windows, an Intel integrated GPU, D3D12VA into `h264_d3d12va`: up to
+    ///   a quarter slower than software (bistable between runs), though at
+    ///   under half its host CPU; fails on the steady time.
     fn default() -> Self {
         if cfg!(all(
             any(target_os = "linux", target_os = "macos"),

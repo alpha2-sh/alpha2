@@ -46,9 +46,10 @@ int alpha2_d3d12_device_init(AVHWDeviceContext *context, void *device) {
  * caller can fall back.
  *
  * FFmpeg 8.1.3 sizes D3D12VA surfaces at the visible size, so a cropped stream (1080p H.264 is
- * coded at 1088 rows) decodes into surfaces smaller than its pictures, after which an Intel Iris Xe
- * on driver 32.0.101.7092 hangs every later video call on the device. So the frames context is
- * made here at the coded size, as FFmpeg master does; the decoder takes a context it is given.
+ * coded at 1088 rows) decodes into surfaces smaller than its pictures, after which an Intel
+ * integrated GPU on driver 32.0.101.7092 hangs every later video call on the device. So the
+ * frames context is made here at the coded size, as FFmpeg master does; the decoder takes a
+ * context it is given.
  */
 enum AVPixelFormat alpha2_d3d12_get_format(
     AVCodecContext *context, const enum AVPixelFormat *formats

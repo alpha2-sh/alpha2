@@ -3,6 +3,7 @@
 import {
   FakeCanvas,
   failingWorker,
+  resetPageGpuLosses,
   workingWorker,
 } from "./support/preview-stubs.mjs";
 import test from "node:test";
@@ -95,6 +96,7 @@ function addColor(editor) {
 }
 
 async function session({ workerFactory, document, previewScale } = {}) {
+  resetPageGpuLosses();
   const reported = [];
   const editor = createEditor({
     document: document ?? createEmptyDocument({ width: 64, height: 36 }),

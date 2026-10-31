@@ -231,6 +231,16 @@ try {
       ),
     ),
   );
+  // No WebGPU and no WebGL: preview and export render on the CPU.
+  const noGpu = JSON.parse(
+    decodeURIComponent(
+      await runBrowserPage(
+        pageBrowser,
+        `http://127.0.0.1:${server.address().port}/editor/?test&gpu=none`,
+        { timeoutMs: 120000 },
+      ),
+    ),
+  );
   const incompleteGraph = JSON.parse(
     decodeURIComponent(
       await runBrowserPage(
@@ -262,6 +272,21 @@ try {
     );
   const webkitStorage = await exportPage("webkit-storage");
   const noAudioEncoder = await exportPage("no-audio-encoder");
+  // A browser whose file handles cannot write exports into memory and keeps proxies there, and
+  // one without AudioDecoder imports compressed audio as undecodable.
+  const noCreateWritable = await exportPage("no-create-writable");
+  const consumerPage = async (query) =>
+    JSON.parse(
+      decodeURIComponent(
+        await runBrowserPage(
+          pageBrowser,
+          `http://127.0.0.1:${server.address().port}/editor/?test&${query}`,
+          { timeoutMs: 120000 },
+        ),
+      ),
+    );
+  const proxyInMemory = await consumerPage("proxy=no-create-writable");
+  const noAudioDecoder = await consumerPage("import=no-audio-decoder");
   // An exact NTSC rate over a range that ends between frames.
   const exactRate = await exportPage("exact-rate");
   // The consumer page's own Export button: the file it downloads is released.
@@ -299,10 +324,14 @@ export const app=<EditorProvider editor={editor}><Selected/><EditorPreview bridg
       browser.ok &&
       fallback.ok &&
       contextLoss.ok &&
+      noGpu.ok &&
       incompleteGraph.ok &&
       extensions.ok &&
       webkitStorage.ok &&
       noAudioEncoder.ok &&
+      noCreateWritable.ok &&
+      proxyInMemory.ok &&
+      noAudioDecoder.ok &&
       exactRate.ok &&
       exportButton.ok &&
       presentation === undefined,
@@ -317,10 +346,14 @@ export const app=<EditorProvider editor={editor}><Selected/><EditorPreview bridg
     browser,
     fallback,
     contextLoss,
+    noGpu,
     incompleteGraph,
     extensions,
     webkitStorage,
     noAudioEncoder,
+    noCreateWritable,
+    proxyInMemory,
+    noAudioDecoder,
     exactRate,
     exportButton,
   };

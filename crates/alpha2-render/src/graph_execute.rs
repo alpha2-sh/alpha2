@@ -134,7 +134,7 @@ impl Renderer {
     pub(crate) fn encode_graph(
         &self,
         graph: &RenderGraph<'_>,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut crate::renderer::RenderEncoder,
     ) -> Result<EncodedGraph, GraphError> {
         self.validate_size(graph.size)?;
         let plan = graph.compile()?;
@@ -151,6 +151,18 @@ impl Renderer {
             (0..graph.nodes.len()).map(|_| None).collect();
         let blend_space = graph.blend_space.unwrap_or(self.blend_space).shader_value();
         let cached = self.cached_results(graph, &plan.order, plan.output, blend_space);
+        let pixels = u64::from(graph.size.width) * u64::from(graph.size.height);
+        let predicted = plan
+            .order
+            .iter()
+            .filter(|node| cached.hits[node.index].is_none() && cached.needed[node.index])
+            .fold(crate::FrameCost::default(), |mut total, node| {
+                if let Some(cost) = self.node_cost(&graph.nodes[node.index]) {
+                    total.add(cost, pixels);
+                }
+                total
+            });
+        self.plan_submissions(encoder, predicted);
         let mut pending_timings = Vec::<PendingEffectTiming>::new();
         let mut encoded_nodes = 0_u64;
         let mut encoded_render_passes = 0_u64;
@@ -310,6 +322,7 @@ impl Renderer {
                     Some(RenderedTexture::pooled(graph.size, format, target))
                 }
                 RenderNode::Vector { scene } => {
+                    encoder.place_pass(crate::submission_planner::VECTOR_COST, pixels, false);
                     let target = self.textures.acquire(
                         self.gpu.device(),
                         graph.size,
@@ -328,6 +341,12 @@ impl Renderer {
                     Some(RenderedTexture::pooled(graph.size, format, target))
                 }
                 RenderNode::Composite { layers, background } => {
+                    encoder.place_pass(
+                        crate::submission_planner::COMPOSITE_LAYER_COST
+                            .times(u64::try_from(layers.len()).unwrap_or(u64::MAX)),
+                        pixels,
+                        false,
+                    );
                     let views = layers
                         .iter()
                         .map(|layer| graph_view(graph, &outputs, layer.source))
@@ -396,6 +415,24 @@ impl Renderer {
             encoded_nodes,
             encoded_render_passes,
         })
+    }
+
+    /// What drawing `node` may cost per pixel, as the submission plan
+    /// predicts it; `None` for a source, which draws nothing in the graph.
+    fn node_cost(&self, node: &RenderNode<'_>) -> Option<crate::effect_cost::EffectCost> {
+        match node {
+            RenderNode::Effect { effect, .. }
+            | RenderNode::Transition { effect, .. }
+            | RenderNode::Generator { effect, .. } => {
+                self.effects.get(effect).map(|registered| registered.cost)
+            }
+            RenderNode::Composite { layers, .. } => Some(
+                crate::submission_planner::COMPOSITE_LAYER_COST
+                    .times(u64::try_from(layers.len()).unwrap_or(u64::MAX)),
+            ),
+            RenderNode::Vector { .. } => Some(crate::submission_planner::VECTOR_COST),
+            RenderNode::Source(_) => None,
+        }
     }
 
     pub(crate) fn complete_graph_work(

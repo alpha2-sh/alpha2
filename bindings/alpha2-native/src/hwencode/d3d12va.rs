@@ -150,8 +150,8 @@ impl D3D12EncodeProbe {
     /// An encoder that opens and returns packets can still write ones no
     /// decoder takes. `FFmpeg` writes an IDR picture's parameter sets at the
     /// start of the encoder's output buffer and tells the driver to write the
-    /// picture after them (`FrameStartOffset`). An Intel Iris Xe on driver
-    /// 30.0.101.2079 does not honour that: `h264_d3d12va`'s first packet is
+    /// picture after them (`FrameStartOffset`). An Intel integrated GPU on
+    /// driver 30.0.101.2079 does not honour that: `h264_d3d12va`'s first packet is
     /// the IDR slice alone (NAL unit types `[5]`), the picture written over
     /// the SPS and PPS, and `hevc_d3d12va`'s is the VPS, SPS and PPS with no
     /// slice after them (`[32, 33, 34]`).
@@ -599,21 +599,20 @@ fn capability_with(encoder: Encoder, extent: &D3D12EncodeExtent) -> HardwareEnco
 /// beyond what the copier already keeps. `FFmpeg` frees an input picture
 /// only once it is encoded and no longer a reference, with up to
 /// `async_depth` (2) in flight, but those are recent frames, still in the
-/// copier's slots. Measured within the copier's retention on an Intel Iris Xe
-/// (8086:9a49, drivers 30.0.101.2079 and 32.0.101.7092) with `FFmpeg` 8.1.3: for `h264_d3d12va`
-/// and `hevc_d3d12va`, at 256x192, 1080p and 4K, at channel depths 0, 1, 2,
-/// 4 and 8, and over 72 frames (past an IDR), the pool never allocated more
-/// than the host's lease peak plus the copier's four slots (exactly four
-/// more at depth 0, one more at depth 4 and 8). One adapter is one data
-/// point: `the_pool_allocates_within_the_host_leases_plus_the_retained_surfaces`
+/// copier's slots. Measured within the copier's retention on an Intel
+/// integrated GPU (drivers 30.0.101.2079 and 32.0.101.7092) with `FFmpeg`
+/// 8.1.3: for `h264_d3d12va` and `hevc_d3d12va`, at 256x192, 1080p and 4K, at
+/// channel depths 0, 1, 2, 4 and 8, and over 72 frames (past an IDR), the
+/// pool never allocated more than the host's lease peak plus the copier's
+/// four slots (exactly four more at depth 0, one more at depth 4 and 8). One
+/// adapter is one data point:
+/// `the_pool_allocates_within_the_host_leases_plus_the_retained_surfaces`
 /// checks this on whatever adapter it runs on.
 const CODEC_RETAINED_SURFACES: usize = 0;
 
-/// D3D12 Video Encode on an Intel Iris Xe (i7-1165G7, driver 32.0.101.7092;
-/// the perf project P1, 240 frames, three alternating rounds) ran depths 0, 1,
-/// 2, 4 and 8 at 6.197, 6.107, 6.091, 6.057 and 6.084 ms a frame at 1080p and
-/// 23.897, 23.870, 23.862, 23.884 and 23.867 at 4K: depth 0 is within 3 % of
-/// the best at both sizes, and holds two surfaces where depth 4 holds six.
+/// D3D12 Video Encode on an Intel integrated GPU (three alternating rounds
+/// at 1080p and 4K) ran depths 0, 1, 2, 4 and 8 within 3 % of each other at
+/// both sizes, and depth 0 holds two surfaces where depth 4 holds six.
 const DEFAULT_CHANNEL_DEPTH: usize = 0;
 
 /// Runs the one test encode of `encoder` on this device, or answers as the
@@ -624,8 +623,8 @@ const DEFAULT_CHANNEL_DEPTH: usize = 0;
 /// left behind, not joined, and the path is unavailable for the rest of the
 /// process: whatever hung it may hang the next session too. A driver that
 /// crashes inside its encode submission takes the process with it, which no
-/// thread can contain: an Intel Iris Xe on driver 30.0.101.2079 hangs or
-/// crashes there about once in a few thousand frames with `FFmpeg` 8.1.3, on
+/// thread can contain: an Intel integrated GPU on driver 30.0.101.2079 hangs
+/// or crashes there about once in a few thousand frames with `FFmpeg` 8.1.3, on
 /// `FFmpeg`'s own device as on the renderer's, so this encodes one frame and
 /// no more, and a caller that must survive it installs a runner
 /// ([`set_d3d12va_test_encode_runner`]) that encodes in another process.

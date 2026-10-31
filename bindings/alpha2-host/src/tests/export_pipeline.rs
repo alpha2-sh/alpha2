@@ -315,9 +315,18 @@ fn the_export_trace_pairs_encode_spans_with_the_rows_that_queued_them() {
     let epoch = Instant::now();
     let mut trace = ExportTrace::from_env(epoch)
         .unwrap_or_else(|| ExportTrace::for_path(PathBuf::from("/dev/null"), epoch));
-    trace.push_video(VideoFrameTrace {
+    trace.push_video(&VideoFrameTrace {
         index: 0,
         packed: Duration::from_millis(1),
+        submissions: Some(alpha2_render::FrameSubmissions {
+            submissions: 3,
+            predicted_ms: Some(512.25),
+            cost: alpha2_render::FrameCost {
+                fetches: 100.0,
+                transcendentals: 200.0,
+                arithmetic: 300.0,
+            },
+        }),
         ..VideoFrameTrace::default()
     });
     trace.push_audio(AudioBlockTrace {
@@ -372,17 +381,26 @@ fn the_export_trace_pairs_encode_spans_with_the_rows_that_queued_them() {
         "header plus one video, two audio and one pipeline row"
     );
     assert!(rows[0].starts_with("kind,index,"));
-    assert!(rows[0].ends_with(",planesReadyMs,label,startedMs,finishedMs"));
+    assert!(rows[0].ends_with(
+        ",planesReadyMs,label,startedMs,finishedMs,submissions,predictedMs,costFetches,\
+         costTranscendentals,costArithmetic"
+    ));
     assert!(
-        rows[1].ends_with("10.000,18.000,20.000,0.000,0.000,,,"),
-        "video row carries its own encode span and send boundary: {}",
+        rows[1].ends_with("10.000,18.000,20.000,0.000,0.000,,,,3,512.250,100,200,300"),
+        "video row carries its own encode span, send boundary and submission plan: {}",
         rows[1]
     );
-    assert_eq!(rows[2], "audio,0,,,,,,,,2.000,21.000,21.000,22.000,,,,,");
-    assert_eq!(rows[3], "audio,1,,,,,,,,3.000,23.000,24.000,25.000,,,,,");
+    assert_eq!(
+        rows[2],
+        "audio,0,,,,,,,,2.000,21.000,21.000,22.000,,,,,,,,,,"
+    );
+    assert_eq!(
+        rows[3],
+        "audio,1,,,,,,,,3.000,23.000,24.000,25.000,,,,,,,,,,"
+    );
     assert_eq!(
         rows[4],
-        "pipeline,0,,,,,,,,,,,,,,alpha2.effect.glow,4.000,5.500"
+        "pipeline,0,,,,,,,,,,,,,,alpha2.effect.glow,4.000,5.500,,,,,"
     );
     let columns = |row: &str| row.split(',').count();
     assert!(

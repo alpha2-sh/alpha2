@@ -36,9 +36,9 @@ pub(crate) fn constant_mode_option(encoder_name: &str) -> Option<(&'static CStr,
 
 /// What to add to an open failure of `encoder_name` under `rate`, when the
 /// constant mode is the likely reason: `VideoToolbox` has a constant bit rate
-/// only from macOS 13, D3D12 Video Encode only on some devices (an Intel Iris
-/// Xe refuses it with `HRESULT` 0x887A0020 and takes a constant QP), and
-/// `FFmpeg` reports either absence as a generic error.
+/// only from macOS 13, D3D12 Video Encode only on some devices (an Intel
+/// integrated GPU refuses it with `HRESULT` 0x887A0020 and takes a constant
+/// QP), and `FFmpeg` reports either absence as a generic error.
 pub(crate) fn constant_rate_hint(encoder_name: &str, rate: VideoRateControl) -> &'static str {
     if rate.mode != BitrateMode::Constant {
         ""
@@ -267,9 +267,9 @@ pub(crate) fn mechanism_request(
         }
         // These families open with `flags=+qscale global_quality=N` but none reads N as a QP, so a
         // quantizer visibly falls back to bitrate. MediaFoundation passes it unscaled as
-        // `AVEncVideoEncodeQP` (an M4's VideoToolbox, before its map, wrote `very-high` smaller
-        // than `very-low` the same way); libavcodec's `mpeg4` reads each frame's `quality`, which
-        // no sink sets.
+        // `AVEncVideoEncodeQP` (VideoToolbox on Apple silicon, before its map, wrote `very-high`
+        // smaller than `very-low` the same way); libavcodec's `mpeg4` reads each frame's
+        // `quality`, which no sink sets.
         _ => return None,
     })
 }
@@ -281,7 +281,8 @@ const FF_QP2LAMBDA: u32 = 118;
 /// `VideoToolbox` quality (`kVTCompressionPropertyKey_Quality`, 0-1, higher
 /// better) per H.264 quantizer, at the quantizers the quality levels resolve
 /// to (`alpha2_media::level_quantizer`): the quality at which `h264_videotoolbox`
-/// on an M4 holds `OpenH264`'s PSNR-Y at the same level within 0.5 dB.
+/// on an Apple-silicon GPU holds `OpenH264`'s PSNR-Y at the same level within
+/// 0.5 dB.
 ///
 /// Measured on the perf project P1 (the complex parity project at 1080p30,
 /// first 4 s), each output against an `OpenH264` QP 0 encode of the same

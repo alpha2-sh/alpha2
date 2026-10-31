@@ -143,6 +143,55 @@ report({
 `;
 }
 
+// WebCodecsVideoDecoder answers each time of an H.264 stream with B-frames with the frame
+// presented then, whatever order the browser's decoder puts frames out in (Safari 16.4 to 26.3
+// put them out in decode order; the decode-order simulation does the same in Chrome).
+export function webcodecsDecodeOrder() {
+  return `
+if (typeof VideoDecoder === "undefined") skip("webcodecs-video", "this browser has no WebCodecs VideoDecoder");
+const { WebCodecsVideoDecoder } = await import("/packages/alpha2/dist/media.js");
+const mb = await import("mediabunny");
+const bytes = new Uint8Array(await (await fetch("/tests/corpus/h264-long-gop.mp4")).arrayBuffer());
+const input = new mb.Input({ source: new mb.BufferSource(bytes), formats: mb.ALL_FORMATS });
+const track = await input.getPrimaryVideoTrack();
+const config = await track.getDecoderConfig();
+const packets = new mb.EncodedPacketSink(track);
+const times = [];
+let decodeOrderDiffers = false;
+let previous = -Infinity;
+for await (const packet of packets.packets()) {
+  if (packet.timestamp < previous) decodeOrderDiffers = true;
+  previous = packet.timestamp;
+  times.push(packet.timestamp);
+}
+times.sort((a, b) => a - b);
+const decoder = new WebCodecsVideoDecoder("s", {
+  config,
+  chunksFrom: async function* (mediaTimeTicks, signal) {
+    const seconds = Number(mediaTimeTicks) / 120000;
+    const key = (await packets.getKeyPacket(seconds)) ?? (await packets.getFirstKeyPacket());
+    for await (const packet of packets.packets(key)) {
+      if (signal.aborted) return;
+      yield packet.toEncodedVideoChunk();
+    }
+  },
+});
+// Every frame asked for in order, then a few backwards: the answer is the frame whose own time
+// is the time asked for.
+const wrong = [];
+const asked = [...times.keys(), times.length - 2, times.length >> 1, 3];
+for (const index of asked) {
+  const ticks = BigInt(Math.round(times[index] * 120000));
+  const decoded = await decoder.refill({ sourceId: "s", mediaTimeTicks: ticks, reason: "prefetch", generation: 1 });
+  if (decoded.decodedTimeTicks !== ticks) wrong.push({ index, asked: Number(ticks), got: Number(decoded.decodedTimeTicks) });
+  decoded.frame.close();
+}
+decoder.close();
+input.dispose();
+report({ ok: decodeOrderDiffers && wrong.length === 0, decodeOrderDiffers, frames: asked.length, wrong: wrong.slice(0, 5) });
+`;
+}
+
 // SDR import/export preserves display-referred R'G'B' (YUV through the matrix alone). Check the
 // browser's `copyExternalImageToTexture` conversion against decoded YUV.
 export function videoColorContract() {
@@ -178,12 +227,7 @@ const plane = (index, w, h, step = 1, phase = 0) => {
 const expected = source.format === "I420"
   ? [plane(0, width, height), plane(1, width / 2, height / 2), plane(2, width / 2, height / 2)]
   : [plane(0, width, height), plane(1, width / 2, height / 2, 2, 0), plane(1, width / 2, height / 2, 2, 1)];
-const canvas = document.createElement("canvas");
-canvas.width = width;
-canvas.height = height;
-document.body.append(canvas);
-const engine = await WebEffectRegistry.createForHtmlCanvas(canvas);
-engine.loadProject(JSON.stringify({
+const project = JSON.stringify({
   schema_version: 1, id: "video-color", name: "Video color",
   settings: { width, height, frame_rate: { num: 30, den: 1 }, sample_rate: 48000 },
   sources: [{ id: "video", locator: "fixture://video", kind: "video" }],
@@ -191,61 +235,122 @@ engine.loadProject(JSON.stringify({
     id: "clip", source_id: "video",
     timeline_range: { start: 0, end: 120000 }, source_range: { start: 0, end: 120000 },
   }] }] },
-}));
+});
 // The decoder's own frame, as the product imports it. \`?source=cpu\` hands
-// over the same planes and color space as a CPU frame instead, which gave the
-// same result where both could be measured.
+// over the same planes and color space as a CPU frame instead: its size is the
+// visible rect's, which copyTo laid the planes out for.
 const decoderFrame = new URL(location.href).searchParams.get("source") !== "cpu";
-const cpuFrame = decoderFrame ? source : new VideoFrame(raw, {
+const frame = decoderFrame ? source : new VideoFrame(raw, {
   format: source.format,
-  codedWidth: source.codedWidth,
-  codedHeight: source.codedHeight,
+  codedWidth: source.visibleRect.width,
+  codedHeight: source.visibleRect.height,
   timestamp: 0,
   layout: planes,
   colorSpace: source.colorSpace.toJSON(),
 });
-if (!decoderFrame) source.close();
-const lostBefore = engine.deviceLost;
-engine.uploadVideoFrame("video", 0n, cpuFrame);
-// A loss before the import is not the browser's inability to import: it fails the case.
-if (lostBefore) throw Object.assign(new Error("the device was lost before the upload"), { beforeImport: true });
-const ticket = engine.beginExportAt(0n, "h264");
-let rendered;
-try {
-  rendered = ticket.kind === "rendered" ? await ticket.readback : ticket;
-} catch (error) {
-  throw new Error(String(error?.message ?? error) + " gpu=" + JSON.stringify(JSON.parse(engine.diagnostics()).gpu));
-}
-if (rendered.kind !== "rendered") throw new Error("the frame did not render: " + JSON.stringify(rendered));
-// Tightly packed, through the export's own plane layout.
-const exportedFrame = new VideoFrame(rendered.pixels, {
-  format: "I420", codedWidth: width, codedHeight: height, timestamp: 0, layout: rendered.layout,
-});
-const exported = new Uint8Array(exportedFrame.allocationSize());
-await exportedFrame.copyTo(exported);
-exportedFrame.close();
-const sizes = [width * height, width * height / 4, width * height / 4];
-let offset = 0;
-const worst = [], mean = [];
-// Chroma is upsampled on the way in and averaged on the way out, which only
-// matters where it changes: samples within 3 luma pixels of a block edge of
-// the fixture (a gray ramp over flat colour blocks) are left out.
-const nearEdge = (x, y) => Math.abs(y - 32) <= 3 || (y > 32 && [0, 64, 128, 192, 256].some((edge) => Math.abs(x - edge) <= 3));
-for (let index = 0; index < 3; index++) {
-  const planeWidth = index === 0 ? width : width / 2;
-  const scale = index === 0 ? 1 : 2;
-  let max = 0, sum = 0, count = 0;
-  for (let i = 0; i < sizes[index]; i++) {
-    const x = (i % planeWidth) * scale, y = Math.floor(i / planeWidth) * scale;
-    if (nearEdge(x, y)) continue;
-    const d = Math.abs(exported[offset + i] - expected[index][i]);
-    max = Math.max(max, d); sum += d; count++;
+const { FrameSupply } = await import("/packages/alpha2/dist/frame-supply.js");
+// The export of \`frame\` handed over by \`upload\`, against the decoded planes. Chroma is
+// upsampled on the way in and averaged on the way out, which only matters
+// where it changes: a sample is flat when its 3x3 expected neighbourhood
+// spans at most 2 codes, and only flat samples are held to the worst-code
+// bound; the others (edges) are held to a mean bound. A chroma edge sample
+// may be off by most of the step between two blocks; their mean measured 3.7
+// to 4.0 codes in every browser and route, so 6 leaves room for rounding and
+// fails a conversion that moves whole edges.
+const EDGE_MEAN_BOUND = 6;
+const measure = async (upload) => {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  document.body.append(canvas);
+  const engine = await WebEffectRegistry.createForHtmlCanvas(canvas);
+  engine.loadProject(project);
+  const lostBefore = engine.deviceLost;
+  await upload(engine, frame.clone());
+  // A loss before the import is not the browser's inability to import: it fails the case.
+  if (lostBefore) throw Object.assign(new Error("the device was lost before the upload"), { beforeImport: true });
+  const ticket = engine.beginExportAt(0n, "h264");
+  let rendered;
+  try {
+    rendered = ticket.kind === "rendered" ? await ticket.readback : ticket;
+  } catch (error) {
+    throw new Error(String(error?.message ?? error) + " gpu=" + JSON.stringify(JSON.parse(engine.diagnostics()).gpu));
   }
-  worst.push(max); mean.push(+(sum / count).toFixed(3));
-  offset += sizes[index];
+  if (rendered.kind !== "rendered") throw new Error("the frame did not render: " + JSON.stringify(rendered));
+  // Tightly packed, through the export's own plane layout.
+  const exportedFrame = new VideoFrame(rendered.pixels, {
+    format: "I420", codedWidth: width, codedHeight: height, timestamp: 0, layout: rendered.layout,
+  });
+  const exported = new Uint8Array(exportedFrame.allocationSize());
+  await exportedFrame.copyTo(exported);
+  exportedFrame.close();
+  engine.free();
+  const sizes = [width * height, width * height / 4, width * height / 4];
+  let offset = 0;
+  const worst = [], mean = [], edgeMean = [];
+  const samples = [];
+  for (let index = 0; index < 3; index++) {
+    const planeWidth = index === 0 ? width : width / 2;
+    const planeHeight = sizes[index] / planeWidth;
+    const want = expected[index];
+    let max = 0, sum = 0, count = 0, edgeSum = 0, edgeCount = 0;
+    for (let y = 0; y < planeHeight; y++)
+      for (let x = 0; x < planeWidth; x++) {
+        let low = 255, high = 0;
+        for (let dy = -1; dy <= 1; dy++)
+          for (let dx = -1; dx <= 1; dx++) {
+            const value = want[Math.min(planeHeight - 1, Math.max(0, y + dy)) * planeWidth +
+              Math.min(planeWidth - 1, Math.max(0, x + dx))];
+            low = Math.min(low, value);
+            high = Math.max(high, value);
+          }
+        const flat = high - low <= 2;
+        const got = exported[offset + y * planeWidth + x];
+        const d = Math.abs(got - want[y * planeWidth + x]);
+        if (d > 0) samples.push({ plane: index, x, y, got, want: want[y * planeWidth + x], flat, d });
+        if (flat) { max = Math.max(max, d); sum += d; count++; }
+        else { edgeSum += d; edgeCount++; }
+      }
+    worst.push(max);
+    mean.push(+(sum / Math.max(1, count)).toFixed(3));
+    edgeMean.push(+(edgeSum / Math.max(1, edgeCount)).toFixed(3));
+    offset += sizes[index];
+  }
+  // The 8 largest differences of flat samples and of edge samples, each with its plane position,
+  // and where the flat samples over the bound lie.
+  samples.sort((a, b) => b.d - a.d);
+  const largest = (flat) => samples.filter((sample) => sample.flat === flat).slice(0, 8)
+    .map(({ plane, x, y, got, want }) => ({ plane, x, y, got, want }));
+  const over = samples.filter((sample) => sample.flat && sample.d > (sample.plane === 0 ? 2 : 3));
+  const span = (key) => over.length === 0 ? null : [Math.min(...over.map((sample) => sample[key])), Math.max(...over.map((sample) => sample[key]))];
+  const lumaBias = (() => { let s = 0; for (let i = 0; i < sizes[0]; i++) s += exported[i] - expected[0][i]; return +(s / sizes[0]).toFixed(3); })();
+  return {
+    ok: worst[0] <= 2 && worst[1] <= 3 && worst[2] <= 3 && edgeMean.every((value) => value <= EDGE_MEAN_BOUND),
+    worst, mean, edgeMean, flatOver: { count: over.length, x: span("x"), y: span("y") },
+    worstFlat: largest(true), worstEdge: largest(false), lumaBias,
+  };
+};
+// The contract is the product's default route: the frame's planes copied out
+// and converted by the engine (FrameSupply). The browser's own conversion of
+// the frame (\`uploadVideoFrame\`) is measured as information: on some decoders'
+// GPU frames it reads past the visible picture at its right edge.
+const contract = await measure((engine, copy) => new FrameSupply(engine).supply(0n, {
+  width, height,
+  liveSourceIds: new Set(["video"]),
+  getLayer: () => ({ id: "video", kind: "video" }),
+  pixelsFor: async () => ({ kind: "video-frame", frame: copy }),
+  isCurrent: () => true,
+}));
+let browserRoute;
+try {
+  const { ok: withinContract, ...measured } = await measure((engine, copy) => engine.uploadVideoFrame("video", 0n, copy));
+  browserRoute = { withinContract, ...measured };
+} catch (error) {
+  browserRoute = { error: String(error?.message ?? error) };
 }
-const lumaBias = (() => { let s = 0; for (let i = 0; i < sizes[0]; i++) s += exported[i] - expected[0][i]; return +(s / sizes[0]).toFixed(3); })();
-report({ ok: worst[0] <= 2 && worst[1] <= 3 && worst[2] <= 3, worst, mean, lumaBias, layout });
+frame.close();
+if (!decoderFrame) source.close();
+report({ ok: contract.ok, source: decoderFrame ? "decoder" : "cpu", ...contract, layout, browserRoute });
 `;
 }
 
@@ -476,8 +581,12 @@ report({
 // the render worker host fed by its decoder, as a page drives it) and the editor's import. Either
 // the source renders a picture on every route, or the SDK and the editor both refuse it at import,
 // typed and not retried. The controls render, unless this browser has no decoder for their codec.
-export function hdrHevcSource() {
+// `degraded`: a source this browser decodes only to frames without planes is previewed instead,
+// through the browser's tone mapping (FrameSupply's present-degraded, the editor's default), with
+// the binding naming it in degradedSources and refusing its export typed.
+export function hdrHevcSource({ degraded = false } = {}) {
   return `
+const DEGRADED = ${degraded};
 const T = 120000;
 const FPS = 30;
 const TICKS_PER_FRAME = T / FPS;
@@ -494,9 +603,12 @@ const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm
 await init();
 const { probePlanarDecode, MediabunnyVideoDecoder } = await import("/packages/alpha2/dist/mediabunny.js");
 const { createWasmRenderWorkerHost } = await import("/packages/alpha2/dist/worker.js");
+const { DecoderRefillCoordinator } = await import("/packages/alpha2/dist/media.js");
+const { Alpha2Exporter, exportToSink } = await import("/packages/alpha2/dist/exporter.js");
 const { classifyBrowserFailure } = await import("/packages/alpha2/dist/export-failure.js");
 const { isRetryableFailure } = await import("/packages/alpha2/dist/export-retry.js");
 const { AssetLibrary } = await import("/packages/alpha2-editor/dist/browser/runtime/assets.js");
+const { FrameSupply } = await import("/packages/alpha2/dist/frame-supply.js");
 if (!(await navigator.gpu?.requestAdapter())) skip("webgpu", "no WebGPU adapter");
 const STEP_MS = 30000;
 const within = (what, work) => {
@@ -515,6 +627,7 @@ const refusalOf = (error) => {
     message: String(error?.message ?? error).slice(0, 300),
     failure: failure.code,
     retryable: isRetryableFailure(failure),
+    softwareDecoder: error?.facts?.softwareDecoder ?? null,
   };
 };
 const lumaOf = (pixels, plane, width, height) => {
@@ -543,55 +656,141 @@ const projectFor = (id, size, color) => ({
     source_range: { start: 0, end: FRAMES * TICKS_PER_FRAME },
   }] }] },
 });
-// The SDK's decoder feeding the render worker host, as a page's export does: three frames, their
-// luma read back.
+// The SDK's playback route as a page's export runs it: its decoders behind a refill coordinator
+// feeding the render worker host, through exportToSink, which asks for a frame again in software
+// when the host sends it back. Three frames, their luma read back.
 const render = async (file, id, color) => {
-  const decoder = await MediabunnyVideoDecoder.open(id, file);
-  let host;
+  const probe = await MediabunnyVideoDecoder.open(id, file);
+  let size;
   try {
-    const first = await decoder.refill({ sourceId: id, mediaTimeTicks: 0n, reason: "seek", generation: 0 });
-    const size = [first.frame.displayWidth, first.frame.displayHeight];
+    const first = await probe.refill({ sourceId: id, mediaTimeTicks: 0n, reason: "seek", generation: 0 });
+    size = [first.frame.displayWidth, first.frame.displayHeight];
     first.frame.close();
-    host = await createWasmRenderWorkerHost(WebEffectRegistry, JSON.stringify(projectFor(id, size, color)))(
-      new OffscreenCanvas(size[0], size[1]),
-    );
-    const supply = async (missingFrames) => {
-      for (const missing of missingFrames) {
-        const decoded = await decoder.refill({
-          sourceId: missing.sourceId, mediaTimeTicks: missing.mediaTimeTicks, reason: "prefetch", generation: 0,
-        });
-        await host.uploadVideoFrame({
-          sourceId: missing.sourceId,
-          requestedTimeTicks: missing.mediaTimeTicks,
-          decodedTimeTicks: decoded.decodedTimeTicks,
-          generation: 0,
-          frame: decoded.frame,
-          ...(decoded.chromaSiting === undefined ? {} : { chromaSiting: decoded.chromaSiting }),
-        });
-      }
-    };
+  } finally {
+    probe.close();
+  }
+  const host = await createWasmRenderWorkerHost(WebEffectRegistry, JSON.stringify(projectFor(id, size, color)), { renderer: "gpu" })(
+    new OffscreenCanvas(size[0], size[1]),
+  );
+  const coordinator = new DecoderRefillCoordinator(
+    (sourceId, { decode }) =>
+      MediabunnyVideoDecoder.open(sourceId, file, decode === "software" ? { hardwareAcceleration: "prefer-software" } : {}),
+    (decoded) => host.uploadVideoFrame(decoded),
+  );
+  try {
     const luma = [];
+    const exporter = new Alpha2Exporter(
+      {
+        begin: async (ticks, outputTicks) => host.beginExport(ticks, "h264", outputTicks),
+        isDeviceLost: () => host.isDeviceLost(),
+        abort() {},
+      },
+      { num: BigInt(FPS), den: 1n },
+      0n,
+      BigInt(FRAMES * TICKS_PER_FRAME),
+    );
+    await exportToSink(
+      exporter,
+      {
+        async writeVideo({ frame }) {
+          try {
+            const copy = new Uint8Array(frame.allocationSize());
+            const planes = await frame.copyTo(copy);
+            luma.push(lumaOf(copy, planes[0], frame.codedWidth, frame.codedHeight));
+          } finally {
+            frame.close();
+          }
+        },
+        async finish() {},
+        abort() {},
+      },
+      (waiting) =>
+        Promise.all(
+          waiting.missingFrames.map((missing) =>
+            coordinator.refill({
+              sourceId: missing.sourceId,
+              mediaTimeTicks: missing.mediaTimeTicks,
+              reason: "prefetch",
+              generation: 0,
+              consumerId: missing.clipId,
+              ...(missing.decode === undefined ? {} : { decode: missing.decode }),
+            }),
+          ),
+        ).then(() => {}),
+    );
+    return { luma, recovery: host.readbackRecovery };
+  } finally {
+    coordinator.close();
+    host.dispose();
+  }
+};
+// The preview of a source the browser hands over only degraded: three frames through a FrameSupply
+// that presents them so, the canvas's luma read after each, then an export of the first frame,
+// which the binding must refuse.
+const previewDegraded = async (file, id, color) => {
+  const probe = await MediabunnyVideoDecoder.open(id, file);
+  let size;
+  try {
+    const first = await probe.refill({ sourceId: id, mediaTimeTicks: 0n, reason: "seek", generation: 0 });
+    size = [first.frame.displayWidth, first.frame.displayHeight];
+    first.frame.close();
+  } finally {
+    probe.close();
+  }
+  const canvas = new OffscreenCanvas(size[0], size[1]);
+  const engine = await WebEffectRegistry.createForCanvas(canvas);
+  engine.loadProject(JSON.stringify(projectFor(id, size, color)));
+  engine.setPreviewScale?.(1);
+  const supply = new FrameSupply(engine, { opaqueEngineFrames: "present-degraded" });
+  const decoders = new Map();
+  const decoderFor = (decode) => {
+    let opened = decoders.get(decode);
+    if (opened === undefined) {
+      opened = MediabunnyVideoDecoder.open(id, file, decode === "software" ? { hardwareAcceleration: "prefer-software" } : {});
+      decoders.set(decode, opened);
+    }
+    return opened;
+  };
+  const copy = new OffscreenCanvas(size[0], size[1]).getContext("2d");
+  const frames = [];
+  try {
     for (let index = 0; index < FRAMES; index += 1) {
       const ticks = BigInt(index * TICKS_PER_FRAME);
-      let ticket = host.beginExport(ticks, "h264", ticks);
-      for (let round = 0; ticket.kind === "waiting" && round < 4; round += 1) {
-        await supply(ticket.missingFrames);
-        ticket = host.beginExport(ticks, "h264", ticks);
-      }
-      if (ticket.kind !== "rendered") throw new Error("frame " + index + " still waits for its source");
-      const frame = await ticket.readback;
-      try {
-        const copy = new Uint8Array(frame.allocationSize());
-        const planes = await frame.copyTo(copy);
-        luma.push(lumaOf(copy, planes[0], frame.codedWidth, frame.codedHeight));
-      } finally {
-        frame.close();
-      }
+      const playback = await supply.render(ticks, {
+        width: size[0], height: size[1],
+        liveSourceIds: new Set([id]),
+        getLayer: () => ({ id, kind: "video" }),
+        pixelsFor: async (_layer, seconds, options) => {
+          const decoder = await decoderFor(options.decode ?? "default");
+          const decoded = await decoder.refill({
+            sourceId: id, mediaTimeTicks: BigInt(Math.round(seconds * T)), reason: "prefetch", generation: 0,
+          });
+          return { kind: "video-frame", frame: decoded.frame, chromaSiting: decoded.chromaSiting };
+        },
+        isCurrent: () => true,
+      });
+      const bitmap = canvas.transferToImageBitmap();
+      copy.drawImage(bitmap, 0, 0);
+      bitmap.close();
+      const rgba = copy.getImageData(0, 0, size[0], size[1]).data;
+      const luma = new Uint8Array(size[0] * size[1]);
+      for (let i = 0; i < luma.length; i += 1)
+        luma[i] = Math.round(0.2126 * rgba[i * 4] + 0.7152 * rgba[i * 4 + 1] + 0.0722 * rgba[i * 4 + 2]);
+      frames.push({
+        degradedSources: playback?.degradedSources ?? null,
+        luma: lumaOf(luma, { offset: 0, stride: size[0] }, size[0], size[1]),
+      });
     }
-    return luma;
+    let exportRefusal = null;
+    try {
+      const ticket = engine.beginExportAt(0n, "h264");
+      if (ticket.kind === "rendered") (await ticket.readback);
+    } catch (error) {
+      exportRefusal = refusalOf(error);
+    }
+    return { frames, exportRefusal, readback: supply.readbackRecovery };
   } finally {
-    host?.dispose();
-    decoder.close();
+    for (const opened of decoders.values()) void opened.then((decoder) => decoder.close(), () => {});
   }
 };
 const results = [];
@@ -607,17 +806,27 @@ for (const entry of FILES) {
   } catch (error) {
     result.sdk = { refused: refusalOf(error) };
   }
-  if (!result.sdk.refused) {
+  // The playback route runs even after the import probe refused: it must refuse alike.
+  try {
+    const rendered = await within("render of " + name, () => render(file, "clip", entry.hdr ? HLG : null));
+    result.luma = rendered.luma;
+    result.recovery = rendered.recovery;
+  } catch (error) {
+    result.renderError = refusalOf(error);
+  }
+  // Decodes, but only to frames without planes: what a degraded preview can show.
+  const opaqueOnly = result.sdk.refused?.code === "PLANAR_DECODE_UNAVAILABLE" && result.sdk.refused.softwareDecoder !== null;
+  if (DEGRADED && opaqueOnly) {
     try {
-      result.luma = await within("render of " + name, () => render(file, "clip", entry.hdr ? HLG : null));
+      result.degraded = await within("degraded preview of " + name, () => previewDegraded(file, "clip", entry.hdr ? HLG : null));
     } catch (error) {
-      result.renderError = refusalOf(error);
+      result.degradedError = refusalOf(error);
     }
   }
-  const library = new AssetLibrary();
+  const library = new AssetLibrary(DEGRADED ? { hdrWithoutPlanes: "preview-degraded" } : {});
   try {
     const asset = await within("editor import of " + name, () => library.importFile(file));
-    result.editor = { imported: asset.kind };
+    result.editor = { imported: asset.kind, planarDecode: asset.planarDecode ?? null };
   } catch (error) {
     result.editor = { refused: refusalOf(error) };
   } finally {
@@ -631,16 +840,28 @@ const renders = (result) =>
 const refusedTyped = (refusal) =>
   refusal !== undefined && refusal.retryable === false &&
   (REFUSALS.has(refusal.code) || REFUSALS.has(refusal.causeCode));
+const previewsDegraded = (result) =>
+  result.degraded !== undefined
+  && result.degraded.frames.length === FRAMES
+  && result.degraded.frames.every((frame) => frame.luma.std >= 4 && frame.degradedSources?.includes("clip"))
+  && result.degraded.exportRefusal?.code === "PLANAR_DECODE_UNAVAILABLE"
+  && result.degraded.exportRefusal.retryable === false
+  && result.editor.planarDecode === "unavailable";
 const verdict = (result) => {
-  if (renders(result) && result.editor.imported) return "renders";
-  if (refusedTyped(result.sdk.refused) && refusedTyped(result.editor.refused)) return "refused-at-import";
+  if (renders(result) && !result.sdk.refused && result.editor.imported) return "renders";
+  if (DEGRADED && previewsDegraded(result) && refusedTyped(result.sdk.refused) && refusedTyped(result.renderError))
+    return "degraded-preview";
+  // Refused at import by the SDK and the editor, and by the SDK's playback route at its first frame.
+  // With a degraded preview offered, only a track the browser cannot decode at all is refused.
+  if (refusedTyped(result.sdk.refused) && refusedTyped(result.editor.refused) && refusedTyped(result.renderError)
+    && !(DEGRADED && result.sdk.refused.softwareDecoder !== null))
+    return "refused-at-import";
   // No decoder for the codec at all (HEVC in Chrome on Linux): the SDK's decoder refuses it when it
-  // opens, typed, and the editor refuses the import. Chrome on an Iris Xe says it decodes 10-bit
-  // HEVC and then refuses the configuration, which the SDK meets at its first frame.
+  // opens, typed, and the editor refuses the import. A browser that says it decodes 10-bit HEVC and
+  // then refuses the configuration is met by the SDK at its first frame, refused just as typed.
   const undecodable = result.sdk.refused ?? result.renderError;
   const typed = undecodable?.code === "DECODE_UNAVAILABLE" && !undecodable.retryable;
-  const refusedConfig = /^(NotSupportedError|OperationError)$/.test(undecodable?.name ?? "");
-  if ((typed || refusedConfig) && result.editor.refused?.retryable === false) return "no-decoder";
+  if (typed && refusedTyped(result.renderError) && result.editor.refused?.retryable === false) return "no-decoder";
   return "inconsistent";
 };
 for (const result of results) result.verdict = verdict(result);
@@ -648,7 +869,7 @@ const subject = results.find((result) => result.subject);
 const controls = results.filter((result) => !result.subject);
 report({
   ok:
-    (subject.verdict === "renders" || subject.verdict === "refused-at-import") &&
+    ["renders", "refused-at-import", "degraded-preview"].includes(subject.verdict) &&
     controls.every((result) => result.verdict === "renders" || result.verdict === "no-decoder"),
   subject: subject.verdict,
   results,

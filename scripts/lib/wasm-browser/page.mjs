@@ -26,7 +26,33 @@ export function page(body, videoImport = false) {
 </head><body>
 <script type="module">
 const VIDEO_IMPORT = ${videoImport};
+// A GPU process that restarts as the page starts gives no adapter to a request made meanwhile:
+// every request is retried once after 500 ms, and a retry is reported.
+let adapterRetries = 0;
+if (globalThis.GPU?.prototype.requestAdapter) {
+  const requestAdapter = GPU.prototype.requestAdapter;
+  GPU.prototype.requestAdapter = async function (...args) {
+    const adapter = await requestAdapter.apply(this, args);
+    if (adapter !== null) return adapter;
+    adapterRetries += 1;
+    console.warn("no WebGPU adapter; asking once more");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    return requestAdapter.apply(this, args);
+  };
+}
+// A case run under Safari's simulated behaviours (\`?sim=<list>\`, or a case that installs them)
+// may check that its result shows the simulated branch ran: \`simulationCheck(result)\` returns
+// the result to report.
+let simulationCheck = (value) => value;
+const simulate = async (names, check) => {
+  (await import("/scripts/lib/wasm-browser/safari-sim.mjs")).installSimulations(names);
+  if (check) simulationCheck = check;
+};
+const SIMULATIONS = new URL(location.href).searchParams.get("sim");
+if (SIMULATIONS) await simulate(SIMULATIONS.split(","));
 const report = (value) => {
+  if (adapterRetries > 0) value = { ...value, adapterRetries };
+  if (value.ok === true) value = simulationCheck(value);
   document.title = encodeURIComponent(JSON.stringify(value));
   const result = document.createElement("pre");
   result.textContent = JSON.stringify(value, null, 2);
@@ -55,6 +81,42 @@ const described = (error) => {
 const importUnavailable = (error) =>
   /external Instance reference no longer exists|device was lost|Device was destroyed/i.test(String(error?.message ?? error));
 ${LUMA_AT}
+// The positive control of a presentation case, run before the engine: a canvas of the same kind
+// filled with one colour without the engine (\`webgpu\`: a render pass that only clears, on the
+// browser's own WebGPU device; \`webgl2\`: a WebGL2 clear), captured by \`capture\` (canvas -> pixels) as the
+// case captures the engine's canvas. A blank or failed control is a browser whose capture shows
+// nothing here, which the run records as the presentation-capture capability missing; with a
+// control that shows its colour, a blank picture of the engine's is the engine's failure.
+const presentationControl = async (capture, width, height, kind = "webgpu") => {
+  const canvas = new OffscreenCanvas(width, height);
+  let device = null;
+  let pixel = null;
+  try {
+    if (kind === "webgpu") {
+      device = await (await navigator.gpu.requestAdapter()).requestDevice();
+      const context = canvas.getContext("webgpu");
+      context.configure({ device, format: navigator.gpu.getPreferredCanvasFormat(), alphaMode: "premultiplied" });
+      const encoder = device.createCommandEncoder();
+      encoder.beginRenderPass({ colorAttachments: [{
+        view: context.getCurrentTexture().createView(), loadOp: "clear", storeOp: "store",
+        clearValue: { r: 40 / 255, g: 160 / 255, b: 220 / 255, a: 1 },
+      }] }).end();
+      device.queue.submit([encoder.finish()]);
+    } else {
+      const gl = canvas.getContext("webgl2");
+      gl.clearColor(40 / 255, 160 / 255, 220 / 255, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+    }
+    pixel = Array.from(await capture(canvas));
+  } catch (error) {
+    skip("presentation-capture", "the positive control could not be captured: " + String(error?.message ?? error));
+  } finally {
+    device?.destroy();
+  }
+  if (pixel.every((value) => value === 0))
+    skip("presentation-capture", "the positive control (a " + kind + " canvas cleared without the engine, through the same capture) captured blank", { control: pixel });
+  return pixel;
+};
 // The engine on the browser's WebGPU device, for cases whose subject is not the GPU. Without an
 // adapter the case cannot run here.
 const gpuEngine = async (Registry) => {

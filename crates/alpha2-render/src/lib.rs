@@ -20,6 +20,7 @@ mod composite;
 mod cpu;
 mod diagnostics;
 mod effect;
+mod effect_cost;
 mod effect_resource;
 mod error;
 mod frame_gpu_time;
@@ -52,6 +53,8 @@ mod runtime_effect;
 mod settle;
 mod shader_inventory;
 mod submission_clock;
+mod submission_planner;
+pub use submission_planner::{FrameCost, FrameSubmissions};
 mod target;
 #[cfg(test)]
 mod tests;
@@ -85,8 +88,8 @@ pub use cpu::{
     CpuImage, CpuRenderStats, CpuRenderer, CpuSource, RgbaPixels, YuvPlanes, pack_cpu_image,
 };
 pub use diagnostics::{
-    AdapterDiagnostics, BenchmarkMetadata, PassTiming, PipelineCreation, PipelineCreationStats,
-    RenderDiagnostics, TimingSource,
+    AdapterDiagnostics, BenchmarkMetadata, GpuSubmissionStats, PassTiming, PipelineCreation,
+    PipelineCreationStats, RenderDiagnostics, TimingSource,
 };
 pub use effect::{
     DiagnosticSeverity, EffectDef, EffectId, EffectKind, EffectParams, EffectResourceKind,

@@ -882,7 +882,7 @@ pub(crate) fn needs_open_probe(on_hardware: bool, name: &str) -> bool {
 /// Probes run when an encoder is first asked about, not at startup: an
 /// export asks only about its own codec's encoders, and a GPU-resident one
 /// about none. Each NVENC probe makes a CUDA context, which took about 0.4 s
-/// on an RTX 4090.
+/// on a discrete NVIDIA GPU.
 fn encoder_runs_here(candidate: &VideoEncoderCandidate, name: &str) -> Result<(), EncoderRefusal> {
     probe_outcome(candidate, name, true).unwrap_or(Ok(()))
 }
@@ -1014,8 +1014,8 @@ pub(crate) fn classify_open_failure(
         |words: &str| error.contains(words) || lines.iter().any(|line| line.text.contains(words));
     if encoder.ends_with("_nvenc") {
         // NV_ENC_ERR_OUT_OF_MEMORY, _LOCK_BUSY, _ENCODER_BUSY and _INCOMPATIBLE_CLIENT_KEY are
-        // what a consumer GPU answers once its session limit is reached (an RTX 4090 on driver
-        // 580 answers 21); 1-5 are no device, an unsupported one, or a device that does not
+        // what a consumer GPU answers once its session limit is reached (NVIDIA driver 580
+        // answers 21); 1-5 are no device, an unsupported one, or a device that does not
         // exist. The status decides first: `FFmpeg` logs "No capable devices found" after any
         // device that failed, a busy one included.
         return match lines.iter().find_map(|line| nvenc_status(&line.text)) {

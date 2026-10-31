@@ -298,3 +298,28 @@ test("the component keeps the project's aspect ratio", () => {
   assert.match(html, /class="preview"/);
   assert.match(html, /aspect-ratio:1920 \/ 1080/);
 });
+
+test("replaceSurface transfers the canvas replaceCanvas puts in place", async () => {
+  const offscreen = { offscreen: "second" };
+  const binding = bindCanvas(
+    fakePlayer(),
+    { transferControlToOffscreen: () => ({ offscreen: "first" }) },
+    {
+      visibility: new Visibility(),
+      replaceCanvas: async () => ({
+        transferControlToOffscreen: () => offscreen,
+      }),
+    },
+  );
+  await binding.ready;
+  assert.equal(await binding.replaceSurface(), offscreen);
+  binding.dispose();
+  await assert.rejects(binding.replaceSurface(), /disposed/);
+  const without = bindCanvas(
+    fakePlayer(),
+    { transferControlToOffscreen: () => ({}) },
+    { visibility: new Visibility() },
+  );
+  await assert.rejects(without.replaceSurface(), /replaceCanvas/);
+  without.dispose();
+});

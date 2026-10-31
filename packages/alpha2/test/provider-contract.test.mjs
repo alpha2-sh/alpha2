@@ -5,6 +5,8 @@ import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { AudioSample, CustomAudioDecoder, registerDecoder } from "mediabunny";
+
 import { MediabunnyAudioDecoder } from "../dist/mediabunny.js";
 import {
   missingCapability,
@@ -162,6 +164,31 @@ test(
   },
 );
 
+/** Node has no WebCodecs: silence in the configured channel count, one frame per packet. */
+class SilentDecoder extends CustomAudioDecoder {
+  static supports(codec) {
+    return ["aac", "ac3", "eac3", "dts", "flac", "opus", "vorbis"].includes(
+      codec,
+    );
+  }
+  init() {}
+  decode(packet) {
+    const channels = this.config.numberOfChannels;
+    this.onSample(
+      new AudioSample({
+        data: new Float32Array(channels * 1_024),
+        format: "f32-planar",
+        numberOfChannels: channels,
+        sampleRate: this.config.sampleRate,
+        timestamp: packet.timestamp,
+      }),
+    );
+  }
+  flush() {}
+  close() {}
+}
+registerDecoder(SilentDecoder);
+
 test(
   "the mediabunny decoder reads the speakers a codec's header declares",
   {
@@ -175,6 +202,8 @@ test(
   },
   async (t) => {
     // Decoding these needs WebCodecs; the browser harness (`audio-speaker-layout`) checks them.
+    // The decoder opens on a stand-in that gives silence in the declared channel count, for the
+    // trial decode at open.
     for (const layout of contract.codecLayouts)
       await t.test(layout.source, async () => {
         const decoder = await MediabunnyAudioDecoder.open(

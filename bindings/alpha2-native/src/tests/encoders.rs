@@ -848,8 +848,8 @@ fn d3d12va_encoders_are_sent_rc_mode_in_ffmpegs_spelling() {
             Some(c"CBR".to_owned()),
             "{name}"
         );
-        // Devices that refuse a constant rate (an Iris Xe does) are told what to ask for instead,
-        // and a variable rate is not blamed on it.
+        // Devices that refuse a constant rate (some Intel integrated GPUs do) are told what to ask
+        // for instead, and a variable rate is not blamed on it.
         assert!(
             crate::rate_control::constant_rate_hint(name, constant).contains("quantizer"),
             "{name}"
@@ -1599,8 +1599,8 @@ fn openh264_threads_are_reserved_in_the_split() {
     assert_eq!(hardware.decoder_threads, 9);
 }
 
-/// The codec budget leaves two hardware threads on a big machine, one on a
-/// laptop and none below six, and the software encoder's floor is four or a
+/// The codec budget leaves two hardware threads on 16 or more, one on 6 to 15
+/// and none below six, and the software encoder's floor is four or a
 /// third of a small budget: on 8 threads, 7 workers with an encoder floor of
 /// two, so two 4K software decoders get two workers each instead of one.
 #[test]
@@ -1620,13 +1620,13 @@ fn the_reserve_scales_with_the_budget() {
         software_video_encoder: true,
         encoder_fixed_threads: None,
     };
-    let laptop = codec_thread_allocation_within(request, codec_thread_budget_for(8));
+    let eight_threads = codec_thread_allocation_within(request, codec_thread_budget_for(8));
     assert_eq!(
-        (laptop.decoder_threads, laptop.encoder_threads),
+        (eight_threads.decoder_threads, eight_threads.encoder_threads),
         (2, 3),
-        "{laptop:?}"
+        "{eight_threads:?}"
     );
-    // One 4K source on the laptop: the decoder is held to the even share, the encoder keeps four.
+    // One 4K source on 8 threads: the decoder is held to the even share, the encoder keeps four.
     let single = codec_thread_allocation_within(
         CodecThreadRequest {
             decode_concurrency: 1,

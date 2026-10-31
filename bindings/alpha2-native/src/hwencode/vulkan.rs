@@ -348,12 +348,11 @@ pub(super) fn capability(
 
 /// Depth 2 keeps a frame queued behind the one being encoded, so the encoder
 /// never waits on the coordinator's next submission when the render is
-/// uneven. On the RTX 4090 (the host-parity complex composition at 4K, 150
-/// frames) depth 0 ran at 135.5 fps against 137 at 2, and the perf project P1
-/// (240 frames, three alternating rounds) ran depths 0, 1, 2, 4 and 8 at
-/// 1.769, 1.786, 1.768, 1.769 and 1.776 ms a frame at 1080p and 6.817, 6.815,
-/// 6.814, 6.814 and 6.815 at 4K: every depth within 3 % of the best, so two
-/// stays, at two surfaces (about 25 MiB at 4K) more than depth 0.
+/// uneven. On a discrete NVIDIA GPU (a complex composition at 4K, and a
+/// lighter project at 1080p and 4K over three alternating rounds) depth 0
+/// was about 1 % slower than 2 on the complex composition and depths 0, 1,
+/// 2, 4 and 8 were within 3 % of the best on the lighter one, so two stays,
+/// at two surfaces (about 25 MiB at 4K) more than depth 0.
 const DEFAULT_CHANNEL_DEPTH: usize = 2;
 
 /// Opens the Vulkan encoder of `request.codec` on the shared device, its input half, and the
@@ -539,9 +538,9 @@ fn open_encoder(
             |quantized| quantized.bit_rate,
         ));
         context.set_gop_size(crate::capabilities::keyframe_interval(rate));
-        // No B pictures, by measurement: devices allow them (an RTX 4090 reports 7 L0 / 1 L1
-        // references) and FFmpeg emits them, but on the 4K showcase at a fixed rate two B frames
-        // cost 0.34-0.63 dB PSNR-Y against none across clips and GOP lengths.
+        // No B pictures, by measurement: devices allow them (a discrete NVIDIA GPU reports L1
+        // references) and FFmpeg emits them, but on a 4K showcase at a fixed rate two B frames
+        // cost up to about 0.6 dB PSNR-Y against none across clips and GOP lengths.
         context.set_max_b_frames(0);
         context.set_hw_frames_ctx(frames.clone());
         // MP4 carries the parameter sets in `avcC` or `hvcC`. The flag is read at open, so it must

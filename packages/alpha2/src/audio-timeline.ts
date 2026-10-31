@@ -499,6 +499,34 @@ export interface AudioOutputTiming {
   readonly outputLatency?: number;
   /** Seconds of the audio thread's own processing delay. */
   readonly baseLatency?: number;
+  /** The context time the audio thread renders next, in seconds. */
+  readonly currentTime?: number;
+  /** The context time heard at a `performance.now()` time, where the browser reports it. */
+  getOutputTimestamp?(): AudioTimestamp;
+}
+
+/**
+ * Where an {@link AudioPlaybackClock}'s output latency comes from: the output's `outputLatency`
+ * when it reports a positive one; else its output timestamp (the context time heard at a known
+ * moment, against the time it renders next); else only its `baseLatency`, which leaves out the
+ * device and any wireless link.
+ */
+export type AudioLatencySource =
+  "output-latency" | "output-timestamp" | "base-only";
+
+/** Options of an {@link AudioPlaybackClock}. */
+export interface AudioPlaybackClockOptions {
+  /**
+   * The delay of what plays the ring before the output, read at every query: for a worklet that
+   * runs the master itself, `Alpha2AudioWorkletHost.latency(node)` (its compressors' lookahead).
+   * An engine-mixed node delays nothing.
+   */
+  readonly processing?: { readonly latencySamples: number };
+  /**
+   * Seconds added to the measured latency, for a delay no browser reports (a wireless link, a
+   * receiver): positive shows the picture later. 0 by default.
+   */
+  readonly latencyOffsetSeconds?: number;
 }
 
 /**
@@ -510,31 +538,28 @@ export interface AudioOutputTiming {
  * sound drift apart by the difference of the two clocks (tens of milliseconds over ten minutes at
  * 50 ppm), and every audio underrun or seek adds a step. This clock instead counts what the audio
  * thread has taken from the ring (everything the pump mixed, less what is still buffered) and
- * subtracts the output's latency, so a host that presents `timelineTicks` on each animation frame
- * shows the picture that belongs to the sound being heard, without drift.
+ * subtracts the output's latency ({@link latencySource} says how it was found) and the manual
+ * offset, so a host that presents `timelineTicks` on each animation frame shows the picture that
+ * belongs to the sound being heard, without drift.
  *
  * Before playback reaches the speaker, the position holds at the start or seek target instead of
  * going earlier. Positions are the pump's samples, at the project's rate; the output's latency is
  * converted from seconds and `processing` from the output's samples, so a context at another rate
  * (whose worklet converts the ring to it) keeps time. The constructor throws `RangeError` for an
- * output or pump sample rate that is not positive.
+ * output or pump sample rate that is not positive, or an offset that is not finite.
  */
 export class AudioPlaybackClock {
   readonly #pump: AudioPump;
   readonly #ring: AudioRingBuffer;
   readonly #output: AudioOutputTiming;
   readonly #processing: { readonly latencySamples: number } | undefined;
+  #offset: number;
 
-  /**
-   * `processing` is the delay of what plays the ring before the output, read at every query: for a
-   * worklet that runs the master itself, `Alpha2AudioWorkletHost.latency(node)` (its compressors'
-   * lookahead). An engine-mixed node delays nothing.
-   */
   constructor(
     pump: AudioPump,
     ring: AudioRingBuffer,
     output: AudioOutputTiming,
-    processing?: { readonly latencySamples: number },
+    { processing, latencyOffsetSeconds = 0 }: AudioPlaybackClockOptions = {},
   ) {
     if (!(output.sampleRate > 0) || !(pump.sampleRate > 0)) {
       throw new RangeError("audio clock needs a positive sample rate");
@@ -543,14 +568,56 @@ export class AudioPlaybackClock {
     this.#ring = ring;
     this.#output = output;
     this.#processing = processing;
+    this.#offset = checkedOffset(latencyOffsetSeconds);
+  }
+
+  /** The manual offset in seconds; setting a value that is not finite throws `RangeError`. */
+  get latencyOffsetSeconds(): number {
+    return this.#offset;
+  }
+
+  set latencyOffsetSeconds(seconds: number) {
+    this.#offset = checkedOffset(seconds);
+  }
+
+  /** The output's latency now, in seconds, and where it came from; read at every query. */
+  #latency(): { seconds: number; source: AudioLatencySource } {
+    const output = this.#output;
+    const base = output.baseLatency ?? 0;
+    const reported = output.outputLatency ?? 0;
+    if (reported > 0)
+      return { seconds: reported + base, source: "output-latency" };
+    const stamp = output.getOutputTimestamp?.();
+    if (
+      stamp?.contextTime !== undefined &&
+      stamp.performanceTime !== undefined &&
+      output.currentTime !== undefined
+    ) {
+      // The context time heard now, against the time the audio thread renders next: the whole
+      // delay after the thread, its own included.
+      const heard =
+        stamp.contextTime + (performance.now() - stamp.performanceTime) / 1000;
+      const seconds = output.currentTime - heard;
+      if (seconds > 0) return { seconds, source: "output-timestamp" };
+    }
+    return { seconds: base, source: "base-only" };
+  }
+
+  /** Where the latency the clock subtracts comes from now. */
+  get latencySource(): AudioLatencySource {
+    return this.#latency().source;
+  }
+
+  /** The output latency the clock subtracts now, in seconds, without the manual offset. */
+  get latencySeconds(): number {
+    return this.#latency().seconds;
   }
 
   /** Absolute sample index being heard now, at the pump's (the project's) rate. */
   get sample(): number {
     const rate = this.#pump.sampleRate;
     const latency =
-      ((this.#output.outputLatency ?? 0) + (this.#output.baseLatency ?? 0)) *
-        rate +
+      (this.#latency().seconds + this.#offset) * rate +
       ((this.#processing?.latencySamples ?? 0) * rate) /
         this.#output.sampleRate;
     const handedOver = this.#pump.position - this.#ring.available;
@@ -564,6 +631,14 @@ export class AudioPlaybackClock {
       BigInt(Math.round(this.#pump.sampleRate))
     );
   }
+}
+
+function checkedOffset(seconds: number): number {
+  if (!Number.isFinite(seconds))
+    throw new RangeError(
+      "audio latency offset must be a finite number of seconds",
+    );
+  return seconds;
 }
 
 /** Record version and effect node identifiers of the worklet's master-chain record. */

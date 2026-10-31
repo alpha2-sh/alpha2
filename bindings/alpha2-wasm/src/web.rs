@@ -246,6 +246,10 @@ pub struct WebEffectRegistry {
     texts: TextTextures,
     source_uploads: u64,
     physical_source_reuses: u64,
+    /// Sources whose frames this binding holds as the browser's own conversion of frames it
+    /// could not hand over as planes (`uploadDegradedVideoFrame`): shown in previews, refused by
+    /// every export.
+    degraded_sources: std::collections::BTreeSet<String>,
     _context_loss: Option<ContextLossListener>,
 }
 
@@ -346,20 +350,40 @@ impl BrowserAdapterInfo {
         }
     }
 
-    /// The adapter's report: wgpu's account of `adapter` with this one's
-    /// fields, and its name, wgpu's or else `<vendor> <architecture>`.
-    fn json(&self, adapter: &alpha2_render::AdapterDiagnostics) -> serde_json::Value {
-        let name = if adapter.name.is_empty() {
+    /// The adapter's name: wgpu's, `wgpu_name`, or else `<vendor>
+    /// <architecture>` (Chrome leaves a WebGPU adapter's description empty).
+    fn name(&self, wgpu_name: &str) -> String {
+        if wgpu_name.is_empty() {
             [self.vendor.as_str(), self.architecture.as_str()]
                 .into_iter()
                 .filter(|part| !part.is_empty())
                 .collect::<Vec<_>>()
                 .join(" ")
         } else {
-            adapter.name.clone()
-        };
+            wgpu_name.to_owned()
+        }
+    }
+
+    /// Whether the browser flags the adapter as its fallback one or names a
+    /// software rasterizer in any field (Chrome's `SwiftShader` adapter has
+    /// the architecture `swiftshader`).
+    fn software(&self) -> bool {
+        self.is_fallback_adapter
+            || [
+                &self.vendor,
+                &self.architecture,
+                &self.device,
+                &self.description,
+            ]
+            .iter()
+            .any(|field| alpha2_gpu::software_renderer_name(field))
+    }
+
+    /// The adapter's report: wgpu's account of `adapter` with this one's
+    /// fields, and its name ([`Self::name`]).
+    fn json(&self, adapter: &alpha2_render::AdapterDiagnostics) -> serde_json::Value {
         serde_json::json!({
-            "name": name,
+            "name": self.name(&adapter.name),
             "vendor": self.vendor,
             "architecture": self.architecture,
             "device": self.device,
@@ -374,6 +398,125 @@ impl BrowserAdapterInfo {
         })
     }
 }
+
+/// The canvas a GPU renderer presents to.
+enum WebCanvas {
+    Offscreen(web_sys::OffscreenCanvas),
+    Html(web_sys::HtmlCanvasElement),
+}
+
+impl WebCanvas {
+    fn size(&self) -> (u32, u32) {
+        match self {
+            Self::Offscreen(canvas) => (canvas.width(), canvas.height()),
+            Self::Html(canvas) => (canvas.width(), canvas.height()),
+        }
+    }
+
+    fn target(&self) -> wgpu::SurfaceTarget<'static> {
+        match self {
+            Self::Offscreen(canvas) => wgpu::SurfaceTarget::OffscreenCanvas(canvas.clone()),
+            Self::Html(canvas) => wgpu::SurfaceTarget::Canvas(canvas.clone()),
+        }
+    }
+
+    fn event_target(&self) -> web_sys::EventTarget {
+        match self {
+            Self::Offscreen(canvas) => canvas.clone().into(),
+            Self::Html(canvas) => canvas.clone().into(),
+        }
+    }
+}
+
+/// Whether a canvas renderer may draw on a software adapter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SoftwareAdapter {
+    Allow,
+    Refuse,
+}
+
+impl SoftwareAdapter {
+    /// `options.softwareAdapter`: `"allow"` (also when absent) or `"refuse"`.
+    fn from_options(options: Option<&JsValue>) -> Result<Self, JsValue> {
+        let Some(options) = options.filter(|value| !value.is_undefined() && !value.is_null())
+        else {
+            return Ok(Self::Allow);
+        };
+        let value = web_sys::js_sys::Reflect::get(options, &JsValue::from_str("softwareAdapter"))
+            .unwrap_or(JsValue::UNDEFINED);
+        if value.is_undefined() {
+            return Ok(Self::Allow);
+        }
+        match value.as_string().as_deref() {
+            Some("allow") => Ok(Self::Allow),
+            Some("refuse") => Ok(Self::Refuse),
+            _ => Err(invalid_input(
+                "options.softwareAdapter must be \"allow\" or \"refuse\"",
+            )),
+        }
+    }
+}
+
+/// The unmasked renderer of a throwaway `OffscreenCanvas` WebGL2 context
+/// when it is a software rasterizer, so a refused one is known before the
+/// caller's canvas is bound to WebGL2 for good. `None` when the renderer is
+/// hardware, or no WebGL2 context can be made (the canvas's own request then
+/// fails and binds nothing).
+fn software_webgl2_renderer() -> Option<String> {
+    use wasm_bindgen::JsCast;
+    let global = web_sys::js_sys::global();
+    let get = |target: &JsValue, name: &str| {
+        web_sys::js_sys::Reflect::get(target, &JsValue::from_str(name))
+            .ok()
+            .filter(|value| !value.is_undefined() && !value.is_null())
+    };
+    let call = |target: &JsValue, name: &str, arguments: &[JsValue]| {
+        let method = get(target, name)?
+            .dyn_into::<web_sys::js_sys::Function>()
+            .ok()?;
+        let arguments: web_sys::js_sys::Array = arguments.iter().collect();
+        method
+            .apply(target, &arguments)
+            .ok()
+            .filter(|value| !value.is_undefined() && !value.is_null())
+    };
+    get(&global, "OffscreenCanvas")?;
+    let canvas = web_sys::OffscreenCanvas::new(1, 1).ok()?;
+    let context = call(
+        canvas.as_ref(),
+        "getContext",
+        &[JsValue::from_str("webgl2")],
+    )?;
+    // Without the debug extension the masked renderer is all there is.
+    let renderer = call(
+        &context,
+        "getExtension",
+        &[JsValue::from_str("WEBGL_debug_renderer_info")],
+    )
+    .and_then(|_| {
+        call(
+            &context,
+            "getParameter",
+            &[JsValue::from(GL_UNMASKED_RENDERER)],
+        )
+    })
+    .or_else(|| call(&context, "getParameter", &[JsValue::from(GL_RENDERER)]))
+    .and_then(|value| value.as_string());
+    // Give the context back now: browsers cap live WebGL contexts per page.
+    if let Some(lose) = call(
+        &context,
+        "getExtension",
+        &[JsValue::from_str("WEBGL_lose_context")],
+    ) {
+        let _ = call(&lose, "loseContext", &[]);
+    }
+    renderer.filter(|name| alpha2_gpu::software_renderer_name(name))
+}
+
+/// `WEBGL_debug_renderer_info.UNMASKED_RENDERER_WEBGL`.
+const GL_UNMASKED_RENDERER: u32 = 0x9246;
+/// `RENDERER`.
+const GL_RENDERER: u32 = 0x1F01;
 
 /// How long a binding made on a canvas whose WebGL context is lost waits for
 /// the browser to restore it before failing as a lost device.
@@ -508,6 +651,7 @@ impl WebEffectRegistry {
             texts: TextTextures::new(),
             source_uploads: 0,
             physical_source_reuses: 0,
+            degraded_sources: std::collections::BTreeSet::new(),
             _context_loss: None,
             surface: None,
             surface_config: None,
@@ -543,53 +687,101 @@ impl WebEffectRegistry {
 
     /// Creates a worker-owned renderer compatible with an `OffscreenCanvas`.
     ///
-    /// Passing the surface during adapter selection enables wgpu's WebGL2
-    /// fallback as well as browser WebGPU.
+    /// Browser WebGPU is tried first and, without a WebGPU adapter, WebGL2. On
+    /// WebGPU the device is opened before the canvas is bound, so a failure
+    /// leaves the canvas free for another context kind (the CPU renderer's 2D
+    /// one). `options.softwareAdapter` is `"allow"` (the default) or
+    /// `"refuse"`: refused, a software adapter (a WebGPU fallback adapter,
+    /// `SwiftShader`, llvmpipe, WARP) is not used, and the call rejects
+    /// before binding the canvas when the browser offers nothing else.
+    ///
+    /// # Errors
+    /// Rejects `GPU_INIT_FAILED` when no device opens, or when only a
+    /// software adapter is offered and `options` refuses it; `GPU_DEVICE_LOST`
+    /// when the canvas's WebGL context is lost and not restored;
+    /// `INVALID_INPUT` for a canvas that takes no GPU surface or bad options.
     #[wasm_bindgen(js_name = createForCanvas)]
     pub async fn create_for_canvas(
         canvas: web_sys::OffscreenCanvas,
+        options: Option<JsValue>,
     ) -> Result<WebEffectRegistry, JsValue> {
         Self::create_for_surface(
-            wgpu::SurfaceTarget::OffscreenCanvas(canvas.clone()),
-            canvas.clone().into(),
-            canvas.width(),
-            canvas.height(),
+            WebCanvas::Offscreen(canvas),
+            SoftwareAdapter::from_options(options.as_ref())?,
         )
         .await
     }
 
-    /// Creates a renderer that presents directly to a main-thread HTML canvas.
-    /// Worker hosts should continue to use `createForCanvas` with an `OffscreenCanvas`.
+    /// Creates a renderer that presents directly to a main-thread HTML canvas,
+    /// as [`Self::create_for_canvas`] does for an `OffscreenCanvas`, with the
+    /// same `options`. Worker hosts should continue to use `createForCanvas`
+    /// with an `OffscreenCanvas`.
+    ///
+    /// # Errors
+    /// As [`Self::create_for_canvas`].
     #[wasm_bindgen(js_name = createForHtmlCanvas)]
     pub async fn create_for_html_canvas(
         canvas: web_sys::HtmlCanvasElement,
+        options: Option<JsValue>,
     ) -> Result<WebEffectRegistry, JsValue> {
         Self::create_for_surface(
-            wgpu::SurfaceTarget::Canvas(canvas.clone()),
-            canvas.clone().into(),
-            canvas.width(),
-            canvas.height(),
+            WebCanvas::Html(canvas),
+            SoftwareAdapter::from_options(options.as_ref())?,
         )
         .await
     }
 
     async fn create_for_surface(
-        target: wgpu::SurfaceTarget<'static>,
-        canvas: web_sys::EventTarget,
-        width: u32,
-        height: u32,
+        canvas: WebCanvas,
+        software: SoftwareAdapter,
     ) -> Result<WebEffectRegistry, JsValue> {
-        let instance = wgpu::util::new_instance_with_webgpu_detection(
-            alpha2_gpu::instance_descriptor(wgpu::Backends::all()),
-        )
-        .await;
+        let (width, height) = canvas.size();
+        // The name of a software adapter refused on WebGPU, for the refusal when WebGL2 has
+        // nothing better.
+        let mut refused = None;
+        if wgpu::util::is_browser_webgpu_supported().await {
+            let instance = alpha2_gpu::new_instance(wgpu::Backends::BROWSER_WEBGPU);
+            // Device first: binding the canvas to `webgpu` is for good, so a device that cannot be
+            // opened, or is refused, must leave the canvas unbound.
+            let gpu = GpuContext::request_compatible(&instance, None)
+                .await
+                .map_err(|error| coded_error(Code::GpuInitFailed, error.to_string()))?;
+            let adapter_info = BrowserAdapterInfo::read().await;
+            if software == SoftwareAdapter::Refuse
+                && (gpu.capabilities().software_rasterizer || adapter_info.software())
+            {
+                refused = Some(adapter_info.name(&gpu.capabilities().adapter_name));
+                // Destroy the refused device now rather than at collection.
+                gpu.device().destroy();
+            } else {
+                let surface = instance.create_surface(canvas.target()).map_err(|error| {
+                    invalid_input(format!("the canvas takes no GPU surface: {error}"))
+                })?;
+                return Self::on_surface(gpu, surface, &canvas, width, height, adapter_info, true);
+            }
+        }
+        if software == SoftwareAdapter::Refuse
+            && let Some(renderer) = software_webgl2_renderer()
+        {
+            return Err(coded_error(
+                Code::GpuInitFailed,
+                format!(
+                    "the browser offers only the software adapter {}",
+                    refused.unwrap_or(renderer)
+                ),
+            ));
+        }
+        // WebGL2 needs the surface during adapter selection; a `getContext("webgl2")` that fails
+        // binds nothing.
+        let instance = alpha2_gpu::new_instance(wgpu::Backends::GL);
         let surface = instance
-            .create_surface(target)
+            .create_surface(canvas.target())
             .map_err(|error| invalid_input(format!("the canvas takes no GPU surface: {error}")))?;
         // A lost WebGL context must not reach adapter selection, where glow panics on its null
         // extensions; wait for the browser to restore it, or fail as a lost device.
-        if webgl_context_lost(canvas.as_ref())
-            && !webgl_context_restored(&canvas, CONTEXT_RESTORE_TIMEOUT_MS).await?
+        let target = canvas.event_target();
+        if webgl_context_lost(target.as_ref())
+            && !webgl_context_restored(&target, CONTEXT_RESTORE_TIMEOUT_MS).await?
         {
             return Err(coded_error(
                 Code::GPU_DEVICE_LOST,
@@ -602,6 +794,27 @@ impl WebEffectRegistry {
         let gpu = GpuContext::request_compatible(&instance, Some(&surface))
             .await
             .map_err(|error| coded_error(Code::GpuInitFailed, error.to_string()))?;
+        Self::on_surface(
+            gpu,
+            surface,
+            &canvas,
+            width,
+            height,
+            BrowserAdapterInfo::default(),
+            false,
+        )
+    }
+
+    /// The renderer on `gpu`, presenting to `surface` made on `canvas`.
+    fn on_surface(
+        gpu: GpuContext,
+        surface: wgpu::Surface<'static>,
+        canvas: &WebCanvas,
+        width: u32,
+        height: u32,
+        adapter_info: BrowserAdapterInfo,
+        browser_webgpu: bool,
+    ) -> Result<WebEffectRegistry, JsValue> {
         let config = gpu
             .surface_config(&surface, width.max(1), height.max(1))
             .ok_or_else(|| {
@@ -616,19 +829,16 @@ impl WebEffectRegistry {
         validate_texture_extent(maximum, width.max(1), height.max(1))?;
         surface.configure(gpu.device(), &config);
         let device = gpu.device().clone();
-        let browser_webgpu = gpu.capabilities().backend == "BrowserWebGpu";
-        let adapter_info = if browser_webgpu {
-            BrowserAdapterInfo::read().await
-        } else {
-            BrowserAdapterInfo::default()
-        };
         let context = gpu.clone();
         let health = watch_device(&device);
         let device_lost = Arc::clone(&health.lost);
         let context_loss = if browser_webgpu {
             None
         } else {
-            Some(ContextLossListener::new(canvas, health.clone())?)
+            Some(ContextLossListener::new(
+                canvas.event_target(),
+                health.clone(),
+            )?)
         };
         let presenter = Presenter::new(&device, config.format);
         let renderer = renderer_with_builtins(gpu, &health)?;
@@ -649,6 +859,7 @@ impl WebEffectRegistry {
             texts: TextTextures::new(),
             source_uploads: 0,
             physical_source_reuses: 0,
+            degraded_sources: std::collections::BTreeSet::new(),
             _context_loss: context_loss,
             surface: Some(surface),
             surface_config: Some(config),
@@ -657,6 +868,28 @@ impl WebEffectRegistry {
             adapter_info,
             video_frame_copy: crate::interop::VideoFrameCopy::default(),
         })
+    }
+
+    /// The graphics API this renderer draws through: `"webgpu"` or `"webgl2"`.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn backend(&self) -> String {
+        if self.browser_webgpu {
+            "webgpu".to_owned()
+        } else {
+            "webgl2".to_owned()
+        }
+    }
+
+    /// The adapter this renderer draws on, as the browser names it: wgpu's
+    /// name (the unmasked WebGL renderer, a WebGPU adapter's description), or
+    /// else the WebGPU adapter's `<vendor> <architecture>`; empty when the
+    /// browser names none.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn adapter(&self) -> String {
+        self.adapter_info
+            .name(&self.gpu.capabilities().adapter_name)
     }
 
     /// Parses one JSON effect definition and compiles it on this binding's
@@ -782,6 +1015,7 @@ impl WebEffectRegistry {
             PresentedImage::Frame(frame),
             output_size,
             Orientation::UPRIGHT,
+            false,
         )
     }
 
@@ -812,6 +1046,9 @@ impl WebEffectRegistry {
             )
             .map_err(|refusal| working_set_refusal(refusal, &source_id))?;
         self.source_uploads = self.source_uploads.saturating_add(1);
+        // A frame of the source that reached the engine itself ends a degraded preview of it;
+        // a degraded upload marks the source again after this.
+        self.degraded_sources.remove(&source_id);
         frame_upload_receipt(generation, retained_bytes)
     }
 
@@ -854,7 +1091,14 @@ impl WebEffectRegistry {
                     return Err(error);
                 }
             };
-        self.upload_presented_inner(source_id, media_time_ticks, image, output_size, orientation)
+        self.upload_presented_inner(
+            source_id,
+            media_time_ticks,
+            image,
+            output_size,
+            orientation,
+            false,
+        )
     }
 
     /// [`Self::upload_presented_video_frame`] for a bitmap made of the frame
@@ -882,7 +1126,55 @@ impl WebEffectRegistry {
                     return Err(error);
                 }
             };
-        self.upload_presented_inner(source_id, media_time_ticks, image, output_size, orientation)
+        self.upload_presented_inner(
+            source_id,
+            media_time_ticks,
+            image,
+            output_size,
+            orientation,
+            false,
+        )
+    }
+
+    /// [`Self::upload_presented_video_frame`] for a frame the engine must
+    /// convert from planes (HDR, or color the project declares) that this
+    /// browser decodes only to frames without planes: the browser's own
+    /// conversion (its tone mapping, for HDR) imports it, and the draw takes
+    /// it as SDR BT.709 display-referred, with no engine tone map. The source
+    /// is then degraded: `renderAt` names it in `degradedSources`, and every
+    /// export of a frame that shows it is refused with
+    /// `PLANAR_DECODE_UNAVAILABLE`, so a browser export never differs from a
+    /// native one by the browser's conversion. A planar or presented upload
+    /// of the source ends that. Always closes `frame`.
+    #[wasm_bindgen(js_name = uploadDegradedVideoFrame)]
+    #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+    pub fn upload_degraded_video_frame(
+        &mut self,
+        source_id: String,
+        media_time_ticks: i64,
+        frame: web_sys::VideoFrame,
+        output_width: u32,
+        output_height: u32,
+        rotation_degrees: u32,
+        mirror: bool,
+    ) -> Result<JsValue, JsValue> {
+        let image = PresentedImage::Frame(frame);
+        let (output_size, orientation) =
+            match presented_placement(output_width, output_height, rotation_degrees, mirror) {
+                Ok(placement) => placement,
+                Err(error) => {
+                    image.close();
+                    return Err(error);
+                }
+            };
+        self.upload_presented_inner(
+            source_id,
+            media_time_ticks,
+            image,
+            output_size,
+            orientation,
+            true,
+        )
     }
 
     /// How [`Self::upload_presented_video_frame`] copies a frame: `"direct"`,
@@ -908,12 +1200,13 @@ impl WebEffectRegistry {
         image: PresentedImage,
         output_size: RenderSize,
         orientation: Orientation,
+        degraded: bool,
     ) -> Result<JsValue, JsValue> {
         let hdr = match &image {
             PresentedImage::Frame(frame) => self.shows_hdr(&source_id, frame),
             PresentedImage::Bitmap(_) => self.hdr_source(&source_id),
         };
-        if hdr {
+        if hdr && !degraded {
             image.close();
             return Err(invalid_input(format!(
                 "source {source_id} is HDR (PQ or HLG): upload its frames' planes with \
@@ -1001,7 +1294,12 @@ impl WebEffectRegistry {
                 alpha,
             )
             .map_err(|error| typed_error(&error))?;
-        self.insert_presented_frame((source_id, media_time_ticks), prepared)
+        let receipt =
+            self.insert_presented_frame((source_id.clone(), media_time_ticks), prepared)?;
+        if degraded {
+            self.degraded_sources.insert(source_id);
+        }
+        Ok(receipt)
     }
 
     /// Uploads a decoded frame's planar YCbCr samples, as
@@ -1560,12 +1858,14 @@ impl WebEffectRegistry {
     /// already retired stay until they are released.
     #[wasm_bindgen(js_name = releaseSourceFrames)]
     pub fn release_source_frames(&mut self, source_id: &str) -> bool {
+        self.degraded_sources.remove(source_id);
         self.frames.release_source(source_id)
     }
 
     /// Releases all uploaded video frames, images, and retired generations.
     #[wasm_bindgen(js_name = clearFrames)]
     pub fn clear_frames(&mut self) {
+        self.degraded_sources.clear();
         self.frames.clear();
     }
 
@@ -1671,7 +1971,7 @@ impl WebEffectRegistry {
 
     /// After a loss (see [`Self::device_lost`]), what the renderer's
     /// submission times say about it, as JSON `{ hung, gpuMs, watchdogMs,
-    /// timeTicks, frameIndex, effects }`: `hung` when the longest recent
+    /// timeTicks, frameIndex, effects, predictedMs }`: `hung` when the longest recent
     /// submission ran for at least half the GPU watchdog, so the loss was
     /// most likely this work's own and running it on the GPU again would
     /// stop the GPU again. `undefined` before any loss.
@@ -1692,6 +1992,10 @@ impl WebEffectRegistry {
                 "watchdogMs": alpha2_gpu::watchdog_ms(),
                 "timeTicks": frame.map(|frame| frame.time_ticks.to_string()),
                 "frameIndex": frame.and_then(|frame| frame.frame_index),
+                "predictedMs": longest
+                    .as_ref()
+                    .and_then(|report| report.predicted_ms)
+                    .map(|ms| (ms * 10.0).round() / 10.0),
                 "effects": longest.map(|report| report.effects).unwrap_or_default(),
             })
             .to_string(),
@@ -1726,10 +2030,12 @@ impl WebEffectRegistry {
     /// and page features are the page's to add: `decode` and `encode` are
     /// `null`, and `features` names only the renderer's own: `renderer.gpu`
     /// (this one), `renderer.cpu` and `effects.runtime`, as the native host
-    /// names them.
+    /// names them, and on WebGL2 `uploads.webgl2-bitmap` (unavailable where
+    /// frames are uploaded as CPU pixels).
     ///
     /// # Errors
-    /// Returns an error if the report cannot be serialized.
+    /// Returns an error if the report cannot be serialized, or on WebGL2 when
+    /// the upload probe throws.
     #[wasm_bindgen(js_name = capabilityReport)]
     pub fn capability_report(&self) -> Result<String, JsValue> {
         let report = alpha2_engine::CapabilityReport::new(
@@ -1744,7 +2050,39 @@ impl WebEffectRegistry {
             ),
         )
         .with_feature("effects.runtime", alpha2_engine::Feature::available());
+        // On WebGL2, whether frames upload as canvas bitmaps or as CPU pixels.
+        let report = if self.browser_webgpu {
+            report
+        } else {
+            report.with_feature(
+                "uploads.webgl2-bitmap",
+                match crate::interop::webgl2_uploads()? {
+                    crate::interop::WebGl2Uploads::Bitmap { .. } => {
+                        alpha2_engine::Feature::available()
+                    }
+                    crate::interop::WebGl2Uploads::CpuPixels => alpha2_engine::Feature::unavailable(
+                        "this browser's WebGL2 does not upload canvas bitmaps; frames are uploaded as CPU pixels",
+                    ),
+                },
+            )
+        };
         serde_json::to_string(&report).map_err(|error| internal_error(error.to_string()))
+    }
+
+    /// How the frames rendered since the last call were cut into GPU
+    /// submissions to stay under the watchdog's budget, as JSON `{ frames,
+    /// splitFrames, maxPerFrame, maxPredictedMs }`, the native host's
+    /// `performance.gpuSubmissions`. The counts start again from zero.
+    #[wasm_bindgen(js_name = takeGpuSubmissionStats)]
+    pub fn take_gpu_submission_stats(&self) -> String {
+        let stats = self.renderer.take_gpu_submission_stats();
+        serde_json::json!({
+            "frames": stats.frames,
+            "splitFrames": stats.split_frames,
+            "maxPerFrame": stats.max_per_frame,
+            "maxPredictedMs": stats.max_predicted_ms.map(|ms| (ms * 10.0).round() / 10.0),
+        })
+        .to_string()
     }
 
     /// Returns a JSON snapshot suitable for browser developer tooling.
@@ -1821,6 +2159,10 @@ impl WebEffectRegistry {
             "decoderWaitNanoseconds": u64::try_from(diagnostics.decoder_wait.as_nanos())
                 .unwrap_or(u64::MAX),
             "maxFilterSamples": diagnostics.max_filter_samples,
+            // How WebGL2 uploads frames (`bitmap` or `cpu-pixels`), once a frame has asked.
+            "webgl2Uploads": crate::interop::measured_webgl2_uploads()
+                .filter(|_| !self.browser_webgpu)
+                .map(crate::interop::WebGl2Uploads::name),
             "motionBlurSubframes": diagnostics.motion_blur_subframes,
             "degradations": diagnostics
                 .degradations
@@ -1904,6 +2246,8 @@ impl WebEffectRegistry {
         if let Some(previous) = self.project.as_ref() {
             let stale = crate::project_cache::stale_sources(previous.project(), snapshot.project());
             self.frames.retain_sources(|source| !stale.contains(source));
+            self.degraded_sources
+                .retain(|source| !stale.contains(source));
             let raw = |texture: &UploadedTexture| {
                 matches!(&texture.backing, UploadedTextureBacking::Raw { .. })
             };
@@ -1919,6 +2263,7 @@ impl WebEffectRegistry {
                 }
             }
         } else {
+            self.degraded_sources.clear();
             self.frames.clear();
         }
         self.audio.install(self.project.as_ref(), &snapshot, audio);
@@ -2269,6 +2614,7 @@ impl WebEffectRegistry {
             .as_mut()
             .ok_or_else(|| invalid_state("no export is running"))?;
         if let Some(time) = exporter.pending_time() {
+            refuse_degraded(&self.degraded_sources, project, time)?;
             let size = exporter
                 .render_size(project)
                 .map_err(|error| typed_error(&error))?;
@@ -2337,6 +2683,7 @@ impl WebEffectRegistry {
             .as_mut()
             .ok_or_else(|| invalid_state("no export is running"))?;
         if let Some(time) = exporter.pending_time() {
+            refuse_degraded(&self.degraded_sources, project, time)?;
             let size = exporter
                 .render_size(project)
                 .map_err(|error| typed_error(&error))?;
@@ -2426,6 +2773,7 @@ impl WebEffectRegistry {
             .as_mut()
             .ok_or_else(|| invalid_state("no export is running"))?;
         if let Some(time) = exporter.pending_time() {
+            refuse_degraded(&self.degraded_sources, project, time)?;
             let size = exporter
                 .render_size(project)
                 .map_err(|error| typed_error(&error))?;
@@ -2529,6 +2877,7 @@ impl WebEffectRegistry {
             .as_ref()
             .ok_or_else(|| invalid_state("no project is loaded"))?;
         let time = MediaTime(time_ticks);
+        refuse_degraded(&self.degraded_sources, project, time)?;
         let mut frame = project
             .evaluate(time)
             .map_err(|error| typed_error(&error))?;
@@ -2780,6 +3129,8 @@ impl WebEffectRegistry {
             .map_err(|error| typed_error(&error))?;
         let missing_frames =
             missing_frames(project, playback.requested_time, &playback.missing_sources)?;
+        let degraded_sources =
+            degraded_at(&self.degraded_sources, project, playback.requested_time)?;
         let result = WebPlaybackResult {
             requested_time_ticks: playback.requested_time.ticks(),
             presented_time_ticks: playback.presented_time.map(MediaTime::ticks),
@@ -2789,6 +3140,7 @@ impl WebEffectRegistry {
                 .map(ToString::to_string)
                 .collect(),
             missing_frames,
+            degraded_sources,
             repeated: playback.repeated,
             unchanged: playback.unchanged,
         };
@@ -2829,6 +3181,49 @@ pub fn check_lut_3d(cube: &str) -> Result<(), JsValue> {
     Lut3dData::from_cube(cube)
         .map(|_| ())
         .map_err(|error| typed_error(&error))
+}
+
+/// The sources a frame at `time` shows whose frames `degraded` names: held only as the browser's
+/// own conversion (`uploadDegradedVideoFrame`), in ID order.
+fn degraded_at(
+    degraded: &std::collections::BTreeSet<String>,
+    project: &EngineProject,
+    time: MediaTime,
+) -> Result<Vec<String>, JsValue> {
+    if degraded.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut sources: Vec<String> = project
+        .frame_needs(time)
+        .map_err(|error| typed_error(&error))?
+        .into_iter()
+        .map(|need| need.source_id.as_str().to_owned())
+        .filter(|source| degraded.contains(source))
+        .collect();
+    sources.sort_unstable();
+    sources.dedup();
+    Ok(sources)
+}
+
+/// Refuses an export frame at `time` that shows a degraded source: the engine, not the host,
+/// keeps a browser export from showing the browser's conversion of a source a native export
+/// converts itself.
+fn refuse_degraded(
+    degraded: &std::collections::BTreeSet<String>,
+    project: &EngineProject,
+    time: MediaTime,
+) -> Result<(), JsValue> {
+    let sources = degraded_at(degraded, project, time)?;
+    if sources.is_empty() {
+        return Ok(());
+    }
+    Err(coded_error(
+        Code::PlanarDecodeUnavailable,
+        format!(
+            "this browser gives {} only as frames the engine cannot convert, shown in previews              through the browser's own conversion: a browser export cannot render them; export              with the native host",
+            sources.join(", ")
+        ),
+    ))
 }
 
 /// The exact frame each of `missing` was needed at, from the snapshot that rendered `time`: a

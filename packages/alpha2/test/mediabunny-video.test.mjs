@@ -486,7 +486,14 @@ test("a decoder that fails in software too rejects the request", async () => {
         reason: "prefetch",
         generation: 0,
       }),
-      { name: "EncodingError" },
+      // No decoder gave a frame of the track: one this browser cannot decode, not a retryable
+      // failure.
+      (error) => {
+        assert.equal(error.code, "DECODE_UNAVAILABLE");
+        assert.equal(error.cause.name, "EncodingError");
+        assert.equal(error.facts.kind, "video");
+        return true;
+      },
     );
     assert.deepEqual(
       [...new Set(hardware.configs)],

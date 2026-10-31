@@ -80,20 +80,28 @@ function requestedBrowser(argv, env) {
  *
  * `onBrowser` receives the browser's version record: Chrome's `Browser.getVersion`, or the
  * WebDriver session's capabilities. `onPage` drives a Chrome page through DevTools while it runs
- * (see `runChromePage`); other browsers ignore it. Rejects with a `BrowserStartError` when the
- * browser cannot start.
+ * (see `runChromePage`), and `onGpuProcess` receives whether Chrome's GPU process restarted while
+ * it ran; other browsers ignore both. Rejects with a `BrowserStartError` when the browser cannot
+ * start.
  *
  * @param {NonNullable<ReturnType<typeof browserForRun>>} browser
  * @param {string} url
- * @param {{ timeoutMs?: number, onBrowser?: (version: object) => void, onPage?: Function }} [options]
+ * @param {{ timeoutMs?: number, onBrowser?: (version: object) => void, onPage?: Function,
+ *   onGpuProcess?: Function, domainBlocking3d?: boolean }} [options]
  * @returns {Promise<string>}
  */
 export function runBrowserPage(
   browser,
   url,
-  { timeoutMs, onBrowser, onPage } = {},
+  { timeoutMs, onBrowser, onPage, onGpuProcess, domainBlocking3d } = {},
 ) {
   return browser.kind === "chrome"
-    ? runChromePage(browser.command, url, { timeoutMs, onBrowser, onPage })
+    ? runChromePage(browser.command, url, {
+        timeoutMs,
+        onBrowser,
+        onPage,
+        onGpuProcess,
+        domainBlocking3d,
+      })
     : runWebDriverPage(browser.webdriver, url, { timeoutMs, onBrowser });
 }

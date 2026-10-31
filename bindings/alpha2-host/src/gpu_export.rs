@@ -388,6 +388,7 @@ impl Host {
         let graph_before = self.gpu_renderer().diagnostics();
         // What frames sampled before this export measured is not its own.
         let _ = self.gpu_renderer().take_frame_gpu_times();
+        let _ = self.gpu_renderer().take_gpu_submission_stats();
         let cancel = crate::termination::export_cancel();
         let plan = crate::export_decode::ExportDecodePlan::new(
             self.export_codec_split(project, assets, range, true, (false, None)),
@@ -748,6 +749,7 @@ impl Host {
                     .saturating_add(render_started.elapsed().saturating_sub(source_in_submit));
                 if let Some(sink) = metrics.trace.as_ref() {
                     frame_trace.submitted = sink.now();
+                    frame_trace.submissions = self.gpu_renderer().take_frame_submissions();
                 }
                 let (index, time) = match step {
                     alpha2_engine::ExportPlaneStep::Rendered { index, time } => (index, time),
@@ -786,7 +788,7 @@ impl Host {
                     .saturating_add(u64::from(backpressured));
                 if let Some(sink) = metrics.trace.as_mut() {
                     frame_trace.encode_queued = sink.now();
-                    sink.push_video(frame_trace);
+                    sink.push_video(&frame_trace);
                 }
                 encode_state.pending_bytes = encode_state
                     .pending_bytes

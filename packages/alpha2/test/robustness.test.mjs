@@ -110,6 +110,119 @@ test("WebAssembly SIMD and reference types are probed before the engine is loade
   assert.equal(capabilities.wasm, true);
 });
 
+/** A WebGL2 context naming `renderer` through the debug extension, recording its loss. */
+function webgl2Context(renderer, lost = []) {
+  return {
+    getExtension(name) {
+      if (name === "WEBGL_debug_renderer_info") return {};
+      if (name === "WEBGL_lose_context")
+        return { loseContext: () => lost.push(renderer) };
+      return null;
+    },
+    getParameter(parameter) {
+      return parameter === 0x9246 ? renderer : "WebKit WebGL";
+    },
+  };
+}
+
+/** Runs `body` with `OffscreenCanvas` making canvases whose WebGL2 context is `context`. */
+async function withOffscreenCanvas(context, body) {
+  const made = [];
+  globalThis.OffscreenCanvas = class {
+    constructor(width, height) {
+      made.push([width, height]);
+    }
+    getContext(kind) {
+      made.push(kind);
+      return kind === "webgl2" ? context : null;
+    }
+  };
+  try {
+    return await body(made);
+  } finally {
+    delete globalThis.OffscreenCanvas;
+  }
+}
+
+test("webgl2 is probed on an offscreen canvas", async () => {
+  const lost = [];
+  globalThis.document = {
+    createElement: () => assert.fail("a document canvas was probed"),
+  };
+  try {
+    await withOffscreenCanvas(
+      webgl2Context("ANGLE (AMD, AMD Radeon Graphics, D3D11)", lost),
+      async (made) => {
+        const capabilities = await detectBrowserCapabilities();
+        assert.equal(capabilities.webgl2, true);
+        assert.equal(
+          capabilities.webgl2Renderer,
+          "ANGLE (AMD, AMD Radeon Graphics, D3D11)",
+        );
+        assert.equal(capabilities.renderer, "gpu");
+        assert.deepEqual(made, [[1, 1], "webgl2"]);
+        // The probe's context is given back at once.
+        assert.equal(lost.length, 1);
+      },
+    );
+  } finally {
+    delete globalThis.document;
+  }
+});
+
+test("a software webgl2 renderer does not count as a gpu", async () => {
+  for (const renderer of [
+    "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero)), SwiftShader driver)",
+    "llvmpipe (LLVM 17.0.6, 256 bits)",
+    "ANGLE (Microsoft, Microsoft Basic Render Driver Direct3D11 vs_5_0 ps_5_0, D3D11)",
+  ]) {
+    await withOffscreenCanvas(webgl2Context(renderer), async () => {
+      const capabilities = await detectBrowserCapabilities();
+      assert.equal(capabilities.webgl2, true, renderer);
+      assert.equal(capabilities.webgl2Renderer, renderer);
+      assert.equal(capabilities.renderer, "cpu", renderer);
+    });
+  }
+});
+
+test("a fallback webgpu adapter does not count as gpu", async () => {
+  for (const [label, adapter] of [
+    ["info flag", { info: { isFallbackAdapter: true } }],
+    ["adapter flag", { isFallbackAdapter: true }],
+    [
+      "swiftshader architecture",
+      { info: { vendor: "google", architecture: "swiftshader" } },
+    ],
+  ]) {
+    const capabilities = await withGpu(
+      { requestAdapter: async () => adapter },
+      () => detectBrowserCapabilities(),
+    );
+    assert.equal(capabilities.webgpu, false, label);
+    assert.equal(capabilities.webgpuFallbackAdapter, true, label);
+    assert.equal(capabilities.renderer, "cpu", label);
+    assert.ok(capabilities.diagnostics.includes("webgpu-unavailable"), label);
+  }
+  const hardware = await withGpu(
+    {
+      requestAdapter: async () => ({
+        info: {
+          vendor: "nvidia",
+          architecture: "ada",
+          isFallbackAdapter: false,
+        },
+      }),
+    },
+    () => detectBrowserCapabilities(),
+  );
+  assert.equal(hardware.webgpu, true);
+  assert.equal(hardware.webgpuFallbackAdapter, false);
+  const none = await withGpu({ requestAdapter: async () => null }, () =>
+    detectBrowserCapabilities(),
+  );
+  assert.equal(none.webgpuFallbackAdapter, null);
+});
+
 test("WebGL2 is probed on a canvas of its own, never one the caller passes", async () => {
   const contexts = [];
   const canvas = (owner) => ({

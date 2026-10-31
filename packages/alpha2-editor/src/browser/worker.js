@@ -81,6 +81,8 @@ export function installEditorWorker(scope) {
             {
               unreadableFrames: "present",
               videoConversion: request.videoConversion,
+              opaqueEngineFrames: request.opaqueEngineFrames,
+              renderer: request.renderer ?? "auto",
             },
           );
           audio = new AudioWindowSupplier(library);
@@ -113,13 +115,16 @@ export function installEditorWorker(scope) {
             return;
           } else if (type === "seek") {
             const generation = engine.generation;
-            const { rendered, unchanged } =
-              arrived !== epoch || !hasContent(currentProject)
-                ? { rendered: false, unchanged: false }
-                : await engine.render(request.tick / 120000, {
-                    generation,
-                    context: context(),
-                  });
+            const {
+              rendered,
+              unchanged,
+              degradedSources = [],
+            } = arrived !== epoch || !hasContent(currentProject)
+              ? { rendered: false, unchanged: false }
+              : await engine.render(request.tick / 120000, {
+                  generation,
+                  context: context(),
+                });
             // An unchanged frame was not presented: the surface it was copied to still shows it.
             const bitmap =
               rendered && !unchanged && bitmapOutput
@@ -137,6 +142,7 @@ export function installEditorWorker(scope) {
                 value: {
                   rendered,
                   unchanged,
+                  degradedSources,
                   diagnostics: pixels.diagnostics,
                   ...(engineDiagnostics ? { engineDiagnostics } : {}),
                   ...(bitmap ? { bitmap } : {}),
@@ -189,12 +195,21 @@ export function installEditorWorker(scope) {
         // The code, fatality, name and failure the bridge decides by, and the cause's code: a
         // source the browser cannot hand over arrives wrapped in the frame that needed it.
         const causeCode = error?.cause?.code;
+        // What a lost GPU said about its loss, read before the engine is freed: the page's
+        // recovery ladder decides by it.
+        let lossReport;
+        try {
+          lossReport = engine?.lossReport();
+        } catch {
+          lossReport = undefined;
+        }
         scope.postMessage({
           ...response,
           ok: false,
           error: {
             ...serializeError(error, false, "worker_error"),
             ...(typeof causeCode === "string" ? { causeCode } : {}),
+            ...(lossReport === undefined ? {} : { lossReport }),
           },
         });
       }
@@ -232,6 +247,8 @@ export function createWorkerPreview(
     width = 16,
     height = 16,
     videoConversion,
+    opaqueEngineFrames,
+    renderer,
   } = {},
 ) {
   let nextId = 0,
@@ -259,6 +276,11 @@ export function createWorkerPreview(
       if (typeof data.error.causeCode === "string")
         Object.defineProperty(error, "cause", {
           value: { code: data.error.causeCode },
+          configurable: true,
+        });
+      if (data.error.lossReport !== undefined)
+        Object.defineProperty(error, "lossReport", {
+          value: data.error.lossReport,
           configurable: true,
         });
       waiter.reject(error);
@@ -289,6 +311,8 @@ export function createWorkerPreview(
       width,
       height,
       ...(videoConversion === undefined ? {} : { videoConversion }),
+      ...(opaqueEngineFrames === undefined ? {} : { opaqueEngineFrames }),
+      ...(renderer === undefined ? {} : { renderer }),
       ...(canvas ? { canvas } : {}),
     },
     canvas ? [canvas] : [],

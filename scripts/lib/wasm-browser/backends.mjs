@@ -1,7 +1,7 @@
 // Backend cases: WebGPU and WebGL2 smoke runs, context and device loss, edges and layers.
 
-// Safari 16.4 to 16.6 has OffscreenCanvas without WebGL: the premultiplication probe must
-// measure on a page canvas instead.
+// A browser whose OffscreenCanvas gives no WebGL2 context leaves the bitmap upload probe nothing
+// to measure on: frames go to WebGL2 as CPU pixels, and still render.
 export function webgl2ProbeWithoutOffscreenWebgl() {
   return `
 Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });
@@ -35,8 +35,70 @@ if (uploaded === true) {
   const rendered = ticket.kind === "rendered" ? await ticket.readback : ticket;
   luma = rendered.kind === "rendered" ? rendered.pixels[rendered.layout[0].offset + 8 * rendered.layout[0].stride + 8] : rendered.kind;
 }
+const webgl2Uploads = JSON.parse(engine.diagnostics()).webgl2Uploads;
 engine.free();
-report({ ok: uploaded === true && luma > 230, uploaded, luma });
+report({ ok: uploaded === true && luma > 230 && webgl2Uploads === "cpu-pixels", uploaded, luma, webgl2Uploads });
+`;
+}
+
+// A WebGL2 whose canvas bitmap uploads fail (ANGLE on some Vulkan drivers: GL_INVALID_VALUE and
+// a black texture) has frames and bitmaps uploaded as CPU pixels, which render. The page breaks
+// every bitmap upload before the binding loads.
+export function webgl2UploadFallback() {
+  return `
+Object.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });
+let failedUploads = 0;
+let pendingError = 0;
+const getError = WebGL2RenderingContext.prototype.getError;
+WebGL2RenderingContext.prototype.getError = function () {
+  if (pendingError !== 0) {
+    const error = pendingError;
+    pendingError = 0;
+    return error;
+  }
+  return getError.call(this);
+};
+for (const name of ["texImage2D", "texSubImage2D"]) {
+  const upload = WebGL2RenderingContext.prototype[name];
+  WebGL2RenderingContext.prototype[name] = function (...args) {
+    if (args.some((arg) => arg instanceof ImageBitmap)) {
+      failedUploads += 1;
+      pendingError = this.INVALID_VALUE;
+      return;
+    }
+    return upload.apply(this, args);
+  };
+}
+const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+await init();
+const engine = await WebEffectRegistry.createForCanvas(new OffscreenCanvas(32, 32));
+engine.loadProject(JSON.stringify({
+  schema_version: 1, id: "fallback", name: "Fallback",
+  settings: { width: 32, height: 32, frame_rate: { num: 30, den: 1 }, sample_rate: 48000 },
+  sources: [{ id: "s", locator: "fixture://s", kind: "video" }],
+  timeline: { tracks: [{ id: "v", name: "V", kind: "video", clips: [{
+    id: "c", source_id: "s", timeline_range: { start: 0, end: 120000 }, source_range: { start: 0, end: 120000 },
+  }] }] },
+}));
+const luma = async () => {
+  const ticket = engine.beginExportAt(0n, "h264");
+  const rendered = ticket.kind === "rendered" ? await ticket.readback : ticket;
+  return rendered.kind === "rendered" ? rendered.pixels[rendered.layout[0].offset + 16 * rendered.layout[0].stride + 16] : rendered.kind;
+};
+const white = new Uint8Array(32 * 32 * 4).fill(255);
+engine.uploadPresentedVideoFrame("s", 0n, new VideoFrame(white, { format: "RGBA", codedWidth: 32, codedHeight: 32, timestamp: 0 }), 32, 32, 0, false);
+const frameLuma = await luma();
+const bitmap = await createImageBitmap(new ImageData(new Uint8ClampedArray(white), 32, 32), { premultiplyAlpha: "none" });
+engine.uploadPresentedImageBitmap("s", 0n, bitmap, 32, 32, 0, false);
+const bitmapLuma = await luma();
+const diagnostics = JSON.parse(engine.diagnostics());
+const features = JSON.parse(engine.capabilityReport()).features ?? {};
+engine.free();
+report({
+  ok: diagnostics.webgl2Uploads === "cpu-pixels" && frameLuma > 230 && bitmapLuma > 230 && failedUploads > 0,
+  webgl2Uploads: diagnostics.webgl2Uploads, frameLuma, bitmapLuma, failedUploads,
+  feature: features["uploads.webgl2-bitmap"],
+});
 `;
 }
 
@@ -131,6 +193,7 @@ report({
   adapter,
   ok: edgeWorst <= 1 && edges > 0 && alphaWorst <= 2 && fellBack && !engine.deviceLost,
   edgeWorst, edges, alphaWorst, halfLuma: [halfFrame[0], halfImage[0]], copies,
+  ...(${webgl} ? { webgl2Uploads: JSON.parse(engine.diagnostics()).webgl2Uploads } : {}),
 });
 `;
 }
@@ -212,6 +275,7 @@ report({
     before === ${webgl ? '"canvas"' : '"untried"'} && helperDraws === ${webgl ? 1 : 0} &&
     handed.format === null && !engine.deviceLost,
   worst, before, mode, helperDraws,
+  ...(${webgl} ? { webgl2Uploads: JSON.parse(engine.diagnostics()).webgl2Uploads } : {}),
 });
 `;
 }
@@ -367,6 +431,14 @@ export function webgpuUnconfiguredSurface() {
 if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
+const probe = new OffscreenCanvas(64, 48).getContext("2d");
+const control = await presentationControl((surface) => {
+  const bitmap = surface.transferToImageBitmap();
+  probe.clearRect(0, 0, 64, 48);
+  probe.drawImage(bitmap, 0, 0);
+  bitmap.close();
+  return probe.getImageData(32, 24, 1, 1).data;
+}, 64, 48);
 const canvas = new OffscreenCanvas(64, 48);
 const engine = await WebEffectRegistry.createForCanvas(canvas);
 const adapter = webgpuAdapter(engine);
@@ -375,13 +447,13 @@ engine.loadProject(JSON.stringify(project));
 const COLOR = [230, 120, 40];
 const image = new Uint8Array(64 * 48 * 4);
 for (let index = 0; index < image.length; index += 4) image.set([...COLOR, 255], index);
-engine.uploadRgbaImage("image-source", 64, 48, image);
-const probe = new OffscreenCanvas(64, 48).getContext("2d");
 const frames = [];
 for (const step of ["first", "after-transfer", "after-unconfigure"]) {
   if (step === "after-unconfigure") canvas.getContext("webgpu").unconfigure();
   const entry = { step };
   try {
+    // Uploaded again, so the still is drawn and presented again rather than found unchanged.
+    engine.uploadRgbaImage("image-source", 64, 48, image);
     engine.renderAt(0n);
     const bitmap = canvas.transferToImageBitmap();
     probe.clearRect(0, 0, 64, 48);
@@ -395,14 +467,11 @@ for (const step of ["first", "after-transfer", "after-unconfigure"]) {
   frames.push(entry);
 }
 const running = frames.every((entry) => !entry.error && !entry.deviceLost);
-// A blank bitmap is a browser that does not hand over what it presented (headless Chrome on
-// SwiftShader); any other colour than the image's is the engine's.
-const blank = frames.some((entry) => entry.pixel?.every((value) => value === 0));
-if (running && blank)
-  skip("webgpu-present", "the presented bitmap is blank", { adapter, frames });
+// The control's bitmap showed its colour: any other colour than the image's, blank included, is
+// the engine's.
 const shown = frames.every((entry) =>
   entry.pixel?.[3] === 255 && entry.pixel.slice(0, 3).every((value, channel) => Math.abs(value - COLOR[channel]) <= 3));
-report({ ok: running && shown, adapter, frames });
+report({ ok: running && shown, adapter, frames, control });
 `;
 }
 
@@ -433,6 +502,17 @@ export function smoke(webgl) {
 ${webgl ? '// Hide WebGPU so the engine takes its WebGL2 backend.\nObject.defineProperty(Navigator.prototype, "gpu", { get: () => undefined });' : 'if (!navigator.gpu) skip("webgpu", "this browser offers no WebGPU");'}
 const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
 await init();
+// The canvas as presented, captured in the task that presented it (the next task may find its
+// drawing buffer cleared), read after the browser has had time to clear it.
+const capture = async (surface) => {
+  const shot = new VideoFrame(surface, { timestamp: 0 });
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  const probe = new OffscreenCanvas(64, 48).getContext("2d");
+  probe.drawImage(shot, 0, 0);
+  shot.close();
+  return probe.getImageData(32, 24, 1, 1).data;
+};
+const control = await presentationControl(capture, 64, 48, ${webgl} ? "webgl2" : "webgpu");
 const canvas = new OffscreenCanvas(64, 48);
 const engine = await WebEffectRegistry.createForCanvas(canvas);
 const adapter = ${webgl} ? undefined : webgpuAdapter(engine);
@@ -458,21 +538,12 @@ if (frame.kind === "rendered") {
 }
 const audio = engine.renderAudio(0n, 1024, true);
 engine.renderAt(0n);
-// The canvas as presented, captured in the task that presented it: the next task may find its
-// drawing buffer cleared.
-let shot = null;
+let pixel = null;
+let shot;
 try {
-  shot = new VideoFrame(canvas, { timestamp: 0 });
+  pixel = [...(await capture(canvas))];
 } catch (error) {
   shot = String(error?.message ?? error);
-}
-await new Promise((resolve) => setTimeout(resolve, 500));
-let pixel = null;
-if (shot instanceof VideoFrame) {
-  const probe = new OffscreenCanvas(64, 48).getContext("2d");
-  probe.drawImage(shot, 0, 0);
-  shot.close();
-  pixel = [...probe.getImageData(32, 24, 1, 1).data];
 }
 // Browser WebGPU validates asynchronously: renderAt returning is no proof that the presenter's
 // shader, pipeline and bind group were valid. The engine logs what the device reports; any
@@ -491,23 +562,23 @@ const filterSamplesOk = ${webgl}
     degradations[0].requested > 16
   : diagnostics.maxFilterSamples > 16 && degradations.length === 0;
 const presentedColor = pixel !== null && pixel[3] === 255 && pixel.slice(0, 3).every((value, channel) => Math.abs(value - COLOR[channel]) <= 3);
-const presented = presentedColor || { pixel, shot: typeof shot === "string" ? shot : undefined, deviceLost: engine.deviceLost };
+const presented = presentedColor || { pixel, shot, deviceLost: engine.deviceLost };
 const details = {
   ...(filterSamplesOk ? {} : { maxFilterSamples: diagnostics.maxFilterSamples, degradations }),
   frame: frame.kind,
   audioSamples: audio.length,
   presented,
+  control,
   ...(adapter ? { adapter } : {}),
   ...(uncaptured.length ? { uncaptured } : {}),
 };
 const rest = frame.kind === "rendered" && tight === (64 * 48 * 3) / 2 && frame.layout.length === 3 && audio.length === 2 * 1024 &&
   uncaptured.length === 0 && filterSamplesOk;
-// A WebGPU device lost on presenting (headless Chrome and SwiftShader destroy it), or a capture
-// that comes back blank, is the browser's: the case cannot see a presentation there. Everything
-// else was still checked.
-const blank = pixel !== null && pixel.every((value) => value === 0);
-if (!${webgl} && rest && presented !== true && (engine.deviceLost || blank))
-  skip("webgpu-present", engine.deviceLost ? "the device was lost presenting to the canvas" : "the presented canvas captured blank", details);
+// A WebGPU device lost on presenting (headless Chrome and SwiftShader destroy it) is the
+// browser's: the case cannot see a presentation there. Everything else was still checked. A blank
+// capture fails: the control showed that this browser's capture works.
+if (!${webgl} && rest && presented !== true && engine.deviceLost)
+  skip("webgpu-present", "the device was lost presenting to the canvas", details);
 report({ ok: rest && presented === true, ...details });
 `;
 }
@@ -607,7 +678,7 @@ await wasm.default();
 const project = await fetch("\${origin}/tests/cases/host-parity-project.json").then((response) => response.text());
 let canvas;
 let lose;
-const create = createWasmRenderWorkerHost(wasm.WebEffectRegistry, project);
+const create = createWasmRenderWorkerHost(wasm.WebEffectRegistry, project, { renderer: "gpu" });
 const scope = {
   onmessage: null,
   postMessage: (message, transfer) => self.postMessage(message, transfer ?? []),
@@ -640,14 +711,24 @@ const backend = new WorkerRenderBackend(worker);
 const canvas = document.createElement("canvas");
 canvas.width = 64;
 canvas.height = 48;
-await backend.initialize(canvas.transferControlToOffscreen());
+const initialized = await backend.initialize(canvas.transferControlToOffscreen()).then(
+  () => null,
+  (error) => error,
+);
+if (initialized !== null) {
+  backend.dispose();
+  if (initialized.code === "GPU_INIT_FAILED" || initialized.code === "INVALID_INPUT")
+    skip("webgl2", "no WebGL2 in the worker", { error: initialized.message });
+  throw initialized;
+}
 const settle = (promise, ms) => Promise.race([
   promise.then((value) => ({ value }), (error) => ({ error: String(error?.message ?? error), code: error?.code ?? null })),
   new Promise((resolve) => setTimeout(() => resolve({ unsettled: true }), ms)),
 ]);
-// Without WebGL2 in the worker, \`auto\` draws on the CPU and there is no context to lose.
+// The worker hides WebGPU, so a GPU renderer is a WebGL2 one; without WebGL2 there is no context
+// to lose.
 const choice = backend.rendererChoice;
-if (choice?.renderer !== "gpu") {
+if (choice?.backend !== "webgl2") {
   backend.dispose();
   skip("webgl2", "no WebGL2 in the worker", { rendererChoice: choice });
 }
@@ -672,7 +753,8 @@ await new Promise((resolve) => setTimeout(resolve, 50));
 // The worker learns of the loss with the next answer.
 const duringLoss = await settle(backend.present(0n), 10000);
 const lostBeforeRecover = backend.isDeviceLost();
-const recovered = await settle(backend.recover(), 15000);
+// The context is restored on the same canvas, which a recovery onto the same surface binds again.
+const recovered = await settle(backend.recover({ renderer: "gpu", surface: "same", reason: "restored" }), 15000);
 const lostAfterRecover = backend.isDeviceLost();
 const afterRecover = await settle(backend.present(0n), 10000);
 backend.dispose();

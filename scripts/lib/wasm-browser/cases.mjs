@@ -2,6 +2,7 @@
 // to the body of the page (lib/wasm-browser/page.mjs wraps it).
 
 import {
+  aacLayoutRefusal,
   audioContinuity,
   audioMatroskaCodecDelay,
   audioSeekState,
@@ -29,6 +30,7 @@ import {
   webgl2EffectBackendCompile,
   webgl2EffectTextureBudget,
   webgl2ProbeWithoutOffscreenWebgl,
+  webgl2UploadFallback,
   webgl2WithoutFloatColorBuffers,
   webglContextLoss,
   webglWorkerRecovery,
@@ -45,10 +47,12 @@ import {
   textRasterParity,
   wasmFeatureProbe,
 } from "./binding.mjs";
+import { crashGpuOnSignal, gpuResetLadder } from "./recovery.mjs";
 import {
   cpuGrid,
   cpuRuntimeEffectRefused,
   cpuWorkerHost,
+  rendererFallbackAdapter,
   rendererWorker,
 } from "./cpu.mjs";
 import {
@@ -80,6 +84,7 @@ import {
 import { previewFullResolution, previewUnchangedFrame } from "./preview.mjs";
 import {
   browserVideoConversion,
+  webcodecsDecodeOrder,
   decoderSoftwareFallback,
   hdrHevcSource,
   presentationCacheColor,
@@ -88,6 +93,13 @@ import {
   videoColorContract,
   yuvAnamorphic,
 } from "./video.mjs";
+import { heavyEffectSplit } from "./watchdog.mjs";
+
+// A case's body run under Safari's behaviours simulated in Chrome (lib/wasm-browser/safari-sim.mjs):
+// the simulations are installed before the body loads the binding, and \`check\` (the source of a
+// function of the result) can require that the result shows the simulated branch ran.
+const underSimulation = (names, body, check) =>
+  `await simulate(${JSON.stringify(names)}${check ? `, ${check}` : ""});\n${body}`;
 
 export const cases = {
   "webgpu-smoke": () => smoke(false),
@@ -96,10 +108,12 @@ export const cases = {
   "webgl-worker-recovery": webglWorkerRecovery,
   "webgpu-dropped-work": webgpuDroppedWork,
   "webgpu-rejected-frame": webgpuRejectedFrame,
+  "heavy-effect-split": heavyEffectSplit,
   "video-color-contract": videoColorContract,
   "browser-video-conversion": browserVideoConversion,
   "decoder-software-fallback": decoderSoftwareFallback,
   "hdr-hevc-source": hdrHevcSource,
+  "hdr-hevc-source-degraded": () => hdrHevcSource({ degraded: true }),
   "export-survives-frozen-page": exportSurvivesFrozenPage,
   "sdr-chroma-siting": sdrChromaSiting,
   "audio-clock-tracking": () => audioClockTracking(48_000),
@@ -122,6 +136,7 @@ export const cases = {
   "audio-window-preroll": audioWindowPreroll,
   "audio-matroska-codec-delay": audioMatroskaCodecDelay,
   "audio-speaker-layout": audioSpeakerLayout,
+  "aac-layout-refusal": aacLayoutRefusal,
   "fixed-audio-mix": fixedAudioMix,
   "export-every-project-rate": exportEveryProjectRate,
   "export-every-container": exportEveryContainer,
@@ -160,6 +175,7 @@ export const cases = {
   "effect-registration-overlap": effectRegistrationOverlap,
   "yuv-anamorphic": yuvAnamorphic,
   "webgl2-probe-without-offscreen-webgl": webgl2ProbeWithoutOffscreenWebgl,
+  "webgl2-upload-fallback": webgl2UploadFallback,
   "wasm-feature-probe": wasmFeatureProbe,
   "sha256-blob-yields": sha256BlobYields,
   "webgpu-unconfigured-surface": webgpuUnconfiguredSurface,
@@ -170,15 +186,56 @@ export const cases = {
   "cpu-worker-host-1080p": () => cpuWorkerHost("cpu", 1920, 1080),
   "renderer-auto": () => cpuWorkerHost("auto", 640, 360),
   "renderer-auto-worker": () => rendererWorker("auto"),
+  "renderer-auto-fallback-adapter": rendererFallbackAdapter,
+  "gpu-reset-ladder": gpuResetLadder,
   "cpu-worker": () => rendererWorker("cpu"),
   "cpu-grid-1080p": cpuGrid,
   "cpu-runtime-effect-refused": cpuRuntimeEffectRefused,
   "cpu-fixed-audio-mix": () => fixedAudioMix(true),
+  "webcodecs-decode-order": webcodecsDecodeOrder,
+  // Safari's behaviours, simulated: the branches that handle them run in Chrome.
+  "safari-sim-quality-silent": () =>
+    underSimulation(
+      ["quality-silent"],
+      exportEveryContainer(),
+      `(result) => { const modes = Object.values(result.results).filter((entry) => entry?.videoCodec === "avc").map((entry) => entry.latencyProbe?.mode); return modes.length > 0 && modes.every((mode) => mode === "realtime") ? result : { ...result, ok: false, simulation: "the H.264 encoders did not open in realtime mode", modes }; }`,
+    ),
+  // The probe's noise burst follows a frame of silence, which the simulated drop removes: the
+  // measured priming is the encoder's own plus 2112, less 1024.
+  "safari-sim-aac-priming": () =>
+    underSimulation(
+      ["aac-first-frame-drop", "aac-priming-2112"],
+      exportAacPriming(),
+      `(result) => result.delay >= 2112 - 1024 ? result : { ...result, ok: false, simulation: "the measured priming does not hold the simulated 2112 frames less the dropped first frame" }`,
+    ),
+  "safari-sim-aac-rate": () =>
+    underSimulation(["aac-rate"], exportEveryProjectRate()),
+  "safari-sim-frame-layout": () =>
+    underSimulation(["frame-layout-ignored"], cpuWorkerHost("cpu", 640, 360)),
+  "safari-sim-decode-order": () =>
+    underSimulation(
+      ["decode-order"],
+      webcodecsDecodeOrder(),
+      `(result) => globalThis.decodeOrderOutputs > 0 ? { ...result, decodeOrderOutputs } : { ...result, ok: false, simulation: "no frame came out in decode order" }`,
+    ),
 };
 
 // What drives a case's page from outside while it runs, by DevTools: Chrome only.
 export const pageDrivers = {
   "export-survives-frozen-page": freezeMidExport,
+  "gpu-reset-ladder": crashGpuOnSignal,
+};
+
+// How a case's Chrome is launched, where it differs from the harness's: `domainBlocking3d` keeps
+// Chrome's policy of withdrawing GPU access from a page after GPU resets (the harness turns it
+// off), and `gpuProcessExits` is how many GPU process exits the case causes itself, which are not
+// an environment fault (more are a failure); `timeoutMs` is how long its page has.
+export const caseLaunch = {
+  "gpu-reset-ladder": {
+    domainBlocking3d: true,
+    gpuProcessExits: 2,
+    timeoutMs: 120_000,
+  },
 };
 
 // Cases run only when `--case` names them: they need inputs the default run does not make.

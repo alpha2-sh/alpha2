@@ -1405,7 +1405,8 @@ pub fn drain_encode_worker(
 static REJECT_GPU_FRAME: std::sync::Mutex<Option<(u64, u64)>> = std::sync::Mutex::new(None);
 
 /// Makes the GPU-resident encoder reject frame `frame` of the next export, as
-/// the Iris Xe's `h264_d3d12va` intermittently does; dropping the guard stops it.
+/// an Intel integrated GPU's `h264_d3d12va` intermittently does; dropping the
+/// guard stops it.
 #[cfg(all(test, feature = "hwencode"))]
 pub(crate) fn reject_gpu_frame(frame: u64) -> impl Drop {
     struct Stop;

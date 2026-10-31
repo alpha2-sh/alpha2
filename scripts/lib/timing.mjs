@@ -30,24 +30,25 @@ function cpuMicros() {
 }
 
 /**
- * The CPU work and wall time of `repeats` runs of `run` over inputs of `size` made by `setup`
- * before the reading starts: one input for all of them, or with `fresh` one input per run.
+ * The CPU work and wall time of `repeats` runs of `run` over `count` inputs of `size` made by
+ * `setup` before the reading starts, read in turn.
  */
-async function measure(size, repeats, setup, run, fresh) {
+async function measure(size, repeats, setup, run, count) {
   const inputs = [];
-  for (let index = 0; index < (fresh ? repeats : 1); index += 1)
-    inputs.push(await setup(size));
+  for (let index = 0; index < count; index += 1) inputs.push(await setup(size));
   const wall = performance.now();
   const started = cpuMicros();
   for (let index = 0; index < repeats; index += 1)
-    await run(inputs[fresh ? index : 0]);
+    await run(inputs[index % count]);
   return { work: cpuMicros() - started, ms: performance.now() - wall };
 }
 
 /**
  * Asserts that `run` over an input `setup` makes of `growth` times `small` takes less than `bound`
  * times the CPU work it takes over one of `small`. `setup` (which may be async) is not measured;
- * `run` (which may be async) is. Each reading runs over one input; with `fresh`, each run gets an
+ * `run` (which may be async) is. A reading's runs read `growth` inputs of the small size in turn
+ * and one of the large, so both sizes read as many bytes between two runs over one input and the
+ * small one does not run from a cache the large one overflows. With `fresh`, each run gets an
  * input of its own, so a step that caches what it computed per input is measured computing it.
  * The small input runs as many times as take 20 ms together (100 ms on Windows), and the large one
  * as many times; the sizes alternate three times and the least reading of each is kept.
@@ -66,10 +67,18 @@ export async function assertScalesBelow(
   { growth = GROWTH, bound = BOUND, fresh = false } = {},
 ) {
   const large = small * growth;
+  const count = (size, repeats) =>
+    fresh ? repeats : size === small ? growth : 1;
   let repeats = 1;
   let leastSmall;
   for (;;) {
-    const reading = await measure(small, repeats, setup, run, fresh);
+    const reading = await measure(
+      small,
+      repeats,
+      setup,
+      run,
+      count(small, repeats),
+    );
     if (reading.ms >= LEAST_RUN_MS || repeats >= 1 << 16) {
       leastSmall = reading.work;
       break;
@@ -81,12 +90,12 @@ export async function assertScalesBelow(
   for (let reading = 0; reading < READINGS; reading += 1) {
     leastLarge = Math.min(
       leastLarge,
-      (await measure(large, repeats, setup, run, fresh)).work,
+      (await measure(large, repeats, setup, run, count(large, repeats))).work,
     );
     if (reading + 1 < READINGS)
       leastSmall = Math.min(
         leastSmall,
-        (await measure(small, repeats, setup, run, fresh)).work,
+        (await measure(small, repeats, setup, run, count(small, repeats))).work,
       );
   }
   const ratio = leastLarge / Math.max(leastSmall, 1);

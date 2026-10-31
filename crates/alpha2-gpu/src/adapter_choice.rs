@@ -10,14 +10,14 @@
 //! Capability leads because speed picks no winner: on a hybrid laptop the discrete GPU renders a
 //! heavy project faster on the readback path, while the integrated one, which encodes on the GPU,
 //! exports a video-led one faster, at a third of the host CPU or less, and is the only one that
-//! exports HEVC at all. Measured 2026-10-31 on an i7-1165G7 laptop (Iris Xe and MX450, DX12,
-//! release host, software decode, H.264 1080p30 8 Mb/s, three alternating rounds): a heavy
-//! composition took 5.73 ms/frame steady on the Iris Xe's GPU-resident path and 4.15 on the
-//! MX450's readback path (1.38x), with 10.1 against 29.3 ms of host CPU per frame; a full-frame
-//! video with an overlay took 3.89 against 6.50 ms/frame, with 10.0 against 44.4 ms of CPU. `performance` takes the first hardware adapter in the high-performance order
-//! whatever it encodes; a number or a name pins one adapter, and a pin that matches nothing
-//! refuses rather than rendering somewhere the caller did not ask for. Software adapters come
-//! last under every policy but a pin.
+//! exports HEVC at all. Measured on a hybrid laptop with an Intel integrated GPU and an NVIDIA
+//! discrete GPU without a video encoder (DX12, release host, software decode, H.264 1080p30,
+//! three alternating rounds): the integrated GPU took about 1.4 times as long on a heavy
+//! composition and was faster on a full-frame video with an overlay, at a third of the discrete
+//! GPU's host CPU or less on both. `performance` takes the first hardware adapter in the
+//! high-performance order whatever it encodes; a number or a name pins one adapter, and a pin that
+//! matches nothing refuses rather than rendering somewhere the caller did not ask for. Software
+//! adapters come last under every policy but a pin.
 //!
 //! The choice is a pure function over one record per adapter, so every policy and machine class
 //! is tested on any platform, without a device. The backends fill the records: Windows from each

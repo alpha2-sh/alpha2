@@ -180,9 +180,9 @@ fn premultiplied_over_stays_within_sixteen_half_ulps_of_the_cpu_model() {
         "premultiplied over: {matches} of {VALUES} equal the CPU model, worst {worst_ulps} half \
          ULPs, {worst_codes:.4} codes"
     );
-    // Measured: exact on lavapipe, llvmpipe, WARP and the M4; 1 half ULP on the Iris Xe; 16 on
-    // RADV and NVIDIA, whose worst is 2 half ULPs at the top of the range, just under a quarter
-    // of a code.
+    // Measured: exact on lavapipe, llvmpipe, WARP and an Apple-silicon GPU; 1 half ULP on an
+    // Intel integrated GPU; 16 on RADV and NVIDIA, whose worst is 2 half ULPs at the top of the
+    // range, just under a quarter of a code.
     assert!(
         worst_ulps <= 16 && worst_codes <= 0.25,
         "the device's premultiplied over is {worst_ulps} half ULPs ({worst_codes} codes) from \

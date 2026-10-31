@@ -90,3 +90,46 @@ test("a late readback frame is closed", async () => {
   assert.ok(host.readbacks.length >= 1);
   assert.ok(host.readbacks.every(({ frame }) => frame.closed));
 });
+
+test("an export asks for a frame sent back for a software decode again in software, once", async () => {
+  let held = false;
+  const host = {
+    begin: async () =>
+      held
+        ? {
+            kind: "rendered",
+            retainedBytes: 1_024,
+            readback: Promise.resolve(frame()),
+          }
+        : {
+            kind: "waiting",
+            missingSources: ["hdr"],
+            missingFrames: [
+              { clipId: "clip", sourceId: "hdr", mediaTimeTicks: 0n },
+            ],
+          },
+    isDeviceLost: () => false,
+    abort() {},
+  };
+  const asked = [];
+  const exporter = new Alpha2Exporter(host, { num: 30n, den: 1n }, 0n, 4_000n);
+  const result = await exportToSink(exporter, sink(), async (waiting) => {
+    const [missing] = waiting.missingFrames;
+    asked.push(missing.decode ?? "default");
+    if (missing.decode !== "software")
+      throw Object.assign(new Error("decode it again in software"), {
+        code: "SOFTWARE_DECODE_REQUIRED",
+        failure: {
+          code: "UNKNOWN",
+          diagnostics: {
+            sourceId: "hdr",
+            mediaTimeTicks: "0",
+            reason: "non-planar",
+          },
+        },
+      });
+    held = true;
+  });
+  assert.equal(result.frames, 1);
+  assert.deepEqual(asked, ["default", "software"]);
+});

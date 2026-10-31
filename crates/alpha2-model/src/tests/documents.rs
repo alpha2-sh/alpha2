@@ -386,8 +386,8 @@ fn disjoint_clips_at_the_track_limit_validate() {
 fn the_overlap_check_scales_without_comparing_all_pairs() {
     // Far more clips than a track holds, so comparing every pair could not finish: 2 * 10^10
     // comparisons for 200,000 clips. Each run gets its own track: reusing one keeps the small
-    // track in cache across runs while the large one is not, which on an Apple M4 reads as 30x
-    // growth for linear work.
+    // track in cache across runs while the large one is not, which on an Apple-silicon CPU reads
+    // as 30x growth for linear work.
     let template = project().timeline.tracks[0].clips[0].clone();
     let with_clips = |count: usize| {
         let mut track = project().timeline.tracks[0].clone();

@@ -1082,14 +1082,14 @@ pub(crate) fn codec_thread_budget_for(hardware_threads: usize) -> usize {
 /// and the rest of the machine: two on a machine of 16 or more, one on 6 to
 /// 15, none below, where every thread is needed for the codecs.
 ///
-/// Measured on an i7-1165G7 (4 cores, 8 threads) with two 4K H.264 sources
-/// decoded in software side by side, 150 frames, three alternating rounds:
-/// with `h264_mf`, a reserve of two and an encoder floor of four (budget 6,
-/// one decoder thread each, encoder 4) ran 44.4 ms a frame with 20 % of the
-/// export waiting on decode; this reserve and [`encoder_thread_floor`]
-/// (budget 7, two decoder threads each, encoder 3) ran 29.0 ms a frame with
-/// 14 % waiting. `OpenH264`, whose eight 4K slice threads leave each decoder
-/// one thread either way, ran 40.6 and 37.4 ms a frame.
+/// Measured on a 4-core, 8-thread laptop CPU with two 4K H.264 sources
+/// decoded in software side by side, three alternating rounds: with
+/// `h264_mf`, a reserve of two and an encoder floor of four (budget 6, one
+/// decoder thread each, encoder 4) left the export waiting on decode and
+/// about half again slower per frame than this reserve and
+/// [`encoder_thread_floor`] (budget 7, two decoder threads each, encoder 3).
+/// `OpenH264`, whose eight 4K slice threads leave each decoder one thread
+/// either way, ran about the same under both.
 pub(crate) const fn codec_thread_reserve(hardware_threads: usize) -> usize {
     match hardware_threads {
         16.. => 2,
@@ -1144,19 +1144,15 @@ const fn encoder_thread_floor(total_threads: usize) -> usize {
 /// Such a session decodes on the device; its workers only parse and submit.
 /// Each one is a frame thread with its own codec context, and frame threading
 /// holds back one packet per extra worker, which a session opened for a short
-/// cut fills and then drops. Measured on a 4090 (`h264_vulkan` decode and
-/// encode, 24-core budget), wall time and `decodeMs`:
-///
-/// | workers | 120 sources, 295 cuts, 1080p30 | one 4K59.94 source, 60 s |
-/// | --- | --- | --- |
-/// | 22 (the even share before) | 64.8-71.6 s | 26.3 s, decode 353-419 ms |
-/// | 4 | 37.6 s | 26.2 s, decode 254-268 ms |
-/// | 2 | 35.5 s | 26.2 s, decode 255 ms |
-/// | 1 | 35.4-35.6 s | 26.2 s, decode 454-461 ms |
+/// cut fills and then drops. Measured on a discrete NVIDIA GPU (`h264_vulkan`
+/// decode and encode, 24-core budget) with 120 1080p sources in 295 cuts and
+/// with one 60-second 4K source: the even share of the budget (22 workers)
+/// took nearly twice as long on the many-cut project as two to four
+/// workers, and the long source's decode was fastest at two to four.
 ///
 /// Two, not one: the many-cut run is the same, and one worker doubles a long
 /// source's decode time, which an encode-bound export hides but a decode-bound
-/// one would not. The worker count changes no output byte. The 4090 is the
+/// one would not. The worker count changes no output byte. That GPU is the
 /// only measurement: `VideoToolbox` and D3D12VA sessions take the same count
 /// unmeasured.
 pub const HARDWARE_DECODER_THREADS: usize = 2;

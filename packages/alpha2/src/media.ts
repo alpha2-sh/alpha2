@@ -294,6 +294,13 @@ export interface DecoderRefillRequest {
    * composition steps, reading one source at different times. Absent, the source has one cursor.
    */
   readonly consumerId?: string;
+  /**
+   * `"software"`: decode the frame on the CPU, through a decoder of its own beside the consumer's,
+   * because a render host could not take the frame the browser's decoder gave (no planar format
+   * the engine reads, or planes the browser could not read back). Absent or `"default"`, the
+   * browser picks the decoder.
+   */
+  readonly decode?: "default" | "software";
 }
 
 /**
@@ -758,6 +765,8 @@ export interface BrowserDecodedFrame {
    * Where chroma samples sit, which WebCodecs does not report: see {@link chromaSitingForStream}.
    */
   readonly chromaSiting?: ChromaSiting;
+  /** Set on a frame a `decode: "software"` request was answered with. */
+  readonly decode?: "software";
 }
 
 /** Public browser decoder contract; no optional demuxer types leak through it. */
@@ -947,6 +956,11 @@ export class WebCodecsVideoDecoder implements BrowserVideoDecoder {
   #readyBytes = 0;
   #activeTargetTicks?: bigint;
   #reverseCacheHits = 0;
+  /** Whether decoders open with `hardwareAcceleration: "prefer-software"`. */
+  #software: boolean;
+  #softwareFallback?: string;
+  /** Whether any decoder gave a frame of the stream: see `decodeFailureOf`. */
+  #decodedAny = false;
 
   /**
    * Throws `RangeError` when an option is not a positive safe integer, `maxCachedFrames` is below
@@ -989,6 +1003,15 @@ export class WebCodecsVideoDecoder implements BrowserVideoDecoder {
       source.config.description,
     );
     this.#sitingFromKeyChunk = source.config.description === undefined;
+    this.#software = source.config.hardwareAcceleration === "prefer-software";
+  }
+
+  /**
+   * Why the decoder moved to software decoding, when the one the browser picked first failed;
+   * `undefined` while that one serves (and for a configuration that asked for software).
+   */
+  get softwareFallback(): string | undefined {
+    return this.#softwareFallback;
   }
 
   /** Bytes the frame cache holds. */
@@ -1018,6 +1041,14 @@ export class WebCodecsVideoDecoder implements BrowserVideoDecoder {
     return this.#reverseCacheHits;
   }
 
+  /**
+   * {@link BrowserVideoDecoder.refill}. A decoder the browser picks can fail on streams it claims
+   * to decode, so a decoder failure reconfigures, once, with `hardwareAcceleration:
+   * "prefer-software"` (unless the configuration asked for it already) and decodes the request
+   * again from its keyframe. A software decoder that fails too rejects: with
+   * `DecodeUnavailableError` when no decoder has given a frame of the stream, else with the
+   * failure.
+   */
   async refill(
     request: DecoderRefillRequest,
     signal: AbortSignal = new AbortController().signal,
@@ -1025,6 +1056,36 @@ export class WebCodecsVideoDecoder implements BrowserVideoDecoder {
     if (request.sourceId !== this.#sourceId) {
       throw new Error(`decoder source mismatch: ${request.sourceId}`);
     }
+    try {
+      const frame = await withSoftwareFallback(
+        () => this.#refillOnce(request, signal),
+        this.#software || signal.aborted
+          ? undefined
+          : (cause) => {
+              this.#software = true;
+              this.#softwareFallback = `${cause.name}: ${cause.message}`;
+              this.#resetCursor();
+              this.#cache.clear();
+              return Promise.resolve();
+            },
+      );
+      this.#decodedAny = true;
+      return frame;
+    } catch (error) {
+      if (this.#decodedAny || signal.aborted) throw error;
+      throw decodeFailureOf(
+        error,
+        this.#sourceId,
+        { kind: "video", codec: this.#source.config.codec },
+        false,
+      );
+    }
+  }
+
+  async #refillOnce(
+    request: DecoderRefillRequest,
+    signal: AbortSignal,
+  ): Promise<BrowserDecodedFrame> {
     throwIfAborted(signal);
     if (
       this.#generation !== undefined &&
@@ -1187,7 +1248,11 @@ export class WebCodecsVideoDecoder implements BrowserVideoDecoder {
       },
     });
     decoder.addEventListener("dequeue", () => this.#notifyOutput());
-    decoder.configure(this.#source.config);
+    decoder.configure(
+      this.#software
+        ? { ...this.#source.config, hardwareAcceleration: "prefer-software" }
+        : this.#source.config,
+    );
     this.#decoder = decoder;
     return decoder;
   }
@@ -1380,16 +1445,27 @@ export interface DecoderRefillCoordinatorOptions {
   readonly maxCursorsPerSource?: number;
 }
 
+/** What a {@link DecoderRefillCoordinator} asks its opener for. */
+export interface DecoderOpenOptions {
+  /**
+   * `"software"`: a decoder that decodes on the CPU (mediabunny's `hardwareAcceleration:
+   * "prefer-software"`). An opener that has none rejects with `code: "software_decode_unavailable"`.
+   */
+  readonly decode: "default" | "software";
+}
+
 /**
  * Runs refills against decoders it opens: one per source and consumer
  * ({@link DecoderRefillRequest.consumerId}), so overlapping clips of one source each decode
- * forward from where they were. Refills of one source run one at a time, at most `maxConcurrency`
- * at once, delivering each frame through `deliver`. A newer generation aborts the requests in
- * flight; a frame decoded for an older one is closed instead of delivered.
+ * forward from where they were, and one more per consumer for `decode: "software"` requests. Refills
+ * of one source run one at a time, at most `maxConcurrency` at once, delivering each frame through
+ * `deliver`. A newer generation aborts the requests in flight; a frame decoded for an older one is
+ * closed instead of delivered.
  */
 export class DecoderRefillCoordinator {
   readonly #open: (
     sourceId: string,
+    options: DecoderOpenOptions,
   ) => BrowserVideoDecoder | Promise<BrowserVideoDecoder>;
   readonly #deliver: (frame: BrowserDecodedFrame) => Promise<void>;
   #generation = 0;
@@ -1407,13 +1483,17 @@ export class DecoderRefillCoordinator {
   #closed = false;
 
   /**
-   * `open` makes a decoder for a source, called once per consumer that reads it; it may reject for
-   * a source it cannot decode, which rejects that refill. Throws `RangeError` when an option is not
-   * a positive safe integer.
+   * `open` makes a decoder for a source, called once per consumer that reads it (and once more per
+   * consumer for software requests); it may reject for a source it cannot decode, which rejects
+   * that refill. A software open that rejects with `code: "software_decode_unavailable"` rejects
+   * the refill with `PlanarDecodeUnavailableError`: the host asked for software because the
+   * browser's decoder gave frames it could not take. Throws `RangeError` when an option is not a
+   * positive safe integer.
    */
   constructor(
     open: (
       sourceId: string,
+      options: DecoderOpenOptions,
     ) => BrowserVideoDecoder | Promise<BrowserVideoDecoder>,
     deliver: (frame: BrowserDecodedFrame) => Promise<void>,
     options: DecoderRefillCoordinatorOptions = {},
@@ -1475,16 +1555,18 @@ export class DecoderRefillCoordinator {
       if (this.#closed) throw new Error("decoder refill coordinator is closed");
       if (request.generation !== this.#generation) return;
       throwIfAborted(this.#controller.signal);
+      const software = request.decode === "software";
       const decoder = await this.#cursor(
         request.sourceId,
         request.consumerId ?? "",
+        software ? "software" : "default",
       );
       const frame = await decoder.refill(request, this.#controller.signal);
       if (frame.generation !== this.#generation) {
         frame.frame.close();
         return;
       }
-      await this.#deliver(frame);
+      await this.#deliver(software ? { ...frame, decode: "software" } : frame);
     } finally {
       this.#release();
     }
@@ -1496,16 +1578,25 @@ export class DecoderRefillCoordinator {
    */
   async #cursor(
     sourceId: string,
-    consumerId: string,
+    consumer: string,
+    decode: "default" | "software",
   ): Promise<BrowserVideoDecoder> {
     let cursors = this.#cursors.get(sourceId);
     if (cursors === undefined) {
       cursors = new Map();
       this.#cursors.set(sourceId, cursors);
     }
+    const consumerId =
+      decode === "software" ? `${consumer}\u0000software` : consumer;
     let decoder = cursors.get(consumerId);
     if (decoder === undefined) {
-      decoder = Promise.resolve().then(() => this.#open(sourceId));
+      decoder = Promise.resolve()
+        .then(() => this.#open(sourceId, { decode }))
+        .catch((error: unknown) => {
+          throw decode === "software"
+            ? softwareRefusal(sourceId, error)
+            : error;
+        });
       // A source that failed to open is opened again by the next request.
       decoder.catch(() => {
         if (cursors.get(consumerId) === decoder) cursors.delete(consumerId);
@@ -1551,6 +1642,29 @@ export class DecoderRefillCoordinator {
         );
     this.#cursors.clear();
   }
+}
+
+/**
+ * The refusal for a source a host asked to decode in software that has no software decoder:
+ * {@link PlanarDecodeUnavailableError}, the opener's error as its cause. Other open failures are
+ * left as they are.
+ */
+function softwareRefusal(sourceId: string, error: unknown): unknown {
+  if (
+    (error as { code?: unknown } | null)?.code !== "software_decode_unavailable"
+  )
+    return error;
+  const facts = {
+    kind: "video" as const,
+    codec: null,
+    softwareDecoder: "none" as const,
+    browserError: error instanceof Error ? error.message : String(error),
+  };
+  return new PlanarDecodeUnavailableError(
+    decodeRefusalMessage(sourceId, facts),
+    facts,
+    { cause: error },
+  );
 }
 
 /** Shape used to wrap mediabunny without importing its types into alpha2. */
@@ -1737,3 +1851,8 @@ function validatePositiveByteLimit(value: number, name: string): void {
 import { abortError, throwIfAborted } from "./abort.js";
 import { activeTimeout } from "./active-clock.js";
 import { type ChromaSiting, chromaSitingForStream } from "./chroma-siting.js";
+import {
+  decodeRefusalMessage,
+  PlanarDecodeUnavailableError,
+} from "./hdr-frames.js";
+import { decodeFailureOf, withSoftwareFallback } from "./decoder-fallback.js";

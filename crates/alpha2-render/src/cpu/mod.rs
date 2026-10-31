@@ -9,8 +9,8 @@
 //! matches is the fixed-function premultiplied `over` blend of vector and
 //! quad passes: computed in `f32`, then stored, which is exact on lavapipe,
 //! llvmpipe, WARP and Metal and within 16 half-float steps (under a quarter of
-//! a code) on NVIDIA, RADV and the Iris Xe. Its output is the same for any
-//! thread count and on every target.
+//! a code) on NVIDIA, RADV and an Intel integrated GPU. Its output is the
+//! same for any thread count and on every target.
 
 mod blend;
 mod composite;

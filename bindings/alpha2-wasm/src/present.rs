@@ -159,6 +159,10 @@ pub(crate) struct WebPlaybackResult {
     /// snapshot. A trimmed, offset, or retimed clip needs its source at a
     /// time other than the timeline's.
     pub(crate) missing_frames: Vec<WebMissingFrame>,
+    /// Sources the frame shows through the browser's own conversion, as
+    /// `uploadDegradedVideoFrame` took them: a preview of them is not what
+    /// an export would show.
+    pub(crate) degraded_sources: Vec<String>,
     pub(crate) repeated: bool,
     /// The frame equals the one presented last, so nothing was rendered or
     /// presented: the canvas still shows it.

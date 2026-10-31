@@ -1223,6 +1223,7 @@ impl Host {
                         "watchdogMs": alpha2_gpu::watchdog_ms(),
                         "frameIndex": longest.frame.and_then(|frame| frame.frame_index),
                         "effects": longest.effects,
+                        "predictedMs": longest.predicted_ms.map(|ms| (ms * 10.0).round() / 10.0),
                     }),
                 );
             }
@@ -2418,6 +2419,7 @@ impl Host {
         let graph_before = self.renderer.gpu().map(Renderer::diagnostics);
         // What frames sampled before this export measured is not its own.
         let _ = self.renderer.gpu().map(Renderer::take_frame_gpu_times);
+        let _ = self.renderer.gpu().map(Renderer::take_gpu_submission_stats);
         let cpu_before = self.renderer.cpu().map(CpuRenderer::stats);
         let mut pending_media = VecDeque::<PendingMedia>::new();
         let mut pending_videos = 0_usize;
@@ -2793,6 +2795,8 @@ impl Host {
                                 metrics.peak_readback_bytes.max(pending_readback_bytes);
                             if let Some(trace) = metrics.trace.as_ref() {
                                 frame_trace.submitted = trace.now();
+                                frame_trace.submissions =
+                                    self.gpu_renderer().take_frame_submissions();
                             }
                             frame_trace.index = index;
                             metrics.record_pipelines(
@@ -3030,7 +3034,7 @@ impl Host {
                 match frame_trace.take() {
                     Some(mut row) => {
                         row.encode_queued = queued;
-                        sink.push_video(row);
+                        sink.push_video(&row);
                     }
                     None => sink.push_audio(AudioBlockTrace {
                         queued,

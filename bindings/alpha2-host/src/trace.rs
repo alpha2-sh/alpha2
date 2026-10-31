@@ -47,6 +47,9 @@ pub struct VideoFrameTrace {
     /// GPU-resident path: the plane pair was free and the render signal
     /// staged, after any wait on the handoff that last read the pair.
     pub planes_ready: Duration,
+    /// How the frame's GPU work was submitted and what it was predicted to
+    /// cost, when its graph was drawn.
+    pub submissions: Option<alpha2_render::FrameSubmissions>,
 }
 
 /// One audio block's trip through the encode worker it shares with video.
@@ -116,8 +119,8 @@ impl ExportTrace {
     }
 
     /// Records one completed output frame.
-    pub fn push_video(&mut self, row: VideoFrameTrace) {
-        self.video.push(row);
+    pub fn push_video(&mut self, row: &VideoFrameTrace) {
+        self.video.push(*row);
     }
 
     /// Records one audio block handed to the encode worker.
@@ -181,12 +184,29 @@ impl ExportTrace {
             "kind,index,decodeWaitStartedMs,decodedMs,installedMs,submittedMs,\
              readbackWaitStartedMs,readbackReadyMs,packedMs,encodeQueuedMs,encodeStartedMs,\
              encodeSentMs,encodeFinishedMs,surfaceAcquiredMs,planesReadyMs,label,startedMs,\
-             finishedMs\n",
+             finishedMs,submissions,predictedMs,costFetches,costTranscendentals,costArithmetic\n",
         );
         for row in &self.video {
+            // Costs are in unit pixels: a pass's count per pixel times the pixels it covers.
+            let plan = row.submissions.map_or_else(String::new, |plan| {
+                format!(
+                    "{},{},{:.0},{:.0},{:.0}",
+                    plan.submissions,
+                    plan.predicted_ms
+                        .map_or_else(String::new, |ms| format!("{ms:.3}")),
+                    plan.cost.fetches,
+                    plan.cost.transcendentals,
+                    plan.cost.arithmetic,
+                )
+            });
+            let plan = if plan.is_empty() {
+                ",,,,".to_owned()
+            } else {
+                plan
+            };
             let _ = writeln!(
                 out,
-                "video,{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},,,",
+                "video,{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},,,,{plan}",
                 row.index,
                 ms(row.decode_wait_started),
                 ms(row.decoded),
@@ -206,7 +226,7 @@ impl ExportTrace {
         for (index, row) in self.audio.iter().enumerate() {
             let _ = writeln!(
                 out,
-                "audio,{index},,,,,,,,{:.3},{:.3},{:.3},{:.3},,,,,",
+                "audio,{index},,,,,,,,{:.3},{:.3},{:.3},{:.3},,,,,,,,,,",
                 ms(row.queued),
                 ms(row.started),
                 ms(row.sent),
@@ -217,7 +237,7 @@ impl ExportTrace {
         for row in &self.pipelines {
             let _ = writeln!(
                 out,
-                "pipeline,{},,,,,,,,,,,,,,{},{:.3},{:.3}",
+                "pipeline,{},,,,,,,,,,,,,,{},{:.3},{:.3},,,,,",
                 row.frame,
                 row.label,
                 ms(row.started),

@@ -1,5 +1,17 @@
 import type { ChromaSiting } from "./hdr-frames.js";
 import {
+  GpuRecoveryLadder,
+  type GpuLossReport,
+  type RecoveryStep,
+  type SurfaceProbe,
+} from "./gpu-recovery.js";
+import type { RendererChoice } from "./renderer-choice.js";
+import { Alpha2WasmError } from "./worker-error.js";
+import {
+  type SoftwareDecodeReason,
+  softwareDecodeRequest,
+} from "./frame-intake.js";
+import {
   type DecoderRefillReason,
   type DecoderRefillRequest,
   decoderConsumerId,
@@ -25,6 +37,13 @@ export interface DecodedVideoFrame {
   readonly chromaSiting?: ChromaSiting;
   /** Seek/recovery generation; stale frames are closed without upload. */
   readonly generation: number;
+  /**
+   * Set when the frame was decoded in software because the request asked for it
+   * ({@link DecoderRefillRequest.decode}); a `DecoderRefillCoordinator` sets it on what it
+   * delivers. A render host that cannot take a software frame either refuses the source instead of
+   * asking for it again.
+   */
+  readonly decode?: "software";
 }
 
 /** A source frame a presentation needed and did not have. */
@@ -42,6 +61,12 @@ export interface MissingFrame {
    * `requestedTimeTicks`, is what to decode.
    */
   readonly mediaTimeTicks: bigint;
+  /**
+   * `"software"` when the render host sent this frame back for a software decode, or every frame
+   * of its source comes back without planes: the refill decodes it in software
+   * ({@link DecoderRefillRequest.decode}). Set by `exportToSink` on what it asks a refill for.
+   */
+  readonly decode?: "software";
 }
 
 /** Result of one real-time presentation attempt. */
@@ -77,10 +102,44 @@ export interface RenderBackend {
    * presentation.
    */
   isDeviceLost(): boolean;
-  /** Replaces a lost device; uploaded frames are gone afterwards. */
-  recover(): Promise<void>;
+  /** What the lost renderer reported about its loss; `undefined` when it reported nothing. */
+  lossReport(): GpuLossReport | undefined;
+  /** The lost renderer's surface and whether the host still gets a WebGPU adapter. */
+  probeSurface(): Promise<SurfaceProbe>;
+  /**
+   * Makes the renderer `step` names, on `canvas` for a fresh-surface step or on the current
+   * surface, and resolves to the renderer it made (`undefined` for a backend that does not say).
+   * Uploaded frames are gone afterwards. Rejects when the renderer cannot be made; the backend stays
+   * lost.
+   */
+  recover(
+    step: RecoveryStep,
+    canvas?: OffscreenCanvas,
+  ): Promise<RendererChoice | undefined>;
   /** Releases the backend; it is not used again. */
   dispose(): void;
+}
+
+/** Options of an {@link Alpha2Player}. */
+export interface Alpha2PlayerOptions {
+  /**
+   * Called with the frames a presentation lacked; see {@link Alpha2Player}. It should resolve after
+   * uploading what it decoded.
+   */
+  readonly onRefill?: (
+    requests: readonly DecoderRefillRequest[],
+  ) => void | Promise<void>;
+  /**
+   * Gives the player a new canvas, already transferred to an `OffscreenCanvas` at the same size, in
+   * place of the one on screen. A recovery that needs a fresh surface (a lost WebGL2 context, the CPU
+   * renderer after the GPU was lost) asks it once per step. Without it such a recovery fails with a
+   * fatal `GPU_DEVICE_LOST`.
+   */
+  readonly replaceSurface?: () => Promise<OffscreenCanvas>;
+  /** Called with the renderer each recovery made. */
+  readonly onRendererChange?: (choice: RendererChoice) => void;
+  /** The recovery ladder; one of its own by default. */
+  readonly recovery?: GpuRecoveryLadder;
 }
 
 /**
@@ -94,6 +153,17 @@ export interface RenderBackend {
  * have arrived, presents the same time again, so the time asked for is the one that shows.
  * `onRefill` should resolve after uploading what it decoded: frames uploaded later reach the screen
  * only with the next presentation.
+ *
+ * A frame the backend sends back for a software decode (`SOFTWARE_DECODE_REQUIRED`: no planar
+ * format the engine reads, or planes the browser could not read back) is asked of `onRefill` again,
+ * once, with `decode: "software"`; a source whose frames have no planar format is asked for in
+ * software from then on. `onRefill` must honor `decode` (a `DecoderRefillCoordinator` does).
+ *
+ * A lost GPU is recovered on the next presentation by a {@link GpuRecoveryLadder}: the GPU again for
+ * a first external loss, the CPU renderer once the loss was the work's own or the page has lost the
+ * GPU twice. A recovery onto a fresh surface takes a canvas from `replaceSurface`. When every rung
+ * fails the player is done: that presentation and every later one reject with the same fatal error,
+ * without calling the backend.
  */
 export class Alpha2Player {
   readonly #backend: RenderBackend;
@@ -111,18 +181,27 @@ export class Alpha2Player {
    * overlap it.
    */
   #recovering?: Promise<void>;
+  /** Set when recovery ran out of rungs; every later presentation rejects with it. */
+  #terminal?: Error;
+  readonly #replaceSurface?: () => Promise<OffscreenCanvas>;
+  readonly #onRendererChange?: (choice: RendererChoice) => void;
+  readonly #ladder: GpuRecoveryLadder;
   readonly #onRefill?: (
     requests: readonly DecoderRefillRequest[],
   ) => void | Promise<void>;
+  /** Sources whose frames came back without planes: asked for in software from then on. */
+  readonly #softwareSources = new Set<string>();
+  /** Frames the backend sent back for a software decode, by {@link frameKey}, not yet asked for. */
+  readonly #softwareFrames = new Map<string, SoftwareDecodeReason>();
+  /** Frames already asked for again in software since the last seek: each is asked for once. */
+  readonly #reissued = new Set<string>();
 
-  constructor(
-    backend: RenderBackend,
-    onRefill?: (
-      requests: readonly DecoderRefillRequest[],
-    ) => void | Promise<void>,
-  ) {
+  constructor(backend: RenderBackend, options: Alpha2PlayerOptions = {}) {
     this.#backend = backend;
-    this.#onRefill = onRefill;
+    this.#onRefill = options.onRefill;
+    this.#replaceSurface = options.replaceSurface;
+    this.#onRendererChange = options.onRendererChange;
+    this.#ladder = options.recovery ?? new GpuRecoveryLadder();
   }
 
   /** Initializes the backend on `canvas`; every other method throws before this resolves. */
@@ -148,7 +227,19 @@ export class Alpha2Player {
       frame.frame.close();
       return;
     }
-    await this.#backend.uploadVideoFrame(frame);
+    try {
+      await this.#backend.uploadVideoFrame(frame);
+    } catch (error) {
+      // The backend closed the frame; the picture is asked for again in software after the refill.
+      const request = softwareDecodeRequest(error);
+      if (request === undefined || frame.decode === "software") throw error;
+      const key = frameKey(request.sourceId, request.mediaTimeTicks);
+      if (this.#reissued.has(key)) throw error;
+      if (request.reason === "non-planar")
+        this.#softwareSources.add(request.sourceId);
+      this.#softwareFrames.set(key, request.reason);
+      return;
+    }
     this.#uploads += 1;
   }
 
@@ -158,12 +249,15 @@ export class Alpha2Player {
    * `seek` superseded this one.
    *
    * Presentations that overlap a recovery wait for it rather than starting another, and reject
-   * with its error when it fails; the next presentation after a failure tries again.
+   * with its error when it fails. A recovery fails only when no renderer could be made at all (or a
+   * fresh surface was needed without `replaceSurface`): it rejects with a fatal `GPU_DEVICE_LOST`,
+   * as every later presentation does.
    *
    * @throws Before {@link Alpha2Player.initialize} has resolved.
    */
   async present(timeTicks: bigint): Promise<PresentedFrame | undefined> {
     this.#assertInitialized();
+    if (this.#terminal !== undefined) throw this.#terminal;
     const request = ++this.#latestRequest;
     let reason: DecoderRefillReason = "prefetch";
     if (this.#recovering !== undefined || this.#backend.isDeviceLost()) {
@@ -185,6 +279,8 @@ export class Alpha2Player {
   async seek(timeTicks: bigint): Promise<PresentedFrame | undefined> {
     this.#assertInitialized();
     this.#generation += 1;
+    this.#softwareFrames.clear();
+    this.#reissued.clear();
     const request = ++this.#latestRequest;
     await this.#backend.reset();
     return this.#presentFilled(timeTicks, request, "seek");
@@ -201,13 +297,68 @@ export class Alpha2Player {
   #recover(): Promise<void> {
     this.#recovering ??= (async () => {
       try {
-        await this.#backend.recover();
+        await this.#climbDown();
         this.#generation += 1;
       } finally {
         this.#recovering = undefined;
       }
     })();
     return this.#recovering;
+  }
+
+  /** Runs the ladder from the loss down until a renderer is made, or stores the terminal error. */
+  async #climbDown(): Promise<void> {
+    const report = this.#backend.lossReport() ?? {
+      hung: false,
+      frameIndex: null,
+      timeTicks: null,
+      gpuMs: null,
+      message: "the GPU device was lost",
+    };
+    let step = this.#ladder.onLoss(report, await this.#backend.probeSurface());
+    for (;;) {
+      let canvas: OffscreenCanvas | undefined;
+      try {
+        if (step.surface === "fresh") {
+          if (this.#replaceSurface === undefined) {
+            throw this.#fail(
+              new Alpha2WasmError({
+                code: "GPU_DEVICE_LOST",
+                message: `${report.message}, and the canvas cannot take another renderer: give Alpha2Player a replaceSurface option`,
+                fatal: true,
+              }),
+            );
+          }
+          canvas = await this.#replaceSurface();
+        }
+        const choice = await this.#backend.recover(step, canvas);
+        if (choice !== undefined) this.#onRendererChange?.(choice);
+        return;
+      } catch (error) {
+        if (error === this.#terminal) throw error;
+        const next = this.#ladder.onRecoveryFailed(step, error);
+        if (next === "terminal") {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          const terminal = new Alpha2WasmError({
+            code: "GPU_DEVICE_LOST",
+            message: `${report.message}, and no renderer could be made again (${message})`,
+            fatal: true,
+          });
+          Object.defineProperty(terminal, "cause", {
+            value: error,
+            configurable: true,
+          });
+          throw this.#fail(terminal);
+        }
+        step = next;
+      }
+    }
+  }
+
+  #fail(error: Error): Error {
+    this.#terminal = error;
+    return error;
   }
 
   #assertInitialized(): void {
@@ -258,17 +409,71 @@ export class Alpha2Player {
       sourceId,
       mediaTimeTicks,
     } of result.missingFrames) {
-      const key = `${sourceId}\u0000${mediaTimeTicks}`;
+      const key = frameKey(sourceId, mediaTimeTicks);
       if (requested.has(key)) continue;
       requested.add(key);
+      const software =
+        this.#softwareSources.has(sourceId) || this.#softwareFrames.has(key);
+      if (software && this.#softwareFrames.delete(key)) this.#reissued.add(key);
       requests.push({
         sourceId,
         mediaTimeTicks,
         reason,
         generation: this.#generation,
         consumerId: decoderConsumerId(clipId, readerId),
+        ...(software ? { decode: "software" as const } : {}),
       });
     }
     await this.#onRefill(requests);
+    await this.#refillInSoftware(requests);
   }
+
+  /**
+   * Asks once more, in software, for each of `requests` whose frame the backend sent back during
+   * the refill. A frame sent back because the browser could not read it fails as an unrecovered
+   * frame when the source has no software decoder (`FRAME_SUPPLY_FAILED`); only a frame without
+   * planes makes the source one the browser cannot hand over.
+   */
+  async #refillInSoftware(
+    requests: readonly DecoderRefillRequest[],
+  ): Promise<void> {
+    const again = new Map<SoftwareDecodeReason, DecoderRefillRequest[]>();
+    for (const request of requests) {
+      const key = frameKey(request.sourceId, request.mediaTimeTicks);
+      const why = this.#softwareFrames.get(key);
+      if (why === undefined) continue;
+      this.#softwareFrames.delete(key);
+      this.#reissued.add(key);
+      const group = again.get(why) ?? [];
+      group.push({ ...request, decode: "software" });
+      again.set(why, group);
+    }
+    const nonPlanar = again.get("non-planar");
+    if (nonPlanar !== undefined) await this.#onRefill?.(nonPlanar);
+    const unreadable = again.get("unreadable");
+    if (unreadable === undefined) return;
+    try {
+      await this.#onRefill?.(unreadable);
+    } catch (error) {
+      if (
+        (error as { code?: unknown } | null)?.code !==
+        "PLANAR_DECODE_UNAVAILABLE"
+      )
+        throw error;
+      throw Object.assign(
+        new Error(
+          `the browser could not read back the frame of ${unreadable
+            .map(({ sourceId }) => sourceId)
+            .join(", ")}, and decoding it again in software failed`,
+          { cause: (error as Error).cause ?? error },
+        ),
+        { code: "FRAME_SUPPLY_FAILED" },
+      );
+    }
+  }
+}
+
+/** One source frame, by source and source time. */
+function frameKey(sourceId: string, mediaTimeTicks: bigint | string): string {
+  return `${sourceId}\u0000${mediaTimeTicks}`;
 }

@@ -379,9 +379,9 @@ fn sample_source(input: VertexOutput, index: u32, looped: bool) -> SampledSource
 // from a register instead of the texture.
 //
 // A half float is rounded toward zero, as the half-float render targets of
-// the devices measured store a finite value (NVIDIA, RADV, lavapipe,
-// llvmpipe GL, Apple M4, Intel Iris Xe, NVIDIA MX450), keeping subnormals and
-// infinity. An 8-bit code is rounded to nearest; devices do not round a
+// the devices measured store a finite value (discrete NVIDIA GPUs, RADV,
+// lavapipe, llvmpipe GL, an Apple-silicon GPU, an Intel integrated GPU),
+// keeping subnormals and infinity. An 8-bit code is rounded to nearest; devices do not round a
 // value to the nearest code exactly (NVIDIA and RADV store v * 255 = n.51
 // as n), so the pass writes one that is already a code.
 

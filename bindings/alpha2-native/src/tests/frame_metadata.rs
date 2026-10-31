@@ -719,10 +719,10 @@ fn a_hardware_picture_that_reaches_past_its_surface_has_no_visible_rect() {
 /// coded size instead (`alpha2_d3d12_get_format`), as `FFmpeg`'s master does, so
 /// every picture fits its surface and the whole stream decodes in hardware.
 ///
-/// Decoding it into the visible-size surfaces also left an Intel Iris Xe
-/// (8086:9a49) on driver 32.0.101.7092 waiting forever on a lock inside the
-/// driver in the next D3D12 video call on the device from another thread,
-/// which hung every later hardware test of this binary.
+/// Decoding it into the visible-size surfaces also left an Intel integrated
+/// GPU on driver 32.0.101.7092 waiting forever on a lock inside the driver in
+/// the next D3D12 video call on the device from another thread, which hung
+/// every later hardware test of this binary.
 #[cfg(all(target_os = "windows", feature = "hwdecode"))]
 #[test]
 fn a_d3d12va_stream_whose_sps_brings_a_left_crop_in_band_decodes_it_in_hardware() {

@@ -76,6 +76,43 @@ export function speakersOfMask(mask: bigint): AudioSpeaker[] {
   return speakers;
 }
 
+/** The native channel bit of each named speaker. */
+const CHANNEL_OF_SPEAKER = new Map<AudioSpeaker, number>(
+  [...SPEAKER_BY_CHANNEL].map(([channel, speaker]) => [speaker, channel]),
+);
+
+/**
+ * `speakers` with an LFE added where a native-order layout has it, and the plane it lands in: the
+ * layout a decoder that adds a silent LFE to a source without one delivers (a WebCodecs decoder
+ * does so for E-AC-3 5.0). `null` when `speakers` already has an LFE or is not a native-order list
+ * of named speakers, so where the decoder put the LFE is unknown.
+ */
+export function speakersWithLfe(
+  speakers: readonly AudioSpeaker[],
+): { speakers: AudioSpeaker[]; lfePlane: number } | null {
+  const channels = speakers.map((speaker) => CHANNEL_OF_SPEAKER.get(speaker));
+  const lfe = CHANNEL_OF_SPEAKER.get("LFE") as number;
+  if (
+    channels.some(
+      (channel, index) =>
+        channel === undefined ||
+        channel === lfe ||
+        (index > 0 && channel <= (channels[index - 1] as number)),
+    )
+  )
+    return null;
+  const at = channels.findIndex((channel) => (channel as number) > lfe);
+  const lfePlane = at === -1 ? speakers.length : at;
+  return {
+    speakers: [
+      ...speakers.slice(0, lfePlane),
+      "LFE",
+      ...speakers.slice(lfePlane),
+    ],
+    lfePlane,
+  };
+}
+
 const list = (names: string): AudioSpeaker[] =>
   names.split(" ") as AudioSpeaker[];
 

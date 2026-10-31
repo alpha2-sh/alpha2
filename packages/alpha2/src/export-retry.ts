@@ -14,7 +14,8 @@
  *   The next attempt renders on the CPU when the caller has a CPU renderer, and otherwise the export
  *   stops.
  * - A failure evidence of memory exhaustion steps down to a smaller profile.
- * - A failure while encoding retries once with the software video encoder.
+ * - A failure while encoding retries once with the software video encoder, when the caller has
+ *   one (`softwareVideoEncoder`).
  * - A busy device (`RESOURCE_BUSY`) retries as it was, after the wait its failure names when that
  *   is longer than the backoff.
  * - A transient failure (a lost device, a crashed host, a refused mapping) retries as it was, and
@@ -77,6 +78,12 @@ export interface RetryPolicyOptions {
    * attempts and other work), for a browser export. Default 0.
    */
   readonly pageGpuLosses?: number;
+  /**
+   * Whether the caller's browser has a software video encoder for this export
+   * (`canEncodeInSoftware` in `alpha2/mediabunny`). `false` skips the switch to it after an encode
+   * failure, and the decision's reason says so. Default: assumed available.
+   */
+  readonly softwareVideoEncoder?: boolean;
 }
 
 /**
@@ -152,9 +159,11 @@ export function decideRetry(
   if (last === undefined)
     return { retry: false, reason: "nothing failed", failure: undefined };
   const { failure } = last;
-  const stop = (reason: string, final: ExportFailure = failure) => ({
+  // Why a rule that would have applied did not, appended to the reason of the one that decides.
+  let note = "";
+  const stop = (why: string, final: ExportFailure = failure) => ({
     retry: false as const,
-    reason,
+    reason: why + note,
     failure: final,
   });
   const attemptsLeft = history.length < maxAttempts;
@@ -164,7 +173,7 @@ export function decideRetry(
   );
   const smaller = profiles[index + 1];
   const retry = (
-    reason: string,
+    why: string,
     changes: {
       readonly profile?: RetryProfile;
       readonly renderer?: AttemptRenderer;
@@ -177,7 +186,7 @@ export function decideRetry(
     profile: changes.profile ?? profiles[index] ?? last.profile,
     renderer: changes.renderer ?? last.renderer,
     videoEncoder: changes.videoEncoder ?? last.videoEncoder,
-    reason,
+    reason: why + note,
   });
   const previous = history.at(-2);
   const samePoint =
@@ -220,11 +229,15 @@ export function decideRetry(
       : stop(
           `${failure.code} with the smallest profile (${last.profile.name}): nothing left to reduce`,
         );
-  if (failure.phase === "encode" && last.videoEncoder === "default")
-    return retry(
-      `${failure.code} while encoding: retrying with the software video encoder`,
-      { videoEncoder: "software" },
-    );
+  if (failure.phase === "encode" && last.videoEncoder === "default") {
+    if (options.softwareVideoEncoder !== false)
+      return retry(
+        `${failure.code} while encoding: retrying with the software video encoder`,
+        { videoEncoder: "software" },
+      );
+    note =
+      " (this browser has no software video encoder for the export to switch to)";
+  }
   if (failure.code === "RESOURCE_BUSY")
     return retry(`${failure.code}: retrying when the device may be free`, {
       delayMs: Math.max(0, failure.retryAfterMs ?? 0, backoff(history.length)),

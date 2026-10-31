@@ -148,8 +148,8 @@ const MAX_DECODE_CONCURRENCY: usize = 4;
 /// videos it reads at once.
 const DEFAULT_DECODER_SESSIONS: usize = 8;
 /// The most decoder sessions an export keeps open. Thirty-two 4K hardware
-/// sessions open on the hardware it was measured on (an RTX 4090 with Vulkan
-/// video), the only measurement: `VideoToolbox` and D3D12VA run under the same
+/// sessions open on the hardware it was measured on (a discrete NVIDIA GPU with
+/// Vulkan video), the only measurement: `VideoToolbox` and D3D12VA run under the same
 /// cap unmeasured, and software sessions this many are bounded by memory
 /// first.
 const MAX_DECODER_SESSIONS: usize = 32;
@@ -1252,8 +1252,8 @@ fn windows_default_note(
     });
     report.explanation = format!(
         "{}; ALPHA2_GPU_ADAPTER is unset, and Windows renders by the high-performance order \
-         because an Intel Iris Xe draws leftover memory into DX12 textures with this build's \
-         wgpu-hal{hint}",
+         because some Intel integrated GPUs draw leftover memory into DX12 textures with this \
+         build's wgpu-hal{hint}",
         report.explanation
     );
     report

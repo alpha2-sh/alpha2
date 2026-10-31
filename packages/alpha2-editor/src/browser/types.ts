@@ -2,6 +2,7 @@ import type { Generator, MediaFingerprint, Project } from "alpha2/project";
 import type { LayoutBounds } from "alpha2/layout";
 import type { AssetBinding, ConformReport, MediaPurpose } from "alpha2/assets";
 import type { BuiltinEffectCatalog, EffectDefinition } from "alpha2/effects";
+import type { TrackDecodeFacts } from "alpha2/hdr-frames";
 import type { EditorSession } from "../core/session.js";
 import type { CapabilityReport, PlaybackPolicy } from "alpha2";
 import type { Capability } from "../ports/index.js";
@@ -94,6 +95,17 @@ export interface RuntimeAsset {
    * source has audio, which a native host and other browsers hear.
    */
   readonly audioDecodable?: boolean;
+  /**
+   * When `audioDecodable` is `false`, what the trial decode at import found: the codec, channels
+   * and layout, and what the browser said.
+   */
+  readonly audioDecodeFacts?: TrackDecodeFacts;
+  /**
+   * For a video: `unavailable` when this browser decodes it only to frames the engine cannot read
+   * (HDR, see `BrowserBridgeOptions.hdrWithoutPlanes`): it previews degraded and does not export
+   * in this session; a native host decodes it.
+   */
+  readonly planarDecode?: "available" | "unavailable";
   /** Per-bucket peak magnitudes across the whole file, for audio sources. */
   readonly peaks?: Float32Array | null;
   /** `native`: drawn centred at its own pixel size (text); otherwise contained. */
@@ -205,6 +217,25 @@ export interface BrowserBridgeOptions {
    * `invalid_video_conversion`.
    */
   readonly videoConversion?: "engine" | "browser";
+  /**
+   * Which renderer previews and exports draw with: `"auto"` (the default) a hardware GPU, through
+   * WebGPU or else WebGL2, and the engine's CPU renderer where the browser offers neither or only a
+   * software adapter; `"gpu"` any GPU adapter, software ones included; `"cpu"` the CPU renderer,
+   * which runs no runtime effect. After GPU losses the recovery ladder may move the preview, and the
+   * export retry policy an export, to the CPU whatever this says. `capabilities.renderer` reports
+   * the preview's. Another value is refused when the bridge is made, with a `RangeError`.
+   */
+  readonly renderer?: "auto" | "gpu" | "cpu";
+  /**
+   * What becomes of an HDR video this browser decodes only to frames the engine cannot read and
+   * has no software decoder for (HEVC 10-bit HDR in Chrome). `preview-degraded` (the default)
+   * imports it: the preview shows it through the browser's own tone mapping and sets
+   * `previewIssue` while it is on screen, and `startExport` refuses any export that shows it
+   * (`unsupported_media`, its cause a `PlanarDecodeUnavailableError`); export such a project with
+   * the native host (`@alpha2-sh/editor/native-client`), which decodes it. `refuse` refuses the
+   * import (`unsupported_media`). Another value is refused when the bridge is made (`RangeError`).
+   */
+  readonly hdrWithoutPlanes?: "refuse" | "preview-degraded";
 }
 /** Options of `BrowserBridge.startExport`. */
 export interface BrowserExportOptions {
@@ -352,13 +383,34 @@ export interface TextBounds {
   readonly lineCount: number;
 }
 
+/** The renderer that draws the bound preview, in {@link BrowserBridge.capabilities}. */
+export interface PreviewRenderer {
+  /** `"gpu"`, or `"cpu"`: the engine's CPU renderer in wasm. */
+  readonly renderer: "gpu" | "cpu";
+  /**
+   * Why it draws on the CPU: no hardware GPU in this browser (a refused software adapter is named),
+   * or a GPU loss moved the preview there. `null` on a GPU.
+   */
+  readonly rendererReason: string | null;
+  /** `"webgpu"`, `"webgl2"` or `"cpu"`. */
+  readonly backend: "webgpu" | "webgl2" | "cpu" | null;
+  /** The GPU adapter as the browser names it; `null` on the CPU or when it names none. */
+  readonly adapter: string | null;
+  /** Whether runtime effects draw: the CPU renderer refuses them, each reported once. */
+  readonly runtimeEffects: boolean;
+}
+
 export interface BrowserBridge {
   /** Where the preview renders: nowhere until `bindPreview`, then a worker or the main thread. */
   readonly previewBackend: "unbound" | "worker" | "main-thread";
   /** How many times the preview was made again after its GPU device or WebGL context was lost. */
   readonly previewRecoveries: number;
-  /** What this page can do; `gpu` and `color` are `null` until a preview is bound. */
+  /**
+   * What this page can do; `gpu`, `color` and `renderer` are `null` until a preview is bound.
+   * `features.preview` and `features.export` need no GPU: without one the engine draws on the CPU.
+   */
   readonly capabilities: CapabilityReport<null, null> & {
+    readonly renderer: PreviewRenderer | null;
     readonly features: Readonly<
       Record<
         "preview" | "audioPreview" | "transportRate" | "worker" | "export",
@@ -379,6 +431,14 @@ export interface BrowserBridge {
   setMonitorVolume(value: number): void;
   /** The monitor volume `setMonitorVolume` last set; 1 until then. */
   readonly monitorVolume: number;
+  /**
+   * Shifts the preview picture against its sound by `ms` milliseconds (positive shows it later),
+   * for an output delay the browser does not report, such as a wireless headset's. Kept across
+   * bindings. Throws for a value that is not finite or beyond 2000 ms either way.
+   */
+  setAudioOffset(ms: number): void;
+  /** The offset `setAudioOffset` last set; 0 until then. */
+  readonly audioOffsetMs: number;
   /**
    * Logs every source upload of the renderer that draws the preview (the worker's in worker mode)
    * to the console, for debugging. Kept for later bindings.
@@ -410,7 +470,9 @@ export interface BrowserBridge {
    *   frame the clock asked for;
    * - `bitmapTransfers`: frames copied to the bound canvas from another surface;
    * - `renderSize`: `[width, height]` frames render at;
-   * - `previewScale`, and `backend` (`worker` or `main-thread`).
+   * - `previewScale`, and `backend` (`worker` or `main-thread`);
+   * - `audioLatencySource`: where the playing audio clock's output latency comes from
+   *   (`output-latency`, `output-timestamp` or `base-only`), `null` without playing sound.
    * Counters are cumulative (`renders` and `unchanged` per renderer, the others since
    * `bindPreview`): subtract two samples for a rate.
    */
@@ -450,7 +512,9 @@ export interface BrowserBridge {
   subscribeAssets(listener: () => void): () => void;
   /**
    * Why the viewer holds its last frame instead of the current one, or `null` when it is current: a
-   * composition the playhead shows cannot draw its output yet.
+   * composition the playhead shows cannot draw its output yet. Also set while the frame shows an
+   * HDR source through the browser's own tone mapping (see `BrowserBridgeOptions.hdrWithoutPlanes`),
+   * which this browser cannot export.
    */
   readonly previewIssue: string | null;
   /** Notifies when {@link previewIssue} changes. */
@@ -670,8 +734,9 @@ export interface BrowserBridge {
    * (`export_busy`), `frameRate` is not one the engine reads (`invalid_frame_rate`), `videoDecode`
    * is not `auto` or `software` (`invalid_video_decode`), `videoConversion` is not `engine` or
    * `browser` (`invalid_video_conversion`), the asset
-   * decisions are not loaded (`conform_pending`), the media is not ready (`ConformError`), or the
-   * document does not compile. Everything later is reported through the job's `result`.
+   * decisions are not loaded (`conform_pending`), the media is not ready (`ConformError`), the
+   * document does not compile, or it shows an HDR source this browser previews only degraded
+   * (`unsupported_media`, its `cause` a `PlanarDecodeUnavailableError` naming the sources). Everything later is reported through the job's `result`.
    */
   startExport(options?: BrowserExportOptions): ExportJob;
   /**
@@ -697,6 +762,16 @@ export interface WorkerPreviewOptions {
    * `BrowserBridgeOptions.videoConversion`.
    */
   readonly videoConversion?: "engine" | "browser";
+  /**
+   * `present-degraded` shows an HDR source without planes through the browser's own conversion
+   * (`FrameSupply`'s `opaqueEngineFrames`); `refuse` (the default) fails its frames.
+   */
+  readonly opaqueEngineFrames?: "refuse" | "present-degraded";
+  /**
+   * Which renderer the worker's engine makes: `"auto"` (the default: a hardware GPU, else the CPU
+   * renderer), `"gpu"` or `"cpu"`.
+   */
+  readonly renderer?: "auto" | "gpu" | "cpu";
 }
 /** The main-thread side of a preview renderer running in a worker. */
 export interface WorkerPreview {
@@ -728,6 +803,8 @@ export interface WorkerPreview {
   seek(tick: number): Promise<{
     rendered: boolean;
     unchanged: boolean;
+    /** Sources the frame showed through the browser's own conversion. */
+    degradedSources: readonly string[];
     bitmap?: ImageBitmap;
     diagnostics: Readonly<Record<string, number>>;
     engineDiagnostics?: Readonly<Record<string, unknown>>;

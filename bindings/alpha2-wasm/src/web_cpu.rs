@@ -1687,6 +1687,7 @@ impl WebCpuRenderer {
                 .map(ToString::to_string)
                 .collect(),
             missing_frames,
+            degraded_sources: Vec::new(),
             repeated: playback.repeated,
             unchanged: playback.unchanged,
         };

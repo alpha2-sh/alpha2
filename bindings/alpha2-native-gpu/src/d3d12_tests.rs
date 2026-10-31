@@ -1852,7 +1852,7 @@ fn an_encode_refusal_names_the_adapter_the_codec_and_the_check() {
         "GPU A: D3D12 Video Encode refuses h264 main at the NV12 input check (not supported)"
     );
     // A device that lists bit-rate modes and refuses each in the whole configuration, as an
-    // Intel Iris Xe on driver 30.0.101.2079 does.
+    // Intel integrated GPU on driver 30.0.101.2079 does.
     let mut caps = refused(ALPHA2_D3D12_ENCODE_CHECK_SUPPORT, 0x887A_0020);
     caps.refused_rate_control_modes = ALPHA2_D3D12_RATE_CONTROL_CBR | ALPHA2_D3D12_RATE_CONTROL_VBR;
     caps.rate_control_status = [0, 0x887A_0020_u32.cast_signed(), 0, 0];

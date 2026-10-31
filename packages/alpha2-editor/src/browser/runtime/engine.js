@@ -1,6 +1,8 @@
 import { PlaybackClock, WebEffectRegistry } from "alpha2/wasm";
 import { loadEngineWasm } from "./wasm.js";
 import { FrameSupply } from "alpha2/frame-supply";
+import { lossReportFromJson } from "alpha2/gpu-recovery";
+import { createRenderer } from "alpha2/renderer-choice";
 import { secondsToTicks } from "alpha2/project";
 import { registerCaptionFonts } from "./caption-fonts.js";
 import { drawnEffectResources } from "../../core/compositions.js";
@@ -44,13 +46,27 @@ export class Engine {
     sources,
     library,
     runtimeAssets = {},
-    { unreadableFrames, videoConversion } = {},
+    {
+      unreadableFrames,
+      videoConversion,
+      opaqueEngineFrames,
+      renderer = "auto",
+    } = {},
   ) {
+    /**
+     * Which renderer `start` makes: `"auto"` (a hardware GPU, else the CPU renderer), `"gpu"` or
+     * `"cpu"`, as `createRenderer` in `alpha2/renderer-choice` takes them.
+     */
+    this.renderer = renderer;
+    /** The renderer `start` made (`RendererChoice`); null before. */
+    this.rendererChoice = null;
     this.runtimeAssets = runtimeAssets;
     /** What the frame supply does with a frame the browser cannot read back (`FrameSupply`). */
     this.unreadableFrames = unreadableFrames;
     /** Who converts decoded SDR frames, the engine or the browser (`FrameSupply`). */
     this.videoConversion = videoConversion;
+    /** Whether HDR frames without planes are previewed degraded (`FrameSupply`). */
+    this.opaqueEngineFrames = opaqueEngineFrames;
     this.canvas = canvas;
     this.sources = sources;
     this.library = library;
@@ -70,10 +86,13 @@ export class Engine {
       );
     }
     await loadEngineWasm(this.runtimeAssets.wasmUrl);
-    this.#registry =
-      this.canvas instanceof OffscreenCanvas
-        ? await WebEffectRegistry.createForCanvas(this.canvas)
-        : await WebEffectRegistry.createForHtmlCanvas(this.canvas);
+    const { wasm, choice } = await createRenderer(
+      WebEffectRegistry,
+      this.canvas,
+      this.renderer,
+    );
+    this.#registry = wasm;
+    this.rendererChoice = choice;
     this.#effectResources = new Map();
     this.#sizeResultCache();
     this.#supply = new FrameSupply(this.#registry, {
@@ -83,6 +102,9 @@ export class Engine {
       ...(this.videoConversion === undefined
         ? {}
         : { videoConversion: this.videoConversion }),
+      ...(this.opaqueEngineFrames === undefined
+        ? {}
+        : { opaqueEngineFrames: this.opaqueEngineFrames }),
     });
     // `engine.traceUploads = true` in the console logs every source upload, to tell a host decode
     // bug from an engine one when a clip shows another clip's picture.
@@ -135,11 +157,34 @@ export class Engine {
     return Array.from(this.#registry.previewSize);
   }
 
-  /** The renderer's part of the capability report: GPU, color, and playback. */
+  /**
+   * The renderer's part of the capability report: GPU, color, and playback, and `renderer`, the
+   * renderer that draws (`renderer`, `rendererReason`, `backend`, `adapter`) and whether it runs
+   * runtime effects (the CPU renderer refuses them).
+   */
   capabilityReport() {
-    return this.#registry
-      ? JSON.parse(this.#registry.capabilityReport())
-      : null;
+    if (!this.#registry) return null;
+    const choice = this.rendererChoice;
+    return {
+      ...JSON.parse(this.#registry.capabilityReport()),
+      renderer: {
+        renderer: choice?.renderer ?? "gpu",
+        rendererReason: choice?.rendererReason ?? null,
+        backend: choice?.backend ?? null,
+        adapter: choice?.adapter ?? null,
+        runtimeEffects: (choice?.renderer ?? "gpu") === "gpu",
+      },
+    };
+  }
+
+  /**
+   * After a GPU loss, what the renderer reported about it (`GpuLossReport` of
+   * `alpha2/gpu-recovery`); undefined before a loss and on the CPU renderer.
+   */
+  lossReport() {
+    const registry = this.#registry;
+    if (!registry?.deviceLost) return undefined;
+    return lossReportFromJson(registry.lossReport);
   }
 
   /** A clock for one run of playback; see the engine's `PlaybackPolicy`. */
@@ -469,7 +514,11 @@ export class Engine {
     else this.#renders += 1;
     this.lastRenderMs = performance.now() - started;
     this.#sampleDiagnostics();
-    return { rendered: true, unchanged };
+    return {
+      rendered: true,
+      unchanged,
+      degradedSources: playback.degradedSources ?? [],
+    };
   }
 
   #sampleDiagnostics() {

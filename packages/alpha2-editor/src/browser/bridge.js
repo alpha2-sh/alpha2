@@ -7,9 +7,15 @@ import {
 import { captionsAsset } from "../core/captions.js";
 import { MAX_CAPTION_FILE_BYTES } from "alpha2/project";
 import { containerPolicy } from "alpha2/containers";
+import { PlanarDecodeUnavailableError } from "alpha2/hdr-frames";
 import { drawnEffectResources, shownSources } from "../core/compositions.js";
 import { ResourceRegistry } from "./resources.js";
 import { ExportJob, requireExportFrameRate } from "./jobs.js";
+import {
+  GpuRecoveryLadder,
+  lossReportFromJson,
+  pageGpuLosses,
+} from "alpha2/gpu-recovery";
 import { attemptOptions } from "./runtime/budget.js";
 import { readUserText } from "./runtime/text.js";
 import { createWorkerPreview } from "./worker.js";
@@ -79,6 +85,9 @@ const PLAYBACK_POLICIES = Object.freeze([
  * 200 MB/s: four read about 800 MB/s, below a local SSD, and one core stays with the page.
  */
 const IMPORT_STAGE_CONCURRENCY = 4;
+/** `previewIssue` while the frame shows an HDR source this browser hands over only degraded. */
+const DEGRADED_PREVIEW_ISSUE =
+  "HDR shown with the browser's tone mapping; the browser cannot export it: export with the native host";
 
 /**
  * How long Play waits for sound to start before playing the picture without it. A first start loads
@@ -95,8 +104,9 @@ const AUDIO_START_TIMEOUT_MS = 3000;
  * `EXTENSIONS_CALL_TIMEOUT_MS` terminates, or, without one, on this thread. A font is checked with
  * the engine's parser (`alpha2/wasm`, from `wasmUrl`) and also registered with the page's
  * `FontFace` set. A file's content hash is made in a worker `hashWorkerFactory` makes, where there
- * is one.
- * @param {{ extensionsWasmUrl?: string | URL, wasmUrl?: string | URL, hashWorkerFactory?: () => Worker, extensionsWorkerFactory?: () => Worker }} [options]
+ * is one. An HDR video this browser decodes only without planes imports for a degraded preview,
+ * or is refused with `hdrWithoutPlanes: "refuse"` (see `BrowserBridgeOptions.hdrWithoutPlanes`).
+ * @param {{ extensionsWasmUrl?: string | URL, wasmUrl?: string | URL, hashWorkerFactory?: () => Worker, extensionsWorkerFactory?: () => Worker, hdrWithoutPlanes?: "refuse" | "preview-degraded" }} [options]
  * @returns {import("./types.js").BrowserMediaAdapter}
  */
 export function createMediaAdapter({
@@ -104,6 +114,7 @@ export function createMediaAdapter({
   wasmUrl,
   hashWorkerFactory,
   extensionsWorkerFactory,
+  hdrWithoutPlanes = "preview-degraded",
 } = {}) {
   const hash = hashWorkerFactory
     ? (file, options) => hashInWorker(hashWorkerFactory, file, options)
@@ -230,7 +241,7 @@ export function createMediaAdapter({
         },
       };
     }
-    const library = new AssetLibrary();
+    const library = new AssetLibrary({ hdrWithoutPlanes });
     try {
       const runtime = file.name.toLowerCase().endsWith(".cube")
         ? await library.importEffectResource(file, "lut3d")
@@ -286,7 +297,8 @@ export function createBrowserBridge(options) {
   const {
     editor,
     runtimeAssets = {},
-    mediaAdapter = createMediaAdapter(runtimeAssets),
+    hdrWithoutPlanes = "preview-degraded",
+    mediaAdapter = createMediaAdapter({ ...runtimeAssets, hdrWithoutPlanes }),
     resourceLimit = 128,
     audio = true,
     onError = () => {},
@@ -295,10 +307,24 @@ export function createBrowserBridge(options) {
     videoConversion: initialVideoConversion = "engine",
   } = options;
   let previewScale = checkedPreviewScale(initialPreviewScale);
+  if (hdrWithoutPlanes !== "refuse" && hdrWithoutPlanes !== "preview-degraded")
+    throw new RangeError(
+      'hdrWithoutPlanes must be "refuse" or "preview-degraded"',
+    );
+  // What the preview's frame supplies do with an HDR source the library imported degraded.
+  const opaqueEngineFrames =
+    hdrWithoutPlanes === "preview-degraded" ? "present-degraded" : "refuse";
   const videoConversion = checkedVideoConversion(
     initialVideoConversion,
     "bridge",
   );
+  const rendererMode = options.renderer ?? "auto";
+  if (
+    rendererMode !== "auto" &&
+    rendererMode !== "gpu" &&
+    rendererMode !== "cpu"
+  )
+    throw new RangeError('renderer must be "auto", "gpu" or "cpu"');
   // A test's stand-in for origin storage, kept out of the public options.
   const proxyStore =
     /** @type {{ proxyStore?: ProxyStore }} */ (options).proxyStore ??
@@ -565,6 +591,8 @@ export function createBrowserBridge(options) {
     workerFonts = null,
     refreshFrame = 0,
     monitorVolume = 1,
+    // The user's A/V offset, for an output delay the browser does not report.
+    audioOffsetMs = 0,
     // Tracing the drawing renderer applies, kept for every renderer a binding makes.
     passTiming = false,
     traceUploads = false,
@@ -696,8 +724,17 @@ export function createBrowserBridge(options) {
       return asset?.kind === "text" ? { id, kind: "image", asset } : asset;
     },
   });
+  // Preview needs the engine's module and the canvases it draws on, not a GPU: without one it
+  // renders on the CPU, which `capabilities.renderer` reports once a preview is bound.
   const features = Object.freeze({
-    preview: { available: typeof OffscreenCanvas !== "undefined" },
+    preview: {
+      available:
+        typeof WebAssembly !== "undefined" &&
+        typeof OffscreenCanvas !== "undefined" &&
+        typeof VideoFrame !== "undefined",
+      reason:
+        "Preview needs WebAssembly, OffscreenCanvas and WebCodecs; it renders on the CPU where the browser offers no hardware GPU",
+    },
     audioPreview: {
       available:
         typeof SharedArrayBuffer !== "undefined" &&
@@ -712,9 +749,12 @@ export function createBrowserBridge(options) {
         "Provide a bundled workerFactory; otherwise the main-thread adapter is used",
     },
     export: {
-      available: typeof VideoEncoder !== "undefined",
+      available:
+        typeof WebAssembly !== "undefined" &&
+        typeof OffscreenCanvas !== "undefined" &&
+        typeof VideoEncoder !== "undefined",
       reason:
-        "Codec availability is checked at export; output streams to a temporary origin-private file unless a file or memory output is chosen",
+        "Codec availability is checked at export, which renders on the CPU where the browser offers no hardware GPU; output streams to a temporary origin-private file unless a file or memory output is chosen",
     },
   });
   /** The page's capability report; the GPU and color are known once a preview is bound. */
@@ -735,6 +775,7 @@ export function createBrowserBridge(options) {
       encode: null,
       features,
       adapters: null,
+      renderer: rendered?.renderer ?? null,
     });
   }
   /**
@@ -1246,8 +1287,16 @@ export function createBrowserBridge(options) {
     }).catch(onError);
   }
   let previewIssue = null;
+  /** Sources the last rendered frame showed through the browser's own tone mapping. */
+  let degradedShown = [];
   /** A lost GPU left no renderer and making it again failed; the next render tries again. */
   let recoveryPending = false;
+  /** The recovery rung the next try makes, while `recoveryPending`. */
+  let pendingStep = null;
+  /** Decides each GPU-loss recovery of the bound preview; one per binding. */
+  let previewLadder = new GpuRecoveryLadder();
+  /** Every recovery rung failed: this binding draws nothing until the preview is bound again. */
+  let previewUnavailable = false;
   /** How many times a lost GPU's preview was made again. */
   let previewRecoveries = 0;
   const previewListeners = new Set();
@@ -1262,8 +1311,8 @@ export function createBrowserBridge(options) {
    */
   async function renderAt(at, project, recovered = false) {
     try {
-      const rendered = await renderFrame(at, project);
-      setPreviewIssue(null);
+      const rendered = await renderFrame(at, project, recovered);
+      setPreviewIssue(degradedShown.length > 0 ? DEGRADED_PREVIEW_ISSUE : null);
       return rendered;
     } catch (error) {
       if (error?.code === "INCOMPLETE_COMPOSITION") {
@@ -1279,13 +1328,25 @@ export function createBrowserBridge(options) {
         throw error;
       }
       const lost =
-        error?.code === "GPU_DEVICE_LOST" || engine?.deviceLost === true;
+        error?.code === "GPU_DEVICE_LOST" ||
+        error?.code === "GPU_DEVICE_HUNG" ||
+        engine?.deviceLost === true;
       if (recovered || !lost || !boundCanvas || disposed) throw error;
-      if (!(await recoverPreview())) return false;
+      // The worker's report travels with its error; the main renderer reads its own.
+      const report =
+        error?.lossReport ??
+        engine?.lossReport() ??
+        lossReportFromJson(undefined, error?.message ?? String(error));
+      // Every rebuild draws on a fresh internal canvas, so no rung needs the lost one.
+      const step = previewLadder.onLoss(report, {
+        kind: "none",
+        webgpuAdapter: false,
+      });
+      if (!(await recoverPreview(step))) return false;
       return renderAt(at, await loaded(), true);
     }
   }
-  async function renderFrame(at, project) {
+  async function renderFrame(at, project, recovered = false) {
     if (boundCanvas?.style)
       boundCanvas.style.visibility = hasContent(project) ? "visible" : "hidden";
     if (!hasContent(project)) return false;
@@ -1294,6 +1355,7 @@ export function createBrowserBridge(options) {
         const result = await workerPreview.seek(at);
         if (result.engineDiagnostics)
           workerDiagnostics = result.engineDiagnostics;
+        degradedShown = result.degradedSources ?? [];
         // An unchanged frame comes without a bitmap: the canvas still shows it.
         if (result.bitmap) {
           boundCanvas
@@ -1304,16 +1366,24 @@ export function createBrowserBridge(options) {
         return result.rendered;
       } catch (error) {
         // Only the worker's own fault gives it up; a source's error is the source's, and the main
-        // renderer would meet it too.
-        if (!isWorkerFault(error)) throw error;
+        // renderer would meet it too. A lost GPU is the recovery ladder's: `renderAt` rebuilds
+        // the worker with the renderer it picks; a worker that loses it again on the frame drawn
+        // after that is let go, and the main renderer draws.
+        if (!isWorkerFault(error) || (isGpuLoss(error) && !recovered))
+          throw error;
         // The main renderer has the same project loaded and draws this frame instead.
         await abandonWorker(error);
       }
     }
-    const { rendered, unchanged } = await engine.render(at / 120000, {
+    const {
+      rendered,
+      unchanged,
+      degradedSources = [],
+    } = await engine.render(at / 120000, {
       generation: engine.generation,
       context: context(project, library),
     });
+    degradedShown = degradedSources;
     // An unchanged frame was not presented: the bound canvas still shows the last copy.
     if (rendered && !unchanged && copySurface) {
       boundCanvas
@@ -1355,6 +1425,12 @@ export function createBrowserBridge(options) {
       code === "GPU_DEVICE_HUNG"
     );
   }
+  /** Whether `error` says the GPU that drew was lost, or hung on the work it was given. */
+  function isGpuLoss(error) {
+    return (
+      error?.code === "GPU_DEVICE_LOST" || error?.code === "GPU_DEVICE_HUNG"
+    );
+  }
   /** Whether `error` is a source's coded error, which a redraw meets again. */
   function isSourceError(error) {
     return (
@@ -1379,7 +1455,7 @@ export function createBrowserBridge(options) {
     workerFonts = null;
     copySurface = true;
     await failed.dispose().catch(() => {});
-    if (error?.code === "GPU_DEVICE_LOST") return;
+    if (isGpuLoss(error)) return;
     workerGivenUp = true;
     const reason = error instanceof Error ? error.message : String(error ?? "");
     onError(
@@ -1591,18 +1667,39 @@ export function createBrowserBridge(options) {
     await workerPreview?.dispose();
     workerPreview = null;
     workerDiagnostics = null;
-    const useWorker =
-      features.worker.available && typeof canvas.getContext === "function";
+    // The main renderer draws on a canvas of its own and each frame is copied to the bound one,
+    // so a renderer made again after a GPU loss, or the CPU renderer, needs nothing of the page:
+    // the bound canvas only ever holds a bitmap renderer.
+    const copyable = typeof canvas.getContext === "function";
+    const useWorker = features.worker.available && copyable;
     engine = new Engine(
-      useWorker ? new OffscreenCanvas(canvas.width, canvas.height) : canvas,
+      copyable ? new OffscreenCanvas(canvas.width, canvas.height) : canvas,
       sources,
       library,
       runtimeAssets,
       // A frame shown at once matters more in a preview than the engine's conversion of it.
-      { unreadableFrames: "present", videoConversion },
+      {
+        unreadableFrames: "present",
+        videoConversion,
+        opaqueEngineFrames,
+        renderer: previewLadder.renderer === "cpu" ? "cpu" : rendererMode,
+      },
     );
-    mixer = new EngineAudioMixer(runtimeAssets, { enabled: audio });
+    mixer = new EngineAudioMixer(runtimeAssets, {
+      enabled: audio,
+      onInterrupted: (state) => {
+        if (playing) pause();
+        onError(
+          new EditorError(
+            "audio_unavailable",
+            `Audio output was ${state} by the browser or the system; playback paused`,
+            "play",
+          ),
+        );
+      },
+    });
     mixer.setMasterVolume(monitorVolume);
+    mixer.setLatencyOffset(audioOffsetMs);
     stalledAudio = null;
     supplier = new AudioWindowSupplier(library);
     try {
@@ -1610,9 +1707,10 @@ export function createBrowserBridge(options) {
       engine.setPreviewScale(previewScale);
       capabilities = capabilityReport(engine.capabilityReport());
       await registerKeptEffects();
-      // The surface already shows copied frames (its context is a bitmap renderer's).
-      if (useWorker && workerGivenUp) copySurface = true;
-      else if (useWorker) {
+      // The worker posts its frames to the same bitmap renderer, so copying stays on for the
+      // main renderer whether or not a worker draws.
+      copySurface = copyable;
+      if (useWorker && !workerGivenUp) {
         const workerRuntime = {
           ...(runtimeAssets.wasmUrl
             ? { wasmUrl: String(runtimeAssets.wasmUrl) }
@@ -1627,12 +1725,16 @@ export function createBrowserBridge(options) {
           width: canvas.width,
           height: canvas.height,
           videoConversion,
+          opaqueEngineFrames,
+          // The worker draws on what the main renderer got: the CPU once recovery or `auto` moved
+          // there, so both report and draw alike.
+          renderer: onCpu() ? "cpu" : rendererMode,
         });
         // A worker that cannot start leaves the surface to the main renderer.
         try {
           await workerPreview.ready;
           await workerPreview.setPreviewScale(previewScale);
-          if (effectDefinitions.size)
+          if (effectDefinitions.size && !onCpu())
             await workerPreview.registerEffects(keptEffects());
         } catch (error) {
           await abandonWorker(error);
@@ -1660,22 +1762,50 @@ export function createBrowserBridge(options) {
   }
   /**
    * A lost GPU (a WebGPU device, a WebGL context) is recovered here rather than reported: the
-   * preview is made again on the same canvas, as binding it did, and the frame drawn once more. The
-   * binding waits for the browser to restore a WebGL context on that canvas. When that fails the
-   * error is reported and the next render tries again.
+   * preview is made again, on fresh internal canvases, with the renderer `step` names (the
+   * binding's `GpuRecoveryLadder` picks it: the GPU again after a first external loss, the CPU
+   * renderer once the loss was the work's own or the page has lost the GPU twice), and the frame
+   * drawn once more. A rung that fails moves down the ladder; when none is left, the preview is
+   * unavailable for this binding, reported once (`preview_unavailable`).
    *
    * Since nothing is reported, what the user sees goes on: playback that was running plays on from
    * where it stood, at the same rate, loop and policy, once the preview is made again, unless a
    * seek, a pause or another Play came first. Sound that had not started in time is not waited for
    * again: the audio output is not what was lost.
    */
-  async function recoverPreview() {
+  async function recoverPreview(step) {
     recoveryPending = true;
+    pendingStep = step;
     const resume = playing ? playRequest : null;
     const stalled = stalledAudio;
-    if (!(await buildPreview(boundCanvas, binding))) return false;
+    for (;;) {
+      try {
+        if (!(await buildPreview(boundCanvas, binding))) return false;
+        break;
+      } catch (error) {
+        const next = previewLadder.onRecoveryFailed(pendingStep, error);
+        if (next !== "terminal") {
+          pendingStep = next;
+          continue;
+        }
+        recoveryPending = false;
+        previewUnavailable = true;
+        onError(
+          new EditorError(
+            "preview_unavailable",
+            `The GPU was lost and no renderer could be made again (${error instanceof Error ? error.message : String(error)}); bind the preview again to retry`,
+            "preview",
+            undefined,
+            false,
+            { cause: error },
+          ),
+        );
+        return false;
+      }
+    }
     stalledAudio = stalled;
     recoveryPending = false;
+    pendingStep = null;
     previewRecoveries += 1;
     if (resume) {
       // Queued behind the render that is recovering, which draws the frame first.
@@ -1689,6 +1819,27 @@ export function createBrowserBridge(options) {
         .catch(onError);
     }
     return true;
+  }
+  /** Whether the main renderer draws on the CPU, where runtime effects are refused. */
+  function onCpu() {
+    return engine?.rendererChoice?.renderer === "cpu";
+  }
+  /** Runtime effects already reported as refused by the CPU renderer, by `id@version`. */
+  const cpuRefusedEffects = new Set();
+  /** Reports, once each, that the CPU renderer drawing the preview does not run `keys`. */
+  function reportCpuEffects(keys) {
+    for (const key of keys) {
+      if (cpuRefusedEffects.has(key)) continue;
+      cpuRefusedEffects.add(key);
+      onError(
+        new EditorError(
+          "effect_unavailable",
+          `Effect ${key} is not drawn: the preview renders on the CPU (${engine?.rendererChoice?.rendererReason ?? "no GPU"}), which runs no runtime effect`,
+          "effects",
+          key,
+        ),
+      );
+    }
   }
   /**
    * Runtime effects `registerEffects` kept, by `id@version`, with their JSON text, in the order they
@@ -1725,6 +1876,12 @@ export function createBrowserBridge(options) {
       }
       if (!added.size) return;
       const fresh = [...added.values()].map(({ definition }) => definition);
+      if (onCpu()) {
+        // Kept for a GPU preview or export; the CPU renderer that draws now refuses them.
+        for (const [key, entry] of added) effectDefinitions.set(key, entry);
+        reportCpuEffects([...added.keys()]);
+        return;
+      }
       // The main renderer loads every project the worker does, so both hold every effect.
       if (engine) await engine.registerEffects(fresh);
       if (workerPreview) {
@@ -1744,9 +1901,14 @@ export function createBrowserBridge(options) {
    * Registers the kept runtime effects on the main renderer `buildPreview` just started, one by
    * one: one its device refuses (kept while no preview was bound, so never compiled) is dropped and
    * reported, and the others draw. A device lost meanwhile drops none: the next render makes the
-   * preview again, which registers them again.
+   * preview again, which registers them again. On the CPU renderer, which runs no runtime effect,
+   * none is dropped (a later GPU preview or export runs them) and each is reported once.
    */
   async function registerKeptEffects() {
+    if (onCpu()) {
+      reportCpuEffects([...effectDefinitions.keys()]);
+      return;
+    }
     const kept = [...effectDefinitions];
     const results = await Promise.allSettled(
       kept.map(([, { definition }]) => engine.registerEffects([definition])),
@@ -1761,8 +1923,9 @@ export function createBrowserBridge(options) {
   /** Whether a renderer is ready, making it again first if a lost GPU left none. */
   async function previewReady() {
     if (engine) return true;
-    if (!recoveryPending || !boundCanvas || disposed) return false;
-    return recoverPreview();
+    if (previewUnavailable || !recoveryPending || !boundCanvas || disposed)
+      return false;
+    return recoverPreview(pendingStep);
   }
   /**
    * Renders the preview at `scale` times the document's size from now on, sizing the surfaces to
@@ -1793,6 +1956,9 @@ export function createBrowserBridge(options) {
     const token = ++binding;
     await enqueue(async () => {
       recoveryPending = false;
+      pendingStep = null;
+      previewLadder = new GpuRecoveryLadder();
+      previewUnavailable = false;
       workerGivenUp = false;
       skippedRequests = 0;
       bitmapTransfers = 0;
@@ -2095,6 +2261,36 @@ export function createBrowserBridge(options) {
       },
     };
   }
+  /**
+   * Refuses, before anything renders, an export that shows a source this browser hands over only
+   * as frames the engine cannot read (imported for a degraded preview): the engine would refuse
+   * its first frame, and the browser's tone mapping must not reach a file.
+   */
+  function refuseDegradedSources(document, project, used) {
+    const degraded = project.sources
+      .filter(
+        (source) =>
+          used.has(source.id) &&
+          originalOf(document, source.id)?.planarDecode === "unavailable",
+      )
+      .map((source) => document.assets[source.id]?.name ?? source.id);
+    if (degraded.length === 0) return;
+    const facts = { kind: "video", codec: null, softwareDecoder: "none" };
+    const names = degraded.join(", ");
+    throw new EditorError(
+      "unsupported_media",
+      `This browser cannot export ${names}: it decodes this HDR video only to frames the engine cannot read, so the preview shows it with the browser's tone mapping. Export with the native host.`,
+      "export",
+      undefined,
+      true,
+      {
+        cause: new PlanarDecodeUnavailableError(
+          `${names}: no planar decode in this browser`,
+          facts,
+        ),
+      },
+    );
+  }
   let sweptExports = false;
   /** Settles when the running export does. */
   let exportSettled = Promise.resolve();
@@ -2139,6 +2335,7 @@ export function createBrowserBridge(options) {
       fontStack = [];
     const used = shownSources(compiled.project);
     const drawnResources = drawnEffectResources(compiled.project);
+    refuseDegradedSources(snapshot, compiled.project, used);
     try {
       for (const source of [
         ...compiled.project.sources.filter((s) => used.has(s.id)),
@@ -2178,12 +2375,17 @@ export function createBrowserBridge(options) {
           extensionsWasmUrl: runtimeAssets.extensionsWasmUrl,
           videoDecode,
         });
+        // The attempt's renderer is the retry policy's: the CPU after a loss the export's own work
+        // caused, or once the page has lost the GPU twice.
         const renderer = new Engine(
           new OffscreenCanvas(project.settings.width, project.settings.height),
           pixels,
           lib,
           runtimeAssets,
-          { videoConversion: exportConversion },
+          {
+            videoConversion: exportConversion,
+            renderer: attempt.renderer === "cpu" ? "cpu" : rendererMode,
+          },
         );
         const audio = new AudioWindowSupplier(lib);
         try {
@@ -2247,6 +2449,10 @@ export function createBrowserBridge(options) {
               renderer.supply(seconds, { context: context(project, lib) }),
             renderFrame: () => renderer.beginExportFrame(),
             sourceTransfer: () => renderer.sourceTransfer,
+            videoEncoder: attempt.videoEncoder,
+            onSoftwareEncoder: (available) => {
+              retryPolicy.softwareVideoEncoder = available;
+            },
           });
           progress({ phase: "publishing", fraction: 0.99 });
           let artifact;
@@ -2265,8 +2471,13 @@ export function createBrowserBridge(options) {
               videoDecode,
               videoConversion: exportConversion,
               decodeFallbacks: pixels.decodeFallbacks,
+              renderer: renderer.rendererChoice,
             },
           };
+        } catch (error) {
+          // A loss this export saw is the page's too: the next attempt's policy counts it.
+          if (renderer.deviceLost) pageGpuLosses.add();
+          throw error;
         } finally {
           await audio.close();
           await renderer.dispose();
@@ -2274,10 +2485,19 @@ export function createBrowserBridge(options) {
         }
       },
     };
-    const job = new ExportJob(revision, snapshot, backend, () => {
-      held.forEach((l) => l.release());
-      jobs.delete(job);
-    });
+    // The CPU renderer runs no runtime effect, so only an export without them can move there. Each
+    // attempt says whether the browser has a software video encoder before the policy reads it.
+    const retryPolicy = { cpuRenderer: effects.length === 0 };
+    const job = new ExportJob(
+      revision,
+      snapshot,
+      backend,
+      () => {
+        held.forEach((l) => l.release());
+        jobs.delete(job);
+      },
+      { retry: retryPolicy },
+    );
     jobs.add(job);
     exportSettled = job.result.then(
       () => {},
@@ -2780,6 +3000,19 @@ export function createBrowserBridge(options) {
     get monitorVolume() {
       return monitorVolume;
     },
+    /**
+     * Shifts the picture against the sound by `ms` milliseconds (positive shows it later), for a
+     * delay the browser does not report, such as a wireless headset's.
+     */
+    setAudioOffset(ms) {
+      if (!Number.isFinite(ms) || Math.abs(ms) > 2000)
+        throw Error("Audio offset must be between -2000 and 2000 ms");
+      audioOffsetMs = ms;
+      mixer?.setLatencyOffset(ms);
+    },
+    get audioOffsetMs() {
+      return audioOffsetMs;
+    },
     setTraceUploads(value) {
       traceUploads = value === true;
       applyTracing();
@@ -2805,6 +3038,7 @@ export function createBrowserBridge(options) {
           skippedRequests,
           bitmapTransfers,
           previewScale,
+          audioLatencySource: mixer?.latencySource ?? null,
         },
       };
     },

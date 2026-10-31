@@ -14,7 +14,6 @@ import {
   type PlanarFrameIdentity,
   type PlanarYuvEngine,
   type PlanarYuvFrame,
-  readPlanarYuvFrame,
   uploadPlanarYuvFrame,
   type VideoConversion,
 } from "./hdr-frames.js";
@@ -28,6 +27,14 @@ import {
   PhysicalFrameAliases,
   type PhysicalFrameIdentity,
 } from "./physical-frames.js";
+import {
+  intakeVideoFrame,
+  readbackCounters,
+  type ReadbackRecoveryStats,
+  readPlanesWithRetries,
+} from "./frame-intake.js";
+
+export type { ReadbackRecoveryStats } from "./frame-intake.js";
 
 /** Tick rate shared by every engine timestamp. */
 const TICKS_PER_SECOND = 120_000;
@@ -237,21 +244,17 @@ export interface FrameSupplyConfig extends FrameRetentionOptions {
    * way.
    */
   readonly unreadableFrames?: "redecode" | "present";
-}
-
-/** How a {@link FrameSupply} recovered frames the browser could not read back; cumulative. */
-export interface ReadbackRecoveryStats {
   /**
-   * Frames whose planes the browser still could not read back after the repeated reads, and frames
-   * the engine had to convert that had no planar format it reads.
+   * What becomes of a source the engine must convert from planes (HDR, or color the project
+   * declares) whose frames this browser gives only without planes, with no software decoder that
+   * gives planes either: `"refuse"` (the default) rejects with `PlanarDecodeUnavailableError`;
+   * `"present-degraded"` shows its frames through the browser's own conversion (its tone mapping)
+   * with the engine's `uploadDegradedVideoFrame`, for a preview that marks it: `renderAt` then
+   * names the source in `degradedSources`, and the engine refuses every export of a frame that
+   * shows it. An export's supply keeps `"refuse"`. An engine without `uploadDegradedVideoFrame`
+   * refuses either way.
    */
-  readonly unreadableFrames: number;
-  /** Reads repeated on the same frame. */
-  readonly readbackRetries: number;
-  /** Frames decoded again in software and copied from that decode. */
-  readonly redecodedFrames: number;
-  /** Frames given to the browser's conversion (`unreadableFrames: "present"`). */
-  readonly presentedFrames: number;
+  readonly opaqueEngineFrames?: "refuse" | "present-degraded";
 }
 
 interface DecodedNeed {
@@ -269,6 +272,8 @@ interface DecodedNeed {
     /** The engine must convert it: HDR, or color the project declares. */
     readonly required: boolean;
   };
+  /** A frame of a degraded source, presented through the browser's own conversion. */
+  readonly degraded?: true;
 }
 
 /**
@@ -356,6 +361,12 @@ export interface PlaybackResult {
   /** `null` until the engine has presented a frame, and after a reset. */
   readonly presentedTimeTicks: number | null;
   readonly missingSources: readonly string[];
+  /**
+   * Sources the frame showed through the browser's own conversion
+   * (`opaqueEngineFrames: "present-degraded"`): not what an export of it would show, which the
+   * engine refuses. Absent from an engine that never presents degraded frames.
+   */
+  readonly degradedSources?: readonly string[];
   readonly repeated: boolean;
   /**
    * The frame equals the one presented last, so the engine neither rendered nor presented it: the
@@ -399,6 +410,19 @@ export interface FrameSupplyEngine {
   ): FrameUploadReceipt;
   readonly videoFrameCopy?: string;
   uploadPresentedImageBitmap?: PresentedFrameEngine["uploadPresentedImageBitmap"];
+  /**
+   * Presents a frame the engine must convert from planes, which has none, through the browser's
+   * own conversion, marking its source degraded (see `opaqueEngineFrames`).
+   */
+  uploadDegradedVideoFrame?(
+    sourceId: string,
+    mediaTimeTicks: bigint,
+    frame: VideoFrame,
+    width: number,
+    height: number,
+    rotation: number,
+    mirror: boolean,
+  ): FrameUploadReceipt;
   /**
    * Converts planar YUV with the project's color pipeline. An engine that has it takes every HDR
    * frame this way, never through the browser's conversion, and every other planar frame unless
@@ -485,6 +509,11 @@ interface SourceContent {
    * planes: every later frame of it fails at once with the same error.
    */
   refused?: PlanarDecodeUnavailableError;
+  /**
+   * Set instead of `refused` under `opaqueEngineFrames: "present-degraded"`: later frames of this
+   * content decode as the browser gives them and are presented degraded.
+   */
+  degraded?: true;
 }
 
 /**
@@ -543,14 +572,10 @@ export class FrameSupply {
   #cachedImageBytes = 0;
   readonly #videoConversion: VideoConversion;
   readonly #unreadableFrames: "redecode" | "present";
+  readonly #presentsDegraded: boolean;
   #planarCopyFrames = 0;
   #planarCopyBytes = 0;
-  #readback = {
-    unreadableFrames: 0,
-    readbackRetries: 0,
-    redecodedFrames: 0,
-    presentedFrames: 0,
-  };
+  readonly #readback = readbackCounters();
   /** Buffers the planar copies reuse; each is given back once its upload has taken it. */
   readonly #planarCopies = new PlanarCopyPool();
   #imageUse = 0n;
@@ -589,6 +614,17 @@ export class FrameSupply {
     if (unreadableFrames !== "redecode" && unreadableFrames !== "present")
       throw new RangeError('unreadableFrames must be "redecode" or "present"');
     this.#unreadableFrames = unreadableFrames;
+    const opaqueEngineFrames = options.opaqueEngineFrames ?? "refuse";
+    if (
+      opaqueEngineFrames !== "refuse" &&
+      opaqueEngineFrames !== "present-degraded"
+    )
+      throw new RangeError(
+        'opaqueEngineFrames must be "refuse" or "present-degraded"',
+      );
+    this.#presentsDegraded =
+      opaqueEngineFrames === "present-degraded" &&
+      typeof engine.uploadDegradedVideoFrame === "function";
     this.#retainer = new FrameGenerationRetainer(
       (generation) => this.#engine.releaseFrameGeneration(generation),
       options,
@@ -705,6 +741,7 @@ export class FrameSupply {
         const entry = decoded[decodedIndex];
         if (entry === undefined) continue;
         const { need, layer, source, planar } = entry;
+        let degraded = entry.degraded === true;
         const sourceTicks = BigInt(need.mediaTimeTicks);
         const content = epochs.get(need.sourceId) ?? 0;
         let videoFrame: FrameSupplyVideoFrame | null = null;
@@ -784,9 +821,9 @@ export class FrameSupply {
             continue;
           }
           let upload: FrameUploadReceipt | undefined;
-          if (planar !== undefined) {
+          if (planar !== undefined && !degraded) {
             // The copy takes the frame over and closes it, unless it hands it back for the
-            // browser's own upload below (`unreadableFrames: "present"`).
+            // browser's own upload below (`unreadableFrames: "present"`, or a degraded source).
             decoded[decodedIndex] = { need, layer, source: null };
             const copied = await this.#copyPlanar(
               need,
@@ -795,8 +832,9 @@ export class FrameSupply {
               planar,
               pixelsFor,
             );
-            if (copied === undefined) {
+            if (copied === undefined || copied === DEGRADED) {
               decoded[decodedIndex] = { need, layer, source: videoFrame };
+              degraded = copied === DEGRADED;
             } else {
               try {
                 upload = uploadPlanarYuvFrame(
@@ -812,6 +850,22 @@ export class FrameSupply {
                 this.#planarCopies.release(copied.data);
               }
             }
+          }
+          if (upload === undefined && degraded) {
+            const engine = this.#engine;
+            if (engine.uploadDegradedVideoFrame === undefined)
+              throw new Error("engine cannot present degraded frames");
+            // The engine takes the frame over and closes it, whether the upload succeeds or not.
+            decoded[decodedIndex] = { need, layer, source: null };
+            upload = engine.uploadDegradedVideoFrame(
+              need.sourceId,
+              sourceTicks,
+              videoFrame.frame,
+              width,
+              height,
+              videoFrame.rotation ?? 0,
+              videoFrame.mirror ?? false,
+            );
           }
           if (upload === undefined) {
             const engine = this.#presentedEngine();
@@ -935,7 +989,11 @@ export class FrameSupply {
               (planar &&
                 layer.kind === "video" &&
                 this.#engine.hdrSource?.(need.sourceId) === true);
+            const degraded =
+              layer.kind === "video" &&
+              this.#contents.get(need.sourceId)?.degraded === true;
             const software =
+              !degraded &&
               layer.kind === "video" &&
               this.#contents.get(need.sourceId)?.softwareDecode === true;
             const decoded = await this.#decodeCursor(
@@ -950,14 +1008,20 @@ export class FrameSupply {
                   ...(software ? { decode: "software" as const } : {}),
                 }),
             );
-            results[index] = this.#planarRoute(
-              need,
-              layer,
-              decoded,
-              enginesColor,
-              declared,
-              planar,
-            );
+            results[index] =
+              degraded &&
+              decoded !== null &&
+              "kind" in decoded &&
+              decoded.kind === "video-frame"
+                ? { need, layer, source: decoded, degraded: true }
+                : this.#planarRoute(
+                    need,
+                    layer,
+                    decoded,
+                    enginesColor,
+                    declared,
+                    planar,
+                  );
           } catch (error) {
             failure = error;
             failed = true;
@@ -1047,73 +1111,61 @@ export class FrameSupply {
     source: FrameSupplyVideoFrame,
     planar: NonNullable<DecodedNeed["planar"]>,
     pixelsFor: FrameSupplyOptions["pixelsFor"],
-  ): Promise<PlanarYuvFrame | undefined> {
-    let copied: PlanarYuvFrame;
+  ): Promise<PlanarYuvFrame | undefined | typeof DEGRADED> {
+    let intake: Awaited<ReturnType<typeof intakeVideoFrame>>;
     try {
-      copied = await this.#readPlanes(source, planar.declared);
+      intake = await intakeVideoFrame(source.frame, {
+        required: planar.required,
+        declared: parseDeclared(planar.declared),
+        identity: planarIdentity(source),
+        pool: this.#planarCopies,
+        counters: this.#readback,
+        unreadable: this.#unreadableFrames,
+        takesPresented: takesPresentedFrames(this.#engine),
+      });
     } catch (error) {
-      const nonPlanar = error instanceof NonPlanarVideoFrameError;
-      if (!nonPlanar && !isUnreadableFrame(error)) {
-        source.frame.close();
-        throw error;
-      }
-      this.#readback.unreadableFrames += 1;
-      if (
-        !nonPlanar &&
-        this.#unreadableFrames === "present" &&
-        !planar.required &&
-        takesPresentedFrames(this.#engine)
-      ) {
-        this.#readback.presentedFrames += 1;
-        return undefined;
-      }
+      source.frame.close();
+      throw error;
+    }
+    if (intake.kind === "present") return undefined;
+    let copied: PlanarYuvFrame;
+    if (intake.kind === "planar") copied = intake.planar;
+    else {
       const timestamp =
         source.physicalTimeMicroseconds ?? source.frame.timestamp;
       const transfer: string | null = source.frame.colorSpace?.transfer ?? null;
-      source.frame.close();
-      if (nonPlanar) {
-        const content = this.#contents.get(need.sourceId);
-        if (content !== undefined) content.softwareDecode = true;
+      const nonPlanar = intake.cause instanceof NonPlanarVideoFrameError;
+      // A frame that may yet be presented degraded stays open through its software decode.
+      const keep = nonPlanar && this.#presentsDegraded;
+      if (!keep) source.frame.close();
+      const content = this.#contents.get(need.sourceId);
+      if (nonPlanar && content !== undefined) content.softwareDecode = true;
+      try {
+        copied = await this.#redecodePlanar(
+          need,
+          layer,
+          planar,
+          { timestamp, transfer },
+          pixelsFor,
+          intake.cause,
+        );
+      } catch (error) {
+        if (keep && error instanceof PlanarDecodeUnavailableError) {
+          if (content !== undefined) {
+            content.refused = undefined;
+            content.softwareDecode = undefined;
+            content.degraded = true;
+          }
+          return DEGRADED;
+        }
+        if (keep) source.frame.close();
+        throw error;
       }
-      copied = await this.#redecodePlanar(
-        need,
-        layer,
-        planar,
-        { timestamp, transfer },
-        pixelsFor,
-        error,
-      );
     }
     source.frame.close();
     this.#planarCopyFrames += 1;
     this.#planarCopyBytes += copied.data.byteLength;
     return copied;
-  }
-
-  /**
-   * The frame's planes, read again up to {@link READBACK_RETRIES} times, a task apart, while the
-   * browser fails to read them back. Leaves the frame open.
-   */
-  async #readPlanes(
-    source: FrameSupplyVideoFrame,
-    declared: string | undefined,
-  ): Promise<PlanarYuvFrame> {
-    const color =
-      declared === undefined ? null : (JSON.parse(declared) as ColorMetadata);
-    for (let retry = 0; ; retry += 1) {
-      try {
-        return await readPlanarYuvFrame(
-          source.frame,
-          color,
-          planarIdentity(source),
-          this.#planarCopies,
-        );
-      } catch (error) {
-        if (retry >= READBACK_RETRIES || !isUnreadableFrame(error)) throw error;
-        this.#readback.readbackRetries += 1;
-        await nextTask();
-      }
-    }
   }
 
   /**
@@ -1208,7 +1260,13 @@ export class FrameSupply {
         );
       let copied: PlanarYuvFrame;
       try {
-        copied = await this.#readPlanes(again, planar.declared);
+        copied = await readPlanesWithRetries(
+          again.frame,
+          parseDeclared(planar.declared),
+          planarIdentity(again),
+          this.#planarCopies,
+          this.#readback,
+        );
       } catch (error) {
         if (nonPlanar && error instanceof NonPlanarVideoFrameError)
           throw refuse("opaque", error);
@@ -1645,21 +1703,14 @@ function validatePositiveInteger(value: number, name: string): void {
   }
 }
 
-/** Reads repeated on a frame whose planes the browser could not read back, before decoding again. */
-const READBACK_RETRIES = 2;
+/** What `#copyPlanar` answers for a frame its source's degraded preview presents. */
+const DEGRADED = Symbol("degraded");
 
-/**
- * Whether a planar copy failed because the browser could not read a GPU-backed frame back: Chrome
- * rejects `copyTo` with `InvalidStateError` ("Failed to read VideoFrame data."), now and then, for
- * hardware-decoded frames. A closed frame rejects with the same name, but the supply owns the
- * frames it copies and has not closed them.
- */
-function isUnreadableFrame(error: unknown): boolean {
-  return (
-    typeof DOMException !== "undefined" &&
-    error instanceof DOMException &&
-    error.name === "InvalidStateError"
-  );
+/** The declared color a decoded need carries as JSON, parsed for the planar copy. */
+function parseDeclared(declared: string | undefined): ColorMetadata | null {
+  return declared === undefined
+    ? null
+    : (JSON.parse(declared) as ColorMetadata);
 }
 
 /** What a planar copy of `source` carries beyond the frame (see `PlanarFrameIdentity`). */
@@ -1674,11 +1725,6 @@ function planarIdentity(source: FrameSupplyVideoFrame): PlanarFrameIdentity {
       ? {}
       : { chromaSiting: source.chromaSiting }),
   };
-}
-
-/** Resolves once the browser has run other tasks, such as the GPU process's replies. */
-function nextTask(): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 /** Whether `engine` takes presented `VideoFrame` uploads (`uploadPresentedVideoFrame`). */

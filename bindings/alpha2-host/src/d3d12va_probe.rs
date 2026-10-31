@@ -3,7 +3,7 @@
 //! A D3D12 Video Encode device that says it encodes a codec is still held to
 //! one encoded frame before an export is offered the GPU path
 //! ([`alpha2_native::probe_d3d12va_encode`]). That encode runs inside the
-//! vendor's driver, and a driver can crash there: an Intel Iris Xe on
+//! vendor's driver, and a driver can crash there: an Intel integrated GPU on
 //! driver 30.0.101.2079 hangs or crashes inside `FFmpeg`'s D3D12VA encode
 //! submission about once in a few thousand frames, with plain `FFmpeg` as
 //! with this host. A thread cannot contain a crash, so the encode runs in

@@ -13,18 +13,44 @@ import type {
   WasmMissingFrame,
 } from "./effects.js";
 import type { ExportBackend, ExportTicket } from "./exporter.js";
+import {
+  lossReportFromJson,
+  type GpuLossReport,
+  type RecoveryStep,
+  type SurfaceProbe,
+} from "./gpu-recovery.js";
+import {
+  createGpuRenderer,
+  createRenderer,
+  gpuChoice,
+  type RendererChoice,
+  type RendererMode,
+} from "./renderer-choice.js";
+import {
+  type BrowserCapabilities,
+  detectBrowserCapabilities,
+} from "./robustness.js";
 import type { EngineVideoCodec } from "./rate-control.js";
 import {
   FrameGenerationRetainer,
   type FrameRetentionOptions,
+  type SourceTransferStats,
 } from "./frame-supply.js";
+import {
+  intakeVideoFrame,
+  readbackCounters,
+  type ReadbackRecoveryStats,
+  SoftwareDecodeRequiredError,
+} from "./frame-intake.js";
 import type { ColorMetadata } from "./generated/project-schema.js";
 import { videoFrameFromI420, videoFrameRepackedBytes } from "./video-frames.js";
 import { recordRepackedBytes } from "./repacked-bytes.js";
 import {
   type ChromaSiting,
-  copyPlanarYuvFrame,
+  decodeRefusalMessage,
+  NonPlanarVideoFrameError,
   PlanarCopyPool,
+  PlanarDecodeUnavailableError,
   isHdrVideoFrame,
   isPlanarVideoFrame,
   uploadPlanarYuvFrame,
@@ -63,6 +89,8 @@ export type RenderWorkerRequest =
       readonly rotationDegrees?: 0 | 90 | 180 | 270;
       readonly mirror?: boolean;
       readonly chromaSiting?: ChromaSiting;
+      /** Set when the page decoded the frame in software, as a host asked it to. */
+      readonly decode?: "software";
     }
   | {
       readonly id: number;
@@ -80,13 +108,22 @@ export type RenderWorkerRequest =
       /** The output pictures by FFmpeg pixel format name; absent, I420. */
       readonly pixels?: string;
     }
-  | { readonly id: number; readonly type: "recover" }
+  | {
+      readonly id: number;
+      readonly type: "recover";
+      readonly step: RecoveryStep;
+      /** The fresh surface of a `"fresh"` step, transferred with the request. */
+      readonly canvas?: OffscreenCanvas;
+    }
+  | { readonly id: number; readonly type: "probe-surface" }
+  | { readonly id: number; readonly type: "detect-capabilities" }
   | { readonly id: number; readonly type: "dispose" };
 
 /**
  * A message the render worker posts back. A plain `{ id, ok }` answers the request with that `id`;
  * `export-frame-ready` later delivers the readback of a `begin-export-frame` request that answered
- * `rendered`; `device-lost` is posted before the answer of any request that found the device lost.
+ * `rendered`; `device-lost` is posted before the answer of any request that found the device lost,
+ * with what the lost renderer reported about the loss.
  */
 export type RenderWorkerResponse =
   | { readonly id: number; readonly ok: true; readonly result?: unknown }
@@ -112,7 +149,7 @@ export type RenderWorkerResponse =
       readonly ok: false;
       readonly error: SerializedAlpha2Error;
     }
-  | { readonly type: "device-lost" };
+  | { readonly type: "device-lost"; readonly report?: GpuLossReport };
 
 export { Alpha2WasmError, type SerializedAlpha2Error } from "./worker-error.js";
 
@@ -137,14 +174,28 @@ export interface RenderWorkerHost {
     pixels?: string,
   ): ExportTicket;
   /**
-   * The renderer the host draws with; `initialize` answers it. Absent for a host that does not
-   * say.
+   * The renderer the host draws with; `initialize` and each `recover` answer it. Absent for a host
+   * that does not say.
    */
   readonly rendererChoice?: RendererChoice;
+  /** Raw source video the host copied through script memory, cumulative; absent if it does not say. */
+  readonly sourceTransfer?: SourceTransferStats;
+  /**
+   * Frames the browser could not read back or that had no planar format, and how the host
+   * recovered them; cumulative, absent if it does not say.
+   */
+  readonly readbackRecovery?: ReadbackRecoveryStats;
   /** Checked after every request; must not throw (a throw is read as lost). */
   isDeviceLost(): boolean;
-  /** Replaces a lost device; the request loop calls it only while `isDeviceLost()` is true. */
-  recover(): Promise<void>;
+  /** What the lost renderer reported about its loss, read before `recover` frees it. */
+  lossReport?(): GpuLossReport | undefined;
+  /** The lost renderer's surface kind, and whether this context still gets a WebGPU adapter. */
+  probeSurface?(): Promise<SurfaceProbe>;
+  /**
+   * Makes the renderer `step` names on `canvas` (a fresh surface) or the current one. The request
+   * loop calls it while `isDeviceLost()` is true, or with a fresh surface.
+   */
+  recover(step: RecoveryStep, canvas?: OffscreenCanvas): Promise<void>;
   dispose(): void;
 }
 
@@ -184,28 +235,28 @@ export interface WasmRenderWorkerHostOptions {
    */
   readonly videoConversion?: VideoConversion;
   /**
-   * Which renderer draws. `"auto"` (the default) draws on the GPU, through WebGPU or else WebGL2,
-   * and on the engine's CPU renderer in wasm when the browser offers neither (Chrome with
-   * acceleration off, a blocklisted GPU); `"gpu"` never falls back, and `"cpu"` draws on the CPU
-   * and opens no GPU context. The CPU renderer previews at half resolution by default and refuses
+   * Which renderer draws (see {@link RendererMode}). `"auto"` (the default) draws on a hardware GPU,
+   * through WebGPU or else WebGL2, and on the engine's CPU renderer in wasm when the browser offers
+   * neither or only a software adapter (Chrome with acceleration off, a blocklisted GPU,
+   * SwiftShader); `"gpu"` accepts any adapter and never falls back, and `"cpu"` draws on the CPU and
+   * opens no GPU context. The CPU renderer previews at half resolution by default and refuses
    * runtime effects (`effects`) with `EFFECT_ERROR`; it needs the binding's `createCpu`, without
    * which `"auto"` is `"gpu"`. The host reports the renderer it chose ({@link RendererChoice}).
    */
   readonly renderer?: RendererMode;
-}
-
-/** The renderer a browser render host is asked for; see {@link WasmRenderWorkerHostOptions}. */
-export type RendererMode = "auto" | "gpu" | "cpu";
-
-/** The renderer a render host draws with, as the native host reports it. */
-export interface RendererChoice {
-  /** The renderer that draws the frames. */
-  readonly renderer: "gpu" | "cpu";
   /**
-   * Why it draws on the CPU: `"auto"` found neither WebGPU nor WebGL2, or `"cpu"` was asked for.
-   * `null` when it draws on a GPU.
+   * What becomes of a frame the engine converts from planes whose planes the browser cannot read
+   * back, once reading them again has failed: `"redecode"` (the default) rejects its upload with
+   * `SoftwareDecodeRequiredError` (code `SOFTWARE_DECODE_REQUIRED`), which `Alpha2Player` and
+   * `exportToSink` answer by asking their refill for the same picture decoded in software;
+   * `"present"` gives it to the browser's conversion instead, unless the engine must convert it
+   * (HDR, or color the project declares), for a preview where a frame shown at once matters more
+   * than the engine's conversion. A frame the engine must convert that has no planar format it
+   * reads (an opaque hardware frame) is sent back for a software decode either way; the same
+   * frame decoded in software and still without planes rejects with
+   * `PlanarDecodeUnavailableError`.
    */
-  readonly rendererReason: string | null;
+  readonly unreadableFrames?: "redecode" | "present";
 }
 
 /**
@@ -231,7 +282,7 @@ export function installRenderWorker(
   // its request settles.
   const reportDeviceLoss = (): void => {
     if (host !== undefined && isLost(host))
-      scope.postMessage({ type: "device-lost" });
+      scope.postMessage({ type: "device-lost", report: lossReportOf(host) });
   };
   scope.onmessage = (event): void => {
     serial = serial.then(async () => {
@@ -257,6 +308,9 @@ export function installRenderWorker(
               ...(request.chromaSiting === undefined
                 ? {}
                 : { chromaSiting: request.chromaSiting }),
+              ...(request.decode === undefined
+                ? {}
+                : { decode: request.decode }),
             });
             break;
           case "present":
@@ -333,10 +387,26 @@ export function installRenderWorker(
           case "recover": {
             // A recovery asked for twice, or after another made the renderer again, has nothing to
             // replace: making it again would drop every upload and recompile every pipeline.
+            // A fresh surface is used whatever the state: it was transferred here for this.
             const lost = requiredHost(host);
-            if (isLost(lost)) await lost.recover();
+            if (isLost(lost) || request.canvas !== undefined)
+              await lost.recover(request.step, request.canvas);
+            result = lost.rendererChoice;
             break;
           }
+          case "probe-surface": {
+            const current = requiredHost(host);
+            result =
+              (await current.probeSurface?.()) ??
+              ({
+                kind: current.rendererChoice?.backend ?? "none",
+                webgpuAdapter: false,
+              } satisfies SurfaceProbe);
+            break;
+          }
+          case "detect-capabilities":
+            result = await detectBrowserCapabilities();
+            break;
           case "dispose":
             host?.dispose();
             host = undefined;
@@ -367,8 +437,8 @@ export function installRenderWorker(
  *
  * The callback rejects when the binding lacks the constructor the renderer needs
  * (`createForCanvas`, or `createCpu` for `"cpu"`), or when making the renderer, compiling an
- * effect or loading the project fails. After a device loss, `recover()` repeats the same
- * registration on a new renderer of the same kind.
+ * effect or loading the project fails. After a device loss, `recover(step)` repeats the same
+ * registration on the renderer the recovery step names.
  */
 export function createWasmRenderWorkerHost(
   binding: WasmEffectRegistryBinding,
@@ -383,6 +453,9 @@ export function createWasmRenderWorkerHost(
   const renderer = options.renderer ?? "auto";
   if (renderer !== "auto" && renderer !== "gpu" && renderer !== "cpu")
     throw new RangeError('renderer must be "auto", "gpu" or "cpu"');
+  const unreadableFrames = options.unreadableFrames ?? "redecode";
+  if (unreadableFrames !== "redecode" && unreadableFrames !== "present")
+    throw new RangeError('unreadableFrames must be "redecode" or "present"');
   return async (canvas) => {
     return WasmRenderWorkerHost.create(
       binding,
@@ -394,13 +467,15 @@ export function createWasmRenderWorkerHost(
       options.uploadRetention,
       videoConversion,
       renderer,
+      unreadableFrames,
     );
   };
 }
 
 class WasmRenderWorkerHost implements RenderWorkerHost {
   readonly #binding: WasmEffectRegistryBinding;
-  readonly #canvas: OffscreenCanvas;
+  #canvas: OffscreenCanvas;
+  readonly #mode: RendererMode;
   readonly #projectJson: string;
   readonly #effects: readonly EffectDefinition[];
   readonly #resources: readonly EffectResourceData[];
@@ -409,7 +484,11 @@ class WasmRenderWorkerHost implements RenderWorkerHost {
   readonly #uploadedFrames: FrameGenerationRetainer;
   readonly #physicalFrames = new PhysicalFrameAliases();
   readonly #videoConversion: VideoConversion;
-  readonly rendererChoice: RendererChoice;
+  readonly #unreadableFrames: "redecode" | "present";
+  readonly #readback = readbackCounters();
+  #planarCopyFrames = 0;
+  #planarCopyBytes = 0;
+  rendererChoice: RendererChoice;
   #pendingUploads: FrameUploadReceipt[] = [];
   /** Buffers the planar copies reuse; each is given back once its upload has taken it. */
   readonly #planarCopies = new PlanarCopyPool();
@@ -433,8 +512,12 @@ class WasmRenderWorkerHost implements RenderWorkerHost {
     uploadRetention: FrameRetentionOptions | undefined,
     videoConversion: VideoConversion,
     rendererChoice: RendererChoice,
+    unreadableFrames: "redecode" | "present",
+    mode: RendererMode,
   ) {
     this.#binding = binding;
+    this.#mode = mode;
+    this.#unreadableFrames = unreadableFrames;
     this.rendererChoice = rendererChoice;
     this.#canvas = canvas;
     this.#projectJson = projectJson;
@@ -462,8 +545,9 @@ class WasmRenderWorkerHost implements RenderWorkerHost {
     uploadRetention: FrameRetentionOptions | undefined,
     videoConversion: VideoConversion,
     mode: RendererMode,
+    unreadableFrames: "redecode" | "present",
   ): Promise<WasmRenderWorkerHost> {
-    const { wasm, choice } = await makeRenderer(binding, canvas, mode);
+    const { wasm, choice } = await createRenderer(binding, canvas, mode);
     await registerEffects(wasm, effects);
     registerResources(wasm, resources);
     registerFonts(wasm, fonts);
@@ -479,7 +563,20 @@ class WasmRenderWorkerHost implements RenderWorkerHost {
       uploadRetention,
       videoConversion,
       choice,
+      unreadableFrames,
+      mode,
     );
+  }
+
+  get sourceTransfer(): SourceTransferStats {
+    return {
+      planarCopyFrames: this.#planarCopyFrames,
+      planarCopyBytes: this.#planarCopyBytes,
+    };
+  }
+
+  get readbackRecovery(): ReadbackRecoveryStats {
+    return { ...this.#readback };
   }
 
   async uploadVideoFrame(frame: DecodedVideoFrame): Promise<void> {
@@ -497,6 +594,7 @@ class WasmRenderWorkerHost implements RenderWorkerHost {
       mediaTimeTicks: frame.requestedTimeTicks,
     };
     let declared: string | undefined;
+    let required: boolean;
     let convert: boolean;
     try {
       if (
@@ -514,10 +612,12 @@ class WasmRenderWorkerHost implements RenderWorkerHost {
       // A project-declared color wins over the frame's own, so such frames, and all HDR ones, are
       // converted by the engine; other planar frames too unless the host leaves SDR to the browser.
       declared = this.#wasm.sourceColorMetadata(frame.sourceId);
-      convert =
+      required =
         declared !== undefined ||
         this.#wasm.hdrSource(frame.sourceId) ||
-        isHdrVideoFrame(frame.frame) ||
+        isHdrVideoFrame(frame.frame);
+      convert =
+        required ||
         (this.#videoConversion === "engine" && isPlanarVideoFrame(frame.frame));
     } catch (error) {
       // The frame is this host's from the start: a binding that refuses it before an upload takes
@@ -526,35 +626,60 @@ class WasmRenderWorkerHost implements RenderWorkerHost {
       throw error;
     }
     if (convert) {
-      const planar = await copyPlanarYuvFrame(
-        frame.frame,
-        declared === undefined ? null : (JSON.parse(declared) as ColorMetadata),
-        {
-          rotation,
-          mirror,
-          ...(frame.chromaSiting === undefined
-            ? {}
-            : { chromaSiting: frame.chromaSiting }),
-        },
-        this.#planarCopies,
-      );
+      let intake: Awaited<ReturnType<typeof intakeVideoFrame>>;
       try {
-        this.#pendingUploads.push(
-          uploadPlanarYuvFrame(
-            this.#wasm,
-            frame.sourceId,
-            frame.requestedTimeTicks,
-            planar,
-            this.#outputSize.width,
-            this.#outputSize.height,
-          ),
-        );
-      } finally {
-        // The upload copied the planes into the engine before it returned.
-        this.#planarCopies.release(planar.data);
+        intake = await intakeVideoFrame(frame.frame, {
+          required,
+          declared:
+            declared === undefined
+              ? null
+              : (JSON.parse(declared) as ColorMetadata),
+          identity: {
+            rotation,
+            mirror,
+            ...(frame.chromaSiting === undefined
+              ? {}
+              : { chromaSiting: frame.chromaSiting }),
+          },
+          pool: this.#planarCopies,
+          counters: this.#readback,
+          unreadable: this.#unreadableFrames,
+          takesPresented: true,
+        });
+      } catch (error) {
+        frame.frame.close();
+        throw error;
       }
-      this.#physicalFrames.record(identity, exact);
-      return;
+      if (intake.kind === "redecode") {
+        const transfer: string | null =
+          frame.frame.colorSpace?.transfer ?? null;
+        frame.frame.close();
+        throw redecodeRequest(frame, intake.cause, transfer);
+      }
+      if (intake.kind === "planar") {
+        frame.frame.close();
+        const planar = intake.planar;
+        if (frame.decode === "software") this.#readback.redecodedFrames += 1;
+        this.#planarCopyFrames += 1;
+        this.#planarCopyBytes += planar.data.byteLength;
+        try {
+          this.#pendingUploads.push(
+            uploadPlanarYuvFrame(
+              this.#wasm,
+              frame.sourceId,
+              frame.requestedTimeTicks,
+              planar,
+              this.#outputSize.width,
+              this.#outputSize.height,
+            ),
+          );
+        } finally {
+          // The upload copied the planes into the engine before it returned.
+          this.#planarCopies.release(planar.data);
+        }
+        this.#physicalFrames.record(identity, exact);
+        return;
+      }
     }
     const upload = [
       frame.sourceId,
@@ -646,21 +771,51 @@ class WasmRenderWorkerHost implements RenderWorkerHost {
     return this.#registry?.deviceLost ?? true;
   }
 
+  lossReport(): GpuLossReport | undefined {
+    const wasm = this.#registry;
+    if (wasm === undefined || !wasm.deviceLost) return undefined;
+    return lossReportFromJson(wasm.lossReport);
+  }
+
+  async probeSurface(): Promise<SurfaceProbe> {
+    return {
+      kind: this.#registry === undefined ? "none" : this.rendererChoice.backend,
+      webgpuAdapter: await webgpuAdapterAvailable(),
+    };
+  }
+
   /**
-   * Makes the binding again on the same canvas. The lost one is freed first and never used again:
-   * when making the new one fails (a WebGL context the browser did not restore), this host stays
-   * lost and the next recovery tries again.
+   * Makes the binding `step` names, on `canvas` when the step brings a fresh surface, else on the
+   * current one. The lost binding is freed first and never used again: when making the new one
+   * fails (a WebGL context the browser did not restore, a GPU the browser withholds), this host
+   * stays lost and the next step tries. A GPU step refuses software adapters unless the host was
+   * asked for `"gpu"`; a CPU step refuses the host's runtime effects, as the CPU renderer does.
    */
-  async recover(): Promise<void> {
+  async recover(step: RecoveryStep, canvas?: OffscreenCanvas): Promise<void> {
     this.#discardUploadedFrames();
     const lost = this.#registry;
     this.#registry = undefined;
     lost?.free?.();
-    // Only a GPU renderer is ever lost; the CPU one has no device.
-    if (this.#binding.createForCanvas === undefined) {
-      throw new Error("createForCanvas is unavailable");
+    const surface = canvas ?? this.#canvas;
+    // A transferred canvas is the host's surface from now on, whether or not a renderer takes it.
+    this.#canvas = surface;
+    let wasm: WasmCanvasRenderer;
+    let choice: RendererChoice;
+    if (step.renderer === "cpu") {
+      const made = await createRenderer(this.#binding, surface, "cpu");
+      wasm = made.wasm;
+      choice = {
+        ...made.choice,
+        rendererReason: `the GPU was lost: ${step.reason}`,
+      };
+    } else {
+      wasm = await createGpuRenderer(
+        this.#binding,
+        surface,
+        this.#mode === "gpu" ? "allow" : "refuse",
+      );
+      choice = gpuChoice(wasm);
     }
-    const wasm = await this.#binding.createForCanvas(this.#canvas);
     try {
       await registerEffects(wasm, this.#effects);
       registerResources(wasm, this.#resources);
@@ -671,6 +826,7 @@ class WasmRenderWorkerHost implements RenderWorkerHost {
       throw error;
     }
     this.#registry = wasm;
+    this.rendererChoice = choice;
   }
 
   dispose(): void {
@@ -691,54 +847,26 @@ class WasmRenderWorkerHost implements RenderWorkerHost {
   }
 }
 
-/**
- * Makes the renderer `mode` asks for on `canvas` and says which it is. `"auto"` falls back to the
- * CPU only when the GPU renderer could not be made for want of a GPU (`GPU_INIT_FAILED`, or a
- * canvas that takes no GPU surface: `INVALID_INPUT`); a canvas whose failed WebGL2 request left it
- * without a context still takes the CPU renderer's 2D one.
- */
-async function makeRenderer(
-  binding: WasmEffectRegistryBinding,
-  canvas: OffscreenCanvas,
-  mode: RendererMode,
-): Promise<{ wasm: WasmCanvasRenderer; choice: RendererChoice }> {
-  const cpu = (rendererReason: string) => {
-    if (binding.createCpu === undefined)
-      throw new Error("wasm binding does not expose createCpu");
-    return {
-      wasm: binding.createCpu(canvas),
-      choice: { renderer: "cpu", rendererReason } as const,
-    };
-  };
-  if (mode === "cpu")
-    return cpu('the CPU renderer was asked for (renderer "cpu")');
-  if (binding.createForCanvas === undefined) {
-    if (mode === "auto" && binding.createCpu !== undefined)
-      return cpu("the wasm binding has no GPU renderer");
-    throw new Error("wasm binding does not expose createForCanvas");
-  }
+/** Whether `navigator.gpu` gives an adapter in this context now; a refused request gives none. */
+async function webgpuAdapterAvailable(): Promise<boolean> {
+  const gpu = (
+    globalThis.navigator as
+      (Navigator & { gpu?: { requestAdapter(): Promise<unknown> } }) | undefined
+  )?.gpu;
+  if (gpu === undefined) return false;
   try {
-    return {
-      wasm: await binding.createForCanvas(canvas),
-      choice: { renderer: "gpu", rendererReason: null },
-    };
-  } catch (error) {
-    const code = (error as { code?: unknown } | null)?.code;
-    if (
-      mode !== "auto" ||
-      binding.createCpu === undefined ||
-      (code !== "GPU_INIT_FAILED" && code !== "INVALID_INPUT")
-    )
-      throw error;
-    const message = error instanceof Error ? error.message : String(error);
-    try {
-      return cpu(
-        `the browser offers no WebGPU adapter and no WebGL2 context (${message})`,
-      );
-    } catch {
-      // The GPU's failure is the one to report: it says why there is no renderer at all.
-      throw error;
-    }
+    return (await gpu.requestAdapter()) != null;
+  } catch {
+    return false;
+  }
+}
+
+/** What `host` reports about its loss; a host whose report throws reports nothing. */
+function lossReportOf(host: RenderWorkerHost): GpuLossReport | undefined {
+  try {
+    return host.lossReport?.();
+  } catch {
+    return undefined;
   }
 }
 
@@ -771,6 +899,52 @@ function workerFrameIdentity(
     rotation,
     mirror,
   };
+}
+
+/**
+ * What a host answers for a frame it must have decoded again in software (`cause` from
+ * `intakeVideoFrame`): the request for that decode, or, for a frame that already is one, the
+ * refusal. A software frame still without planes means this browser cannot hand the source over
+ * (`PlanarDecodeUnavailableError`); one still unreadable fails as `FrameSupply` fails it
+ * (`FRAME_SUPPLY_FAILED`).
+ */
+function redecodeRequest(
+  frame: DecodedVideoFrame,
+  cause: unknown,
+  transfer: string | null,
+): Error {
+  const nonPlanar = cause instanceof NonPlanarVideoFrameError;
+  if (frame.decode !== "software")
+    return new SoftwareDecodeRequiredError(
+      {
+        sourceId: frame.sourceId,
+        mediaTimeTicks: frame.requestedTimeTicks.toString(),
+        reason: nonPlanar ? "non-planar" : "unreadable",
+      },
+      { cause },
+    );
+  if (nonPlanar) {
+    const facts = {
+      kind: "video" as const,
+      codec: null,
+      transfer,
+      frameFormat: cause.format,
+      softwareDecoder: "opaque" as const,
+      browserError: cause.message,
+    };
+    return new PlanarDecodeUnavailableError(
+      decodeRefusalMessage(frame.sourceId, facts),
+      facts,
+      { cause },
+    );
+  }
+  return Object.assign(
+    new Error(
+      `the browser could not read back the frame of ${frame.sourceId} at ${frame.requestedTimeTicks}, decoded again in software`,
+      { cause },
+    ),
+    { code: "FRAME_SUPPLY_FAILED" },
+  );
 }
 
 function registerFonts(
@@ -852,6 +1026,7 @@ export class WorkerRenderBackend implements RenderBackend {
   #nextId = 1;
   #rendererChoice: RendererChoice | undefined;
   #deviceLost = false;
+  #lossReport: GpuLossReport | undefined;
   #disposed = false;
   /** Set once the worker raised an uncaught error; see `#onWorkerError`. */
   #failure: Alpha2WasmError | undefined;
@@ -864,7 +1039,7 @@ export class WorkerRenderBackend implements RenderBackend {
 
   /**
    * The renderer the worker's host draws with, once {@link WorkerRenderBackend.initialize} has
-   * resolved; `undefined` before, or for a host that does not say.
+   * resolved, and as each recovery changed it; `undefined` before, or for a host that does not say.
    */
   get rendererChoice(): RendererChoice | undefined {
     return this.#rendererChoice;
@@ -894,6 +1069,7 @@ export class WorkerRenderBackend implements RenderBackend {
         rotationDegrees: frame.rotationDegrees,
         mirror: frame.mirror,
         chromaSiting: frame.chromaSiting,
+        ...(frame.decode === undefined ? {} : { decode: frame.decode }),
       },
       [frame.frame],
       () => frame.frame.close(),
@@ -985,9 +1161,43 @@ export class WorkerRenderBackend implements RenderBackend {
     return this.#deviceLost;
   }
 
-  async recover(): Promise<void> {
-    await this.#request({ type: "recover" });
+  /** What the worker's host reported with its last loss; cleared by a recovery. */
+  lossReport(): GpuLossReport | undefined {
+    return this.#lossReport;
+  }
+
+  /** Asks the worker for its lost renderer's surface kind and whether it gets a WebGPU adapter. */
+  async probeSurface(): Promise<SurfaceProbe> {
+    return (await this.#request({ type: "probe-surface" })) as SurfaceProbe;
+  }
+
+  /**
+   * Has the worker's host make the renderer `step` names, transferring `canvas` (a fresh surface)
+   * to it, and resolves to the renderer it made. Rejects with the host's error; the backend then
+   * stays lost.
+   */
+  async recover(
+    step: RecoveryStep,
+    canvas?: OffscreenCanvas,
+  ): Promise<RendererChoice | undefined> {
+    const choice = (await this.#request(
+      { type: "recover", step, ...(canvas === undefined ? {} : { canvas }) },
+      canvas === undefined ? [] : [canvas],
+    )) as RendererChoice | undefined;
     this.#deviceLost = false;
+    this.#lossReport = undefined;
+    if (choice !== undefined) this.#rendererChoice = choice;
+    return choice;
+  }
+
+  /**
+   * The browser's capabilities probed inside the worker, where its host renders: what
+   * `renderer: "auto"` does there, which can differ from the page's answer.
+   */
+  async detectCapabilities(): Promise<BrowserCapabilities> {
+    return (await this.#request({
+      type: "detect-capabilities",
+    })) as BrowserCapabilities;
   }
 
   /** Terminates the worker and rejects every pending call. Idempotent. */
@@ -1012,6 +1222,7 @@ export class WorkerRenderBackend implements RenderBackend {
     if ("type" in message) {
       if (message.type === "device-lost") {
         this.#deviceLost = true;
+        if (message.report !== undefined) this.#lossReport = message.report;
         return;
       }
       const readback = this.#pendingExportReadbacks.get(message.id);
@@ -1095,7 +1306,7 @@ function lostRenderer(): Alpha2WasmError {
   return new Alpha2WasmError({
     code: "GPU_DEVICE_LOST",
     message:
-      "the GPU device was lost and no renderer has been made again yet; recover() makes one",
+      "the GPU device was lost and no renderer has been made again yet; recover(step) makes one",
     fatal: true,
   });
 }

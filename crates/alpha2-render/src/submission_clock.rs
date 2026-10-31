@@ -44,6 +44,9 @@ pub struct SubmissionReport {
     pub frame: Option<FrameMark>,
     /// The effects it ran, as `id@version`.
     pub effects: Vec<String>,
+    /// The GPU time the renderer predicted for it, in milliseconds, when its
+    /// frame was planned.
+    pub predicted_ms: Option<f64>,
 }
 
 #[derive(Debug)]
@@ -52,6 +55,7 @@ struct Entry {
     done_at: Option<Instant>,
     frame: Option<FrameMark>,
     effects: Vec<String>,
+    predicted_ms: Option<f64>,
 }
 
 #[derive(Debug, Default)]
@@ -90,9 +94,9 @@ impl SubmissionClock {
         }
     }
 
-    /// Records a submission made at `at`, and returns its sequence number for
-    /// [`Self::complete`].
-    pub(crate) fn record(&self, at: Instant) -> u64 {
+    /// Records a submission made at `at`, predicted to take `predicted_ms`,
+    /// and returns its sequence number for [`Self::complete`].
+    pub(crate) fn record(&self, at: Instant, predicted_ms: Option<f64>) -> u64 {
         let mut state = self.state();
         let effects = std::mem::take(&mut state.effects);
         let frame = state.frame;
@@ -101,6 +105,7 @@ impl SubmissionClock {
             done_at: None,
             frame,
             effects,
+            predicted_ms,
         });
         if state.entries.len() > KEPT {
             state.entries.pop_front();
@@ -154,7 +159,30 @@ impl SubmissionClock {
                 gpu_ms,
                 frame: entry.frame,
                 effects: entry.effects.clone(),
+                predicted_ms: entry.predicted_ms,
             })
+    }
+
+    /// The summed GPU time of the submissions `sequences`, once all of them
+    /// finished and are still kept. A completion seen late moves time
+    /// between consecutive submissions, not out of the sum, so the sum over
+    /// one frame's submissions holds even when their completions arrive
+    /// together.
+    pub(crate) fn gpu_ms(&self, sequences: std::ops::Range<u64>) -> Option<f64> {
+        let state = self.state();
+        let first = state.first;
+        let spans = Self::spans(&state, Instant::now());
+        let mut total = 0.0;
+        let mut counted = 0;
+        for (position, (ms, entry)) in spans.into_iter().enumerate() {
+            let sequence = first + u64::try_from(position).unwrap_or(u64::MAX);
+            if sequences.contains(&sequence) {
+                entry.done_at?;
+                total += ms;
+                counted += 1;
+            }
+        }
+        (counted == sequences.end.saturating_sub(sequences.start)).then_some(total)
     }
 
     /// [`Self::longest_at`] now.
@@ -188,20 +216,20 @@ mod tests {
         let clock = SubmissionClock::default();
         let start = Instant::now();
         let at = |ms: u64| start + Duration::from_millis(ms);
-        let first = clock.record(at(0));
-        let second = clock.record(at(0));
-        let third = clock.record(at(0));
+        let first = clock.record(at(0), None);
+        let second = clock.record(at(0), None);
+        let third = clock.record(at(0), None);
         clock.complete(first, at(10));
         clock.complete(second, at(400));
         clock.complete(third, at(405));
         let longest = clock.longest_at(at(1_000)).expect("submissions");
         assert!((longest.gpu_ms - 390.0).abs() < 0.5, "{longest:?}");
         // A later submission made after the queue went idle starts at its own submission.
-        let fourth = clock.record(at(2_000));
+        let fourth = clock.record(at(2_000), None);
         clock.complete(fourth, at(2_005));
         assert!((clock.longest_at(at(3_000)).expect("kept").gpu_ms - 390.0).abs() < 0.5);
         // A submission that never finished counts up to now.
-        let _ = clock.record(at(3_000));
+        let _ = clock.record(at(3_000), None);
         assert!((clock.longest_at(at(3_700)).expect("running").gpu_ms - 700.0).abs() < 0.5);
     }
 
@@ -209,8 +237,8 @@ mod tests {
     fn a_completion_finishes_every_earlier_submission() {
         let clock = SubmissionClock::default();
         let start = Instant::now();
-        let first = clock.record(start);
-        let second = clock.record(start);
+        let first = clock.record(start, None);
+        let second = clock.record(start, None);
         clock.complete(second, start + Duration::from_millis(8));
         let _ = first;
         assert_eq!(
@@ -218,6 +246,28 @@ mod tests {
                 .longest_at(start + Duration::from_secs(5))
                 .map(|r| r.gpu_ms.round()),
             Some(8.0)
+        );
+    }
+
+    #[test]
+    fn a_frames_gpu_time_survives_completions_seen_together() {
+        let clock = SubmissionClock::default();
+        let start = Instant::now();
+        let at = |ms: u64| start + Duration::from_millis(ms);
+        let earlier = clock.record(at(0), None);
+        clock.complete(earlier, at(5));
+        let first = clock.record(at(10), Some(100.0));
+        let second = clock.record(at(10), Some(100.0));
+        assert_eq!(clock.gpu_ms(first..second + 1), None, "not finished");
+        // Both seen at once, at 210 ms: the first takes the whole span, the sum is the same.
+        clock.complete(second, at(210));
+        let total = clock.gpu_ms(first..second + 1).expect("finished");
+        assert!((total - 200.0).abs() < 0.5, "{total}");
+        assert_eq!(
+            clock
+                .longest_at(at(300))
+                .and_then(|report| report.predicted_ms),
+            Some(100.0)
         );
     }
 
@@ -230,9 +280,9 @@ mod tests {
             frame_index: Some(1),
         }));
         clock.note_effect(&crate::EffectId::from_static("blur", 2));
-        let heavy = clock.record(start);
+        let heavy = clock.record(start, None);
         clock.complete(heavy, start + Duration::from_millis(30));
-        let light = clock.record(start + Duration::from_millis(40));
+        let light = clock.record(start + Duration::from_millis(40), None);
         clock.complete(light, start + Duration::from_millis(41));
         let report = clock
             .longest_at(start + Duration::from_millis(50))

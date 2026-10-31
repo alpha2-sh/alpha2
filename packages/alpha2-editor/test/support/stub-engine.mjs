@@ -1,8 +1,9 @@
 // The renderer a preview test's bridge makes: it records what it was asked to load and draw. A test
 // steers it through `globalThis.stubEngine` (see preview-stubs.mjs).
 export class Engine {
-  constructor(canvas, sources, library, runtimeAssets = {}) {
+  constructor(canvas, sources, library, runtimeAssets = {}, options = {}) {
     this.canvas = canvas;
+    this.options = options;
     this.sources = sources;
     this.library = library;
     this.runtimeAssets = runtimeAssets;
@@ -21,10 +22,34 @@ export class Engine {
   }
   async start() {
     await globalThis.stubEngine.start?.(this);
+    // A test may say which renderer the engine got (`stubEngine.renderer`); by default the one
+    // asked for, `auto` drawing on the GPU.
+    const renderer =
+      globalThis.stubEngine.renderer?.(this) ??
+      (this.options.renderer === "cpu" ? "cpu" : "gpu");
+    this.rendererChoice = {
+      renderer,
+      rendererReason: renderer === "cpu" ? "stub CPU renderer" : null,
+      backend: renderer === "cpu" ? "cpu" : "webgpu",
+      adapter: null,
+    };
     return {};
   }
+  /** What a test set as the loss report (`engine.report`); undefined without a loss. */
+  lossReport() {
+    return this.deviceLost ? this.report : undefined;
+  }
   capabilityReport() {
-    return { gpu: null, color: null, playback: null };
+    const choice = this.rendererChoice;
+    return {
+      gpu: null,
+      color: null,
+      playback: null,
+      renderer: choice && {
+        ...choice,
+        runtimeEffects: choice.renderer === "gpu",
+      },
+    };
   }
   loadProject(project) {
     this.project = project;
@@ -72,7 +97,10 @@ export class Engine {
     const unchanged = globalThis.stubEngine.unchanged?.(this, seconds) === true;
     this.renders.push({ seconds, project: this.project, unchanged });
     if (!unchanged && this.canvas.drawn !== undefined) this.canvas.drawn += 1;
-    return { rendered: true, unchanged };
+    // A test may say the frame showed sources degraded (`stubEngine.degraded`).
+    const degradedSources =
+      globalThis.stubEngine.degraded?.(this, seconds) ?? [];
+    return { rendered: true, unchanged, degradedSources };
   }
   audible() {
     return false;

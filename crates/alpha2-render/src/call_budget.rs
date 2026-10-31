@@ -119,6 +119,20 @@ pub(crate) fn check_invocation_calls(code: &str) -> Result<(), ShaderDiagnostics
 /// The module-scope functions of `code` and the calls each makes to the
 /// others.
 fn functions(code: &str) -> Vec<Function<'_>> {
+    let declared = declarations(code);
+    let names = declared_names(&declared);
+    declared
+        .iter()
+        .map(|(name, body)| Function {
+            name,
+            calls: calls(code, body.clone(), &names),
+        })
+        .collect()
+}
+
+/// The module-scope functions `code` declares: each one's name and the range
+/// of its body, braces included.
+pub(crate) fn declarations(code: &str) -> Vec<(&str, std::ops::Range<usize>)> {
     let bytes = code.as_bytes();
     let mut declared = Vec::new();
     let mut depth = 0_usize;
@@ -138,18 +152,18 @@ fn functions(code: &str) -> Vec<Function<'_>> {
         }
         index += 1;
     }
-    let names = declared
+    declared
+}
+
+/// Each declared name and the index of its first declaration.
+pub(crate) fn declared_names<'a>(
+    declared: &[(&'a str, std::ops::Range<usize>)],
+) -> HashMap<&'a str, usize> {
+    declared
         .iter()
         .enumerate()
         .rev()
         .map(|(index, (name, _))| (*name, index))
-        .collect::<HashMap<_, _>>();
-    declared
-        .iter()
-        .map(|(name, body)| Function {
-            name,
-            calls: calls(code, body.clone(), &names),
-        })
         .collect()
 }
 
@@ -217,8 +231,9 @@ fn calls(
     calls
 }
 
-/// The spans of the `for` loops in `body`, header to closing brace.
-fn loops(code: &str, body: std::ops::Range<usize>) -> Vec<std::ops::Range<usize>> {
+/// The spans of the `for` loops in `body`, header to closing brace, nested
+/// ones included.
+pub(crate) fn loops(code: &str, body: std::ops::Range<usize>) -> Vec<std::ops::Range<usize>> {
     let mut loops = Vec::new();
     let mut search = body.start;
     let within = &code[..body.end];

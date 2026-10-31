@@ -4,6 +4,9 @@ export async function loadAlpha2AudioWorkletWasm() {
   return {};
 }
 export class Alpha2AudioWorkletHost {
+  static latency() {
+    return { latencySamples: 0 };
+  }
   static async create() {
     return {
       port: { addEventListener() {}, postMessage() {} },

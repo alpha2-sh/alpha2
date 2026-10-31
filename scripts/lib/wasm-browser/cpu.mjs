@@ -5,13 +5,11 @@
 // still offers SwiftShader WebGPU and WebGL2; Chrome without any GPU process is
 //   ALPHA2_CHROME_GPU=none node scripts/test-wasm-browser.mjs --case renderer-auto
 
-// The renderer `auto` must choose here: "gpu" when the page has a WebGPU adapter or a WebGL2
-// context, "cpu" otherwise. Whether a fallback adapter (SwiftShader) is a GPU is the product's
-// rule; this follows what the page offers.
-const EXPECTED_RENDERER = (renderer) => `
-const pageHasGpu = Boolean(await navigator.gpu?.requestAdapter()) ||
-  Boolean(new OffscreenCanvas(1, 1).getContext("webgl2"));
-const expected = ${JSON.stringify(renderer)} === "auto" ? (pageHasGpu ? "gpu" : "cpu") : ${JSON.stringify(renderer)};
+// The renderer `auto` must choose here: the answer of `detectBrowserCapabilities` where the host
+// renders (`answer`, an expression for that thread's report): "gpu" on a hardware WebGPU adapter or
+// WebGL2 context, "cpu" with neither or only a software one (SwiftShader), as the native `auto`.
+const EXPECTED_RENDERER = (renderer, answer) => `
+const expected = ${JSON.stringify(renderer)} === "auto" ? (${answer}).renderer : ${JSON.stringify(renderer)};
 `;
 
 // A project of one decoded video (planar I420 frames, as WebCodecs decodes them), shown whole, then
@@ -60,7 +58,7 @@ const host = await createWasmRenderWorkerHost(WebEffectRegistry, JSON.stringify(
   renderer: ${JSON.stringify(renderer)},
 })(canvas);
 const choice = host.rendererChoice;
-${EXPECTED_RENDERER(renderer)}
+${EXPECTED_RENDERER(renderer, "capabilities")}
 if (choice?.renderer === "gpu") {
   // A GPU's export is other cases'; here one frame must present. A device lost on presenting
   // (headless Chrome and SwiftShader lose one) is the browser's.
@@ -198,12 +196,16 @@ await encoder.flush();
 encoder.close();
 // The encoded stream decodes back to as many frames, the last one showing the square. The decoder
 // the browser picks may fail on the stream before its first frame (a hardware one on a size it
-// does not take); it is then asked once more for a software decoder.
+// does not take); it is then asked once more for a software decoder. Only the newest decoded frame
+// is held: a hardware decoder's surface pool is a few frames past its reference frames, and one
+// whose surfaces are all held by the page stops decoding without an error, so a flush that waits
+// on it never settles.
 const decodeAll = async (hardwareAcceleration) => {
-  const frames = [];
+  let count = 0;
+  let last = null;
   let failure = null;
   const decoder = new VideoDecoder({
-    output: (frame) => { frames.push(frame); },
+    output: (frame) => { count += 1; last?.close(); last = frame; },
     error: (error) => { failure ??= error; },
   });
   try {
@@ -214,28 +216,28 @@ const decodeAll = async (hardwareAcceleration) => {
     failure ??= error;
   }
   if (decoder.state !== "closed") decoder.close();
-  return { frames, failure };
+  return { count, last, failure };
 };
 let decoding = await decodeAll("no-preference");
 let decoderRetried = null;
-if (decoding.failure !== null && decoding.frames.length === 0) {
+if (decoding.failure !== null && decoding.count === 0) {
   decoderRetried = String(decoding.failure?.message ?? decoding.failure);
   decoding = await decodeAll("prefer-software");
 }
-const decodedFrames = decoding.frames;
 if (decoding.failure !== null) {
-  for (const frame of decodedFrames) frame.close();
+  decoding.last?.close();
   throw decoding.failure;
 }
-const last = decodedFrames.at(-1);
+const decodedCount = decoding.count;
+const last = decoding.last;
 // A decoder hands back YUV (I420, NV12) or, in some browsers, RGB; either gives the luma.
 const decodedFormat = last.format;
 const decodedSquare = await lumaAt(last, width * 3 / 8, height * 3 / 8);
-for (const frame of decodedFrames) frame.close();
+last.close();
 const report_ = {
   renderer: choice?.renderer, rendererReason: choice?.rendererReason, capabilities: { webgpu: capabilities.webgpu, webgl2: capabilities.webgl2, renderer: capabilities.renderer },
   size: [width, height], codec: encoding.codec, frames: frameTicks.length, presentedFrames, encodedChunks: chunks.length,
-  decodedFrames: decodedFrames.length, previewMsPerFrame: Number(previewMs.toFixed(1)), exportMsPerFrame: Number(exportMs.toFixed(1)),
+  decodedFrames: decodedCount, previewMsPerFrame: Number(previewMs.toFixed(1)), exportMsPerFrame: Number(exportMs.toFixed(1)),
   supplyMsPerFrame: { preview: Number(previewSupplyMs.toFixed(1)), export: Number(exportSupplyMs.toFixed(1)) },
   exportedSquare: exported[0], decodedSquare, decodedFormat, decoderRetried,
   // How far the preview's luma is from the export's at the worst point.
@@ -244,7 +246,7 @@ const report_ = {
 host.dispose();
 report({
   ok: report_.renderer === expected && (expected === "gpu") === (report_.rendererReason === null) &&
-    presentedFrames === frameTicks.length && decodedFrames.length === frameTicks.length &&
+    presentedFrames === frameTicks.length && decodedCount === frameTicks.length &&
     exported[0] > 200 && Math.abs(decodedSquare - exported[0]) <= 12 &&
     (shown === null || report_.previewDifference <= 24),
   ...report_,
@@ -290,7 +292,9 @@ canvas.height = 24;
 document.body.append(canvas);
 await backend.initialize(canvas.transferControlToOffscreen());
 const choice = backend.rendererChoice;
-${EXPECTED_RENDERER(renderer)}
+// The worker's own answer, which is what its host's \`auto\` follows.
+const workerCapabilities = await backend.detectCapabilities();
+${EXPECTED_RENDERER(renderer, "workerCapabilities")}
 if (choice?.renderer === "gpu") {
   // A GPU's worker is other cases'; here one frame must present. A device lost on presenting
   // (headless Chrome and SwiftShader lose one) is the browser's.
@@ -455,5 +459,45 @@ report({
     !capability.features["effects.runtime"].available && !deviceLost,
   registration, rendering, backend: capability.gpu.backend,
 });
+`;
+}
+
+// `auto` refuses a software adapter (SwiftShader, llvmpipe, WARP, a WebGPU fallback adapter) and
+// draws on the CPU, naming the adapter it refused; `gpu` draws on it. On a hardware GPU both draw
+// on the GPU. A browser with no GPU adapter at all has nothing to refuse.
+export function rendererFallbackAdapter() {
+  return `
+const { default: init, WebEffectRegistry } = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+await init();
+const { createWasmRenderWorkerHost } = await import("/packages/alpha2/dist/worker.js");
+const { detectBrowserCapabilities } = await import("/packages/alpha2/dist/robustness.js");
+const capabilities = await detectBrowserCapabilities();
+const project = JSON.stringify({
+  schema_version: 1, id: "f", name: "F",
+  settings: { width: 64, height: 48, frame_rate: { num: 30, den: 1 }, sample_rate: 48000 },
+  sources: [], timeline: { tracks: [] },
+});
+const make = async (renderer) => {
+  try {
+    const host = await createWasmRenderWorkerHost(WebEffectRegistry, project, { renderer })(new OffscreenCanvas(64, 48));
+    const choice = host.rendererChoice;
+    host.dispose();
+    return choice;
+  } catch (error) {
+    return { error: String(error?.message ?? error), code: error?.code ?? null };
+  }
+};
+const auto = await make("auto");
+const gpu = await make("gpu");
+const software = capabilities.webgpuFallbackAdapter === true ||
+  (!capabilities.webgpu && capabilities.webgl2 && capabilities.renderer === "cpu");
+const details = { auto, gpu, capabilities: { webgpu: capabilities.webgpu, webgpuFallbackAdapter: capabilities.webgpuFallbackAdapter,
+  webgl2: capabilities.webgl2, webgl2Renderer: capabilities.webgl2Renderer, renderer: capabilities.renderer } };
+if (!capabilities.webgpu && !capabilities.webgl2) skip("software-adapter", "the browser offers no GPU adapter at all", details);
+const ok = software
+  ? auto.renderer === "cpu" && /software adapter .+, which renderer "auto" does not draw on/.test(auto.rendererReason ?? "") &&
+    gpu.renderer === "gpu" && gpu.rendererReason === null
+  : auto.renderer === "gpu" && gpu.renderer === "gpu" && auto.backend === gpu.backend;
+report({ ok, software, ...details });
 `;
 }

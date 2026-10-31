@@ -20,11 +20,11 @@ pub enum AdapterPolicy {
 
 impl AdapterPolicy {
     /// The policy when `ALPHA2_GPU_ADAPTER` is unset: `auto` on Linux and macOS, `performance` on
-    /// Windows. On a Windows laptop whose integrated GPU is an Intel Iris Xe, `auto` would render
-    /// there (its video engines encode H.264 and HEVC), and with the wgpu-hal this build uses the
-    /// Iris Xe draws leftover memory into DX12 textures that should start out cleared. Until that
-    /// is fixed, Windows renders on the first hardware adapter in the high-performance order and
-    /// `auto` is there to ask for.
+    /// Windows. On a hybrid Windows laptop with an Intel integrated GPU, `auto` would often render
+    /// there (its video engines encode H.264 and HEVC), and with the wgpu-hal this build uses some
+    /// Intel integrated GPUs draw leftover memory into DX12 textures that should start out
+    /// cleared. Until that is fixed, Windows renders on the first hardware adapter in the
+    /// high-performance order and `auto` is there to ask for.
     #[must_use]
     pub const fn platform_default() -> Self {
         if cfg!(target_os = "windows") {

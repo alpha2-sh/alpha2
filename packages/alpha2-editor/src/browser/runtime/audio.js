@@ -340,14 +340,33 @@ const PUMP_INTERVAL_MS = 40;
  * thread; the worklet applies no second master chain.
  */
 export class EngineAudioMixer {
-  constructor(runtimeAssets = {}, { enabled = true } = {}) {
+  /**
+   * `onInterrupted` is called when the output stops under playing audio (the context suspended or
+   * interrupted by the system, as when another app takes the device); the mixer has stopped by then.
+   */
+  constructor(runtimeAssets = {}, { enabled = true, onInterrupted } = {}) {
     this.runtimeAssets = runtimeAssets;
     this.#enabled = enabled;
+    this.#onInterrupted = onInterrupted ?? null;
   }
   #enabled = true;
   #clock = null;
+  #onInterrupted = null;
+  /** The user's A/V offset in milliseconds, for a delay the output does not report. */
+  #offsetMs = 0;
   get tick() {
     return this.#clock ? Number(this.#clock.timelineTicks) : null;
+  }
+
+  /** Where the playing clock's output latency comes from (`AudioLatencySource`), else null. */
+  get latencySource() {
+    return this.#clock?.latencySource ?? null;
+  }
+
+  /** Sets the A/V offset in milliseconds (positive shows the picture later), playing or not. */
+  setLatencyOffset(ms) {
+    this.#offsetMs = ms;
+    if (this.#clock) this.#clock.latencyOffsetSeconds = ms / 1000;
   }
   #context = null;
   #node = null;
@@ -444,8 +463,18 @@ export class EngineAudioMixer {
   async resume() {
     if (!this.supported || !this.#engine) return;
     // Construct and resume before the first await to keep Play's user activation.
-    const context =
-      this.#context ?? new AudioContext({ sampleRate: this.#sampleRate });
+    let context = this.#context;
+    if (!context) {
+      context = new AudioContext({ sampleRate: this.#sampleRate });
+      context.addEventListener("statechange", () => {
+        // Only while playing: stopping clears the clock, so a stop reports once.
+        if (!this.#clock || this.#context !== context) return;
+        if (context.state !== "suspended" && context.state !== "interrupted")
+          return;
+        this.stop();
+        this.#onInterrupted?.(context.state);
+      });
+    }
     this.#context = context;
     const resumed =
       context.state === "suspended" ? context.resume() : Promise.resolve();
@@ -491,7 +520,10 @@ export class EngineAudioMixer {
       this.#pump,
       this.#ring,
       this.#context,
-      Alpha2AudioWorkletHost.latency(this.#node),
+      {
+        processing: Alpha2AudioWorkletHost.latency(this.#node),
+        latencyOffsetSeconds: this.#offsetMs / 1000,
+      },
     );
     this.#timer = setInterval(() => {
       void this.#pump?.fill().catch((error) => {

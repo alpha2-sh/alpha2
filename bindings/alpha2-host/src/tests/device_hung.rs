@@ -2,7 +2,7 @@
 //! one lost after short ones stays lost. No test may stop a GPU, so the loss
 //! is injected at a frame's readback (`ALPHA2_EXPORT_LOSE_DEVICE_AT_FRAME`)
 //! after its submission ran, and the watchdog is shortened
-//! (`ALPHA2_GPU_WATCHDOG_MS`) so a real heavy frame crosses the line. Both
+//! (`ALPHA2_GPU_WATCHDOG_MS`) so the frame's submissions cross the line. Both
 //! are read from the environment, so each export runs in a child process.
 
 use super::*;
@@ -87,9 +87,9 @@ fn lost_export(watchdog_ms: Option<&str>) -> Value {
 
 #[test]
 fn an_injected_loss_after_a_heavy_frame_is_device_hung() {
-    // A 2 ms watchdog puts the line at 1 ms: a blurred, grained 1080p frame runs longer on any
-    // GPU, software adapters included.
-    let answer = lost_export(Some("2"));
+    // A 1 ms watchdog puts the line at 0 ms. A longer one would not do: a heavy frame is cut into
+    // submissions of an eighth of the watchdog, so on a fast GPU none of them reaches half of it.
+    let answer = lost_export(Some("1"));
     let error = &answer["error"];
     assert_eq!(answer["ok"], false, "{answer}");
     assert_eq!(error["code"], "GPU_DEVICE_HUNG", "{answer}");
@@ -98,15 +98,18 @@ fn an_injected_loss_after_a_heavy_frame_is_device_hung() {
     assert!(
         error["message"]
             .as_str()
-            .is_some_and(|message| message.contains("2 ms watchdog")),
+            .is_some_and(|message| message.contains("1 ms watchdog")),
         "{answer}"
     );
     let submission = &error["failure"]["diagnostics"]["gpuSubmission"];
-    assert_eq!(submission["watchdogMs"], 2, "{answer}");
+    assert_eq!(submission["watchdogMs"], 1, "{answer}");
     assert!(
-        submission["maxMs"].as_f64().is_some_and(|ms| ms >= 1.0),
+        submission["maxMs"].as_f64().is_some_and(|ms| ms >= 0.0),
         "{answer}"
     );
+    // The frame was planned: the report carries what its longest submission was predicted to
+    // take.
+    assert!(submission["predictedMs"].as_f64().is_some(), "{answer}");
 }
 
 #[test]
@@ -122,4 +125,71 @@ fn an_injected_loss_after_light_frames_stays_device_lost() {
         alpha2_gpu::WATCHDOG_MS,
         "{answer}"
     );
+}
+
+/// Exports three 640x360 frames of a still through the heavy watchdog fixture with a watchdog
+/// of `watchdog_ms` (zero: the default), and returns the result's `gpuSubmissions`.
+fn heavy_export_submissions(watchdog_ms: u32) -> Value {
+    let directory = scratch_directory("split-frames");
+    let mut host = create_gpu_test_host(VideoDecodePolicy::Software).expect("host");
+    let fixture = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/cases/gpu-watchdog/heavy-effects.json"),
+    )
+    .expect("the heavy fixture");
+    let heavy: Value = serde_json::from_str(&fixture).expect("JSON");
+    let mut project = still_project([0.0, 0.0, 0.0], "bypass");
+    project["settings"]["width"] = json!(640);
+    project["settings"]["height"] = json!(360);
+    project["compositions"] = json!([{"id": "look", "output": "effect", "nodes": [
+        {"id": "clip", "op": {"type": "clip"}},
+        {"id": "effect", "op": {"type": "effect", "input": "clip",
+            "effect": {"id": heavy[0]["id"], "version": 1}}}]}]);
+    project["timeline"]["tracks"][0]["clips"][0]["composition"] = json!({"id": "look"});
+    let request = parse_request(
+        &json!({
+            "protocolVersion": 1,
+            "operation": "export",
+            "requestId": "split",
+            "project": project,
+            "assets": {"image": Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tests/corpus/cross_topology_parity.png")},
+            "effects": heavy,
+            "startTicks": 0,
+            "endTicks": 3 * 4_000,
+            "frameRate": {"num": 30, "den": 1},
+            "includeAudio": false,
+            "videoCodec": "mpeg4-part2",
+            "output": directory.join("split.mp4"),
+        })
+        .to_string(),
+    )
+    .expect("request");
+    alpha2_gpu::set_watchdog_ms(watchdog_ms);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        host.handle(request, &mut |_| Ok(()))
+    }));
+    alpha2_gpu::set_watchdog_ms(0);
+    let result = result
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+        .expect("the export finishes");
+    result["performance"]["gpuSubmissions"].clone()
+}
+
+#[test]
+fn export_performance_reports_split_frames() {
+    let _gpu = gpu_test_lock();
+    // A one-millisecond watchdog leaves no budget: every heavy frame is drawn in the most bands.
+    let split = heavy_export_submissions(1);
+    assert!(
+        split["frames"].as_u64().is_some_and(|frames| frames >= 1),
+        "{split}"
+    );
+    assert_eq!(split["splitFrames"], split["frames"], "{split}");
+    // The heavy pass's bands, and the work before it in a command buffer of its own.
+    assert!(
+        split["maxPerFrame"].as_u64().is_some_and(|most| most >= 64),
+        "{split}"
+    );
+    assert!(split["maxPredictedMs"].as_f64().is_some(), "{split}");
 }

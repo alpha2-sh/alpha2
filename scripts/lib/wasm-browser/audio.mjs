@@ -126,6 +126,58 @@ const power = (samples, frequency) => {
   }
   return previous * previous + before * before - coefficient * previous * before;
 };
+const toneOf = (samples, tones) => tones.reduce((best, tone) => (power(samples, tone) > power(samples, best) ? tone : best));
+// The browser's decoder on a source's first 16 packets, without the engine's decoder: the channel
+// count and rate of its first output, and per plane the RMS of 1024 frames and the tone after the
+// codec settles (from frame 4800; AAC's first frames are its encoder's priming).
+const trialDecode = async (bytes, tones) => {
+  const mediabunny = await import("mediabunny");
+  const input = new mediabunny.Input({ source: new mediabunny.BufferSource(bytes), formats: mediabunny.ALL_FORMATS });
+  const track = await input.getPrimaryAudioTrack();
+  const planes = [];
+  let channels = 0, sampleRate = 0, failure = null;
+  const decoder = new AudioDecoder({
+    output: (data) => {
+      if (channels === 0) [channels, sampleRate] = [data.numberOfChannels, data.sampleRate];
+      for (let plane = 0; plane < data.numberOfChannels; plane++) {
+        const samples = new Float32Array(data.numberOfFrames);
+        data.copyTo(samples, { planeIndex: plane, format: "f32-planar" });
+        (planes[plane] ??= []).push(samples);
+      }
+      data.close();
+    },
+    error: (error) => (failure = String(error?.message ?? error)),
+  });
+  try {
+    decoder.configure(await track.getDecoderConfig());
+    let count = 0;
+    for await (const packet of new mediabunny.EncodedPacketSink(track).packets()) {
+      decoder.decode(packet.toEncodedAudioChunk());
+      if (++count === 16) break;
+    }
+    await decoder.flush();
+  } catch (error) {
+    failure ??= String(error?.message ?? error);
+  } finally {
+    if (decoder.state !== "closed") decoder.close();
+    input.dispose();
+  }
+  const joined = planes.map((parts) => {
+    const out = new Float32Array(parts.reduce((sum, part) => sum + part.length, 0));
+    let at = 0;
+    for (const part of parts) { out.set(part, at); at += part.length; }
+    return out;
+  });
+  const rms = joined.map((plane) => {
+    const head = plane.length >= 5824 ? plane.subarray(4800, 5824) : plane.subarray(0, 1024);
+    return +Math.sqrt(head.reduce((sum, value) => sum + value * value, 0) / Math.max(1, head.length)).toFixed(5);
+  });
+  return {
+    declared: track.numberOfChannels, channels, sampleRate, rms,
+    tones: joined.map((plane) => (plane.length > 4800 && tones.length > 0 ? toneOf(plane.subarray(4800), tones) : null)),
+    ...(failure === null ? {} : { failure }),
+  };
+};
 const decoded = {};
 if (typeof AudioDecoder === "undefined") {
   decoded.skipped = "this browser has no WebCodecs AudioDecoder";
@@ -145,14 +197,31 @@ if (typeof AudioDecoder === "undefined") {
         : { ok: false, undecodable: track.codec };
       continue;
     }
-    const decoder = await MediabunnyAudioDecoder.open("codec", bytes, wasm);
-    const block = await decoder.refill({ sourceId: "codec", startMediaTimeTicks: 0n, endMediaTimeTicks: 60000n, generation: 1 }, 48000);
-    decoder.close();
-    const tones = block.channels.map((plane) => {
-      const settled = plane.subarray(4800);
-      return layout.tones.reduce((best, tone) => (power(settled, tone) > power(settled, best) ? tone : best));
-    });
-    decoded[layout.source] = { speakers: block.speakers, tones, ok: JSON.stringify(block.speakers) === JSON.stringify(layout.speakers) && JSON.stringify(tones) === JSON.stringify(layout.tones) };
+    const trial = await trialDecode(bytes, layout.tones);
+    let block;
+    try {
+      const decoder = await MediabunnyAudioDecoder.open("codec", bytes, wasm);
+      block = await decoder.refill({ sourceId: "codec", startMediaTimeTicks: 0n, endMediaTimeTicks: 60000n, generation: 1 }, 48000);
+      decoder.close();
+    } catch (error) {
+      decoded[layout.source] = { ok: false, error: String(error?.message ?? error), code: error?.code, trial };
+      continue;
+    }
+    // A decoder that adds a silent LFE to a source without one (Edge's E-AC-3 5.0) has that
+    // layout adopted: the LFE plane must be silent and the others the source's.
+    const lfe = block.speakers.length === layout.speakers.length + 1 && !layout.speakers.includes("LFE")
+      ? block.speakers.indexOf("LFE") : -1;
+    const planes = block.channels.filter((_, index) => index !== lfe);
+    const tones = planes.map((plane) => toneOf(plane.subarray(4800), layout.tones));
+    const silentLfe = lfe === -1 || block.channels[lfe].every((sample) => Math.abs(sample) < 1e-4);
+    decoded[layout.source] = {
+      speakers: block.speakers, tones,
+      ...(lfe === -1 ? {} : { addedLfe: lfe, silentLfe }),
+      ok: JSON.stringify(block.speakers.filter((_, index) => index !== lfe)) === JSON.stringify(layout.speakers) &&
+        JSON.stringify(tones) === JSON.stringify(layout.tones) && silentLfe,
+      // What the browser's own decoder gave, when its channel count is not the declared one.
+      ...(trial.channels === track.numberOfChannels ? {} : { trial }),
+    };
   }
   // Every built-in fixture's kind of stream is measured where the browser decodes its codec (AC-3
   // and E-AC-3 need not decode); the order each measured is reported, FFmpeg's being the identity.
@@ -169,7 +238,27 @@ if (typeof AudioDecoder === "undefined") {
       const input = new mediabunny.Input({ source: new mediabunny.BufferSource(bytes), formats: mediabunny.ALL_FORMATS });
       const decodable = await (await input.getPrimaryAudioTrack()).canDecode();
       input.dispose();
-      orders[key] = !decodable && ["ac3", "eac3"].includes(codec) ? "skipped: this browser does not decode " + codec : null;
+      if (!decodable) {
+        orders[key] = ["ac3", "eac3"].includes(codec) ? "skipped: this browser does not decode " + codec : null;
+        continue;
+      }
+      // A decoder that delivers another channel count (Edge's AC-3 and E-AC-3 decoder gives 5.1
+      // for every layout) has no order for the declared layout: the source opens with an added
+      // silent LFE, or is refused when it opens.
+      const trial = await trialDecode(bytes, []);
+      if (trial.channels === trial.declared || trial.channels === 0) {
+        orders[key] = null;
+        continue;
+      }
+      try {
+        const decoder = await MediabunnyAudioDecoder.open("order", bytes, wasm);
+        orders[key] = decoder.speakers?.includes("LFE") && trial.channels === trial.declared + 1
+          ? "added a silent LFE" : null;
+        decoder.close();
+      } catch (error) {
+        orders[key] = error?.code === "DECODE_UNAVAILABLE"
+          ? "refused at open: decodes to " + trial.channels + " channels" : null;
+      }
     }
   }
   const measured = Object.values(orders).filter((order) => Array.isArray(order));
@@ -216,6 +305,43 @@ if (ok && decoded.skipped !== undefined)
 else if (ok && notes.length > 0)
   report({ skipped: "this browser does not decode AC-3 or E-AC-3", capability: "ac3-decode", decoded, lcr, folded, counted, fronts, refused });
 else report({ ok, decoded, lcr, folded, counted, fronts, refused });
+`;
+}
+
+// A browser whose decoder rejects an AAC layout its canDecode() accepts (Firefox: channel
+// configuration 4 in MP4 and two program config element layouts) has the source refused when it
+// opens, with DECODE_UNAVAILABLE, never at a refill with the decoder's own error; every source
+// that opens decodes.
+export function aacLayoutRefusal() {
+  return `
+const wasm = await import("/packages/alpha2/wasm/alpha2_wasm.js");
+await wasm.default();
+const { MediabunnyAudioDecoder } = await import("/packages/alpha2/dist/mediabunny.js");
+const { ORDER_FIXTURES } = await import("/packages/alpha2/dist/generated/aac-order-fixtures.js");
+if (typeof AudioDecoder === "undefined") skip("webcodecs-audio", "this browser has no WebCodecs AudioDecoder");
+const results = {};
+for (const key of ["aac:4", "aac:pce:CF LL", "aac:pce:SF CF SB", "aac:adts:4", "aac:7"]) {
+  const bytes = Uint8Array.from(atob(ORDER_FIXTURES[key].file), (character) => character.charCodeAt(0));
+  let decoder;
+  try {
+    decoder = await MediabunnyAudioDecoder.open("s", bytes, wasm);
+  } catch (error) {
+    results[key] = error?.code === "DECODE_UNAVAILABLE"
+      ? { refused: true, channels: error.facts?.channels, ok: true }
+      : { ok: false, open: String(error?.message ?? error) };
+    continue;
+  }
+  try {
+    const block = await decoder.refill({ sourceId: "s", startMediaTimeTicks: 0n, endMediaTimeTicks: 40000n, generation: 1 }, 48000);
+    results[key] = { planes: block.channels.length, speakers: block.speakers, ok: block.channels.length > 0 };
+  } catch (error) {
+    results[key] = { ok: false, refill: String(error?.message ?? error), name: error?.name, code: error?.code };
+  } finally {
+    decoder.close();
+  }
+}
+const refused = Object.keys(results).filter((key) => results[key].refused);
+report({ ok: Object.values(results).every((result) => result.ok), refused, results });
 `;
 }
 

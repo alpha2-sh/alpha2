@@ -45,6 +45,10 @@
       "types": "./dist/export-destination.d.ts",
       "import": "./dist/export-destination.js"
     },
+    "./export-metrics": {
+      "types": "./dist/export-metrics.d.ts",
+      "import": "./dist/export-metrics.js"
+    },
     "./export-retry": {
       "types": "./dist/export-retry.d.ts",
       "import": "./dist/export-retry.js"
@@ -56,6 +60,14 @@
     "./frame-supply": {
       "types": "./dist/frame-supply.d.ts",
       "import": "./dist/frame-supply.js"
+    },
+    "./gpu-recovery": {
+      "types": "./dist/gpu-recovery.d.ts",
+      "import": "./dist/gpu-recovery.js"
+    },
+    "./renderer-choice": {
+      "types": "./dist/renderer-choice.d.ts",
+      "import": "./dist/renderer-choice.js"
     },
     "./worker-error": {
       "types": "./dist/worker-error.d.ts",

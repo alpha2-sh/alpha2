@@ -185,6 +185,16 @@ export interface WasmCanvasRenderer extends WasmEffectRegistry {
    * wasm, which refuses runtime effects with `EFFECT_ERROR`). Absent means `"gpu"`.
    */
   readonly renderer?: "gpu" | "cpu";
+  /** The graphics API a GPU renderer draws through; absent on the CPU renderer. */
+  readonly backend?: "webgpu" | "webgl2";
+  /** The adapter a GPU renderer draws on, as the browser names it (may be empty). */
+  readonly adapter?: string;
+  /**
+   * After a loss, what the renderer's submission times say about it, as JSON `{ hung, gpuMs,
+   * watchdogMs, timeTicks, frameIndex, effects }` (`timeTicks` a decimal string); `undefined`
+   * before any loss and on the CPU renderer.
+   */
+  readonly lossReport?: string;
   /**
    * Whether the GPU device is gone: a WebGPU device-lost callback, or a WebGL canvas's
    * `webglcontextlost` event. A lost renderer rejects export readbacks and must be recreated. The
@@ -540,11 +550,31 @@ export type ExportAtTicket =
       readonly readback: Promise<ExportAtFrame>;
     };
 
+/** What the binding's canvas constructors accept besides the canvas. */
+export interface CanvasRendererOptions {
+  /**
+   * `"allow"` (the default) or `"refuse"`: refused, a software adapter (a WebGPU fallback adapter,
+   * SwiftShader, llvmpipe, WARP) is not drawn on, and the constructor rejects `GPU_INIT_FAILED`
+   * before binding the canvas when the browser offers nothing else.
+   */
+  readonly softwareAdapter?: "allow" | "refuse";
+}
+
 /** Constructor shape injected by a browser host after loading wasm. */
 export interface WasmEffectRegistryBinding {
   create(): Promise<WasmEffectRegistry>;
-  createForCanvas?(canvas: OffscreenCanvas): Promise<WasmCanvasRenderer>;
-  createForHtmlCanvas?(canvas: HTMLCanvasElement): Promise<WasmCanvasRenderer>;
+  /**
+   * The GPU renderer on `canvas`: WebGPU, else WebGL2. On WebGPU the device is opened before the
+   * canvas is bound, so a rejection leaves the canvas free for the CPU renderer.
+   */
+  createForCanvas?(
+    canvas: OffscreenCanvas,
+    options?: CanvasRendererOptions,
+  ): Promise<WasmCanvasRenderer>;
+  createForHtmlCanvas?(
+    canvas: HTMLCanvasElement,
+    options?: CanvasRendererOptions,
+  ): Promise<WasmCanvasRenderer>;
   /**
    * The renderer that draws on the CPU, for a browser with no WebGPU adapter and no WebGL2
    * context: it presents on `canvas`'s 2D context (nowhere without a canvas) and needs no GPU. It

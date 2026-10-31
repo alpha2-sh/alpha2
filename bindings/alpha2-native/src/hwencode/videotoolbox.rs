@@ -41,11 +41,11 @@ use crate::mux::Muxer;
 
 const ENCODER: &str = "h264_videotoolbox";
 
-/// Smallest output the hardware session accepts, measured on an M4 with
-/// `probe-gpu-encode`: every even size down to 2x2 opens one.
+/// Smallest output the hardware session accepts, measured on an Apple-silicon
+/// GPU with `probe-gpu-encode`: every even size down to 2x2 opens one.
 const MINIMUM: (u32, u32) = (2, 2);
-/// Largest output the hardware session accepts, measured on an M4 with
-/// `probe-gpu-encode`: 4096x4096 opens, while 4112x4096, 4096x4112,
+/// Largest output the hardware session accepts, measured on an Apple-silicon
+/// GPU with `probe-gpu-encode`: 4096x4096 opens, while 4112x4096, 4096x4112,
 /// 5120x2880 and 7680x4320 are refused. Other Apple chips may differ, and a
 /// size a device refuses still refuses at open, before any output exists.
 const MAXIMUM: (u32, u32) = (4_096, 4_096);
@@ -264,18 +264,16 @@ fn capability_with(rate_control_modes: Vec<&'static str>) -> HardwareEncodeCapab
 }
 
 /// `h264_videotoolbox` encodes as fast at depth 0 as at any deeper one: on an
-/// M4 (the perf project P1, 240 frames, three alternating rounds) depths 0,
-/// 1, 2, 4 and 8 ran 4.353, 4.351, 4.354, 4.356 and 4.358 ms a frame at 1080p
-/// and 16.311, 16.311, 16.310, 16.310 and 16.316 at 4K: the encoder paces the
-/// export, and each step deeper only holds another surface (lease peaks 2
-/// to 10).
+/// Apple-silicon GPU (three alternating rounds at 1080p and 4K) depths 0, 1,
+/// 2, 4 and 8 ran within 0.1 % of each other: the encoder paces the export,
+/// and each step deeper only holds another surface.
 const DEFAULT_CHANNEL_DEPTH: usize = 0;
 
 /// Surfaces `h264_videotoolbox` holds after `avcodec_send_frame` has returned,
-/// until its output callback consumes them. Measured on an M4: the pool
-/// allocated exactly six more surfaces than the host's lease peak at channel
-/// depths 1, 2, 4 and 8, at 256x192, 1080p and 4K, and at depth 0 above
-/// 256x192 (three at 256x192).
+/// until its output callback consumes them. Measured on an Apple-silicon GPU:
+/// the pool allocated exactly six more surfaces than the host's lease peak at
+/// channel depths 1, 2, 4 and 8, at 256x192, 1080p and 4K, and at depth 0
+/// above 256x192 (three at 256x192).
 const CODEC_RETAINED_SURFACES: usize = 6;
 
 /// Opens `h264_videotoolbox`, its input half, and the output.

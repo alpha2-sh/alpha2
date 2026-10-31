@@ -288,12 +288,20 @@ export function skippedCasesSummary(skipped) {
 /**
  * The command line of a Chrome (or Edge) launch. `harness` settings add what unattended pages need
  * (no sandbox, unsafe WebGPU, no 3D API blocking, autoplay) and `gpuFlags`; `stock` settings keep
- * only what starting a fresh profile under DevTools needs.
+ * only what starting a fresh profile under DevTools needs. `domainBlocking3d` keeps Chrome's 3D API
+ * blocking under harness settings, for a case about what Chrome withdraws after GPU resets.
  *
- * @param {{ settings: "harness" | "stock", gpuFlags: string[], headed: boolean, profile: string }} options
+ * @param {{ settings: "harness" | "stock", gpuFlags: string[], headed: boolean, profile: string,
+ *   domainBlocking3d?: boolean }} options
  * @returns {string[]}
  */
-export function chromeArguments({ settings, gpuFlags, headed, profile }) {
+export function chromeArguments({
+  settings,
+  gpuFlags,
+  headed,
+  profile,
+  domainBlocking3d = false,
+}) {
   return [
     // A windowed Chrome is for a display with the machine's GPU: headless Chrome cannot import a
     // VideoFrame into WebGPU.
@@ -306,9 +314,13 @@ export function chromeArguments({ settings, gpuFlags, headed, profile }) {
           "--enable-unsafe-webgpu",
           // SwiftShader on a small runner loses its device often, and Chrome then refuses WebGL to
           // the page, which would fail the recovery cases on Chrome's policy instead of on the engine.
-          "--disable-domain-blocking-for-3d-apis",
+          ...(domainBlocking3d
+            ? []
+            : ["--disable-domain-blocking-for-3d-apis"]),
           // An AudioContext would otherwise wait for a user gesture.
           "--autoplay-policy=no-user-gesture-required",
+          // Chrome on Windows logs nowhere by default; its GPU process exits are read from stderr.
+          "--enable-logging=stderr",
           ...gpuFlags,
         ]),
     // A windowed Chrome otherwise stops at its first-run dialog, or on a desktop keyring prompt,
@@ -319,6 +331,77 @@ export function chromeArguments({ settings, gpuFlags, headed, profile }) {
     `--user-data-dir=${profile}`,
     "about:blank",
   ];
+}
+
+/** What Chrome logs when its GPU process ends without being asked to. */
+const GPU_PROCESS_EXIT =
+  /GPU process exited unexpectedly|GPU process isn't usable/g;
+
+/**
+ * Chrome's GPU process over one page: its id when the page started and when it ended (null when
+ * there was none, undefined when DevTools could no longer say), and how many GPU process exits
+ * Chrome logged. The process restarted when Chrome logged an exit or the id changed; a GPU process
+ * that only started during the page is no restart.
+ *
+ * @typedef {{ startPid: number | null | undefined, endPid: number | null | undefined,
+ *   exits: number, restarted: boolean }} GpuProcessRecord
+ */
+
+/**
+ * The record of a page's GPU process from its ids at the page's start and end and the GPU process
+ * exits Chrome logged meanwhile.
+ *
+ * @returns {GpuProcessRecord}
+ */
+export function gpuProcessRecord({ startPid, endPid, exits }) {
+  const changed =
+    startPid !== null &&
+    startPid !== undefined &&
+    endPid !== undefined &&
+    endPid !== startPid;
+  return { startPid, endPid, exits, restarted: exits > 0 || changed };
+}
+
+/**
+ * The case result a page whose GPU process restarted gets in place of its own: a skip record of
+ * the `browser-gpu-process` capability, never a pass or a failure, since a page that lost its GPU
+ * process to the environment shows nothing about the engine. Null when the process did not
+ * restart. `result` is the page's own report or `{ error }`, kept for the log.
+ *
+ * @param {GpuProcessRecord | undefined} record
+ * @param {object} result
+ */
+export function gpuProcessEnvironment(record, result) {
+  if (!record?.restarted) return null;
+  const how =
+    record.exits > 0
+      ? `Chrome logged ${record.exits} GPU process exit(s)`
+      : `its id changed from ${record.startPid} to ${record.endPid ?? "none"}`;
+  return {
+    skipped: `gpu-process-restarted: the browser's GPU process restarted during the page (${how})`,
+    capability: "browser-gpu-process",
+    gpuProcess: record,
+    page: result.error ?? (result.ok === true ? "ok" : result),
+  };
+}
+
+/** The ids of Chrome's processes and of its GPU process, or null when DevTools cannot say. */
+async function chromeProcesses(cdp) {
+  try {
+    const { processInfo } = await cdp.send(
+      "SystemInfo.getProcessInfo",
+      {},
+      undefined,
+      5_000,
+    );
+    return {
+      pids: processInfo.map((process) => process.id),
+      gpu:
+        processInfo.find((process) => /^gpu/i.test(process.type))?.id ?? null,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** How much of Chrome's stderr a launch keeps, and how many of its last lines an error quotes. */
@@ -350,13 +433,26 @@ function chromeSaid(stderr) {
  * @param {string} [options.initScript] Evaluated in every new document before its own scripts.
  * @param {(version: { product: string, userAgent: string }) => void} [options.onBrowser] Called
  *   with `Browser.getVersion` once the DevTools connection is open.
+ * @param {boolean} [options.domainBlocking3d] Keeps Chrome's 3D API blocking (see
+ *   `chromeArguments`).
+ * @param {(record: GpuProcessRecord) => void} [options.onGpuProcess] Called with the GPU process
+ *   record when the page ends, before the result or the error: whether Chrome's GPU process
+ *   restarted while the page ran.
  * @returns {Promise<string>} The URI-encoded JSON title the page set. Rejects with a
  *   `BrowserStartError` when Chrome cannot be started or connected to.
  */
 export async function runChromePage(
   command,
   url,
-  { timeoutMs = 30_000, onPage, viewport, initScript, onBrowser } = {},
+  {
+    timeoutMs = 30_000,
+    onPage,
+    viewport,
+    initScript,
+    onBrowser,
+    onGpuProcess,
+    domainBlocking3d = false,
+  } = {},
 ) {
   const { flags: gpuFlags } = chromeGpuMode();
   const settings = browserSettingsMode();
@@ -372,6 +468,7 @@ export async function runChromePage(
         gpuFlags,
         headed: process.env.ALPHA2_BROWSER_HEADED === "1",
         profile,
+        domainBlocking3d,
       }),
       {
         stdio: ["ignore", "ignore", "pipe"],
@@ -388,12 +485,20 @@ export async function runChromePage(
   }
   cleanup.child = child;
   cleanup.group = process.platform !== "win32";
-  // The tail of what Chrome writes, quoted by every start and timeout error.
+  // The tail of what Chrome writes, quoted by every start and timeout error, and the GPU process
+  // exits it logs (a line may arrive split across chunks, so each chunk is read with the tail).
   let stderr = "";
+  let gpuExits = 0;
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk) => {
+    const tail = stderr.slice(-200);
+    gpuExits +=
+      (`${tail}${chunk}`.match(GPU_PROCESS_EXIT) ?? []).length -
+      (tail.match(GPU_PROCESS_EXIT) ?? []).length;
     stderr = (stderr + chunk).slice(-STDERR_TAIL_BYTES);
   });
+  // Every process Chrome reported, which stopping it waits for.
+  const pids = new Set();
   const said = () => chromeSaid(stderr);
   try {
     const webSocketUrl = await new Promise((resolveUrl, reject) => {
@@ -443,6 +548,8 @@ export async function runChromePage(
         `the DevTools connection failed: ${error?.message ?? error}${said()}`,
       );
     }
+    const started = await chromeProcesses(cdp);
+    for (const pid of started?.pids ?? []) pids.add(pid);
     try {
       if (onBrowser) onBrowser(await cdp.send("Browser.getVersion"));
       const { targetId } = await cdp.send("Target.createTarget", {
@@ -503,10 +610,20 @@ export async function runChromePage(
         `browser page timed out at ${title} after ${timeoutMs / 1000} s${said()}`,
       );
     } finally {
+      // After a crashed page DevTools answers nothing: the end id is then unknown.
+      const ended = await chromeProcesses(cdp);
+      for (const pid of ended?.pids ?? []) pids.add(pid);
+      onGpuProcess?.(
+        gpuProcessRecord({
+          startPid: started === null ? undefined : started.gpu,
+          endPid: ended === null ? undefined : ended.gpu,
+          exits: gpuExits,
+        }),
+      );
       cdp.close();
     }
   } finally {
-    await stopChrome(child);
+    await stopChrome(child, { pids: [...pids] });
     untrack(cleanup);
     // A leftover profile never replaces the page's result or error.
     await rm(profile, {
@@ -522,16 +639,56 @@ export async function runChromePage(
   }
 }
 
+/** How long stopping Chrome waits for every process it reported to exit. */
+const STOP_WAIT_MS = 10_000;
+
 /**
- * Ends Chrome and every process it started, and waits up to 2 s for it to exit. On Windows the
- * whole tree is ended by `taskkill /T`: a plain kill leaves the renderer and GPU processes holding
- * the profile and stderr pipe. On POSIX a child that leads its own process group (spawned
- * detached) is ended with its group, killed outright if it has not exited after the 2 s.
+ * Whether process `pid` still runs: on Windows by `tasklist`, elsewhere by signal 0. A process
+ * that cannot be asked counts as gone.
+ */
+export async function processAlive(pid, platform = process.platform) {
+  if (platform !== "win32") {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return error.code === "EPERM";
+    }
+  }
+  const output = await new Promise((resolveList) => {
+    const list = spawn(
+      "tasklist",
+      ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"],
+      { stdio: ["ignore", "pipe", "ignore"], windowsHide: true },
+    );
+    let text = "";
+    list.stdout.setEncoding("utf8");
+    list.stdout.on("data", (chunk) => (text += chunk));
+    list.once("close", () => resolveList(text));
+    list.once("error", () => resolveList(""));
+  });
+  return output.includes(`"${pid}"`);
+}
+
+/**
+ * Ends Chrome and every process it started. On Windows the whole tree is ended by `taskkill /T`:
+ * a plain kill leaves the renderer and GPU processes holding the profile and stderr pipe. On POSIX
+ * a child that leads its own process group (spawned detached) is ended with its group, killed
+ * outright if it has not exited after 2 s. Then waits up to 10 s for Chrome and every process in
+ * `pids` (those DevTools reported) to exit: a GPU process still running holds the GPU the next
+ * launch opens. `alive` stands in for {@link processAlive} in tests.
  */
 export async function stopChrome(
   child,
-  { platform = process.platform, spawnProcess = spawn } = {},
+  {
+    platform = process.platform,
+    spawnProcess = spawn,
+    pids = [],
+    alive = (pid) => processAlive(pid, platform),
+    waitMs = STOP_WAIT_MS,
+  } = {},
 ) {
+  const started = Date.now();
   const running = child.exitCode === null && child.signalCode === null;
   const exited = running
     ? new Promise((resolveExit) => child.once("exit", resolveExit))
@@ -571,6 +728,20 @@ export async function stopChrome(
   clearTimeout(timer);
   if (!stopped && grouped) signalGroup("SIGKILL");
   child.stderr?.destroy();
+  let left = pids.filter((pid) => pid !== child.pid || running);
+  while (left.length > 0) {
+    left = (
+      await Promise.all(
+        left.map(async (pid) => ((await alive(pid)) ? pid : null)),
+      )
+    ).filter((pid) => pid !== null);
+    if (left.length === 0 || Date.now() - started >= waitMs) break;
+    await new Promise((resolveTimer) => setTimeout(resolveTimer, 100));
+  }
+  if (left.length > 0)
+    process.stderr.write(
+      `Chrome's process(es) ${left.join(", ")} still ran ${waitMs / 1000} s after it was stopped\n`,
+    );
 }
 
 /** A DevTools command that got no answer in time. */

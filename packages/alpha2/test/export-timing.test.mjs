@@ -208,7 +208,8 @@ test("browser export overlaps bounded rendering with ordered encoding", async ()
   assert.ok(result.renderMs >= 0);
   assert.ok(result.fps > 0);
   assert.equal(result.performance.pipelineEnabled, true);
-  assert.equal(result.performance.inFlightDepth, 3);
+  assert.equal(result.performance.maxInFlightReadbacks, 3);
+  assert.equal(result.performance.maxPendingVideoWrites, 3);
   assert.equal(result.performance.inFlightByteBudget, 128 * 1024 * 1024);
   assert.equal(result.performance.stagingBytesPerFrame, 10);
   assert.equal(result.performance.peakReadbackBytes, 30);
@@ -218,12 +219,12 @@ test("browser export overlaps bounded rendering with ordered encoding", async ()
     "every frame's mapped staging bytes, once",
   );
   assert.equal(result.performance.peakEncodeQueueBytes, 30);
-  assert.equal(result.performance.maxInFlightReadbacks, 3);
+  assert.equal(result.performance.peakInFlightReadbacks, 3);
   assert.equal(result.performance.maxEncodeQueueEvents, 3);
   assert.ok(result.performance.encodeBackpressureCount > 0);
   assert.ok(result.performance.readbackMapLatencyMs >= 0);
-  assert.ok(result.performance.videoEncodeMs >= 0);
-  assert.ok(result.performance.muxFinishMs >= 0);
+  assert.ok(result.performance.videoWriteWaitMs >= 0);
+  assert.ok(result.performance.finishMs >= 0);
 });
 
 test("browser export bounds readback and encoder ownership by bytes", async () => {

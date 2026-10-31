@@ -13,6 +13,7 @@ import {
   type RetryPolicyOptions,
   type RetryProfile,
 } from "alpha2/export-retry";
+import { pageGpuLosses } from "alpha2/gpu-recovery";
 import { validFrameRate } from "alpha2/project";
 import { EditorError } from "../core/document.js";
 import type { EditorDocument } from "../core/document.js";
@@ -57,7 +58,8 @@ export interface ExportJobOptions {
   readonly id?: string;
   /**
    * The retry policy (see `alpha2/export-retry`), or `false` for one attempt. Default: three
-   * attempts, the reference backoff.
+   * attempts, the reference backoff. Without `pageGpuLosses`, each decision reads the page's count
+   * (`pageGpuLosses` of `alpha2/gpu-recovery`) as it stands then.
    */
   readonly retry?: RetryPolicyOptions | false;
   /** Waits `ms` or rejects when `signal` aborts; replaceable for tests. */
@@ -248,8 +250,12 @@ export class ExportJob {
           attemptId: attempt.id,
         };
         history.push({ failure, profile, renderer, videoEncoder });
+        // Losses the page saw up to now, this attempt's included, unless the caller counts them.
         const decision = policy
-          ? decideRetry(history, policy)
+          ? decideRetry(history, {
+              ...policy,
+              pageGpuLosses: policy.pageGpuLosses ?? pageGpuLosses.count(),
+            })
           : {
               retry: false as const,
               reason: "retries are off for this job",

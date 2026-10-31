@@ -4,9 +4,26 @@ import {
   activeTimeout,
   withinActiveTime,
 } from "./active-clock.js";
-import { type ByteReader, readAudioSpeakers } from "./audio-layout.js";
+import {
+  type ByteReader,
+  readAudioSpeakers,
+  speakersWithLfe,
+} from "./audio-layout.js";
 import { type ChromaSiting, chromaSitingForStream } from "./chroma-siting.js";
 import { decoderOrderKey, decoderPlaneOrder } from "./decoder-order.js";
+import type {
+  AacEncoderProbe,
+  EncoderProbeOutcome,
+  VideoLatencyProbe,
+} from "./export-metrics.js";
+
+export type {
+  AacEncoderProbe,
+  AacProbeOutcome,
+  EncoderProbeOutcome,
+  VideoLatencyProbe,
+} from "./export-metrics.js";
+import { decodeFailureOf, withSoftwareFallback } from "./decoder-fallback.js";
 import {
   ALL_FORMATS,
   AudioSample,
@@ -20,6 +37,7 @@ import {
   StreamTarget,
   EncodedPacketSink,
   Input,
+  type InputAudioTrack,
   type InputTrack,
   type InputVideoTrack,
   MkvOutputFormat,
@@ -126,19 +144,6 @@ export interface MediabunnyVideoDecoderOptions extends BrowserVideoDecoderOption
 }
 
 /**
- * A `VideoDecoder` failure, as WebCodecs reports one: an undecodable stream or a decoder that could
- * not be configured or broke. Aborts, stalls, and the stream ending are not.
- */
-function isDecoderFailure(error: unknown): boolean {
-  return (
-    error instanceof DOMException &&
-    ["EncodingError", "NotSupportedError", "OperationError"].includes(
-      error.name,
-    )
-  );
-}
-
-/**
  * Optional demux/decode adapter implementing alpha2's public decoder contract.
  *
  * Forward requests share one sequential decode. A request earlier than the last one, or far past
@@ -158,6 +163,8 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
   #sink: VideoSampleSink;
   #hardwareAcceleration: HardwareAcceleration;
   #softwareFallback?: string;
+  /** Whether any decoder gave a frame of the track: see {@link decodeFailureOf}. */
+  #decodedAny = false;
   readonly #packets: EncodedPacketSink;
   readonly #chromaSiting: ChromaSiting;
   readonly #stallTimeoutMs: number;
@@ -350,32 +357,44 @@ export class MediabunnyVideoDecoder implements BrowserVideoDecoder {
    * A decoder the browser picks can fail on streams it claims to decode (Chromium's VA-API decoders
    * on Linux report `EncodingError: Decoding error.`), so a decoder failure replaces it, once, with
    * a software decoder, which decodes the request again from its keyframe. A software decoder that
-   * fails too rejects the request.
+   * fails too rejects the request: with {@link DecodeUnavailableError} when no decoder has given a
+   * frame of the track (a browser that says it decodes the codec, then refuses it), else with the
+   * failure.
    */
   async refill(
     request: DecoderRefillRequest,
     signal?: AbortSignal,
   ): Promise<BrowserDecodedFrame> {
     try {
-      return await this.#refill(request, signal);
-    } catch (error) {
-      if (
+      const frame = await withSoftwareFallback(
+        () => this.#refill(request, signal),
         this.#closed ||
-        this.#hardwareAcceleration === "prefer-software" ||
-        signal?.aborted === true ||
-        !isDecoderFailure(error)
-      )
+          this.#hardwareAcceleration === "prefer-software" ||
+          signal?.aborted === true
+          ? undefined
+          : async (cause) => {
+              await this.#resetIterator();
+              this.#cache.clear();
+              this.#reverse.clear();
+              this.#backwardSteps = 0;
+              this.#hardwareAcceleration = "prefer-software";
+              this.#softwareFallback = `${cause.name}: ${cause.message}`;
+              this.#sink = new VideoSampleSink(this.#track, {
+                hardwareAcceleration: "prefer-software",
+              });
+            },
+      );
+      this.#decodedAny = true;
+      return frame;
+    } catch (error) {
+      if (this.#decodedAny || this.#closed || signal?.aborted === true)
         throw error;
-      await this.#resetIterator();
-      this.#cache.clear();
-      this.#reverse.clear();
-      this.#backwardSteps = 0;
-      this.#hardwareAcceleration = "prefer-software";
-      this.#softwareFallback = `${(error as DOMException).name}: ${(error as DOMException).message}`;
-      this.#sink = new VideoSampleSink(this.#track, {
-        hardwareAcceleration: "prefer-software",
-      });
-      return this.#refill(request, signal);
+      throw decodeFailureOf(
+        error,
+        this.#sourceId,
+        await videoTrackFacts(this.#track),
+        false,
+      );
     }
   }
 
@@ -1339,6 +1358,201 @@ export async function probePlanarDecode(
   }
 }
 
+/** How long the trial decode at open may take, in active milliseconds. */
+const AUDIO_TRIAL_DECODE_MS = 2_000;
+
+/** The RMS under which a trial plane counts as silent: -80 dBFS. */
+const SILENT_PLANE_RMS = 1e-4;
+
+/** What a trial decode of an audio track's first packet gave. */
+export interface AudioTrialDecode {
+  readonly channels: number;
+  readonly sampleRate: number;
+  /** Per plane, the RMS of the first decoded sample's frames. */
+  readonly planeRms: readonly number[];
+}
+
+/**
+ * An audio track this browser decodes, as the engine reads it: the channel count, sample rate and
+ * speakers of what the decoder delivers, which a trial decode measured.
+ */
+export interface DecodableAudioTrack {
+  readonly channels: number;
+  readonly sampleRate: number;
+  /** The speakers of the delivered planes, null when the source declares none. */
+  readonly speakers: AudioSpeaker[] | null;
+  /** Whether the decoder delivers more planes than the source declares: an added silent LFE. */
+  readonly addedLfe: boolean;
+  readonly trial: AudioTrialDecode;
+}
+
+/**
+ * Decodes the track's first packet with this browser's decoder, within 2 s of active time. Rejects
+ * with the decoder's error, or a `TimeoutError` `DOMException` when it gave nothing in time;
+ * resolves to null for a track with no packet.
+ */
+async function trialAudioDecode(
+  track: InputAudioTrack,
+): Promise<AudioTrialDecode | null> {
+  const samples = new AudioSampleSink(track).samples();
+  let settled = false;
+  try {
+    const first = await withinActiveTime(
+      samples.next(),
+      AUDIO_TRIAL_DECODE_MS,
+      () =>
+        new DOMException(
+          `the audio decoder gave nothing within ${AUDIO_TRIAL_DECODE_MS / 1000} s`,
+          "TimeoutError",
+        ),
+    );
+    settled = true;
+    if (first.done === true) return null;
+    const sample = first.value;
+    try {
+      const plane = new Float32Array(sample.numberOfFrames);
+      const planeRms = Array.from(
+        { length: sample.numberOfChannels },
+        (_, index) => {
+          sample.copyTo(plane, { planeIndex: index, format: "f32-planar" });
+          let sum = 0;
+          for (const value of plane) sum += value * value;
+          return Math.sqrt(sum / Math.max(1, plane.length));
+        },
+      );
+      return {
+        channels: sample.numberOfChannels,
+        sampleRate: sample.sampleRate,
+        planeRms,
+      };
+    } finally {
+      sample.close();
+    }
+  } finally {
+    // A decoder that never answered may never let the iterator end: it is left to the input's
+    // disposal instead of waited for.
+    if (settled) await samples.return(undefined);
+    else void samples.return(undefined).catch(() => {});
+  }
+}
+
+/**
+ * Whether this browser decodes `track`, by a trial decode of its first packet (`canDecode()` alone
+ * is not enough: Firefox answers true for AAC layouts its decoder then rejects), and what the
+ * engine then reads: the decoded channel count and rate, and the speakers `declared` (the source's
+ * own layout, {@link readAudioSpeakers}) under that count. A decoder that delivers one plane more
+ * than a source without an LFE declares is taken to add a silent LFE (Edge decodes E-AC-3 5.0 as
+ * 5.1) when that plane is silent in the trial; its layout is adopted.
+ *
+ * Rejects with {@link DecodeUnavailableError} (facts: the codec, channels and layout) when the
+ * browser has no decoder for the track, the trial fails or times out, or the decoder delivers
+ * another channel count; `name` names the source in the message.
+ */
+export async function probeAudioDecode(
+  name: string,
+  track: InputAudioTrack,
+  declared: readonly AudioSpeaker[] | null,
+): Promise<DecodableAudioTrack> {
+  const codec =
+    (await track.getCodecParameterString().catch(() => null)) ??
+    track.codec ??
+    null;
+  const facts: TrackDecodeFacts = {
+    kind: "audio",
+    codec,
+    channels: track.numberOfChannels,
+    ...(declared === null ? {} : { layout: [...declared] }),
+  };
+  const refuse = (detail: string, cause?: unknown): DecodeUnavailableError =>
+    new DecodeUnavailableError(
+      decodeRefusalMessage(name, { ...facts, browserError: detail }),
+      { ...facts, browserError: detail },
+      cause === undefined ? undefined : { cause },
+    );
+  if (!(await track.canDecode().catch(() => false)))
+    throw refuse("the browser has no decoder for this audio");
+  let trial: AudioTrialDecode | null;
+  try {
+    trial = await trialAudioDecode(track);
+  } catch (error) {
+    throw refuse(
+      `the trial decode failed: ${String((error as Error)?.message ?? error)}`,
+      error,
+    );
+  }
+  if (trial === null)
+    return {
+      channels: track.numberOfChannels,
+      sampleRate: track.sampleRate,
+      speakers: declared === null ? null : [...declared],
+      addedLfe: false,
+      trial: {
+        channels: track.numberOfChannels,
+        sampleRate: track.sampleRate,
+        planeRms: [],
+      },
+    };
+  if (trial.channels === track.numberOfChannels)
+    return {
+      channels: trial.channels,
+      sampleRate: trial.sampleRate,
+      speakers: declared === null ? null : [...declared],
+      addedLfe: false,
+      trial,
+    };
+  const withLfe =
+    declared !== null && trial.channels === declared.length + 1
+      ? speakersWithLfe(declared)
+      : null;
+  if (withLfe !== null && trial.planeRms[withLfe.lfePlane] <= SILENT_PLANE_RMS)
+    return {
+      channels: trial.channels,
+      sampleRate: trial.sampleRate,
+      speakers: withLfe.speakers,
+      addedLfe: true,
+      trial,
+    };
+  throw refuse(
+    `the decoder delivers ${trial.channels} channels for a source that declares ${track.numberOfChannels}`,
+  );
+}
+
+/**
+ * {@link probeAudioDecode} on `resource`'s primary audio track, with the speakers the file
+ * declares: what an import records about whether this browser decodes the audio. Rejects as
+ * `probeAudioDecode` does, and with a plain `Error` when the file has no audio track.
+ */
+export async function probeAudioSource(
+  name: string,
+  resource: MediabunnyInput,
+): Promise<DecodableAudioTrack> {
+  const input = new Input({
+    source:
+      resource instanceof Blob
+        ? new BlobSource(resource)
+        : new BufferSource(resource),
+    formats: ALL_FORMATS,
+  });
+  try {
+    const track = await input.getPrimaryAudioTrack();
+    if (track === null) throw new Error("mediabunny input has no audio track");
+    const config = await track.getDecoderConfig();
+    const declared = await readAudioSpeakers(
+      byteReader(resource),
+      byteLength(resource),
+      track,
+      bufferBytes(config?.description),
+      () =>
+        new EncodedPacketSink(track)
+          .getFirstPacket()
+          .then((packet) => packet?.data ?? null),
+    );
+    return await probeAudioDecode(name, track, declared);
+  } finally {
+    input.dispose();
+  }
+}
+
 export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
   readonly #sourceId: string;
   readonly #input: Input;
@@ -1373,6 +1587,8 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
    */
   readonly #delay: number;
   readonly #binding: AudioResamplerBinding;
+  /** What a refusal names: the codec, channels and layout. */
+  readonly #facts: TrackDecodeFacts;
   #resampler?: { targetRate: number; resampler: AudioResampler };
   #closed = false;
 
@@ -1388,6 +1604,7 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
     preroll: number,
     delay: number,
     binding: AudioResamplerBinding,
+    facts: TrackDecodeFacts,
   ) {
     this.#sourceId = sourceId;
     this.#input = input;
@@ -1400,14 +1617,17 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
     this.#preroll = preroll;
     this.#delay = delay;
     this.#binding = binding;
+    this.#facts = facts;
   }
 
   /**
    * Opens `resource`'s primary audio track, resampling with `binding`'s `AudioResampler`.
    *
    * Rejects when the input has no audio track, when its channel count is outside 1 to
-   * {@link MAX_AUDIO_CHANNELS} or its sample rate outside 1 kHz to 768 kHz (`RangeError`), or when
-   * its decoder configuration or channel layout cannot be read.
+   * {@link MAX_AUDIO_CHANNELS} or its sample rate outside 1 kHz to 768 kHz (`RangeError`), when
+   * its decoder configuration or channel layout cannot be read, and with
+   * {@link DecodeUnavailableError} when this browser does not decode it ({@link probeAudioDecode}:
+   * the first packet is decoded here, so a source that would fail at its first refill fails now).
    */
   static async open(
     sourceId: string,
@@ -1424,16 +1644,19 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
       input.dispose();
       throw new Error("mediabunny input has no audio track");
     }
-    const channelCount = track.numberOfChannels;
-    if (channelCount < 1 || channelCount > MAX_AUDIO_CHANNELS) {
+    if (
+      track.numberOfChannels < 1 ||
+      track.numberOfChannels > MAX_AUDIO_CHANNELS
+    ) {
       input.dispose();
       throw new RangeError(
-        `audio with ${channelCount} channels is unsupported: the engine takes 1 to ${MAX_AUDIO_CHANNELS}`,
+        `audio with ${track.numberOfChannels} channels is unsupported: the engine takes 1 to ${MAX_AUDIO_CHANNELS}`,
       );
     }
     let speakers: AudioSpeaker[] | null;
     let description: Uint8Array | null;
     let planeOrder: readonly number[] | null;
+    let decodable: DecodableAudioTrack;
     try {
       const config = await track.getDecoderConfig();
       description = bufferBytes(config?.description);
@@ -1443,28 +1666,43 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
         (firstPacket ??= new EncodedPacketSink(track)
           .getFirstPacket()
           .then((packet) => packet?.data ?? null));
-      speakers = await readAudioSpeakers(
+      const declared = await readAudioSpeakers(
         byteReader(resource),
         byteLength(resource),
         track,
         description,
         readFirstPacket,
       );
-      planeOrder = await decoderPlaneOrder(
-        decoderOrderKey(
-          track.codec,
-          description,
-          channelCount,
-          track.codec === "ac3" || track.codec === "eac3"
-            ? await readFirstPacket()
-            : null,
-        ),
-      );
+      decodable = await probeAudioDecode(sourceId, track, declared);
+      speakers = decodable.speakers;
+      // The order measured for the declared layout says nothing of one with an added LFE, which
+      // the decoder put where a native-order layout has it.
+      planeOrder = decodable.addedLfe
+        ? null
+        : await decoderPlaneOrder(
+            decoderOrderKey(
+              track.codec,
+              description,
+              track.numberOfChannels,
+              track.codec === "ac3" || track.codec === "eac3"
+                ? await readFirstPacket()
+                : null,
+            ),
+          );
     } catch (error) {
       input.dispose();
       throw error;
     }
-    const sourceRate = track.sampleRate;
+    const channelCount = decodable.channels;
+    if (channelCount > MAX_AUDIO_CHANNELS) {
+      input.dispose();
+      throw new RangeError(
+        `audio decoded to ${channelCount} channels is unsupported: the engine takes 1 to ${MAX_AUDIO_CHANNELS}`,
+      );
+    }
+    // What the decoder delivers: an implicitly signalled AAC extension decodes at twice the
+    // header's rate.
+    const sourceRate = decodable.sampleRate;
     if (
       !Number.isInteger(sourceRate) ||
       sourceRate < SOURCE_SAMPLE_RATES.min ||
@@ -1520,6 +1758,12 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
       track.codec === "opus" ? OPUS_PREROLL_SECONDS : AUDIO_PREROLL_SECONDS,
       delay,
       binding,
+      {
+        kind: "audio",
+        codec: track.codec ?? null,
+        channels: track.numberOfChannels,
+        ...(speakers === null ? {} : { layout: speakers }),
+      },
     );
   }
 
@@ -1543,7 +1787,7 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
    *
    * Rejects when the decoder is closed, the request names another source or an empty interval,
    * the rate is not a positive integer, `signal` aborts, or the track changes channel count or
-   * sample rate mid-stream.
+   * sample rate mid-stream; with {@link DecodeUnavailableError} when the browser's decoder fails.
    */
   async refill(
     request: AudioDecoderRefillRequest,
@@ -1582,58 +1826,75 @@ export class MediabunnyAudioDecoder implements BrowserAudioDecoder {
     /** Where the next sample continues the last one placed. */
     let expected: number | undefined;
     const delay = this.#delay;
-    for await (const sample of this.#sink.samples(
-      decodeFrom + delay,
-      sourceEnd / rate + delay,
-    )) {
-      try {
-        throwIfAborted(signal);
-        // The engine folds a source's channels into the project's by speaker, so every one is kept,
-        // each in the plane its speaker is listed at.
-        if (sample.numberOfChannels !== channelCount)
-          throw new RangeError(
-            `audio track changed from ${channelCount} to ${sample.numberOfChannels} channels`,
-          );
-        if (sample.sampleRate !== rate)
-          throw new RangeError(
-            `audio track changed from ${rate} Hz to ${sample.sampleRate} Hz`,
-          );
-        const length = sample.numberOfFrames;
-        const timestamp = sample.timestamp - delay;
-        let at = Math.round(timestamp * rate);
-        let skip = 0;
-        if (expected === undefined) {
-          // Place the window's first sample where a decode from the stream's start puts it.
-          if (this.#grid !== undefined)
-            at = placeOnAudioFrameGrid(this.#grid, at, length);
-          // mediabunny starts at the packet holding the time asked for; a first sample after that
-          // time is the stream's first.
-          if (timestamp > decodeFrom) streamStart = at;
-        } else {
-          const ahead = at - expected;
-          const tolerance = Math.max(length, Math.ceil(rate / 500));
-          if (Math.abs(ahead) < tolerance) at = expected;
-          else if (ahead < 0) {
-            skip = Math.min(length, -ahead);
-            at = expected;
+    try {
+      for await (const sample of this.#sink.samples(
+        decodeFrom + delay,
+        sourceEnd / rate + delay,
+      )) {
+        try {
+          throwIfAborted(signal);
+          // The engine folds a source's channels into the project's by speaker, so every one is kept,
+          // each in the plane its speaker is listed at.
+          if (sample.numberOfChannels !== channelCount)
+            throw new RangeError(
+              `audio track changed from ${channelCount} to ${sample.numberOfChannels} channels`,
+            );
+          if (sample.sampleRate !== rate)
+            throw new RangeError(
+              `audio track changed from ${rate} Hz to ${sample.sampleRate} Hz`,
+            );
+          const length = sample.numberOfFrames;
+          const timestamp = sample.timestamp - delay;
+          let at = Math.round(timestamp * rate);
+          let skip = 0;
+          if (expected === undefined) {
+            // Place the window's first sample where a decode from the stream's start puts it.
+            if (this.#grid !== undefined)
+              at = placeOnAudioFrameGrid(this.#grid, at, length);
+            // mediabunny starts at the packet holding the time asked for; a first sample after that
+            // time is the stream's first.
+            if (timestamp > decodeFrom) streamStart = at;
+          } else {
+            const ahead = at - expected;
+            const tolerance = Math.max(length, Math.ceil(rate / 500));
+            if (Math.abs(ahead) < tolerance) at = expected;
+            else if (ahead < 0) {
+              skip = Math.min(length, -ahead);
+              at = expected;
+            }
           }
+          expected = at + length - skip;
+          const from = Math.max(at, sourceStart);
+          const to = Math.min(at + length - skip, sourceEnd);
+          if (to <= from) continue;
+          const data = new Float32Array(length);
+          const order = this.#planeOrder;
+          for (let plane = 0; plane < channelCount; plane += 1) {
+            sample.copyTo(data, { planeIndex: plane, format: "f32-planar" });
+            source[order === undefined ? plane : order[plane]].set(
+              data.subarray(skip + from - at, skip + to - at),
+              from - sourceStart,
+            );
+          }
+        } finally {
+          sample.close();
         }
-        expected = at + length - skip;
-        const from = Math.max(at, sourceStart);
-        const to = Math.min(at + length - skip, sourceEnd);
-        if (to <= from) continue;
-        const data = new Float32Array(length);
-        const order = this.#planeOrder;
-        for (let plane = 0; plane < channelCount; plane += 1) {
-          sample.copyTo(data, { planeIndex: plane, format: "f32-planar" });
-          source[order === undefined ? plane : order[plane]].set(
-            data.subarray(skip + from - at, skip + to - at),
-            from - sourceStart,
-          );
-        }
-      } finally {
-        sample.close();
       }
+    } catch (error) {
+      // The browser's decoder failing (a `DOMException`) is this browser not decoding the source.
+      if (
+        typeof DOMException !== "undefined" &&
+        error instanceof DOMException &&
+        error.name !== "AbortError"
+      ) {
+        const facts = { ...this.#facts, browserError: error.message };
+        throw new DecodeUnavailableError(
+          decodeRefusalMessage(this.#sourceId, facts),
+          facts,
+          { cause: error },
+        );
+      }
+      throw error;
     }
     // Outside the stream the source is silent, and so is the output: a band-limited reading of the
     // stream's first and last samples rings past them.
@@ -1726,6 +1987,13 @@ export interface MediabunnySinkOptions {
   readonly videoBitDepth?: 8 | 10;
   /** The video encoder's latency mode; by default the one {@link videoEncoderLatencyMode} measures. */
   readonly videoLatencyMode?: VideoEncoderLatencyMode;
+  /**
+   * The video encoder the browser is asked for: `"no-preference"` (the default, usually a hardware
+   * encoder) or `"prefer-software"`, which a retry after a failed encode asks for (`decideRetry`'s
+   * `videoEncoder: "software"`); check {@link canEncodeInSoftware} first. `videoEncoderAcceleration`
+   * reports it.
+   */
+  readonly videoHardwareAcceleration?: "no-preference" | "prefer-software";
   /**
    * How long the video encoder may hold frames without output before writes reject with
    * `ENCODE_STALLED` (default 10 s).
@@ -1926,6 +2194,32 @@ export async function canEncodeVideoTrack(
 }
 
 /**
+ * Whether this browser encodes `codec` video at `width`x`height` with `rate` with a software
+ * encoder (`hardwareAcceleration: "prefer-software"`), in `codecString` when given: what a
+ * {@link MediabunnySink} opened with `videoHardwareAcceleration: "prefer-software"` asks for. A
+ * retry that would switch to the software encoder asks this first.
+ */
+export async function canEncodeInSoftware(
+  codec: "avc" | "hevc" | "vp9" | "av1",
+  options: {
+    readonly width: number;
+    readonly height: number;
+    readonly rate: VideoRateControl;
+    readonly codecString?: string;
+  },
+): Promise<boolean> {
+  return canEncodeVideo(codec, {
+    width: options.width,
+    height: options.height,
+    quality: videoEncoderQuality(options.rate),
+    hardwareAcceleration: "prefer-software",
+    ...(options.codecString === undefined
+      ? {}
+      : { fullCodecString: options.codecString }),
+  }).catch(() => false);
+}
+
+/**
  * The WebCodecs codec string a 10-bit 4:2:0 export opens with: VP9 profile 2, AV1 Main, HEVC Main
  * 10, each at 10 bits. `undefined` for H.264, which a browser does not encode at 10 bits.
  */
@@ -2054,43 +2348,88 @@ const LATENCY_PROBE_HEIGHT = 240;
 const LATENCY_PROBE_FRAMES = 6;
 /** How long a probe encoder has to put out its first chunk. */
 const LATENCY_PROBE_TIMEOUT_MS = 1_500;
+interface LatencyMeasurement {
+  readonly probe: VideoLatencyProbe;
+  /** Whether the answer may be reused: it rests on no probe that only ran out of time. */
+  readonly definitive: boolean;
+}
+
 const latencyModes = new Map<
   keyof typeof LATENCY_PROBE_CODECS,
-  Promise<VideoEncoderLatencyMode>
+  Promise<LatencyMeasurement>
 >();
 
 /**
  * The latency mode {@link MediabunnySink} opens `codec`'s encoder with: `"realtime"` only where a
- * quality-mode encoder puts out nothing (Safari 27's H.264) and a realtime one works. Measured once
- * per codec.
+ * quality-mode encoder puts out nothing (Safari 27's H.264) and a realtime one works. See
+ * {@link videoEncoderLatencyProbe}.
  */
-export function videoEncoderLatencyMode(
+export async function videoEncoderLatencyMode(
   codec: "avc" | "hevc" | "vp9" | "av1",
 ): Promise<VideoEncoderLatencyMode> {
-  let mode = latencyModes.get(codec);
-  if (mode === undefined) {
-    mode = measureLatencyMode(codec);
-    latencyModes.set(codec, mode);
+  return (await videoEncoderLatencyProbe(codec)).mode;
+}
+
+/**
+ * {@link videoEncoderLatencyMode}'s answer, with how it was reached. A definitive answer is
+ * measured once per codec and reused; one that rests on a probe that timed out (a cold encoder on
+ * a loaded machine) serves this export only and is measured again by the next.
+ */
+export async function videoEncoderLatencyProbe(
+  codec: "avc" | "hevc" | "vp9" | "av1",
+): Promise<VideoLatencyProbe> {
+  const known = latencyModes.get(codec);
+  if (known !== undefined) {
+    const { probe, definitive } = await known;
+    if (definitive) return { ...probe, cached: true };
   }
-  return mode;
+  const measuring = measureLatencyMode(codec);
+  latencyModes.set(codec, measuring);
+  const { probe, definitive } = await measuring;
+  if (!definitive && latencyModes.get(codec) === measuring)
+    latencyModes.delete(codec);
+  return probe;
 }
 
 async function measureLatencyMode(
   codec: keyof typeof LATENCY_PROBE_CODECS,
-): Promise<VideoEncoderLatencyMode> {
-  if (typeof VideoEncoder === "undefined") return "quality";
+): Promise<LatencyMeasurement> {
+  const started = performance.now();
+  const answer = (
+    mode: VideoEncoderLatencyMode,
+    outcome: VideoLatencyProbe["outcome"],
+    definitive: boolean,
+  ): LatencyMeasurement => ({
+    probe: { mode, ms: performance.now() - started, outcome, cached: false },
+    definitive,
+  });
+  if (typeof VideoEncoder === "undefined")
+    return answer("quality", "unavailable", true);
   // One at a time: on Chrome a realtime encoder opening at once delays the quality one.
-  if ((await encoderPutsOut(codec, "quality")) !== false) return "quality";
-  return (await encoderPutsOut(codec, "realtime")) === true
-    ? "realtime"
-    : "quality";
+  const quality = await encoderPutsOut(codec, "quality");
+  if (quality === "output") return answer("quality", quality, true);
+  if (quality === "failed") return answer("quality", quality, false);
+  const realtime = await encoderPutsOut(codec, "realtime");
+  // A quality encoder whose flush ended with nothing never puts out: a realtime one that only ran
+  // out of time (a cold hardware encoder) is the one that can, for this export.
+  if (quality === "silent" && realtime === "timed-out")
+    return answer("realtime", realtime, false);
+  if (realtime !== "output") return answer("quality", realtime, false);
+  if (quality === "silent") return answer("realtime", realtime, true);
+  // The quality probe only ran out of time, as a cold encoder can on a loaded machine: asked again,
+  // now warm, it decides.
+  const warm = await encoderPutsOut(codec, "quality");
+  if (warm === "output") return answer("quality", warm, true);
+  if (warm === "timed-out" || warm === "silent")
+    return answer("realtime", realtime, true);
+  return answer("quality", warm, false);
 }
 
-/** `true` once the encoder puts out a chunk, `false` if it puts out none, `undefined` if it failed. */
+/** What a probe encoder in `latencyMode` did with a few frames: see {@link EncoderProbeOutcome}. */
 async function encoderPutsOut(
   codec: keyof typeof LATENCY_PROBE_CODECS,
   latencyMode: VideoEncoderLatencyMode,
-): Promise<boolean | undefined> {
+): Promise<EncoderProbeOutcome> {
   const config: VideoEncoderConfig = {
     codec: LATENCY_PROBE_CODECS[codec],
     width: LATENCY_PROBE_WIDTH,
@@ -2102,12 +2441,13 @@ async function encoderPutsOut(
   };
   try {
     if (!(await VideoEncoder.isConfigSupported(config)).supported)
-      return undefined;
+      return "failed";
   } catch {
-    return undefined;
+    return "failed";
   }
   let outputs = 0;
   let failed = false;
+  let flushed = false;
   let encoder: VideoEncoder | undefined;
   const probeDone = new AbortController();
   let putOut = () => {};
@@ -2141,13 +2481,17 @@ async function encoderPutsOut(
     }
     await Promise.race([
       firstOutput,
-      encoder.flush().catch(() => (failed = true)),
+      encoder.flush().then(
+        () => (flushed = true),
+        () => (failed = true),
+      ),
       activeTimeout(LATENCY_PROBE_TIMEOUT_MS, probeDone.signal),
     ]);
-    if (outputs > 0) return true;
-    return failed ? undefined : false;
+    if (outputs > 0) return "output";
+    if (failed) return "failed";
+    return flushed ? "silent" : "timed-out";
   } catch {
-    return undefined;
+    return "failed";
   } finally {
     probeDone.abort();
     try {
@@ -2255,13 +2599,6 @@ const AAC_DELAY_PROBE_TIMEOUT_MS = 1_500;
 /** How closely the decoded audio must match the burst at the lag found for it to count. */
 const AAC_DELAY_MIN_CORRELATION = 0.5;
 
-/** What an AAC-LC encoder made of a probe: see {@link probeAacEncoder}. */
-interface AacEncoderProbe {
-  /** The rate its stream declares; undefined when it put out nothing. */
-  readonly rate?: number;
-  /** Its priming in frames; 0 when it was not found or the stream is at another rate. */
-  readonly delay: number;
-}
 const aacProbes = new Map<string, Promise<AacEncoderProbe>>();
 
 /**
@@ -2281,8 +2618,22 @@ export async function aacEncoderDelay(options: {
 }
 
 /**
- * This browser's AAC-LC encoder at `sampleRate` with `numberOfChannels`, probed once per
- * configuration: the rate of the stream it puts out and its priming ({@link aacEncoderDelay}).
+ * {@link aacEncoderDelay}'s measurement, with its outcome. A probe that times out is run once
+ * more; two that time out leave the delay 0 for this export and are not kept, so the next export
+ * measures again. Other outcomes are kept per configuration.
+ */
+export function aacEncoderPrimingProbe(options: {
+  readonly sampleRate: number;
+  readonly numberOfChannels: number;
+  readonly bitrate: number;
+}): Promise<AacEncoderProbe> {
+  return probeAacEncoder(options);
+}
+
+/**
+ * This browser's AAC-LC encoder at `sampleRate` with `numberOfChannels`: the rate of the stream it
+ * puts out and its priming ({@link aacEncoderDelay}), measured as {@link aacEncoderPrimingProbe}
+ * says.
  */
 function probeAacEncoder(options: {
   readonly sampleRate: number;
@@ -2296,22 +2647,34 @@ function probeAacEncoder(options: {
     bitrate: options.bitrate,
   };
   const key = JSON.stringify(config);
-  let probe = aacProbes.get(key);
-  if (probe === undefined) {
-    probe = measureAacEncoder(config);
-    aacProbes.set(key, probe);
-  }
+  const known = aacProbes.get(key);
+  if (known !== undefined) return known;
+  const probe = (async (): Promise<AacEncoderProbe> => {
+    const started = performance.now();
+    let measured = await measureAacEncoder(config);
+    let attempts = 1;
+    if (measured.outcome === "timed-out") {
+      measured = await measureAacEncoder(config);
+      attempts = 2;
+    }
+    return { ...measured, ms: performance.now() - started, attempts };
+  })();
+  aacProbes.set(key, probe);
+  void probe.then((measured) => {
+    if (measured.outcome === "timed-out" && aacProbes.get(key) === probe)
+      aacProbes.delete(key);
+  });
   return probe;
 }
 
 async function measureAacEncoder(
   config: AudioEncoderConfig,
-): Promise<AacEncoderProbe> {
+): Promise<Omit<AacEncoderProbe, "ms" | "attempts">> {
   if (
     typeof AudioEncoder === "undefined" ||
     typeof AudioDecoder === "undefined"
   )
-    return { delay: 0 };
+    return { delay: 0, outcome: "unavailable" };
   let encoder: AudioEncoder | undefined;
   let decoder: AudioDecoder | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -2320,7 +2683,7 @@ async function measureAacEncoder(
   });
   try {
     if (!(await AudioEncoder.isConfigSupported(config)).supported)
-      return { delay: 0 };
+      return { delay: 0, outcome: "failed" };
     let failed = false;
     const chunks: EncodedAudioChunk[] = [];
     let decoderConfig: AudioDecoderConfig | undefined;
@@ -2354,10 +2717,12 @@ async function measureAacEncoder(
       input.close();
     }
     if ((await Promise.race([encoder.flush(), timedOut])) === "timeout")
-      return { delay: 0 };
-    if (failed || decoderConfig === undefined) return { delay: 0 };
+      return { delay: 0, outcome: "timed-out" };
+    if (failed || decoderConfig === undefined)
+      return { delay: 0, outcome: "failed" };
     const rate = decoderConfig.sampleRate;
-    if (rate !== config.sampleRate) return { rate, delay: 0 };
+    if (rate !== config.sampleRate)
+      return { rate, delay: 0, outcome: "output" };
     const planes: Float32Array[] = [];
     decoder = new AudioDecoder({
       output: (audio) => {
@@ -2385,8 +2750,8 @@ async function measureAacEncoder(
     );
     for (const chunk of chunks) decoder.decode(chunk);
     if ((await Promise.race([decoder.flush(), timedOut])) === "timeout")
-      return { rate, delay: 0 };
-    if (failed) return { rate, delay: 0 };
+      return { rate, delay: 0, outcome: "timed-out" };
+    if (failed) return { rate, delay: 0, outcome: "failed" };
     const decoded = new Float32Array(
       planes.reduce((sum, plane) => sum + plane.length, 0),
     );
@@ -2399,9 +2764,10 @@ async function measureAacEncoder(
     return {
       rate,
       delay: lag === null ? 0 : Math.max(0, lag - AAC_FRAME_FRAMES),
+      outcome: "output",
     };
   } catch {
-    return { delay: 0 };
+    return { delay: 0, outcome: "failed" };
   } finally {
     clearTimeout(timer);
     for (const coder of [encoder, decoder]) {
@@ -2631,6 +2997,12 @@ export class MediabunnySink
   readonly #hasVideo: boolean;
   #video?: VideoSampleSource;
   #latencyMode?: VideoEncoderLatencyMode;
+  #latencyProbe?: VideoLatencyProbe;
+  #acceleration?: "no-preference" | "prefer-software";
+  /** When each frame still in the encoder was added, by its timestamp in microseconds. */
+  readonly #addedAt = new Map<number, number>();
+  #encodeLatency = { totalMs: 0, maxMs: 0, count: 0 };
+  #aacProbe?: AacEncoderProbe;
   readonly #stallTimeoutMs: number;
   #framesIn = 0;
   #framesOut = 0;
@@ -2763,10 +3135,15 @@ export class MediabunnySink
     const codec = options.videoCodec;
     const rate = options.videoRateControl;
     if (codec !== undefined && rate !== undefined) {
-      const latencyMode =
-        options.videoLatencyMode ?? (await videoEncoderLatencyMode(codec));
+      let latencyMode = options.videoLatencyMode;
+      if (latencyMode === undefined) {
+        this.#latencyProbe = await videoEncoderLatencyProbe(codec);
+        latencyMode = this.#latencyProbe.mode;
+      }
       if (this.#output.state === "canceled") return;
       this.#latencyMode = latencyMode;
+      const acceleration = options.videoHardwareAcceleration ?? "no-preference";
+      this.#acceleration = acceleration;
       const codecString =
         options.videoCodecString ??
         (options.videoBitDepth === 10 ? tenBitCodecString(codec) : undefined);
@@ -2774,6 +3151,7 @@ export class MediabunnySink
         codec,
         quality: videoEncoderQuality(rate),
         latencyMode,
+        hardwareAcceleration: acceleration,
         ...(options.videoAlpha === true ? { alpha: "keep" as const } : {}),
         ...(codecString === undefined ? {} : { fullCodecString: codecString }),
         // mediabunny reports each candidate config before it asks the browser whether it is
@@ -2789,9 +3167,18 @@ export class MediabunnySink
               : { bitrate: config.bitrate }),
           };
         },
-        onEncodedPacket: () => {
+        onEncodedPacket: (packet) => {
           this.#framesOut += 1;
           this.#madeProgress();
+          const key = Math.round(packet.timestamp * 1_000_000);
+          const added = this.#addedAt.get(key);
+          if (added !== undefined) {
+            this.#addedAt.delete(key);
+            const ms = performance.now() - added;
+            this.#encodeLatency.totalMs += ms;
+            this.#encodeLatency.maxMs = Math.max(this.#encodeLatency.maxMs, ms);
+            this.#encodeLatency.count += 1;
+          }
         },
       });
       this.#output.addVideoTrack(
@@ -2846,6 +3233,38 @@ export class MediabunnySink
   /** The latency mode the video encoder was opened with; undefined until the sink has started. */
   get videoLatencyMode(): VideoEncoderLatencyMode | undefined {
     return this.#latencyMode;
+  }
+
+  /**
+   * How the latency mode was measured ({@link videoEncoderLatencyProbe}); undefined until the sink
+   * has started, and when `videoLatencyMode` was given.
+   */
+  get videoLatencyProbe(): VideoLatencyProbe | undefined {
+    return this.#latencyProbe;
+  }
+
+  /** The video encoder the browser was asked for; undefined until the sink has started. */
+  get videoEncoderAcceleration():
+    "no-preference" | "prefer-software" | undefined {
+    return this.#acceleration;
+  }
+
+  /**
+   * Time from a frame's hand-over to the encoder to its encoded packet, over the frames encoded so
+   * far: what the encoder itself took, queueing in it included.
+   */
+  get videoEncodeLatencyMs(): {
+    readonly mean: number;
+    readonly max: number;
+    readonly count: number;
+  } {
+    const { totalMs, maxMs, count } = this.#encodeLatency;
+    return { mean: count === 0 ? 0 : totalMs / count, max: maxMs, count };
+  }
+
+  /** How the AAC encoder's priming was measured; undefined before the first AAC block. */
+  get aacPrimingProbe(): AacEncoderProbe | undefined {
+    return this.#aacProbe;
   }
 
   /**
@@ -2946,6 +3365,10 @@ export class MediabunnySink
     });
     if (this.#framesOut >= this.#framesIn) this.#madeProgress();
     this.#framesIn += 1;
+    this.#addedAt.set(
+      Math.round((Number(output.timeTicks) / 120_000) * 1_000_000),
+      performance.now(),
+    );
     try {
       await this.#watched(this.#video.add(sample));
     } finally {
@@ -3031,10 +3454,13 @@ export class MediabunnySink
     // own in its header.
     let delay = 0;
     if (this.#audioCodec === "aac" && this.#audioBitrate !== undefined) {
-      delay = await (this.#audioDelay ??= aacEncoderDelay({
+      delay = await (this.#audioDelay ??= aacEncoderPrimingProbe({
         sampleRate,
         numberOfChannels: channels.length,
         bitrate: this.#audioBitrate,
+      }).then((probe) => {
+        this.#aacProbe = probe;
+        return probe.delay;
       }));
       // Safari's encoder drops the first frame of its input: give it a frame of silence, before
       // zero with the priming, ahead of the audio.

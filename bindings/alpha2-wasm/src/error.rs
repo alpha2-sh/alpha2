@@ -22,6 +22,9 @@ pub(crate) enum Code {
     ResourceLimit,
     /// The browser offers no GPU device to make a binding on.
     GpuInitFailed,
+    /// An export would show a source the browser gave only as frames the
+    /// engine cannot convert (a degraded preview of it).
+    PlanarDecodeUnavailable,
 }
 
 impl Code {
@@ -41,6 +44,7 @@ impl Code {
             Self::InvalidState => "INVALID_STATE",
             Self::ResourceLimit => "RESOURCE_LIMIT",
             Self::GpuInitFailed => "GPU_INIT_FAILED",
+            Self::PlanarDecodeUnavailable => "PLANAR_DECODE_UNAVAILABLE",
         }
     }
 
@@ -145,13 +149,14 @@ mod tests {
             Code::InvalidState,
             Code::ResourceLimit,
             Code::GpuInitFailed,
+            Code::PlanarDecodeUnavailable,
         ];
         for code in codes {
             assert!(!code.fatal(), "{}", code.as_str());
         }
         assert!(Code::GPU_DEVICE_LOST.fatal());
         assert!(Code::GPU_DEVICE_HUNG.fatal());
-        assert_eq!(ErrorCode::ALL.len() + 3, codes.len() + 2);
+        assert_eq!(ErrorCode::ALL.len() + 4, codes.len() + 2);
         let mut names: Vec<_> = codes
             .iter()
             .chain([&Code::GPU_DEVICE_LOST, &Code::GPU_DEVICE_HUNG])

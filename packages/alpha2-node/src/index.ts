@@ -495,6 +495,21 @@ export interface NativeExportResult {
  * names; the ones that are not are declared. A copy reports a few counters of its own and none of
  * the declared ones.
  */
+/** {@link ExportPerformance.gpuSubmissions}. */
+export interface GpuSubmissions {
+  /** Frames the GPU rendered. */
+  readonly frames: number;
+  /** Frames submitted in more than one submission. */
+  readonly splitFrames: number;
+  /** The most submissions one frame took. */
+  readonly maxPerFrame: number;
+  /**
+   * The longest GPU time predicted for one submission, in milliseconds; `null` when no frame was
+   * heavy enough to be planned.
+   */
+  readonly maxPredictedMs: number | null;
+}
+
 export interface ExportPerformance {
   /** Per reason a source left the hardware decode path, how many times it did. */
   readonly hardwareFallbackReasons?: Readonly<Record<string, number>>;
@@ -507,6 +522,12 @@ export interface ExportPerformance {
   readonly encodeChannelDepthSamples?: readonly number[];
   /** What the GPU-resident path reserved from the in-flight budget; `null` on the readback path. */
   readonly gpuEncodeBudget?: GpuEncodeBudget | null;
+  /**
+   * How the export's frames were cut into GPU submissions, each kept under an eighth of the GPU
+   * watchdog (`ALPHA2_GPU_WATCHDOG_MS`, 2000 ms): a heavy frame is several submissions, one heavy
+   * pass several horizontal bands. `null` on the CPU renderer.
+   */
+  readonly gpuSubmissions?: GpuSubmissions | null;
   /** Time the CPU renderer spent drawing this export's graphs, in milliseconds. CPU hosts only. */
   readonly cpuRenderMs?: number;
   /** Graph nodes the CPU renderer drew, those found in the result cache not counted. */
@@ -540,7 +561,8 @@ export type PerformanceValue =
   | readonly number[]
   | Readonly<Record<string, number>>
   | Readonly<Record<string, string>>
-  | GpuEncodeBudget;
+  | GpuEncodeBudget
+  | GpuSubmissions;
 
 /** The device memory the GPU-resident path reserved, in bytes and surfaces. */
 export interface GpuEncodeBudget {

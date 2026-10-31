@@ -181,9 +181,9 @@ fn a_stall_the_driver_drains_while_submitting_is_not_waited_on() {
     assert!(stall_drained_before_the_wait(stall, ms(90), ms(1), false).is_some());
     assert!(stall_drained_before_the_wait(stall, ms(1), ms(80), false).is_some());
     assert!(stall_drained_before_the_wait(stall, ms(1), ms(1), true).is_some());
-    // A GPU that takes the stall and returns at once (the 4090) still has it pending, and
-    // so does one slow to submit it (RADV: about 55 ms for 67 draws): the readback behind
-    // it has to time out.
+    // A GPU that takes the stall and returns at once (a discrete NVIDIA GPU) still has it
+    // pending, and so does one slow to submit it (RADV: about 55 ms for 67 draws): the readback
+    // behind it has to time out.
     assert_eq!(
         stall_drained_before_the_wait(stall, ms(2), ms(1), false),
         None

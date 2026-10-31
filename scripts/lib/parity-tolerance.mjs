@@ -1,7 +1,7 @@
 // How far apart browser and native frames may be when drawn on different devices. FMA
-// contraction, `fract` and sampler subtexel rounding are not bit-exact across GPUs (lavapipe vs an
-// RTX 4090 swaps 7 codes on one edge), so a few isolated samples may exceed the general bound;
-// callers also check the frame mean and the share of samples over one code.
+// contraction, `fract` and sampler subtexel rounding are not bit-exact across GPUs (lavapipe vs a
+// discrete NVIDIA GPU swaps 7 codes on one edge), so a few isolated samples may exceed the
+// general bound; callers also check the frame mean and the share of samples over one code.
 
 /** The largest code difference any sample may have without counting as an outlier. */
 export const PEAK_CODES = 4;
